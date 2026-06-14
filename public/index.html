@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#080d18" />
+  <title>Smart Thermostat</title>
+  <link rel="stylesheet" href="./css/styles.css" />
+</head>
+<body>
+  <main id="app" class="app-shell" aria-label="Smart Thermostat interface">
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+    <div class="glass-frame">
+      <header class="top-bar">
+        <section class="brand-block" aria-label="System identity">
+          <div class="brand-mark">ST</div>
+          <div>
+            <p class="eyebrow">Smart Thermostat</p>
+            <h1 id="pageTitle">Thermostat</h1>
+          </div>
+        </section>
+
+        <section class="system-status" aria-label="System status">
+          <div class="status-pill online"><span></span> Local Control</div>
+          <div class="status-pill muted"><span></span> HA Placeholder</div>
+          <div id="clock" class="clock">--:--</div>
+        </section>
+      </header>
+
+      <button id="leftZone" class="edge-zone edge-left" aria-label="Previous screen"></button>
+      <button id="rightZone" class="edge-zone edge-right" aria-label="Next screen"></button>
+
+      <section id="screenTrack" class="screen-track" aria-live="polite">
+        <!-- BLINDS SCREEN -->
+        <article class="screen screen-blinds" data-screen="blinds" aria-label="Blinds controls">
+          <div class="screen-grid blinds-grid">
+            <section class="panel hero-panel blinds-hero">
+              <div class="panel-heading">
+                <p class="eyebrow">Shade Control</p>
+                <h2 id="blindRoomTitle">Living Room</h2>
+                <p class="panel-subtitle">Room-level scenes and independent blind positions.</p>
+              </div>
+
+              <div class="room-tabs" role="tablist" aria-label="Blind rooms">
+                <button class="room-tab active" data-room="living">Living Room</button>
+                <button class="room-tab" data-room="kitchen">Kitchen</button>
+              </div>
+
+              <div class="room-actions">
+                <button class="scene-btn" data-blind-action="open-room">Open Room</button>
+                <button class="scene-btn dark" data-blind-action="stop-room">Stop</button>
+                <button class="scene-btn" data-blind-action="close-room">Close Room</button>
+              </div>
+            </section>
+
+            <section class="panel blinds-list-panel">
+              <div class="panel-heading compact">
+                <p class="eyebrow">Individual Blinds</p>
+                <h3>Fine Tune</h3>
+              </div>
+              <div id="blindCards" class="blind-cards"></div>
+            </section>
+          </div>
+        </article>
+
+        <!-- THERMOSTAT SCREEN -->
+        <article class="screen screen-thermostat" data-screen="thermostat" aria-label="Thermostat controls">
+          <div class="screen-grid thermostat-grid">
+            <section class="thermostat-main panel hero-panel">
+              <div class="comfort-header">
+                <div>
+                  <p class="eyebrow">Living Space</p>
+                  <h2>Comfort Control</h2>
+                </div>
+                <div id="runtimeState" class="runtime-chip">Idle</div>
+              </div>
+
+              <div class="dial-wrap">
+                <button id="tempDown" class="temp-step" aria-label="Decrease setpoint">−</button>
+                <div id="thermoDial" class="thermo-dial" aria-label="Thermostat dial">
+                  <div class="dial-inner">
+                    <p class="current-label">Current</p>
+                    <div class="current-temp"><span id="currentTemp">72</span><small>°F</small></div>
+                    <div class="target-row">Set to <strong><span id="targetTemp">70</span>°</strong></div>
+                    <div id="modeBadge" class="mode-badge cool">Cooling Ready</div>
+                  </div>
+                </div>
+                <button id="tempUp" class="temp-step" aria-label="Increase setpoint">+</button>
+              </div>
+
+              <div class="quick-actions">
+                <button class="mode-button active" data-mode="cool">Cool</button>
+                <button class="mode-button" data-mode="heat">Heat</button>
+                <button id="awayToggle" class="mode-button away">Away</button>
+              </div>
+            </section>
+
+            <aside class="side-stack">
+              <section class="panel metric-panel">
+                <div>
+                  <p class="eyebrow">Humidity</p>
+                  <h3><span id="humidityValue">45</span>%</h3>
+                </div>
+                <div class="mini-meter"><span style="--meter:45%"></span></div>
+              </section>
+
+              <section class="panel safety-panel">
+                <p class="eyebrow">Away Safety</p>
+                <h3>Protected Range</h3>
+                <div class="safety-points">
+                  <div><span>Heat</span><strong>55°</strong></div>
+                  <div><span>Cool</span><strong>85°</strong></div>
+                </div>
+                <p id="awayHint" class="hint">Away mode is off. Tap Away to apply safety setpoints.</p>
+              </section>
+
+              <section class="panel fan-panel">
+                <p class="eyebrow">Fan</p>
+                <div class="segmented" role="group" aria-label="Fan mode">
+                  <button class="segment active" data-fan="auto">Auto</button>
+                  <button class="segment" data-fan="on">On</button>
+                </div>
+              </section>
+            </aside>
+          </div>
+        </article>
+
+        <!-- AUDIO SCREEN -->
+        <article class="screen screen-audio" data-screen="audio" aria-label="Audio controls">
+          <div class="screen-grid audio-grid">
+            <section class="panel hero-panel audio-hero">
+              <div class="now-playing-card">
+                <div class="album-art" aria-hidden="true">
+                  <div class="record-core"></div>
+                </div>
+                <div class="track-info">
+                  <p class="eyebrow">Sonos Placeholder</p>
+                  <h2 id="trackTitle">Midnight Drive</h2>
+                  <p id="trackArtist">Glass Skyline</p>
+                  <div class="progress-bar"><span id="trackProgress"></span></div>
+                </div>
+              </div>
+
+              <div class="transport-controls">
+                <button id="prevTrack" class="transport" aria-label="Previous track">⏮</button>
+                <button id="playPause" class="transport primary" aria-label="Play or pause">▶</button>
+                <button id="nextTrack" class="transport" aria-label="Next track">⏭</button>
+              </div>
+            </section>
+
+            <section class="panel audio-mixer">
+              <div class="panel-heading compact">
+                <p class="eyebrow">Audio Tuning</p>
+                <h3>Living Room</h3>
+              </div>
+              <div class="slider-row">
+                <label for="volumeSlider">Volume <strong id="volumeValue">42</strong></label>
+                <input id="volumeSlider" type="range" min="0" max="100" value="42" />
+              </div>
+              <div class="slider-row">
+                <label for="gainSlider">Gain <strong id="gainValue">0</strong></label>
+                <input id="gainSlider" type="range" min="-10" max="10" value="0" />
+              </div>
+              <div class="slider-row">
+                <label for="bassSlider">Bass <strong id="bassValue">2</strong></label>
+                <input id="bassSlider" type="range" min="-10" max="10" value="2" />
+              </div>
+              <div class="slider-row">
+                <label for="trebleSlider">Treble <strong id="trebleValue">4</strong></label>
+                <input id="trebleSlider" type="range" min="-10" max="10" value="4" />
+              </div>
+            </section>
+          </div>
+        </article>
+      </section>
+
+      <footer class="bottom-nav">
+        <button id="navBlinds" class="nav-pill" data-goto="blinds">Blinds</button>
+        <button id="navThermostat" class="nav-pill active" data-goto="thermostat">Thermostat</button>
+        <button id="navAudio" class="nav-pill" data-goto="audio">Audio</button>
+        <div class="page-dots" aria-label="Screen position">
+          <span data-dot="blinds"></span>
+          <span data-dot="thermostat" class="active"></span>
+          <span data-dot="audio"></span>
+        </div>
+      </footer>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </main>
+
+  <script src="./js/app.js"></script>
+</body>
+</html>
