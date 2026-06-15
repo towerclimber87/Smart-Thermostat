@@ -4341,10 +4341,13 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
 .room-control-tabs { max-width: min(52vw, 780px); }
 .room-control-actions-row { display: none !important; }
 .room-control-cards {
+  --room-control-columns: 6;
+  --room-control-card-height: clamp(228px, 29vh, 276px);
   min-height: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  grid-auto-rows: minmax(214px, 1fr);
+  grid-template-columns: repeat(var(--room-control-columns, 6), minmax(0, 1fr));
+  grid-auto-rows: var(--room-control-card-height);
+  grid-auto-flow: row;
   align-content: start;
   align-items: stretch;
   gap: clamp(14px, 1.25vw, 22px);
@@ -4355,7 +4358,7 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
 .room-control-cards::-webkit-scrollbar { display: none; }
 .room-control-card {
   min-width: 0;
-  min-height: 214px;
+  min-height: 0;
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -4595,21 +4598,19 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
 }
 
 @media (min-width: 1400px) {
-  .room-control-cards { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
-  .room-control-card { min-height: 260px; }
+  .room-control-cards { --room-control-columns: 6; --room-control-card-height: clamp(236px, 29vh, 282px); }
   .room-control-name-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 @media (max-width: 1180px) {
-  .room-control-cards { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
-  .room-control-card { min-height: 220px; }
+  .room-control-cards { --room-control-columns: 4; --room-control-card-height: clamp(218px, 27vh, 254px); }
 }
 
 @media (max-width: 900px) {
   .top-nav { max-width: calc(100vw - 150px); overflow-x: auto; scrollbar-width: none; }
   .top-nav::-webkit-scrollbar { display: none; }
   .room-control-stage { grid-template-rows: auto auto minmax(0, 1fr); }
-  .room-control-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: minmax(210px, auto); }
+  .room-control-cards { --room-control-columns: 2; --room-control-card-height: clamp(206px, 30vh, 246px); }
   .room-control-config-list .room-config-main,
   .room-control-name-grid { grid-template-columns: 1fr; }
   .virtual-thermostat-panel {
@@ -5087,4 +5088,10 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   .settings-sheet.room-control-setup .room-control-name-grid {
     grid-template-columns: 1fr;
   }
+}
+
+
+/* 2026-06-16 v3.7: Room cards keep a fixed six-wide layout on the main panel. */
+.screen-room .room-control-cards {
+  grid-template-columns: repeat(var(--room-control-columns, 6), minmax(0, 1fr));
 }

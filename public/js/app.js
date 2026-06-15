@@ -35,6 +35,7 @@ const LIGHT_COLOR_PRESETS = [
 const ALARM_AUTO_SUBMIT_LENGTH = 4;
 const SETTINGS_ACCESS_CODE = "3762";
 const ROOM_CONTROL_CODE_MAX_LENGTH = 12;
+const ROOM_CONTROL_MAX_ENTRIES = 12;
 const ALARM_ARM_AWAY_DELAY_SECONDS = 60;
 const ROOM_CONTROL_PICKER_DOMAINS = [
   "switch",
@@ -705,7 +706,7 @@ function getActiveRoomControlRoom() {
     return state.roomControl.rooms[state.roomControl.room];
   }
   if (!state.roomControl.rooms[state.roomControl.room]) state.roomControl.room = keys[0];
-  return state.roomControl.rooms[state.roomControl.room];
+  return normalizeRoomControlRoom(state.roomControl.rooms[state.roomControl.room], state.roomControl.room);
 }
 
 function serializeLightsConfig() {
@@ -818,8 +819,7 @@ function applySavedConfig(saved = {}) {
   if (saved?.roomControl?.rooms) {
     state.roomControl = { ...clone(defaultRoomControlConfig), ...saved.roomControl, rooms: saved.roomControl.rooms };
     Object.entries(state.roomControl.rooms || {}).forEach(([roomKey, room]) => {
-      room.controls = Array.isArray(room.controls) && room.controls.length ? room.controls : [createRoomControl(roomKey || state.roomControl.room || "room", 1)];
-      room.controls.forEach((control, index) => normalizeRoomControlRecord(control, roomKey || state.roomControl.room || "room", index + 1));
+      normalizeRoomControlRoom(room, roomKey || state.roomControl.room || "room");
     });
     getActiveRoomControlRoom();
   }
@@ -3941,10 +3941,18 @@ function createRoomControl(roomKey, index) {
   };
 }
 
+function normalizeRoomControlRoom(room, roomKey = "room") {
+  if (!room || typeof room !== "object") return room;
+  room.controls = Array.isArray(room.controls) && room.controls.length ? room.controls : [createRoomControl(roomKey, 1)];
+  if (room.controls.length > ROOM_CONTROL_MAX_ENTRIES) room.controls = room.controls.slice(0, ROOM_CONTROL_MAX_ENTRIES);
+  room.controls.forEach((control, index) => normalizeRoomControlRecord(control, roomKey, index + 1));
+  return room;
+}
+
 function setRoomControlCount(roomKey, count) {
   const room = state.roomControl.rooms[roomKey];
   if (!room) return;
-  const target = clamp(Number(count), 1, 16);
+  const target = clamp(Number(count), 1, ROOM_CONTROL_MAX_ENTRIES);
   room.controls = Array.isArray(room.controls) ? room.controls : [];
   while (room.controls.length < target) room.controls.push(createRoomControl(roomKey, room.controls.length + 1));
   while (room.controls.length > target) room.controls.pop();
@@ -4014,12 +4022,11 @@ function renderRoomControlConfigList() {
   elements.roomControlConfigList.innerHTML = "";
   getRoomControlKeys().forEach((key) => {
     const room = state.roomControl.rooms[key];
-    room.controls = Array.isArray(room.controls) && room.controls.length ? room.controls : [createRoomControl(key, 1)];
-    room.controls.forEach((control, index) => normalizeRoomControlRecord(control, key, index + 1));
+    normalizeRoomControlRoom(room, key);
     const card = document.createElement("div");
     card.className = "room-config-card room-control-config-card";
     card.dataset.roomControlConfig = key;
-    const countOptions = Array.from({ length: 16 }, (_, idx) => idx + 1)
+    const countOptions = Array.from({ length: ROOM_CONTROL_MAX_ENTRIES }, (_, idx) => idx + 1)
       .map((count) => `<option value="${count}" ${room.controls.length === count ? "selected" : ""}>${count}</option>`)
       .join("");
     const controlInputs = room.controls.map((control, index) => {
@@ -4477,7 +4484,7 @@ function renderRoomControls() {
   if (!elements.roomControlCards) return;
   elements.roomControlCards.innerHTML = "";
   const controls = Array.isArray(room.controls) ? room.controls : [];
-  elements.roomControlCards.style.setProperty("--room-control-columns", clamp(controls.length, 1, 4));
+  elements.roomControlCards.style.setProperty("--room-control-columns", "6");
   controls.forEach((control, index) => {
     normalizeRoomControlRecord(control, state.roomControl.room, index + 1);
     const card = document.createElement("button");
