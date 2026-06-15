@@ -1077,1416 +1077,2065 @@
           ],
           "switches": [
             {
-              "domain": "switch",
-              "entityId": "switch.all_heater",
-              "name": "all Heaters",
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.alarm_fail_hold",
+              "name": "Alarm Fail Hold",
+              "state": "on"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.bedroom_ac_trgger",
+              "name": "Bedroom AC-Trigger",
               "state": "off"
             },
             {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.bedroom_floor",
+              "name": "Bedroom Floor",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.bedroom_heat_trgger",
+              "name": "Bedroom Heat-Trgger",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.bike",
+              "name": "Bike",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.blind_shower_helper",
+              "name": "Blind Shower Helper",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.christmas_time",
+              "name": "Christmas Time",
+              "state": "on"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.david_nfc",
+              "name": "David NFC",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.deleted_temp_bedroom",
+              "name": "deleted temp bedroom",
+              "state": "on"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.deleted_temp_couch",
+              "name": "deleted temp couch",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.status_fan_power",
+              "name": "Fan Power",
+              "state": "on"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.fan_sleep",
+              "name": "Fan Sleep",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.front_light_stay_on",
+              "name": "Front Light Stay On",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.girlfriend",
+              "name": "Girlfriend",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.alarm_armed_away_alex",
+              "name": "Going Out",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.good_night",
+              "name": "good night",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.guest_mode",
+              "name": "Guest Mode",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.hass_restart",
+              "name": "Hass Restart",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.house_wall_art",
+              "name": "House Wall Art",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.kitchen_light_auto_off",
+              "name": "Kitchen Light Auto Off",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.kitchen_light_stay_on",
+              "name": "Kitchen Light Stay On",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.livingroom_ac_trgger",
+              "name": "Livingroom AC-Trgger",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.livingroom_dark",
+              "name": "livingroom dark",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.livingroom_heat_trigger",
+              "name": "Livingroom Heat-Trigger",
+              "state": "on"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.minimalist_dropdown",
+              "name": "minimalist dropdown",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.morning_hold",
+              "name": "Morning Hold",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.morning_trigger",
+              "name": "morning trigger",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.night_light",
+              "name": "Night Light",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.night_mode",
+              "name": "Night Mode",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.not_used_used_for_holder",
+              "name": "Not used used for holder",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.nursery_ac_trigger",
+              "name": "Nursery AC Trigger",
+              "state": "on"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.nursery_heat_trigger",
+              "name": "Nursery Heat Trigger",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.office_ac_trigger",
+              "name": "Office AC Trigger",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.office_heat_trigger",
+              "name": "Office Heat Trigger",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.office_lock_override",
+              "name": "Office Lock Override",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.office_shutdown",
+              "name": "office shutdown",
+              "state": "on"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.office_wakeup",
+              "name": "Office Wakeup",
+              "state": "on"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.override",
+              "name": "Override",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.roomba_house",
+              "name": "Roomba House",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.roomba_kitchen",
+              "name": "Roomba Kitchen",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.roomba_livingroom",
+              "name": "Roomba Livingroom",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.security_system_alexa",
+              "name": "Security System Alexa",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.security_system_armed_away",
+              "name": "Security System Armed Away",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.security_system_armed_home",
+              "name": "Security System Armed Home",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.security_system_disarmed",
+              "name": "Security System Disarmed",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.security_system_sound",
+              "name": "Security System Sound",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.sleep",
+              "name": "Sleep",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.sleep_lock",
+              "name": "Sleep Lock",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.sonos_sound_auto",
+              "name": "Sonos Sound Auto",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.sonos_sound_correction",
+              "name": "Sonos Sound Correction",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.sonos_volume_change_trigger",
+              "name": "Sonos Volume Change Trigger",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.summer",
+              "name": "Summer",
+              "state": "on"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.surround_sound",
+              "name": "Surround sound",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.system_warning",
+              "name": "System Warning",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.tv_sleep",
+              "name": "TV Sleep",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.visitor",
+              "name": "Visitor",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.wake_up",
+              "name": "Wake up",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.window_10",
+              "name": "window 10",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "input_boolean",
+              "entityId": "input_boolean.winter",
+              "name": "Winter",
+              "state": "off"
+            },
+            {
+              "deviceClass": "",
+              "domain": "switch",
+              "entityId": "switch.all_heater",
+              "name": "all Heaters",
+              "state": "on"
+            },
+            {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.back_door_detections_animal",
               "name": "Back Door Animal detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.back_door_detections_baby_cry",
               "name": "Back Door Baby cry detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.back_door_detections_co_alarm",
               "name": "Back Door CO alarm detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_motion_5",
               "name": "Back Door Motion",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_overlay_show_date_5",
               "name": "Back Door Overlay: show date",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_overlay_show_logo_5",
               "name": "Back Door Overlay: show logo",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_overlay_show_name_5",
               "name": "Back Door Overlay: show name",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_overlay_show_nerd_mode_5",
               "name": "Back Door Overlay: show nerd mode",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.back_door_detections_person",
               "name": "Back Door Person detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_privacy_mode_5",
               "name": "Back Door Privacy mode",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.back_door_detections_smoke",
               "name": "Back Door Smoke detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.back_door_detections_speaking",
               "name": "Back Door Speaking detection",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.back_door_status_light",
               "name": "Back Door Status light",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.back_door_detections_vehicle",
               "name": "Back Door Vehicle detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.backyard_animal_detection",
               "name": "Backyard Animal detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.backyard_baby_cry_detection",
               "name": "Backyard Baby cry detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.backyard_co_alarm_detection",
               "name": "Backyard CO alarm detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_motion_6",
               "name": "Backyard Motion",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_overlay_show_date_6",
               "name": "Backyard Overlay: show date",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_overlay_show_logo_6",
               "name": "Backyard Overlay: show logo",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_overlay_show_name_6",
               "name": "Backyard Overlay: show name",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_overlay_show_nerd_mode_6",
               "name": "Backyard Overlay: show nerd mode",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.backyard_person_detection",
               "name": "Backyard Person detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.backyard_privacy_mode",
               "name": "Backyard Privacy mode",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.backyard_smoke_detection",
               "name": "Backyard Smoke detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.backyard_speaking_detection",
               "name": "Backyard Speaking detection",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.backyard_status_light",
               "name": "Backyard Status light",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.backyard_vehicle_detection",
               "name": "Backyard Vehicle detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.firetv_8074763bfc45ae20_mute",
               "name": "Bathroom Mirror FireTV 8074763bfc45ae20 Mute",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.bedroom_ac_relay",
               "name": "Bedroom AC Relay",
               "state": "unavailable"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.bedroom_artwork_freeze",
               "name": "Bedroom Artwork Freeze",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.bedroom_artwork_nightlight",
               "name": "Bedroom Artwork Nightlight",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.bedroom_artwork_reverse",
               "name": "Bedroom Artwork Reverse",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.bedroom_artwork_sync_receive",
               "name": "Bedroom Artwork Sync receive",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.bedroom_artwork_sync_send",
               "name": "Bedroom Artwork Sync send",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.bedroom_bed_light_freeze",
               "name": "Bedroom Bed Light Freeze",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.bed_light_nightlight",
               "name": "Bedroom Bed Light Nightlight",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.bed_light_reverse",
               "name": "Bedroom Bed Light Reverse",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.bed_light_sync_receive",
               "name": "Bedroom Bed Light Sync receive",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.bed_light_sync_send",
               "name": "Bedroom Bed Light Sync send",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.bedroom_crossfade",
               "name": "Bedroom Crossfade",
               "state": "off"
             },
             {
+              "deviceClass": "switch",
               "domain": "switch",
               "entityId": "switch.bedroom_fan",
               "name": "Bedroom Fan",
               "state": "off"
             },
             {
+              "deviceClass": "switch",
               "domain": "switch",
               "entityId": "switch.bedroom_fan_rotate",
               "name": "Bedroom Fan Rotate",
               "state": "off"
             },
             {
+              "deviceClass": "switch",
               "domain": "switch",
               "entityId": "switch.bedroom_fan_speed",
               "name": "Bedroom Fan Speed",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.bedroom_loudness",
               "name": "Bedroom Loudness",
               "state": "off"
             },
             {
+              "deviceClass": "switch",
               "domain": "switch",
               "entityId": "switch.bedroom_sound_power",
               "name": "Bedroom Sound Power",
               "state": "off"
             },
             {
+              "deviceClass": "switch",
               "domain": "switch",
               "entityId": "switch.bedroom_sound_volume",
               "name": "Bedroom Sound Volume +",
               "state": "on"
             },
             {
+              "deviceClass": "switch",
               "domain": "switch",
               "entityId": "switch.bedroom_sound_volume_2",
               "name": "Bedroom Sound Volume -",
               "state": "on"
             },
             {
+              "deviceClass": "switch",
               "domain": "switch",
               "entityId": "switch.bedroom_tv",
               "name": "Bedroom TV",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.bedroom_tv_autoplay",
               "name": "Bedroom TV autoplay",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.bedroom_ungroup_on_autoplay",
               "name": "Bedroom Ungroup on autoplay",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.forward",
               "name": "Bedroom-Bed forward",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.door_contact_disable_enable_2",
               "name": "Bedroom-Door Door Contact (Disable/Enable)",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.candle",
               "name": "Candle Candle",
-              "state": "off"
+              "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.porch_light_1",
               "name": "Christmas-Light-Main-Power Christmas Light Main Power",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.heater_2",
               "name": "Coffee-Pot Heater",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.couch_coffee",
               "name": "Couch-Coffee Couch Coffee",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.couch_heater_coil",
               "name": "Couch-Coffee Couch Heater Coil",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.desk_heater",
               "name": "Desk Heater",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.coffee",
               "name": "Desk-Coffee-And-Lights Coffee",
-              "state": "off"
+              "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.heater_coil",
               "name": "Desk-Coffee-And-Lights Heater Coil",
-              "state": "off"
+              "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.restart_2",
               "name": "Desk-Coffee-And-Lights Restart",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.cool",
               "name": "Final-Touch-Screen Cool",
               "state": "unavailable"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.fan",
               "name": "Final-Touch-Screen Fan",
               "state": "unavailable"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.heat",
               "name": "Final-Touch-Screen Heat",
               "state": "unavailable"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.fish_tank_blue_light",
-              "name": "Fish-Tank-Lights Fish Tank Blue Light",
-              "state": "on"
-            },
-            {
-              "domain": "switch",
-              "entityId": "switch.fish_tank_white_light",
-              "name": "Fish-Tank-Lights Fish Tank White Light",
+              "name": "Fish Tank Blue",
               "state": "off"
             },
             {
+              "deviceClass": "",
+              "domain": "switch",
+              "entityId": "switch.fish_tank_white_light",
+              "name": "Fish Tank White",
+              "state": "on"
+            },
+            {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.front_yard_north_detections_animal",
               "name": "Front Yard North Animal detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.front_yard_north_detections_baby_cry",
               "name": "Front Yard North Baby cry detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.front_yard_north_detections_co_alarm",
               "name": "Front Yard North CO alarm detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.front_yard_north_motion",
               "name": "Front Yard North Motion",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.front_yard_north_overlay_show_date",
               "name": "Front Yard North Overlay: show date",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.front_yard_north_overlay_show_logo",
               "name": "Front Yard North Overlay: show logo",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.front_yard_north_overlay_show_name",
               "name": "Front Yard North Overlay: show name",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.front_yard_north_overlay_show_nerd_mode",
               "name": "Front Yard North Overlay: show nerd mode",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.front_yard_north_detections_person",
               "name": "Front Yard North Person detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.front_yard_north_privacy_mode",
               "name": "Front Yard North Privacy mode",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.front_yard_north_detections_smoke",
               "name": "Front Yard North Smoke detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.front_yard_north_detections_speaking",
               "name": "Front Yard North Speaking detection",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.front_yard_north_status_light",
               "name": "Front Yard North Status light",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.front_yard_north_detections_vehicle",
               "name": "Front Yard North Vehicle detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.front_yard_south_detections_animal",
               "name": "Front yard South Animal detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.front_yard_south_detections_baby_cry",
               "name": "Front yard South Baby cry detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.front_yard_south_detections_co_alarm",
               "name": "Front yard South CO alarm detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_motion",
               "name": "Front yard South Motion",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_overlay_show_date",
               "name": "Front yard South Overlay: show date",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_overlay_show_logo",
               "name": "Front yard South Overlay: show logo",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_overlay_show_name",
               "name": "Front yard South Overlay: show name",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_overlay_show_nerd_mode",
               "name": "Front yard South Overlay: show nerd mode",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.front_yard_south_detections_person",
               "name": "Front yard South Person detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_privacy_mode",
               "name": "Front yard South Privacy mode",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.front_yard_south_detections_smoke",
               "name": "Front yard South Smoke detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.front_yard_south_detections_speaking",
               "name": "Front yard South Speaking detection",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.front_yard_south_status_light",
               "name": "Front yard South Status light",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.front_yard_south_detections_vehicle",
               "name": "Front yard South Vehicle detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.garage_bay_detections_animal",
               "name": "Garage Bay Animal detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.garage_bay_detections_baby_cry",
               "name": "Garage Bay Baby cry detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.garage_bay_detections_co_alarm",
               "name": "Garage Bay CO alarm detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_motion_4",
               "name": "Garage Bay Motion",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_overlay_show_date_4",
               "name": "Garage Bay Overlay: show date",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_overlay_show_logo_4",
               "name": "Garage Bay Overlay: show logo",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_overlay_show_name_4",
               "name": "Garage Bay Overlay: show name",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_overlay_show_nerd_mode_4",
               "name": "Garage Bay Overlay: show nerd mode",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.garage_bay_detections_person",
               "name": "Garage Bay Person detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_privacy_mode_4",
               "name": "Garage Bay Privacy mode",
               "state": "off"
             },
             {
+              "deviceClass": "switch",
               "domain": "switch",
               "entityId": "switch.garage_bay_remote",
               "name": "Garage Bay Remote",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.garage_bay_detections_smoke",
               "name": "Garage Bay Smoke detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.garage_bay_detections_speaking",
               "name": "Garage Bay Speaking detection",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.garage_bay_status_light",
               "name": "Garage Bay Status light",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.garage_bay_detections_vehicle",
               "name": "Garage Bay Vehicle detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.tp_link_smart_dimmer_8fa7_led",
               "name": "Garage light LED",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.tp_link_smart_dimmer_7609_led",
               "name": "Guest hallway LED",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.nursery_temp_restart_2",
               "name": "Guest-Room-Motion-2 Nursery Temp Restart 2",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.guest_temp_controller_lock",
               "name": "Guest-Temp-Controller guest-temp-controller Lock",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.guest_temp_controller_test",
               "name": "Guest-Temp-Controller test",
-              "state": "on"
+              "state": "off"
             },
             {
+              "deviceClass": "switch",
               "domain": "switch",
               "entityId": "switch.hdmi_3",
               "name": "HDMI 3",
               "state": "off"
             },
             {
+              "deviceClass": "switch",
               "domain": "switch",
               "entityId": "switch.hdmi_4",
               "name": "HDMI 4",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.house_alexa",
               "name": "House Alexa",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.house_climate_control_room_3_heater_relay",
               "name": "House-Climate-Control ${room_3} Heater Relay",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.on_board_relay",
               "name": "House-Rack-1 On Board Relay",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.pico_buzzer",
               "name": "House-Rack-1 Pico Buzzer",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.test_switch",
               "name": "House-Rack-1 Test Switch",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.bedroomdoor_red_led",
               "name": "House-System-3 Bedroomdoor Red LED",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.fire_place_trigger",
               "name": "House-System-3 Fire Place Trigger",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.frontdoor_red_led",
               "name": "House-System-3 Frontdoor Red LED",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.garage_door_trigger",
               "name": "House-System-3 Garage Door Trigger",
               "state": "off"
             },
             {
+              "deviceClass": "switch",
               "domain": "switch",
               "entityId": "switch.iot",
               "name": "IOT Enabled",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.keypad_bedroom_door_guest_access",
               "name": "Keypad-Bedroom-Door Keypad Bedroom Door Guest Access",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.keypad_front_door_guest_access",
               "name": "Keypad-Frontdoor Keypad Front Door Guest Access",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.keypad_garage_door_guest_access",
               "name": "Keypad-Garage Keypad Garage Door Guest Access",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.keypad_garage_bay_guest_access",
               "name": "Keypad-Garage-Bay Keypad Garage Bay Guest Access",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.keypad_office_door_guest_access",
               "name": "Keypad-Office Keypad Office Door Guest Access",
               "state": "off"
             },
             {
+              "deviceClass": "switch",
               "domain": "switch",
               "entityId": "switch.kitchen_alexa",
               "name": "Kitchen Alexa Blocked",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.kitchen_detections_animal",
               "name": "Kitchen Animal detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.kitchen_detections_baby_cry",
               "name": "Kitchen Baby cry detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.kitchen_detections_co_alarm",
               "name": "Kitchen CO alarm detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.tp_link_smart_dimmer_c7cc_led",
               "name": "Kitchen light LED",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_motion_2",
               "name": "Kitchen Motion",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_overlay_show_date_2",
               "name": "Kitchen Overlay: show date",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_overlay_show_logo_2",
               "name": "Kitchen Overlay: show logo",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_overlay_show_name_2",
               "name": "Kitchen Overlay: show name",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_overlay_show_nerd_mode_2",
               "name": "Kitchen Overlay: show nerd mode",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.kitchen_detections_person",
               "name": "Kitchen Person detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_privacy_mode_2",
               "name": "Kitchen Privacy mode",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.kitchen_detections_smoke",
               "name": "Kitchen Smoke detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.kitchen_detections_speaking",
               "name": "Kitchen Speaking detection",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.kitchen_status_light",
               "name": "Kitchen Status light",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.kitchen_detections_vehicle",
               "name": "Kitchen Vehicle detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.little_tv_relay",
               "name": "Little-Tv little_tv_relay",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.tp_link_smart_dimmer_a167_led",
               "name": "Living room light LED",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.livingroom_ac_power",
               "name": "Livingroom AC Power",
-              "state": "on"
+              "state": "off"
             },
             {
+              "deviceClass": "switch",
               "domain": "switch",
               "entityId": "switch.livingroom_alexa",
               "name": "Livingroom Alexa Blocked",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.livingroom_detections_animal",
               "name": "Livingroom Animal detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.livingroom_detections_baby_cry",
               "name": "Livingroom Baby cry detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.livingroom_detections_co_alarm",
               "name": "Livingroom CO alarm detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_motion_3",
               "name": "Livingroom Motion",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_overlay_show_date_3",
               "name": "Livingroom Overlay: show date",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_overlay_show_logo_3",
               "name": "Livingroom Overlay: show logo",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_overlay_show_name_3",
               "name": "Livingroom Overlay: show name",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_overlay_show_nerd_mode_3",
               "name": "Livingroom Overlay: show nerd mode",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.livingroom_detections_person",
               "name": "Livingroom Person detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.g5_turret_ultra_privacy_mode_3",
               "name": "Livingroom Privacy mode",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.livingroom_projector",
               "name": "Livingroom Projector",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.livingroom_detections_smoke",
               "name": "Livingroom Smoke detection",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.livingroom_sonos_crossfade",
               "name": "Livingroom Sonos Crossfade",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.livingroom_sonos_loudness",
               "name": "Livingroom Sonos Loudness",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.livingroom_sonos_night_sound",
               "name": "Livingroom Sonos Night sound",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.livingroom_sonos_speech_enhancement",
               "name": "Livingroom Sonos Speech enhancement",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.sonos_sub",
               "name": "Livingroom Sonos Subwoofer enabled",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.sonos_sonosf_surround_enabled",
               "name": "Livingroom Sonos Surround enabled",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.livingroom_sonos_surround_music_full_volume",
               "name": "Livingroom Sonos Surround music full volume",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.livingroom_sonos_tv_autoplay",
               "name": "Livingroom Sonos TV autoplay",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.livingroom_sonos_ungroup_on_autoplay",
               "name": "Livingroom Sonos Ungroup on autoplay",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.livingroom_detections_speaking",
               "name": "Livingroom Speaking detection",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.livingroom_status_light",
               "name": "Livingroom Status light",
               "state": "off"
             },
             {
+              "deviceClass": "switch",
               "domain": "switch",
               "entityId": "switch.livingroom_tv_power",
               "name": "Livingroom TV Power",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.smarttv_4k_mute",
               "name": "Livingroom TV SmartTV 4K Mute",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.livingroom_detections_vehicle",
               "name": "Livingroom Vehicle detection",
               "state": "on"
             },
             {
+              "deviceClass": "switch",
               "domain": "switch",
               "entityId": "switch.livingroom_volume",
               "name": "Livingroom Volume +",
               "state": "off"
             },
             {
+              "deviceClass": "switch",
               "domain": "switch",
               "entityId": "switch.livingroom_volume_2",
               "name": "Livingroom Volume -",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.latch",
               "name": "Livingroom-Gun-Art latch",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.mini_climate_card_pre_release",
               "name": "mini climate card Pre-release",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.mirror",
               "name": "Mirror",
               "state": "unavailable"
             },
             {
+              "deviceClass": "switch",
               "domain": "switch",
               "entityId": "switch.morris",
               "name": "Morris Enabled",
               "state": "on"
             },
             {
+              "deviceClass": "switch",
               "domain": "switch",
               "entityId": "switch.morris_media",
               "name": "Morris Media Enabled",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.night_stand_drawer_drawer_open",
               "name": "Night-Stand-Drawer Drawer Open",
               "state": "unavailable"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.night_stand_drawer_night_stand_drawer_guest_access",
               "name": "Night-Stand-Drawer Night Stand Drawer Guest Access",
               "state": "unavailable"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.nursery_ac_relay",
               "name": "Nursery AC Relay",
               "state": "unavailable"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.office_ac_power",
               "name": "Office AC Power",
-              "state": "on"
+              "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.tp_link_smart_dimmer_c4a9_led",
               "name": "Office light LED",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.office_outlets",
               "name": "Office Outlets",
               "state": "unavailable"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.onn_g801x_a16a_mute",
               "name": "Office TV onn G801X A16A Mute",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.office_bench_spare_1",
               "name": "Office-Bench-Light Office Bench Spare 1",
               "state": "unavailable"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.office_bench_spare_2",
               "name": "Office-Bench-Light Office Bench Spare 2",
               "state": "unavailable"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.office_bench_spare_3",
               "name": "Office-Bench-Light Office Bench Spare 3",
               "state": "unavailable"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.office_bench_spare_4",
               "name": "Office-Bench-Light Office Bench Spare 4",
               "state": "unavailable"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.office_button_controller_lock",
               "name": "Office-Button-Controller office-button-controller Lock",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.office_computer",
               "name": "Office-Computer Office Computer",
               "state": "unavailable"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.office_computer_power_cord_office_computer_power_cord",
               "name": "Office-Computer-Power-Cord Office Computer Power Cord",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.1",
               "name": "Office-Door 1",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.2",
               "name": "Office-Door 2",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.office_door_close",
               "name": "Office-Door Office Door Close",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.office_door_open",
               "name": "Office-Door Office Door Open",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.office_door_reset",
               "name": "Office-Door Office Door Reset",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.office_exhaust",
               "name": "Office-Exhaust Office Exhaust",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.office_bench_overhead_lights",
               "name": "Office-Overhead-Light Office Bench Overhead Lights",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.office_temp_controller_lock",
               "name": "Office-Temp-Controller office-temp-controller Lock",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.outside_light",
               "name": "Outside Light",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.printer_light",
               "name": "Printer Light",
               "state": "unavailable"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.printer_light_1",
               "name": "Printer-Lamp-1 Printer Light 1",
               "state": "unavailable"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.printer_light_2",
               "name": "Printer-Lamp-2 Printer Light 2",
               "state": "unavailable"
             },
             {
+              "deviceClass": "switch",
               "domain": "switch",
               "entityId": "switch.projector_screen",
               "name": "Projector Screen",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.nursery_ac_power",
               "name": "Receptacle",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.screen_helper_subwoffler",
               "name": "screen helper subwoffler",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.screen_helper_surround",
               "name": "screen helper surround",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.screen_lock",
               "name": "Screen Lock",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.screen_projector_helper",
               "name": "Screen Projector Helper",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.shower_fan",
               "name": "Shower Fan",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.shower_fan_auto_off_enabled",
               "name": "Shower Fan Auto-off enabled",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.shower_fan_auto_update_enabled",
               "name": "Shower Fan Auto-update enabled",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.shower_fan_led",
               "name": "Shower Fan LED",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.unassigned_smart_away",
               "name": "Smart Bridge 2 Unassigned Smart Away",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.solder_fan",
               "name": "Solder-Fan Solder Fan",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.solder_iron",
               "name": "Solder-Iron Solder Iron",
               "state": "off"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.bedroom_hallway_light",
               "name": "switch.bedroom_hallway_light",
               "state": "unavailable"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.udm_se_morris_analytics_enabled",
               "name": "UDM SE-Morris Analytics enabled",
               "state": "on"
             },
             {
+              "deviceClass": "",
               "domain": "switch",
               "entityId": "switch.udm_se_morris_insights_enabled",
               "name": "UDM SE-Morris Insights enabled",
               "state": "on"
             },
             {
+              "deviceClass": "switch",
               "domain": "switch",
               "entityId": "switch.unifi_network_beta_app",
               "name": "UniFi Network Beta App",
               "state": "off"
             },
             {
+              "deviceClass": "switch",
               "domain": "switch",
               "entityId": "switch.unifi_network_beta_app_temp_certbot_http_challenge",
               "name": "UniFi Network Beta App Temp-Certbot HTTP Challenge",
               "state": "off"
             },
             {
+              "deviceClass": "switch",
               "domain": "switch",
               "entityId": "switch.unifi_network_blue",
               "name": "UniFi Network Blue",
               "state": "off"
             },
             {
+              "deviceClass": "switch",
               "domain": "switch",
               "entityId": "switch.unifi_network_daily_reort_test_1",
               "name": "UniFi Network daily reort test 1",
               "state": "off"
             },
             {
+              "deviceClass": "switch",
               "domain": "switch",
               "entityId": "switch.unifi_network_fns_testing_checker",
               "name": "UniFi Network FNS Testing Checker",
               "state": "off"
             },
             {
+              "deviceClass": "switch",
               "domain": "switch",
               "entityId": "switch.unifi_network_mqtt",
               "name": "UniFi Network MQTT",
               "state": "on"
             },
             {
+              "deviceClass": "switch",
               "domain": "switch",
               "entityId": "switch.unifi_network_remote_desktop_to_office_computer",
               "name": "UniFi Network Remote Desktop To Office computer",
               "state": "on"
             },
             {
+              "deviceClass": "switch",
               "domain": "switch",
               "entityId": "switch.unifi_network_vpn",
               "name": "UniFi Network VPN",
@@ -2520,18 +3169,21 @@
             "value": -15
           },
           "projector": {
+            "deviceClass": "",
             "domain": "switch",
             "entityId": "switch.livingroom_projector",
             "name": "Livingroom Projector",
             "state": "off"
           },
           "subwoofer": {
+            "deviceClass": "",
             "domain": "switch",
             "entityId": "switch.sonos_sub",
             "name": "Livingroom Sonos Subwoofer enabled",
             "state": "on"
           },
           "surround": {
+            "deviceClass": "",
             "domain": "switch",
             "entityId": "switch.sonos_sonosf_surround_enabled",
             "name": "Livingroom Sonos Surround enabled",
@@ -2566,24 +3218,24 @@
             "supportedFeatures": 15
           },
           {
-            "currentPosition": 0,
+            "currentPosition": 100,
             "entityId": "cover.bedroom_blinds",
             "name": "Bedroom-Blinds Bedroom Blinds",
-            "state": "closed",
+            "state": "open",
             "supportedFeatures": 15
           },
           {
-            "currentPosition": 0,
+            "currentPosition": 100,
             "entityId": "cover.bedroom_blinds_1",
             "name": "Bedroom-Blinds Bedroom Blinds 1",
-            "state": "closed",
+            "state": "open",
             "supportedFeatures": 15
           },
           {
-            "currentPosition": 0,
+            "currentPosition": 100,
             "entityId": "cover.bedroom_blinds_2",
             "name": "Bedroom-Blinds Bedroom Blinds 2",
-            "state": "closed",
+            "state": "open",
             "supportedFeatures": 15
           },
           {
@@ -2594,10 +3246,10 @@
             "supportedFeatures": 3
           },
           {
-            "currentPosition": 0,
+            "currentPosition": 100,
             "entityId": "cover.house_blind",
             "name": "House Blind",
-            "state": "closed",
+            "state": "open",
             "supportedFeatures": 15
           },
           {
@@ -2622,24 +3274,24 @@
             "supportedFeatures": 15
           },
           {
-            "currentPosition": 0,
+            "currentPosition": 100,
             "entityId": "cover.kitchen_blinds",
             "name": "Kitchen-Robby-Blinds Kitchen Blinds",
-            "state": "closed",
+            "state": "open",
             "supportedFeatures": 15
           },
           {
-            "currentPosition": 0,
+            "currentPosition": 100,
             "entityId": "cover.kitchen_east_blind",
             "name": "Kitchen-Robby-Blinds Kitchen East Blind",
-            "state": "closed",
+            "state": "open",
             "supportedFeatures": 15
           },
           {
-            "currentPosition": 0,
+            "currentPosition": 100,
             "entityId": "cover.kitchen_north_blind",
             "name": "Kitchen-Robby-Blinds Kitchen North Blind",
-            "state": "closed",
+            "state": "open",
             "supportedFeatures": 15
           },
           {
@@ -2650,10 +3302,31 @@
             "supportedFeatures": 15
           },
           {
-            "currentPosition": 0,
+            "currentPosition": 100,
             "entityId": "cover.living_space_blind",
             "name": "Living Space Blind",
-            "state": "closed",
+            "state": "open",
+            "supportedFeatures": 15
+          },
+          {
+            "currentPosition": 100,
+            "entityId": "cover.livingroom_blinds",
+            "name": "Livingroom-Blinds Livingroom Blinds",
+            "state": "open",
+            "supportedFeatures": 15
+          },
+          {
+            "currentPosition": 100,
+            "entityId": "cover.north_blinds",
+            "name": "Livingroom-Blinds North Blinds",
+            "state": "open",
+            "supportedFeatures": 15
+          },
+          {
+            "currentPosition": 100,
+            "entityId": "cover.west_blinds",
+            "name": "Livingroom-Blinds West Blinds",
+            "state": "open",
             "supportedFeatures": 15
           },
           {
@@ -2668,27 +3341,6 @@
             "entityId": "cover.livingroom_blind_4",
             "name": "North 2",
             "state": "open",
-            "supportedFeatures": 15
-          },
-          {
-            "currentPosition": 0,
-            "entityId": "cover.livingroom_blinds",
-            "name": "Livingroom-Blinds Livingroom Blinds",
-            "state": "closed",
-            "supportedFeatures": 15
-          },
-          {
-            "currentPosition": 0,
-            "entityId": "cover.north_blinds",
-            "name": "Livingroom-Blinds North Blinds",
-            "state": "closed",
-            "supportedFeatures": 15
-          },
-          {
-            "currentPosition": 0,
-            "entityId": "cover.west_blinds",
-            "name": "Livingroom-Blinds West Blinds",
-            "state": "closed",
             "supportedFeatures": 15
           },
           {
@@ -5907,6 +6559,2073 @@
             "volumeLevel": null
           }
         ],
+        "roomAvailableEntities": [
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.alarm_fail_hold",
+            "name": "Alarm Fail Hold",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.bedroom_ac_trgger",
+            "name": "Bedroom AC-Trigger",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.bedroom_floor",
+            "name": "Bedroom Floor",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.bedroom_heat_trgger",
+            "name": "Bedroom Heat-Trgger",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.bike",
+            "name": "Bike",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.blind_shower_helper",
+            "name": "Blind Shower Helper",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.christmas_time",
+            "name": "Christmas Time",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.david_nfc",
+            "name": "David NFC",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.deleted_temp_bedroom",
+            "name": "deleted temp bedroom",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.deleted_temp_couch",
+            "name": "deleted temp couch",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.status_fan_power",
+            "name": "Fan Power",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.fan_sleep",
+            "name": "Fan Sleep",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.front_light_stay_on",
+            "name": "Front Light Stay On",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.girlfriend",
+            "name": "Girlfriend",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.alarm_armed_away_alex",
+            "name": "Going Out",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.good_night",
+            "name": "good night",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.guest_mode",
+            "name": "Guest Mode",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.hass_restart",
+            "name": "Hass Restart",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.house_wall_art",
+            "name": "House Wall Art",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.kitchen_light_auto_off",
+            "name": "Kitchen Light Auto Off",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.kitchen_light_stay_on",
+            "name": "Kitchen Light Stay On",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.livingroom_ac_trgger",
+            "name": "Livingroom AC-Trgger",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.livingroom_dark",
+            "name": "livingroom dark",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.livingroom_heat_trigger",
+            "name": "Livingroom Heat-Trigger",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.minimalist_dropdown",
+            "name": "minimalist dropdown",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.morning_hold",
+            "name": "Morning Hold",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.morning_trigger",
+            "name": "morning trigger",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.night_light",
+            "name": "Night Light",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.night_mode",
+            "name": "Night Mode",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.not_used_used_for_holder",
+            "name": "Not used used for holder",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.nursery_ac_trigger",
+            "name": "Nursery AC Trigger",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.nursery_heat_trigger",
+            "name": "Nursery Heat Trigger",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.office_ac_trigger",
+            "name": "Office AC Trigger",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.office_heat_trigger",
+            "name": "Office Heat Trigger",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.office_lock_override",
+            "name": "Office Lock Override",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.office_shutdown",
+            "name": "office shutdown",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.office_wakeup",
+            "name": "Office Wakeup",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.override",
+            "name": "Override",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.roomba_house",
+            "name": "Roomba House",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.roomba_kitchen",
+            "name": "Roomba Kitchen",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.roomba_livingroom",
+            "name": "Roomba Livingroom",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.security_system_alexa",
+            "name": "Security System Alexa",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.security_system_armed_away",
+            "name": "Security System Armed Away",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.security_system_armed_home",
+            "name": "Security System Armed Home",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.security_system_disarmed",
+            "name": "Security System Disarmed",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.security_system_sound",
+            "name": "Security System Sound",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.sleep",
+            "name": "Sleep",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.sleep_lock",
+            "name": "Sleep Lock",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.sonos_sound_auto",
+            "name": "Sonos Sound Auto",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.sonos_sound_correction",
+            "name": "Sonos Sound Correction",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.sonos_volume_change_trigger",
+            "name": "Sonos Volume Change Trigger",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.summer",
+            "name": "Summer",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.surround_sound",
+            "name": "Surround sound",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.system_warning",
+            "name": "System Warning",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.tv_sleep",
+            "name": "TV Sleep",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.visitor",
+            "name": "Visitor",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.wake_up",
+            "name": "Wake up",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.window_10",
+            "name": "window 10",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "input_boolean",
+            "entityId": "input_boolean.winter",
+            "name": "Winter",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.all_heater",
+            "name": "all Heaters",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.back_door_detections_animal",
+            "name": "Back Door Animal detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.back_door_detections_baby_cry",
+            "name": "Back Door Baby cry detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.back_door_detections_co_alarm",
+            "name": "Back Door CO alarm detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_motion_5",
+            "name": "Back Door Motion",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_overlay_show_date_5",
+            "name": "Back Door Overlay: show date",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_overlay_show_logo_5",
+            "name": "Back Door Overlay: show logo",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_overlay_show_name_5",
+            "name": "Back Door Overlay: show name",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_overlay_show_nerd_mode_5",
+            "name": "Back Door Overlay: show nerd mode",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.back_door_detections_person",
+            "name": "Back Door Person detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_privacy_mode_5",
+            "name": "Back Door Privacy mode",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.back_door_detections_smoke",
+            "name": "Back Door Smoke detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.back_door_detections_speaking",
+            "name": "Back Door Speaking detection",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.back_door_status_light",
+            "name": "Back Door Status light",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.back_door_detections_vehicle",
+            "name": "Back Door Vehicle detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.backyard_animal_detection",
+            "name": "Backyard Animal detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.backyard_baby_cry_detection",
+            "name": "Backyard Baby cry detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.backyard_co_alarm_detection",
+            "name": "Backyard CO alarm detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_motion_6",
+            "name": "Backyard Motion",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_overlay_show_date_6",
+            "name": "Backyard Overlay: show date",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_overlay_show_logo_6",
+            "name": "Backyard Overlay: show logo",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_overlay_show_name_6",
+            "name": "Backyard Overlay: show name",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_overlay_show_nerd_mode_6",
+            "name": "Backyard Overlay: show nerd mode",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.backyard_person_detection",
+            "name": "Backyard Person detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.backyard_privacy_mode",
+            "name": "Backyard Privacy mode",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.backyard_smoke_detection",
+            "name": "Backyard Smoke detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.backyard_speaking_detection",
+            "name": "Backyard Speaking detection",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.backyard_status_light",
+            "name": "Backyard Status light",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.backyard_vehicle_detection",
+            "name": "Backyard Vehicle detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.firetv_8074763bfc45ae20_mute",
+            "name": "Bathroom Mirror FireTV 8074763bfc45ae20 Mute",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.bedroom_ac_relay",
+            "name": "Bedroom AC Relay",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.bedroom_artwork_freeze",
+            "name": "Bedroom Artwork Freeze",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.bedroom_artwork_nightlight",
+            "name": "Bedroom Artwork Nightlight",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.bedroom_artwork_reverse",
+            "name": "Bedroom Artwork Reverse",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.bedroom_artwork_sync_receive",
+            "name": "Bedroom Artwork Sync receive",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.bedroom_artwork_sync_send",
+            "name": "Bedroom Artwork Sync send",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.bedroom_bed_light_freeze",
+            "name": "Bedroom Bed Light Freeze",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.bed_light_nightlight",
+            "name": "Bedroom Bed Light Nightlight",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.bed_light_reverse",
+            "name": "Bedroom Bed Light Reverse",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.bed_light_sync_receive",
+            "name": "Bedroom Bed Light Sync receive",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.bed_light_sync_send",
+            "name": "Bedroom Bed Light Sync send",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.bedroom_crossfade",
+            "name": "Bedroom Crossfade",
+            "state": "off"
+          },
+          {
+            "deviceClass": "switch",
+            "domain": "switch",
+            "entityId": "switch.bedroom_fan",
+            "name": "Bedroom Fan",
+            "state": "off"
+          },
+          {
+            "deviceClass": "switch",
+            "domain": "switch",
+            "entityId": "switch.bedroom_fan_rotate",
+            "name": "Bedroom Fan Rotate",
+            "state": "off"
+          },
+          {
+            "deviceClass": "switch",
+            "domain": "switch",
+            "entityId": "switch.bedroom_fan_speed",
+            "name": "Bedroom Fan Speed",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.bedroom_loudness",
+            "name": "Bedroom Loudness",
+            "state": "off"
+          },
+          {
+            "deviceClass": "switch",
+            "domain": "switch",
+            "entityId": "switch.bedroom_sound_power",
+            "name": "Bedroom Sound Power",
+            "state": "off"
+          },
+          {
+            "deviceClass": "switch",
+            "domain": "switch",
+            "entityId": "switch.bedroom_sound_volume",
+            "name": "Bedroom Sound Volume +",
+            "state": "on"
+          },
+          {
+            "deviceClass": "switch",
+            "domain": "switch",
+            "entityId": "switch.bedroom_sound_volume_2",
+            "name": "Bedroom Sound Volume -",
+            "state": "on"
+          },
+          {
+            "deviceClass": "switch",
+            "domain": "switch",
+            "entityId": "switch.bedroom_tv",
+            "name": "Bedroom TV",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.bedroom_tv_autoplay",
+            "name": "Bedroom TV autoplay",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.bedroom_ungroup_on_autoplay",
+            "name": "Bedroom Ungroup on autoplay",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.forward",
+            "name": "Bedroom-Bed forward",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.door_contact_disable_enable_2",
+            "name": "Bedroom-Door Door Contact (Disable/Enable)",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.candle",
+            "name": "Candle Candle",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.porch_light_1",
+            "name": "Christmas-Light-Main-Power Christmas Light Main Power",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.heater_2",
+            "name": "Coffee-Pot Heater",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.couch_coffee",
+            "name": "Couch-Coffee Couch Coffee",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.couch_heater_coil",
+            "name": "Couch-Coffee Couch Heater Coil",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.desk_heater",
+            "name": "Desk Heater",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.coffee",
+            "name": "Desk-Coffee-And-Lights Coffee",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.heater_coil",
+            "name": "Desk-Coffee-And-Lights Heater Coil",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.restart_2",
+            "name": "Desk-Coffee-And-Lights Restart",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.cool",
+            "name": "Final-Touch-Screen Cool",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.fan",
+            "name": "Final-Touch-Screen Fan",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.heat",
+            "name": "Final-Touch-Screen Heat",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.fish_tank_blue_light",
+            "name": "Fish Tank Blue",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.fish_tank_white_light",
+            "name": "Fish Tank White",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.front_yard_north_detections_animal",
+            "name": "Front Yard North Animal detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.front_yard_north_detections_baby_cry",
+            "name": "Front Yard North Baby cry detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.front_yard_north_detections_co_alarm",
+            "name": "Front Yard North CO alarm detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.front_yard_north_motion",
+            "name": "Front Yard North Motion",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.front_yard_north_overlay_show_date",
+            "name": "Front Yard North Overlay: show date",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.front_yard_north_overlay_show_logo",
+            "name": "Front Yard North Overlay: show logo",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.front_yard_north_overlay_show_name",
+            "name": "Front Yard North Overlay: show name",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.front_yard_north_overlay_show_nerd_mode",
+            "name": "Front Yard North Overlay: show nerd mode",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.front_yard_north_detections_person",
+            "name": "Front Yard North Person detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.front_yard_north_privacy_mode",
+            "name": "Front Yard North Privacy mode",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.front_yard_north_detections_smoke",
+            "name": "Front Yard North Smoke detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.front_yard_north_detections_speaking",
+            "name": "Front Yard North Speaking detection",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.front_yard_north_status_light",
+            "name": "Front Yard North Status light",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.front_yard_north_detections_vehicle",
+            "name": "Front Yard North Vehicle detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.front_yard_south_detections_animal",
+            "name": "Front yard South Animal detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.front_yard_south_detections_baby_cry",
+            "name": "Front yard South Baby cry detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.front_yard_south_detections_co_alarm",
+            "name": "Front yard South CO alarm detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_motion",
+            "name": "Front yard South Motion",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_overlay_show_date",
+            "name": "Front yard South Overlay: show date",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_overlay_show_logo",
+            "name": "Front yard South Overlay: show logo",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_overlay_show_name",
+            "name": "Front yard South Overlay: show name",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_overlay_show_nerd_mode",
+            "name": "Front yard South Overlay: show nerd mode",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.front_yard_south_detections_person",
+            "name": "Front yard South Person detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_privacy_mode",
+            "name": "Front yard South Privacy mode",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.front_yard_south_detections_smoke",
+            "name": "Front yard South Smoke detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.front_yard_south_detections_speaking",
+            "name": "Front yard South Speaking detection",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.front_yard_south_status_light",
+            "name": "Front yard South Status light",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.front_yard_south_detections_vehicle",
+            "name": "Front yard South Vehicle detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.garage_bay_detections_animal",
+            "name": "Garage Bay Animal detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.garage_bay_detections_baby_cry",
+            "name": "Garage Bay Baby cry detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.garage_bay_detections_co_alarm",
+            "name": "Garage Bay CO alarm detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_motion_4",
+            "name": "Garage Bay Motion",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_overlay_show_date_4",
+            "name": "Garage Bay Overlay: show date",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_overlay_show_logo_4",
+            "name": "Garage Bay Overlay: show logo",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_overlay_show_name_4",
+            "name": "Garage Bay Overlay: show name",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_overlay_show_nerd_mode_4",
+            "name": "Garage Bay Overlay: show nerd mode",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.garage_bay_detections_person",
+            "name": "Garage Bay Person detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_privacy_mode_4",
+            "name": "Garage Bay Privacy mode",
+            "state": "off"
+          },
+          {
+            "deviceClass": "switch",
+            "domain": "switch",
+            "entityId": "switch.garage_bay_remote",
+            "name": "Garage Bay Remote",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.garage_bay_detections_smoke",
+            "name": "Garage Bay Smoke detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.garage_bay_detections_speaking",
+            "name": "Garage Bay Speaking detection",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.garage_bay_status_light",
+            "name": "Garage Bay Status light",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.garage_bay_detections_vehicle",
+            "name": "Garage Bay Vehicle detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.tp_link_smart_dimmer_8fa7_led",
+            "name": "Garage light LED",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.tp_link_smart_dimmer_7609_led",
+            "name": "Guest hallway LED",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.nursery_temp_restart_2",
+            "name": "Guest-Room-Motion-2 Nursery Temp Restart 2",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.guest_temp_controller_lock",
+            "name": "Guest-Temp-Controller guest-temp-controller Lock",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.guest_temp_controller_test",
+            "name": "Guest-Temp-Controller test",
+            "state": "off"
+          },
+          {
+            "deviceClass": "switch",
+            "domain": "switch",
+            "entityId": "switch.hdmi_3",
+            "name": "HDMI 3",
+            "state": "off"
+          },
+          {
+            "deviceClass": "switch",
+            "domain": "switch",
+            "entityId": "switch.hdmi_4",
+            "name": "HDMI 4",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.house_alexa",
+            "name": "House Alexa",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.house_climate_control_room_3_heater_relay",
+            "name": "House-Climate-Control ${room_3} Heater Relay",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.on_board_relay",
+            "name": "House-Rack-1 On Board Relay",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.pico_buzzer",
+            "name": "House-Rack-1 Pico Buzzer",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.test_switch",
+            "name": "House-Rack-1 Test Switch",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.bedroomdoor_red_led",
+            "name": "House-System-3 Bedroomdoor Red LED",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.fire_place_trigger",
+            "name": "House-System-3 Fire Place Trigger",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.frontdoor_red_led",
+            "name": "House-System-3 Frontdoor Red LED",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.garage_door_trigger",
+            "name": "House-System-3 Garage Door Trigger",
+            "state": "off"
+          },
+          {
+            "deviceClass": "switch",
+            "domain": "switch",
+            "entityId": "switch.iot",
+            "name": "IOT Enabled",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.keypad_bedroom_door_guest_access",
+            "name": "Keypad-Bedroom-Door Keypad Bedroom Door Guest Access",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.keypad_front_door_guest_access",
+            "name": "Keypad-Frontdoor Keypad Front Door Guest Access",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.keypad_garage_door_guest_access",
+            "name": "Keypad-Garage Keypad Garage Door Guest Access",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.keypad_garage_bay_guest_access",
+            "name": "Keypad-Garage-Bay Keypad Garage Bay Guest Access",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.keypad_office_door_guest_access",
+            "name": "Keypad-Office Keypad Office Door Guest Access",
+            "state": "off"
+          },
+          {
+            "deviceClass": "switch",
+            "domain": "switch",
+            "entityId": "switch.kitchen_alexa",
+            "name": "Kitchen Alexa Blocked",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.kitchen_detections_animal",
+            "name": "Kitchen Animal detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.kitchen_detections_baby_cry",
+            "name": "Kitchen Baby cry detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.kitchen_detections_co_alarm",
+            "name": "Kitchen CO alarm detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.tp_link_smart_dimmer_c7cc_led",
+            "name": "Kitchen light LED",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_motion_2",
+            "name": "Kitchen Motion",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_overlay_show_date_2",
+            "name": "Kitchen Overlay: show date",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_overlay_show_logo_2",
+            "name": "Kitchen Overlay: show logo",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_overlay_show_name_2",
+            "name": "Kitchen Overlay: show name",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_overlay_show_nerd_mode_2",
+            "name": "Kitchen Overlay: show nerd mode",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.kitchen_detections_person",
+            "name": "Kitchen Person detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_privacy_mode_2",
+            "name": "Kitchen Privacy mode",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.kitchen_detections_smoke",
+            "name": "Kitchen Smoke detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.kitchen_detections_speaking",
+            "name": "Kitchen Speaking detection",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.kitchen_status_light",
+            "name": "Kitchen Status light",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.kitchen_detections_vehicle",
+            "name": "Kitchen Vehicle detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.little_tv_relay",
+            "name": "Little-Tv little_tv_relay",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.tp_link_smart_dimmer_a167_led",
+            "name": "Living room light LED",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.livingroom_ac_power",
+            "name": "Livingroom AC Power",
+            "state": "off"
+          },
+          {
+            "deviceClass": "switch",
+            "domain": "switch",
+            "entityId": "switch.livingroom_alexa",
+            "name": "Livingroom Alexa Blocked",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.livingroom_detections_animal",
+            "name": "Livingroom Animal detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.livingroom_detections_baby_cry",
+            "name": "Livingroom Baby cry detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.livingroom_detections_co_alarm",
+            "name": "Livingroom CO alarm detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_motion_3",
+            "name": "Livingroom Motion",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_overlay_show_date_3",
+            "name": "Livingroom Overlay: show date",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_overlay_show_logo_3",
+            "name": "Livingroom Overlay: show logo",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_overlay_show_name_3",
+            "name": "Livingroom Overlay: show name",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_overlay_show_nerd_mode_3",
+            "name": "Livingroom Overlay: show nerd mode",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.livingroom_detections_person",
+            "name": "Livingroom Person detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.g5_turret_ultra_privacy_mode_3",
+            "name": "Livingroom Privacy mode",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.livingroom_projector",
+            "name": "Livingroom Projector",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.livingroom_detections_smoke",
+            "name": "Livingroom Smoke detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.livingroom_sonos_crossfade",
+            "name": "Livingroom Sonos Crossfade",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.livingroom_sonos_loudness",
+            "name": "Livingroom Sonos Loudness",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.livingroom_sonos_night_sound",
+            "name": "Livingroom Sonos Night sound",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.livingroom_sonos_speech_enhancement",
+            "name": "Livingroom Sonos Speech enhancement",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.sonos_sub",
+            "name": "Livingroom Sonos Subwoofer enabled",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.sonos_sonosf_surround_enabled",
+            "name": "Livingroom Sonos Surround enabled",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.livingroom_sonos_surround_music_full_volume",
+            "name": "Livingroom Sonos Surround music full volume",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.livingroom_sonos_tv_autoplay",
+            "name": "Livingroom Sonos TV autoplay",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.livingroom_sonos_ungroup_on_autoplay",
+            "name": "Livingroom Sonos Ungroup on autoplay",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.livingroom_detections_speaking",
+            "name": "Livingroom Speaking detection",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.livingroom_status_light",
+            "name": "Livingroom Status light",
+            "state": "off"
+          },
+          {
+            "deviceClass": "switch",
+            "domain": "switch",
+            "entityId": "switch.livingroom_tv_power",
+            "name": "Livingroom TV Power",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.smarttv_4k_mute",
+            "name": "Livingroom TV SmartTV 4K Mute",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.livingroom_detections_vehicle",
+            "name": "Livingroom Vehicle detection",
+            "state": "on"
+          },
+          {
+            "deviceClass": "switch",
+            "domain": "switch",
+            "entityId": "switch.livingroom_volume",
+            "name": "Livingroom Volume +",
+            "state": "off"
+          },
+          {
+            "deviceClass": "switch",
+            "domain": "switch",
+            "entityId": "switch.livingroom_volume_2",
+            "name": "Livingroom Volume -",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.latch",
+            "name": "Livingroom-Gun-Art latch",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.mini_climate_card_pre_release",
+            "name": "mini climate card Pre-release",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.mirror",
+            "name": "Mirror",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "switch",
+            "domain": "switch",
+            "entityId": "switch.morris",
+            "name": "Morris Enabled",
+            "state": "on"
+          },
+          {
+            "deviceClass": "switch",
+            "domain": "switch",
+            "entityId": "switch.morris_media",
+            "name": "Morris Media Enabled",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.night_stand_drawer_drawer_open",
+            "name": "Night-Stand-Drawer Drawer Open",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.night_stand_drawer_night_stand_drawer_guest_access",
+            "name": "Night-Stand-Drawer Night Stand Drawer Guest Access",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.nursery_ac_relay",
+            "name": "Nursery AC Relay",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.office_ac_power",
+            "name": "Office AC Power",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.tp_link_smart_dimmer_c4a9_led",
+            "name": "Office light LED",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.office_outlets",
+            "name": "Office Outlets",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.onn_g801x_a16a_mute",
+            "name": "Office TV onn G801X A16A Mute",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.office_bench_spare_1",
+            "name": "Office-Bench-Light Office Bench Spare 1",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.office_bench_spare_2",
+            "name": "Office-Bench-Light Office Bench Spare 2",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.office_bench_spare_3",
+            "name": "Office-Bench-Light Office Bench Spare 3",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.office_bench_spare_4",
+            "name": "Office-Bench-Light Office Bench Spare 4",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.office_button_controller_lock",
+            "name": "Office-Button-Controller office-button-controller Lock",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.office_computer",
+            "name": "Office-Computer Office Computer",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.office_computer_power_cord_office_computer_power_cord",
+            "name": "Office-Computer-Power-Cord Office Computer Power Cord",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.1",
+            "name": "Office-Door 1",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.2",
+            "name": "Office-Door 2",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.office_door_close",
+            "name": "Office-Door Office Door Close",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.office_door_open",
+            "name": "Office-Door Office Door Open",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.office_door_reset",
+            "name": "Office-Door Office Door Reset",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.office_exhaust",
+            "name": "Office-Exhaust Office Exhaust",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.office_bench_overhead_lights",
+            "name": "Office-Overhead-Light Office Bench Overhead Lights",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.office_temp_controller_lock",
+            "name": "Office-Temp-Controller office-temp-controller Lock",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.outside_light",
+            "name": "Outside Light",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.printer_light",
+            "name": "Printer Light",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.printer_light_1",
+            "name": "Printer-Lamp-1 Printer Light 1",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.printer_light_2",
+            "name": "Printer-Lamp-2 Printer Light 2",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "switch",
+            "domain": "switch",
+            "entityId": "switch.projector_screen",
+            "name": "Projector Screen",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.nursery_ac_power",
+            "name": "Receptacle",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.screen_helper_subwoffler",
+            "name": "screen helper subwoffler",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.screen_helper_surround",
+            "name": "screen helper surround",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.screen_lock",
+            "name": "Screen Lock",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.screen_projector_helper",
+            "name": "Screen Projector Helper",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.shower_fan",
+            "name": "Shower Fan",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.shower_fan_auto_off_enabled",
+            "name": "Shower Fan Auto-off enabled",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.shower_fan_auto_update_enabled",
+            "name": "Shower Fan Auto-update enabled",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.shower_fan_led",
+            "name": "Shower Fan LED",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.unassigned_smart_away",
+            "name": "Smart Bridge 2 Unassigned Smart Away",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.solder_fan",
+            "name": "Solder-Fan Solder Fan",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.solder_iron",
+            "name": "Solder-Iron Solder Iron",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.bedroom_hallway_light",
+            "name": "switch.bedroom_hallway_light",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.udm_se_morris_analytics_enabled",
+            "name": "UDM SE-Morris Analytics enabled",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "switch",
+            "entityId": "switch.udm_se_morris_insights_enabled",
+            "name": "UDM SE-Morris Insights enabled",
+            "state": "on"
+          },
+          {
+            "deviceClass": "switch",
+            "domain": "switch",
+            "entityId": "switch.unifi_network_beta_app",
+            "name": "UniFi Network Beta App",
+            "state": "off"
+          },
+          {
+            "deviceClass": "switch",
+            "domain": "switch",
+            "entityId": "switch.unifi_network_beta_app_temp_certbot_http_challenge",
+            "name": "UniFi Network Beta App Temp-Certbot HTTP Challenge",
+            "state": "off"
+          },
+          {
+            "deviceClass": "switch",
+            "domain": "switch",
+            "entityId": "switch.unifi_network_blue",
+            "name": "UniFi Network Blue",
+            "state": "off"
+          },
+          {
+            "deviceClass": "switch",
+            "domain": "switch",
+            "entityId": "switch.unifi_network_daily_reort_test_1",
+            "name": "UniFi Network daily reort test 1",
+            "state": "off"
+          },
+          {
+            "deviceClass": "switch",
+            "domain": "switch",
+            "entityId": "switch.unifi_network_fns_testing_checker",
+            "name": "UniFi Network FNS Testing Checker",
+            "state": "off"
+          },
+          {
+            "deviceClass": "switch",
+            "domain": "switch",
+            "entityId": "switch.unifi_network_mqtt",
+            "name": "UniFi Network MQTT",
+            "state": "on"
+          },
+          {
+            "deviceClass": "switch",
+            "domain": "switch",
+            "entityId": "switch.unifi_network_remote_desktop_to_office_computer",
+            "name": "UniFi Network Remote Desktop To Office computer",
+            "state": "on"
+          },
+          {
+            "deviceClass": "switch",
+            "domain": "switch",
+            "entityId": "switch.unifi_network_vpn",
+            "name": "UniFi Network VPN",
+            "state": "on"
+          }
+        ],
         "selectedMediaPlayerId": "media_player.livingroom_sonos",
         "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIxMzJhMzM2ZjMxNmM0YWRmODE2NDQxNTkwNDgwNzIxZSIsImlhdCI6MTc4MTU0NTI1MSwiZXhwIjoyMDk2OTA1MjUxfQ.dDAeuZM1BRON10g7qbzLkUKZgNR8u8Xw1-Dw6HX_UTY",
         "url": "http://192.168.1.135:8123/"
@@ -6068,6 +8787,96 @@
         }
       }
     },
+    "roomControl": {
+      "room": "living",
+      "rooms": {
+        "living": {
+          "controls": [
+            {
+              "domain": "switch",
+              "haEntityId": "switch.fish_tank_blue_light",
+              "haName": "Fish Tank Blue",
+              "id": "lr-control-1",
+              "name": "Fish-Tank-Lights Fish Tank Blue Light",
+              "on": false
+            },
+            {
+              "domain": "switch",
+              "haEntityId": "switch.fish_tank_white_light",
+              "haName": "Fish Tank White",
+              "id": "lr-control-2",
+              "name": "Fish-Tank-Lights Fish Tank White Light",
+              "on": true
+            },
+            {
+              "domain": "switch",
+              "haEntityId": "switch.couch_heater_coil",
+              "haName": "Couch-Coffee Couch Heater Coil",
+              "id": "living-control-mqfikely-3",
+              "name": "Couch-Coffee Couch Heater Coil",
+              "on": false
+            },
+            {
+              "domain": "switch",
+              "haEntityId": "",
+              "haName": "",
+              "id": "living-control-mqfikely-4",
+              "name": "Entry 4",
+              "on": false
+            },
+            {
+              "domain": "switch",
+              "haEntityId": "",
+              "haName": "",
+              "id": "living-control-mqfikely-5",
+              "name": "Entry 5",
+              "on": false
+            },
+            {
+              "domain": "switch",
+              "haEntityId": "",
+              "haName": "",
+              "id": "living-control-mqfikely-6",
+              "name": "Entry 6",
+              "on": false
+            },
+            {
+              "domain": "switch",
+              "haEntityId": "",
+              "haName": "",
+              "id": "living-control-mqfikely-7",
+              "name": "Entry 7",
+              "on": false
+            },
+            {
+              "domain": "switch",
+              "haEntityId": "",
+              "haName": "",
+              "id": "living-control-mqfikely-8",
+              "name": "Entry 8",
+              "on": false
+            },
+            {
+              "domain": "switch",
+              "haEntityId": "",
+              "haName": "",
+              "id": "living-control-mqfikely-9",
+              "name": "Entry 9",
+              "on": false
+            },
+            {
+              "domain": "switch",
+              "haEntityId": "",
+              "haName": "",
+              "id": "living-control-mqfikely-10",
+              "name": "Entry 10",
+              "on": false
+            }
+          ],
+          "label": "Living Room"
+        }
+      }
+    },
     "thermostat": {
       "autoActiveMode": "heat",
       "autoChangeoverLockoutMinutes": 120,
@@ -6079,7 +8888,7 @@
       "currentTemp": 71,
       "fan": "auto",
       "humidity": 45,
-      "lastComfortTarget": 68,
+      "lastComfortTarget": 72,
       "limits": {
         "auto": {
           "max": 80,
@@ -6097,10 +8906,10 @@
       "mode": "cool",
       "name": "Livingroom Test",
       "outdoorTemp": 40,
-      "targetTemp": 68
+      "targetTemp": 72
     },
-    "version": 10
+    "version": 11
   },
-  "updatedAt": 1781545630,
-  "version": 259
+  "updatedAt": 1781547056,
+  "version": 499
 }

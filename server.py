@@ -827,6 +827,59 @@ def _call_switch_service(ha_url: str, token: str, entity_id: str, action: str) -
         return {"entityId": entity_id, "name": entity_id, "domain": "switch", "state": action}
 
 
+def _room_control_domain(entity_id: str) -> str:
+    entity_id = (entity_id or "").strip()
+    domain = entity_id.split(".", 1)[0] if "." in entity_id else ""
+    if domain not in {"switch", "input_boolean"}:
+        raise ValueError("Entity must be a switch.* or input_boolean.* entity")
+    return domain
+
+
+def _fetch_ha_room_control_states_for_entities(ha_url: str, token: str, entity_ids: list[str]) -> list[dict]:
+    wanted: list[str] = []
+    seen: set[str] = set()
+    for raw in entity_ids or []:
+        entity_id = str(raw or "").strip()
+        try:
+            _room_control_domain(entity_id)
+        except ValueError:
+            continue
+        if entity_id in seen:
+            continue
+        seen.add(entity_id)
+        wanted.append(entity_id)
+
+    if not wanted:
+        return []
+
+    states = _ha_json_request(ha_url, token, "GET", "/api/states")
+    if not isinstance(states, list):
+        return []
+    wanted_set = set(wanted)
+    controls = []
+    for item in states:
+        entity_id = str(item.get("entity_id", ""))
+        if entity_id not in wanted_set:
+            continue
+        controls.append(_normalize_generic_entity(item))
+    controls.sort(key=lambda item: wanted.index(item.get("entityId")) if item.get("entityId") in wanted else 9999)
+    return controls
+
+
+def _call_room_control_service(ha_url: str, token: str, entity_id: str, action: str) -> dict:
+    entity_id = (entity_id or "").strip()
+    domain = _room_control_domain(entity_id)
+    action = (action or "toggle").strip().lower()
+    service = {"on": "turn_on", "off": "turn_off", "toggle": "toggle"}.get(action)
+    if not service:
+        raise ValueError("Unsupported room control action")
+
+    _ha_json_request(ha_url, token, "POST", f"/api/services/{domain}/{service}", {"entity_id": entity_id})
+    try:
+        item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
+        return _normalize_generic_entity(item)
+    except Exception:
+        return {"entityId": entity_id, "name": entity_id, "domain": domain, "state": "off" if action == "off" else "on"}
 
 
 
@@ -1211,7 +1264,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action"}:
             self.send_error(404, "Not found")
             return
 
@@ -1285,6 +1338,23 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                     payload.get("color"),
                 )
                 return _json(self, 200, {"ok": True, "light": light})
+
+            if path == "/api/ha/room/states":
+                controls = _fetch_ha_room_control_states_for_entities(
+                    payload.get("url", ""),
+                    payload.get("token", ""),
+                    payload.get("entityIds", []),
+                )
+                return _json(self, 200, {"ok": True, "controls": controls, "count": len(controls)})
+
+            if path == "/api/ha/room/action":
+                control = _call_room_control_service(
+                    payload.get("url", ""),
+                    payload.get("token", ""),
+                    payload.get("entityId", ""),
+                    payload.get("action", "toggle"),
+                )
+                return _json(self, 200, {"ok": True, "control": control})
 
             if path == "/api/ha/cover/states":
                 covers = _fetch_ha_cover_states_for_entities(

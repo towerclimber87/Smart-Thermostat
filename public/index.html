@@ -29,6 +29,7 @@
         <button class="nav-pill active" data-goto="thermostat">Thermostat</button>
         <button class="nav-pill" data-goto="audio">Audio</button>
         <button class="nav-pill" data-goto="lights">Lights</button>
+        <button class="nav-pill" data-goto="room">Room</button>
       </nav>
       <div class="status-cluster">
         <div id="clock" class="clock">--:--</div>
@@ -124,7 +125,8 @@
             <span class="door-icon" aria-hidden="true">
               <svg viewBox="0 0 74 74" focusable="false">
                 <path class="door-frame" d="M18 66V9h34v57"></path>
-                <path class="door-panel" d="M27 62V16l25-6v58l-25-6Z"></path>
+                <path class="door-panel door-closed-panel" d="M27 63V15h24v48H27Z"></path>
+                <path class="door-panel door-open-panel" d="M27 62V16l25-6v58l-25-6Z"></path>
                 <circle class="door-knob" cx="45" cy="38" r="2.6"></circle>
               </svg>
             </span>
@@ -300,6 +302,21 @@
           </div>
 
           <div id="lightCards" class="light-cards"></div>
+        </section>
+      </article>
+
+      <article class="screen screen-room" data-screen="room" aria-label="Room controls">
+        <section class="room-control-stage panel">
+          <div class="room-control-head-row">
+            <div class="panel-heading vertical">
+              <p class="eyebrow">Room Control</p>
+              <h2 id="roomControlRoomTitle">Living Room</h2>
+            </div>
+            <div id="roomControlTabs" class="room-tabs top-room-tabs room-control-tabs" role="tablist" aria-label="Room control rooms"></div>
+          </div>
+
+
+          <div id="roomControlCards" class="room-control-cards"></div>
         </section>
       </article>
     </section>
@@ -498,6 +515,17 @@
                 <button id="saveLightHaConfig" class="scene-btn room-open">Save</button>
               </div>
             </section>
+          </div>
+        </div>
+
+
+        <div id="roomControlSettingsView" class="settings-view" hidden>
+          <div id="roomControlSetupView" class="settings-subview room-control-setup-subview">
+            <div class="setup-actions-row">
+              <button id="addRoomControlRoomButton" class="scene-btn room-open">Add Room</button>
+            </div>
+            <p class="settings-hint room-control-ha-hint">Uses the saved Home Assistant URL/token. Long-press a Room control card to assign a switch or input_boolean.</p>
+            <div id="roomControlConfigList" class="room-config-list room-control-config-list"></div>
           </div>
         </div>
 

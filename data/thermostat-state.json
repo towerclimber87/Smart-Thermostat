@@ -15,7 +15,7 @@
     "currentTemp": 71.0,
     "fan": "auto",
     "humidity": 45.0,
-    "lastComfortTarget": 68.0,
+    "lastComfortTarget": 72.0,
     "lastCoolRunAt": 0.0,
     "lastHeatRunAt": 0.0,
     "limits": {
@@ -35,8 +35,8 @@
     "mode": "cool",
     "name": "Livingroom Test",
     "outdoorTemp": 40.0,
-    "targetTemp": 68.0
+    "targetTemp": 72.0
   },
-  "updatedAt": 1781545630,
+  "updatedAt": 1781547056,
   "version": 1
 }
