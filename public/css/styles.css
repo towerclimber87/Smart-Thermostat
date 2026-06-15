@@ -4795,3 +4795,137 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
 .room-control-config-link.muted {
   color: rgba(178,200,222,.44);
 }
+
+/* 2026-06-15 room controls: futuristic entity glyph refresh + cleaner assignment pills */
+.room-control-power-shell {
+  isolation: isolate;
+  width: clamp(72px, 5.9vw, 94px);
+  height: clamp(72px, 5.9vw, 94px);
+}
+.room-control-power-shell::before,
+.room-control-power-shell::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  z-index: 2;
+  opacity: .72;
+}
+.room-control-power-shell::before {
+  inset: 9px;
+  border-radius: 20px;
+  border: 1px solid rgba(77,238,255,.16);
+  clip-path: polygon(22% 0, 78% 0, 100% 22%, 100% 78%, 78% 100%, 22% 100%, 0 78%, 0 22%);
+}
+.room-control-power-shell::after {
+  width: 42%;
+  height: 2px;
+  right: 3px;
+  top: 16px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, rgba(77,238,255,.68));
+  box-shadow: -39px 44px 0 rgba(255,255,255,.16);
+  transform: rotate(45deg);
+}
+.room-control-power-ring {
+  border-radius: 22px;
+  clip-path: polygon(18% 0, 82% 0, 100% 18%, 100% 82%, 82% 100%, 18% 100%, 0 82%, 0 18%);
+  background:
+    linear-gradient(135deg, rgba(255,255,255,.18), rgba(255,255,255,.035)),
+    radial-gradient(circle at 28% 24%, rgba(77,238,255,.16), transparent 46%);
+  border-color: rgba(77,238,255,.15);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.20),
+    inset 0 -18px 30px rgba(0,0,0,.16),
+    0 18px 38px rgba(0,0,0,.26);
+}
+.room-control-power-icon {
+  width: 76%;
+  height: 76%;
+  color: rgba(197,225,241,.72);
+}
+.room-control-card.unlinked .room-control-power-icon {
+  color: rgba(77,238,255,.66);
+  filter: drop-shadow(0 0 12px rgba(77,238,255,.18));
+}
+.room-control-card.linked.on .room-control-power-shell::before {
+  border-color: rgba(99,241,173,.30);
+  box-shadow: inset 0 0 18px rgba(99,241,173,.12);
+}
+.room-control-card.linked.on .room-control-power-shell::after {
+  background: linear-gradient(90deg, transparent, rgba(99,241,173,.92));
+}
+.room-control-card.on .room-control-power-ring {
+  background:
+    linear-gradient(135deg, rgba(99,241,173,.26), rgba(255,255,255,.045)),
+    radial-gradient(circle at 30% 22%, rgba(77,238,255,.20), transparent 48%);
+}
+.room-control-state-pill {
+  max-width: min(142px, 42vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.10);
+}
+.room-control-card.unlinked .room-control-state-pill {
+  background: rgba(77,238,255,.12);
+  color: rgba(215,249,255,.86);
+}
+.room-control-power-icon .futuristic-room-glyph {
+  filter: drop-shadow(0 0 10px rgba(77,238,255,.10));
+}
+.room-control-power-icon .futuristic-room-glyph .glyph-halo,
+.room-control-power-icon .futuristic-room-glyph .glyph-corner,
+.room-control-power-icon .futuristic-room-glyph .glyph-core,
+.room-control-power-icon .futuristic-room-glyph .glyph-stroke,
+.room-control-power-icon .futuristic-room-glyph .glyph-soft {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.room-control-power-icon .futuristic-room-glyph .glyph-halo {
+  stroke-width: 2.2;
+  opacity: .18;
+}
+.room-control-power-icon .futuristic-room-glyph .glyph-corner {
+  stroke-width: 3.6;
+  opacity: .42;
+}
+.room-control-power-icon .futuristic-room-glyph .glyph-core {
+  stroke-width: 1.6;
+  opacity: .16;
+  fill: currentColor;
+  fill-opacity: .035;
+}
+.room-control-power-icon .futuristic-room-glyph .glyph-stroke {
+  stroke-width: 5.2;
+}
+.room-control-power-icon .futuristic-room-glyph .glyph-soft {
+  stroke-width: 3.4;
+  opacity: .42;
+}
+.room-control-power-icon .futuristic-room-glyph .glyph-fill,
+.room-control-power-icon .futuristic-room-glyph .glyph-dot {
+  fill: currentColor;
+  vector-effect: non-scaling-stroke;
+}
+.room-control-card.off .room-control-power-icon .futuristic-room-glyph .glyph-halo,
+.room-control-card.off .room-control-power-icon .futuristic-room-glyph .glyph-corner,
+.room-control-card.off .room-control-power-icon .futuristic-room-glyph .glyph-core {
+  opacity: .12;
+}
+.room-control-card.status-only .room-control-power-shell::before {
+  border-color: rgba(77,238,255,.28);
+}
+.room-control-card.status-only .room-control-power-icon .futuristic-room-glyph {
+  filter: drop-shadow(0 0 12px rgba(77,238,255,.22));
+}
+.room-control-card[data-room-control-domain="cover"].on .room-control-power-shell::before,
+.room-control-card[data-room-control-domain="lock"].on .room-control-power-shell::before {
+  border-color: rgba(255,196,78,.34);
+  box-shadow: inset 0 0 18px rgba(255,196,78,.10);
+}
+.room-control-card[data-room-control-domain="cover"].on .room-control-power-shell::after,
+.room-control-card[data-room-control-domain="lock"].on .room-control-power-shell::after {
+  background: linear-gradient(90deg, transparent, rgba(255,196,78,.92));
+}

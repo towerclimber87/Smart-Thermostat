@@ -52,7 +52,6 @@ const ROOM_CONTROL_PICKER_DOMAINS = [
   "input_select",
   "scene",
   "script",
-  "automation",
   "media_player",
   "climate",
   "humidifier",
@@ -62,6 +61,7 @@ const ROOM_CONTROL_PICKER_DOMAINS = [
 ];
 const ROOM_CONTROL_READ_ONLY_DOMAINS = new Set(["binary_sensor", "sensor", "number", "input_number", "select", "input_select", "person", "device_tracker", "climate"]);
 const ROOM_CONTROL_MOMENTARY_DOMAINS = new Set(["button", "input_button", "scene", "script"]);
+const ROOM_CONTROL_EXCLUDED_DOMAINS = new Set(["automation"]);
 let haSyncInFlight = false;
 let haSyncLastError = "";
 let haAudioSyncInFlight = false;
@@ -4064,6 +4064,16 @@ function roomControlTypeLabel(control) {
   return deviceClass ? `${base} · ${prettifyRoomControlName(deviceClass)}` : base;
 }
 
+function roomControlEntityDomain(entity) {
+  return normalizeRoomControlDomain(entity?.domain || String(entity?.entityId || "").split(".", 1)[0], "");
+}
+
+function isRoomControlEntityAllowed(entity) {
+  const domain = roomControlEntityDomain(entity);
+  return Boolean(domain) && !ROOM_CONTROL_EXCLUDED_DOMAINS.has(domain);
+}
+
+
 function isRoomControlUnavailableState(value) {
   return ["unavailable", "unknown", "none", "null"].includes(String(value ?? "").trim().toLowerCase());
 }
@@ -4237,48 +4247,117 @@ function roomControlAriaAction(control) {
   return `${label} ${roomControlDisplayName(control)}`;
 }
 
+function roomControlGlyphSvg(kind, innerSvg) {
+  return `<svg class="room-control-svg ${kind}-svg futuristic-room-glyph" viewBox="0 0 96 96" focusable="false" aria-hidden="true">
+    <path class="glyph-halo" d="M48 6 82 25v46L48 90 14 71V25z"></path>
+    <path class="glyph-corner glyph-corner-a" d="M26 19h-6v13"></path>
+    <path class="glyph-corner glyph-corner-b" d="M70 77h6V64"></path>
+    <circle class="glyph-core" cx="48" cy="48" r="27"></circle>
+    ${innerSvg}
+  </svg>`;
+}
+
 function roomControlIconSvg(control) {
+  const linked = Boolean(control?.haEntityId);
+  if (!linked) {
+    return roomControlGlyphSvg("assign", `
+      <path class="glyph-stroke" d="M31 48h34M48 31v34"></path>
+      <path class="glyph-soft" d="M28 30h14M54 30h14M28 66h14M54 66h14"></path>
+    `);
+  }
   const domain = normalizeRoomControlDomain(control?.domain, "switch");
   const deviceClass = normalizeRoomControlDeviceClass(control?.deviceClass);
   const open = Boolean(control?.on);
   const key = domain === "cover" ? (deviceClass || "cover") : domain === "binary_sensor" ? (deviceClass || "binary_sensor") : domain;
   if (["door", "garage_door", "gate", "opening"].includes(key)) {
-    return `<svg class="room-control-svg door-svg" viewBox="0 0 80 80" focusable="false" aria-hidden="true"><path d="M24 67V14h32v53" fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="round"/><path d="M31 65V19l23 6v41z" fill="currentColor" opacity="${open ? ".44" : ".20"}"/><circle cx="48" cy="44" r="2.8" fill="currentColor"/></svg>`;
+    return roomControlGlyphSvg("door", `
+      <path class="glyph-stroke" d="M33 73V24h31v49"></path>
+      <path class="glyph-fill" opacity="${open ? ".44" : ".20"}" d="M39 69V30l20 5v38z"></path>
+      <path class="glyph-soft" d="M29 73h40M58 36v35"></path>
+      <circle class="glyph-dot" cx="53" cy="51" r="2.3"></circle>
+    `);
   }
   if (["window", "shutter", "blind", "shade", "awning", "curtain", "damper", "cover"].includes(key)) {
-    return `<svg class="room-control-svg cover-svg" viewBox="0 0 80 80" focusable="false" aria-hidden="true"><rect x="17" y="14" width="46" height="52" rx="5" fill="none" stroke="currentColor" stroke-width="5"/><path d="M40 16v48M19 40h42" stroke="currentColor" stroke-width="4" opacity=".72"/><path d="M23 25h34M23 32h34M23 48h34M23 55h34" stroke="currentColor" stroke-width="3" opacity=".46"/></svg>`;
+    return roomControlGlyphSvg("cover", `
+      <rect class="glyph-stroke" x="29" y="22" width="38" height="52" rx="6"></rect>
+      <path class="glyph-soft" d="M48 24v48M31 46h34M35 32h26M35 39h26M35 55h26M35 62h26"></path>
+      <path class="glyph-fill" opacity="${open ? ".22" : ".10"}" d="M31 24h34v21H31z"></path>
+    `);
   }
   if (domain === "light" || deviceClass === "light") {
-    return `<svg class="room-control-svg light-svg" viewBox="0 0 80 80" focusable="false" aria-hidden="true"><path d="M28 36a12 12 0 1 1 24 0c0 5-3 8-6 12-2 2-2 4-2 6h-8c0-2-.4-4-2-6-3-4-6-7-6-12z" fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="round"/><path d="M34 61h12M35 68h10" stroke="currentColor" stroke-width="5" stroke-linecap="round"/></svg>`;
+    return roomControlGlyphSvg("light", `
+      <path class="glyph-stroke" d="M37 45a11 11 0 1 1 22 0c0 5-3 8-6 12-1.6 2-2.2 4-2.2 6h-5.6c0-2-.6-4-2.2-6-3-4-6-7-6-12z"></path>
+      <path class="glyph-soft" d="M42 70h12M44 77h8M29 40h-7M74 40h-7M32 28l-5-5M64 28l5-5"></path>
+    `);
   }
   if (domain === "fan") {
-    return `<svg class="room-control-svg fan-svg" viewBox="0 0 80 80" focusable="false" aria-hidden="true"><circle cx="40" cy="40" r="6" fill="currentColor"/><path d="M42 34c8-17 25-10 18 3-5 9-14 5-18 3M34 39c-19-2-20-20-5-20 10 0 10 10 5 20M42 46c11 15-3 26-12 14-6-8 2-15 12-14" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    return roomControlGlyphSvg("fan", `
+      <circle class="glyph-dot" cx="48" cy="48" r="5"></circle>
+      <path class="glyph-stroke" d="M51 42c8-18 26-9 17 4-5 8-13 3-17-4M41 46c-20-1-20-20-5-19 10 1 9 11 5 19M51 55c11 15-4 25-13 13-5-8 2-15 13-13"></path>
+      <path class="glyph-soft" d="M48 20a28 28 0 1 1-1 0"></path>
+    `);
   }
   if (domain === "lock" || deviceClass === "lock") {
-    return `<svg class="room-control-svg lock-svg" viewBox="0 0 80 80" focusable="false" aria-hidden="true"><rect x="22" y="36" width="36" height="28" rx="6" fill="none" stroke="currentColor" stroke-width="5"/><path d="M30 36V27a10 10 0 0 1 ${open ? "18 -7" : "20 0"}v9" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round"/><circle cx="40" cy="49" r="3" fill="currentColor"/></svg>`;
+    return roomControlGlyphSvg("lock", `
+      <rect class="glyph-stroke" x="31" y="44" width="34" height="27" rx="6"></rect>
+      <path class="glyph-stroke" d="M38 44V34a10 10 0 0 1 ${open ? "18 -7" : "20 0"}v10"></path>
+      <circle class="glyph-dot" cx="48" cy="57" r="3"></circle>
+      <path class="glyph-soft" d="M48 61v5"></path>
+    `);
   }
   if (["motion", "occupancy", "presence"].includes(deviceClass)) {
-    return `<svg class="room-control-svg motion-svg" viewBox="0 0 80 80" focusable="false" aria-hidden="true"><circle cx="30" cy="25" r="7" fill="currentColor"/><path d="M31 34l12 8-6 9 9 13M29 35l-7 13M43 42l10-7" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><path d="M55 22c6 4 10 10 10 18s-4 14-10 18" fill="none" stroke="currentColor" stroke-width="4" opacity=".55" stroke-linecap="round"/></svg>`;
+    return roomControlGlyphSvg("motion", `
+      <circle class="glyph-fill" cx="38" cy="30" r="6"></circle>
+      <path class="glyph-stroke" d="M40 39l13 9-7 9 9 15M37 40l-8 15M53 48l11-8"></path>
+      <path class="glyph-soft" d="M66 25c8 6 13 14 13 24s-5 18-13 24M25 32c-4 4-7 10-7 17s3 13 7 17"></path>
+    `);
   }
   if (["moisture", "gas", "smoke", "safety", "problem"].includes(deviceClass)) {
-    return `<svg class="room-control-svg alert-svg" viewBox="0 0 80 80" focusable="false" aria-hidden="true"><path d="M40 12l30 54H10z" fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="round"/><path d="M40 29v17" stroke="currentColor" stroke-width="6" stroke-linecap="round"/><circle cx="40" cy="56" r="3" fill="currentColor"/></svg>`;
+    return roomControlGlyphSvg("alert", `
+      <path class="glyph-stroke" d="M48 20l31 56H17z"></path>
+      <path class="glyph-stroke" d="M48 38v17"></path>
+      <circle class="glyph-dot" cx="48" cy="65" r="3"></circle>
+    `);
   }
   if (domain === "button" || domain === "input_button") {
-    return `<svg class="room-control-svg button-svg" viewBox="0 0 80 80" focusable="false" aria-hidden="true"><circle cx="40" cy="40" r="25" fill="none" stroke="currentColor" stroke-width="5"/><circle cx="40" cy="40" r="13" fill="currentColor" opacity=".28"/></svg>`;
+    return roomControlGlyphSvg("button", `
+      <circle class="glyph-stroke" cx="48" cy="48" r="24"></circle>
+      <circle class="glyph-fill" opacity=".28" cx="48" cy="48" r="12"></circle>
+      <path class="glyph-soft" d="M48 17v9M48 70v9M17 48h9M70 48h9"></path>
+    `);
   }
   if (domain === "scene" || domain === "script") {
-    return `<svg class="room-control-svg scene-svg" viewBox="0 0 80 80" focusable="false" aria-hidden="true"><path d="M31 22l27 18-27 18z" fill="currentColor" opacity=".7"/><path d="M21 18v44M62 18v44" stroke="currentColor" stroke-width="5" stroke-linecap="round" opacity=".55"/></svg>`;
+    return roomControlGlyphSvg("scene", `
+      <path class="glyph-fill" opacity=".70" d="M39 29l27 19-27 19z"></path>
+      <path class="glyph-soft" d="M28 27v42M70 27v42M22 34v28"></path>
+    `);
   }
   if (domain === "media_player") {
-    return `<svg class="room-control-svg media-svg" viewBox="0 0 80 80" focusable="false" aria-hidden="true"><path d="M20 32h12l16-13v42L32 48H20z" fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="round"/><path d="M56 30c4 3 6 6 6 10s-2 8-6 10" stroke="currentColor" stroke-width="5" fill="none" stroke-linecap="round"/></svg>`;
+    return roomControlGlyphSvg("media", `
+      <path class="glyph-stroke" d="M24 41h14l18-14v42L38 55H24z"></path>
+      <path class="glyph-soft" d="M64 38c5 4 8 7 8 11s-3 8-8 11M70 29c8 6 13 12 13 20s-5 15-13 21"></path>
+    `);
   }
   if (domain === "sensor" || domain === "number" || domain === "input_number" || domain === "climate") {
-    return `<svg class="room-control-svg sensor-svg" viewBox="0 0 80 80" focusable="false" aria-hidden="true"><path d="M18 52a25 25 0 1 1 44 0" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round"/><path d="M40 47l15-15" stroke="currentColor" stroke-width="5" stroke-linecap="round"/><circle cx="40" cy="52" r="5" fill="currentColor"/></svg>`;
+    return roomControlGlyphSvg("sensor", `
+      <path class="glyph-stroke" d="M25 61a25 25 0 1 1 46 0"></path>
+      <path class="glyph-stroke" d="M48 57l16-18"></path>
+      <circle class="glyph-dot" cx="48" cy="61" r="5"></circle>
+      <path class="glyph-soft" d="M30 61h36M34 41h-8M70 41h-8M48 23v-8"></path>
+    `);
   }
   if (domain === "vacuum") {
-    return `<svg class="room-control-svg vacuum-svg" viewBox="0 0 80 80" focusable="false" aria-hidden="true"><rect x="18" y="23" width="44" height="34" rx="17" fill="none" stroke="currentColor" stroke-width="5"/><circle cx="33" cy="40" r="5" fill="currentColor"/><path d="M51 56l8 9" stroke="currentColor" stroke-width="5" stroke-linecap="round"/></svg>`;
+    return roomControlGlyphSvg("vacuum", `
+      <rect class="glyph-stroke" x="24" y="32" width="48" height="34" rx="17"></rect>
+      <circle class="glyph-dot" cx="39" cy="49" r="4"></circle>
+      <path class="glyph-soft" d="M55 63l10 11M31 31l6-9h22l6 9"></path>
+    `);
   }
-  return `<svg class="room-control-svg power-svg" viewBox="0 0 80 80" focusable="false" aria-hidden="true"><path class="power-line" d="M40 14v25"></path><path class="power-arc" d="M25.6 27.8a23 23 0 1 0 28.8 0"></path></svg>`;
+  return roomControlGlyphSvg("power", `
+    <path class="glyph-stroke" d="M48 22v25"></path>
+    <path class="glyph-stroke" d="M33 35a23 23 0 1 0 30 0"></path>
+    <path class="glyph-soft" d="M26 27l-6-6M70 27l6-6"></path>
+  `);
 }
 
 function updateRoomControlCard(control) {
@@ -4305,7 +4384,7 @@ function updateRoomControlCard(control) {
     title.setAttribute("title", displayName);
   }
   const stateEl = card.querySelector("[data-room-control-state]");
-  if (stateEl) stateEl.textContent = linked ? roomControlStateLabel(control) : "Hold to assign";
+  if (stateEl) stateEl.textContent = linked ? roomControlStateLabel(control) : "Assign";
   const domainEl = card.querySelector("[data-room-control-domain]");
   if (domainEl) domainEl.textContent = linked ? roomControlTypeLabel(control) : "Unassigned";
   const icon = card.querySelector("[data-room-control-icon]");
@@ -4346,7 +4425,7 @@ function renderRoomControls() {
           <span class="room-control-power-ring"></span>
           <span class="room-control-power-icon" data-room-control-icon>${roomControlIconSvg(control)}</span>
         </span>
-        <em class="room-control-state-pill" data-room-control-state>${control.haEntityId ? escapeHtml(roomControlStateLabel(control)) : "Hold to assign"}</em>
+        <em class="room-control-state-pill" data-room-control-state>${control.haEntityId ? escapeHtml(roomControlStateLabel(control)) : "Assign"}</em>
       </span>
       <span class="room-control-copy">
         <strong data-room-control-title title="${safeName}">${safeName}</strong>
@@ -5078,7 +5157,8 @@ function getAudioPickerMeta(kind) {
     domains: ROOM_CONTROL_PICKER_DOMAINS,
     allDomains: true,
     title: "Assign Room Device",
-    help: "Select any useful Home Assistant entity. The card will choose the icon, status, and action from its domain and device class."
+    excludeDomains: ROOM_CONTROL_EXCLUDED_DOMAINS,
+    help: "Select any useful Home Assistant entity. Automations are hidden, and the card will choose the icon, status, and action from its domain and device class."
   };
   if (kind === "light") return { domain: "light", title: "Assign Light", help: "Select the Home Assistant light entry for this slider." };
   return { domain: "", title: "Assign Entity", help: "Select the Home Assistant entity for this control." };
@@ -5098,7 +5178,9 @@ function renderAudioEntityPicker() {
   const picker = state.audioEntityPicker;
   if (!elements.audioEntityPickerList) return;
   const search = elements.audioEntitySearch?.value || picker.search || "";
-  const entities = (picker.entities || []).filter((entity) => scoreEntityForSearch(entity, search) > 0);
+  const entities = (picker.entities || [])
+    .filter((entity) => picker.kind !== "roomControl" || isRoomControlEntityAllowed(entity))
+    .filter((entity) => scoreEntityForSearch(entity, search) > 0);
   if (elements.audioEntityPickerTitle) elements.audioEntityPickerTitle.textContent = getAudioPickerMeta(picker.kind).title;
   if (elements.audioEntityPickerHelp) elements.audioEntityPickerHelp.textContent = getAudioPickerMeta(picker.kind).help;
   elements.audioEntityPickerList.innerHTML = entities.length ? entities.map((entity) => {
@@ -5144,7 +5226,8 @@ async function openAudioEntityPicker(kind) {
   renderAudioEntityPicker();
   try {
     const domains = meta.allDomains ? [] : (Array.isArray(meta.domains) && meta.domains.length ? meta.domains : [meta.domain]);
-    const entities = await fetchHaEntitiesViaLocalBackend(domains);
+    let entities = await fetchHaEntitiesViaLocalBackend(domains);
+    if (kind === "roomControl") entities = entities.filter(isRoomControlEntityAllowed);
     state.audioEntityPicker.entities = entities;
     const ha = state.integrations.homeAssistant;
     if (!ha.audioAvailableEntities) ha.audioAvailableEntities = { mediaPlayers: [], numbers: [], switches: [] };
