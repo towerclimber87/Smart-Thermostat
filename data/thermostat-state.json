@@ -1,0 +1,42 @@
+{
+  "thermostat": {
+    "autoActiveMode": "cool",
+    "autoChangeoverLockoutMinutes": 120,
+    "autoCoolOutdoorTarget": 70,
+    "autoHeatOutdoorTarget": 65,
+    "autoLockoutUntil": 0.0,
+    "autoPendingMode": "",
+    "away": false,
+    "awayCool": 85,
+    "awayHeat": 55,
+    "coolFanHoldUntil": 1781496266474.0,
+    "coolFanRemainOnMinutes": 2,
+    "coolRelayWasOn": false,
+    "currentTemp": 71.0,
+    "fan": "auto",
+    "humidity": 45,
+    "lastComfortTarget": 77,
+    "lastCoolRunAt": 0.0,
+    "lastHeatRunAt": 0.0,
+    "limits": {
+      "auto": {
+        "max": 80,
+        "min": 60
+      },
+      "cool": {
+        "max": 80,
+        "min": 65
+      },
+      "heat": {
+        "max": 78,
+        "min": 60
+      }
+    },
+    "mode": "heat",
+    "name": "Livingroom Test",
+    "outdoorTemp": 40,
+    "targetTemp": 77
+  },
+  "updatedAt": 1781496617,
+  "version": 1
+}

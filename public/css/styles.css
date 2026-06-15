@@ -2310,3 +2310,266 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
 }
 
 .thermo-dial .outdoor-temp-row { display: none !important; }
+
+/* 2026-06-15 thermostat alarm tile and disarm keypad */
+.alarm-control-widget {
+  position: absolute;
+  z-index: 5;
+  right: clamp(42px, 6.2vw, 118px);
+  top: clamp(188px, 33vh, 330px);
+  width: clamp(154px, 12vw, 220px);
+  min-height: clamp(132px, 13vh, 170px);
+  padding: 16px 14px 14px;
+  border-radius: 30px;
+  border: 1px solid rgba(255,255,255,.12);
+  background:
+    radial-gradient(circle at 50% 22%, rgba(255,255,255,.10), transparent 42%),
+    linear-gradient(150deg, rgba(255,255,255,.085), rgba(255,255,255,.032));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.11), 0 24px 58px rgba(0,0,0,.26);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 10px;
+  text-align: center;
+  overflow: hidden;
+}
+.alarm-control-widget::before {
+  content: "";
+  position: absolute;
+  inset: -42%;
+  background: conic-gradient(from 0deg, transparent 0 55deg, rgba(255,255,255,.12) 70deg, transparent 92deg 360deg);
+  opacity: 0;
+  animation: alarmOrbit 2.8s linear infinite;
+  pointer-events: none;
+}
+.alarm-control-widget.linked { cursor: pointer; }
+.alarm-control-widget.unlinked { opacity: .72; }
+.alarm-control-widget.armed,
+.alarm-control-widget.pending,
+.alarm-control-widget.triggered {
+  border-color: rgba(255, 104, 93, .40);
+  background:
+    radial-gradient(circle at 50% 26%, rgba(255,104,93,.24), transparent 42%),
+    linear-gradient(150deg, rgba(255,124,99,.15), rgba(255,255,255,.035));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.15), 0 24px 64px rgba(0,0,0,.32), 0 0 44px rgba(255,104,93,.15);
+}
+.alarm-control-widget.armed::before,
+.alarm-control-widget.pending::before,
+.alarm-control-widget.triggered::before { opacity: 1; }
+.alarm-control-widget.disarmed {
+  border-color: rgba(99,241,173,.24);
+  background:
+    radial-gradient(circle at 50% 22%, rgba(99,241,173,.12), transparent 42%),
+    linear-gradient(150deg, rgba(99,241,173,.08), rgba(255,255,255,.03));
+}
+.alarm-control-widget.busy { cursor: wait; filter: saturate(1.15); }
+.alarm-orbit {
+  position: absolute;
+  width: 88px;
+  height: 88px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,.10);
+  box-shadow: inset 0 0 20px rgba(255,255,255,.04);
+  pointer-events: none;
+}
+.alarm-control-widget.armed .alarm-orbit,
+.alarm-control-widget.pending .alarm-orbit,
+.alarm-control-widget.triggered .alarm-orbit {
+  border-color: rgba(255,235,225,.28);
+  animation: alarmPulseRing 1.35s ease-in-out infinite;
+}
+.alarm-shield {
+  position: relative;
+  z-index: 1;
+  width: 64px;
+  height: 72px;
+  display: grid;
+  place-items: center;
+  filter: drop-shadow(0 14px 24px rgba(0,0,0,.26));
+}
+.alarm-shield svg { width: 100%; height: 100%; }
+.alarm-shield .shield-body {
+  fill: rgba(230,240,255,.16);
+  stroke: rgba(255,255,255,.46);
+  stroke-width: 2;
+}
+.alarm-shield .shield-core { fill: rgba(255,255,255,.13); }
+.alarm-control-widget.armed .shield-body,
+.alarm-control-widget.pending .shield-body,
+.alarm-control-widget.triggered .shield-body { fill: rgba(255,104,93,.30); stroke: rgba(255,226,217,.86); }
+.alarm-control-widget.armed .shield-core,
+.alarm-control-widget.pending .shield-core,
+.alarm-control-widget.triggered .shield-core { fill: rgba(255,104,93,.58); }
+.alarm-control-widget.disarmed .shield-body { fill: rgba(99,241,173,.18); stroke: rgba(209,255,234,.72); }
+.alarm-control-widget.disarmed .shield-core { fill: rgba(99,241,173,.34); }
+.alarm-copy {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.alarm-copy strong {
+  max-width: 100%;
+  color: rgba(247,251,255,.96);
+  font-size: clamp(.92rem, 1.05vw, 1.08rem);
+  line-height: 1.1;
+  font-weight: 1000;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.alarm-copy em {
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,.08);
+  color: rgba(216,230,245,.78);
+  font-size: .68rem;
+  font-style: normal;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: .11em;
+}
+.alarm-control-widget.armed .alarm-copy em,
+.alarm-control-widget.pending .alarm-copy em,
+.alarm-control-widget.triggered .alarm-copy em {
+  background: rgba(255,104,93,.18);
+  color: #ffe5df;
+  box-shadow: 0 0 20px rgba(255,104,93,.14);
+}
+.alarm-control-widget.disarmed .alarm-copy em {
+  background: rgba(99,241,173,.12);
+  color: #ddffef;
+}
+
+.alarm-keypad-overlay { z-index: 60; }
+.alarm-keypad-sheet {
+  position: relative;
+  width: min(420px, calc(100vw - 40px));
+  border-radius: 34px;
+  border: 1px solid rgba(255,255,255,.14);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(255,104,93,.18), transparent 36%),
+    linear-gradient(155deg, rgba(22,33,54,.97), rgba(8,14,28,.98));
+  box-shadow: 0 42px 96px rgba(0,0,0,.52), inset 0 1px 0 rgba(255,255,255,.14);
+  padding: 22px;
+}
+.alarm-keypad-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.alarm-keypad-head h2 {
+  font-size: clamp(2rem, 4vw, 3.25rem);
+}
+.alarm-keypad-status {
+  margin-top: 14px;
+  min-height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 18px;
+  background: rgba(255,255,255,.055);
+  border: 1px solid rgba(255,255,255,.09);
+  color: rgba(224,237,249,.82);
+  font-weight: 850;
+}
+.alarm-code-dots {
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+.alarm-code-dots span {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgba(255,255,255,.12);
+  border: 1px solid rgba(255,255,255,.14);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
+}
+.alarm-code-dots span.filled {
+  background: #ffffff;
+  box-shadow: 0 0 18px rgba(255,255,255,.28);
+}
+.alarm-keypad-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+.alarm-keypad-grid button {
+  aspect-ratio: 1;
+  min-height: 72px;
+  border-radius: 24px;
+  border: 1px solid rgba(255,255,255,.11);
+  background: linear-gradient(145deg, rgba(255,255,255,.10), rgba(255,255,255,.035));
+  color: rgba(248,252,255,.96);
+  font-size: 1.65rem;
+  font-weight: 1000;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.10), 0 14px 28px rgba(0,0,0,.18);
+}
+.alarm-keypad-grid button.alarm-key-muted {
+  font-size: .9rem;
+  color: rgba(215,229,243,.78);
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.alarm-keypad-grid button:disabled,
+.alarm-disarm-button:disabled {
+  opacity: .54;
+  cursor: wait;
+}
+.alarm-disarm-button {
+  width: 100%;
+  margin-top: 14px;
+  min-height: 58px;
+  border-radius: 22px;
+  font-size: 1.02rem;
+}
+.alarm-keypad-overlay.busy .alarm-keypad-sheet {
+  filter: saturate(1.08);
+}
+
+@keyframes alarmOrbit {
+  to { transform: rotate(360deg); }
+}
+@keyframes alarmPulseRing {
+  0%, 100% { transform: scale(.94); opacity: .72; }
+  50% { transform: scale(1.08); opacity: 1; }
+}
+
+@media (max-width: 1200px) {
+  .alarm-control-widget {
+    right: clamp(18px, 3vw, 42px);
+    top: clamp(160px, 31vh, 288px);
+    width: clamp(138px, 14vw, 176px);
+    min-height: 126px;
+  }
+  .alarm-shield { width: 54px; height: 62px; }
+  .alarm-orbit { width: 78px; height: 78px; }
+}
+@media (max-width: 900px) {
+  .alarm-control-widget {
+    position: relative;
+    right: auto;
+    top: auto;
+    width: min(520px, 92vw);
+    min-height: 86px;
+    margin: -4px auto 2px;
+    grid-template-columns: 72px minmax(0,1fr);
+    justify-items: start;
+    text-align: left;
+    padding: 12px 16px;
+  }
+  .alarm-copy { justify-items: start; }
+  .alarm-shield { width: 48px; height: 54px; }
+  .alarm-orbit { width: 64px; height: 64px; left: 20px; }
+}

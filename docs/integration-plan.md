@@ -1,4 +1,4 @@
-# Smart Thermostat Integration Plan
+# IHA Integration Plan
 
 This project starts as a local UI. The next phases should add control layers without making the UI itself responsible for critical hardware decisions.
 
@@ -74,3 +74,17 @@ A thermostat setpoint changed on the wall panel must apply locally even when Wi-
 ```
 
 That means GPIO and sensor logic should be local to the Raspberry Pi or delegated to a directly wired controller.
+
+## Home Assistant discovery path
+
+For this Raspberry Pi wall-panel build, the clean no-MQTT Home Assistant path is:
+
+```text
+thermostat server.py
+  ↓ mDNS/Zeroconf advertises _iha-thermostat._tcp.local.
+Home Assistant custom integration
+  ↓ local HTTP polling/commands
+climate.iha
+```
+
+Home Assistant will not magically create a climate entity from an unknown HTTP server. A supported protocol or an integration has to translate the device into Home Assistant entities. This build includes the integration layer in `custom_components/iha`.

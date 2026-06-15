@@ -117,6 +117,20 @@
             </div>
           </aside>
 
+          <button id="alarmWidget" class="alarm-control-widget unlinked" type="button" aria-label="Alarm status. Hold to assign Home Assistant alarm.">
+            <span class="alarm-orbit" aria-hidden="true"></span>
+            <span class="alarm-shield" aria-hidden="true">
+              <svg viewBox="0 0 64 72" focusable="false">
+                <path class="shield-body" d="M32 4 56 14v19c0 16.5-9.8 27.7-24 34C17.8 60.7 8 49.5 8 33V14L32 4Z"></path>
+                <path class="shield-core" d="M32 13 47 19v13.5c0 10.5-5.9 18-15 23-9.1-5-15-12.5-15-23V19l15-6Z"></path>
+              </svg>
+            </span>
+            <span class="alarm-copy">
+              <strong id="alarmWidgetTitle">Alarm</strong>
+              <em id="alarmWidgetState">Hold to assign</em>
+            </span>
+          </button>
+
           <div class="thermostat-focus">
             <button id="tempDown" class="temp-step temp-left" aria-label="Decrease setpoint">−</button>
 
@@ -445,6 +459,36 @@
         </label>
         <div id="audioEntityPickerHelp" class="entity-picker-help">Choose the Home Assistant entity for this control.</div>
         <div id="audioEntityPickerList" class="entity-picker-list audio-entity-picker-list"></div>
+      </aside>
+    </section>
+
+    <section id="alarmKeypadOverlay" class="settings-overlay alarm-keypad-overlay" aria-hidden="true">
+      <div class="settings-backdrop" data-close-alarm-keypad></div>
+      <aside class="alarm-keypad-sheet" role="dialog" aria-modal="true" aria-labelledby="alarmKeypadTitle">
+        <div class="alarm-keypad-head">
+          <div>
+            <p class="eyebrow">Security</p>
+            <h2 id="alarmKeypadTitle">Disarm Alarm</h2>
+          </div>
+          <button id="alarmKeypadClose" class="icon-button close" aria-label="Close alarm keypad">×</button>
+        </div>
+        <div id="alarmKeypadStatus" class="alarm-keypad-status">Enter code to disarm.</div>
+        <div id="alarmCodeDots" class="alarm-code-dots" aria-label="Entered alarm code"></div>
+        <div id="alarmKeypadGrid" class="alarm-keypad-grid" aria-label="Alarm keypad">
+          <button data-alarm-key="1">1</button>
+          <button data-alarm-key="2">2</button>
+          <button data-alarm-key="3">3</button>
+          <button data-alarm-key="4">4</button>
+          <button data-alarm-key="5">5</button>
+          <button data-alarm-key="6">6</button>
+          <button data-alarm-key="7">7</button>
+          <button data-alarm-key="8">8</button>
+          <button data-alarm-key="9">9</button>
+          <button data-alarm-key="clear" class="alarm-key-muted">Clear</button>
+          <button data-alarm-key="0">0</button>
+          <button data-alarm-key="back" class="alarm-key-muted">⌫</button>
+        </div>
+        <button id="alarmDisarmButton" class="scene-btn alarm-disarm-button" type="button">Disarm</button>
       </aside>
     </section>
 

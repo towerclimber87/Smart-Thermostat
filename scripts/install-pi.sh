@@ -10,11 +10,17 @@ if [[ $EUID -eq 0 ]]; then
   exit 1
 fi
 
+if command -v apt-get >/dev/null 2>&1; then
+  sudo apt-get update
+  sudo apt-get install -y avahi-daemon python3-zeroconf
+fi
+
 sed -e "s|__PROJECT_DIR__|${PROJECT_DIR}|g" -e "s|__USER__|${USER}|g" "${PROJECT_DIR}/systemd/${SERVICE_NAME}" > "/tmp/${SERVICE_NAME}"
 
 sudo cp "/tmp/${SERVICE_NAME}" "${SERVICE_PATH}"
 sudo systemctl daemon-reload
 sudo systemctl enable --now "${SERVICE_NAME}"
 
-echo "Smart Thermostat web service installed."
+echo "IHA web service installed."
 echo "Open http://localhost:8080 on the Raspberry Pi."
+echo "Home Assistant discovery uses mDNS service _iha-thermostat._tcp.local."

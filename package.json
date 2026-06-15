@@ -1,11 +1,11 @@
 {
-  "name": "smart-thermostat",
+  "name": "iha-thermostat",
   "version": "0.1.0",
   "private": true,
-  "description": "Modern Raspberry Pi wall-panel UI for thermostat, audio, and blind controls.",
+  "description": "IHA Raspberry Pi thermostat wall panel",
   "scripts": {
-    "dev": "python3 -m http.server 8080 --directory public",
-    "serve": "python3 -m http.server 8080 --directory public"
+    "dev": "python3 server.py --host 0.0.0.0 --port 8080",
+    "serve": "python3 server.py --host 0.0.0.0 --port 8080"
   },
   "keywords": [
     "raspberry-pi",

@@ -300,6 +300,8 @@ def _normalize_generic_entity(item: dict) -> dict:
     if domain == "number":
         payload.update(_normalize_number_control(item))
         payload["domain"] = domain
+    if domain == "alarm_control_panel":
+        payload.update(_normalize_alarm_control_item(item))
     if domain == "media_player":
         attrs = item.get("attributes") or {}
         payload.update({
@@ -312,6 +314,77 @@ def _normalize_generic_entity(item: dict) -> dict:
         })
         payload["domain"] = domain
     return payload
+
+
+
+def _normalize_alarm_control_item(item: dict) -> dict:
+    attrs = item.get("attributes") or {}
+    entity_id = str(item.get("entity_id", ""))
+    return {
+        "entityId": entity_id,
+        "domain": "alarm_control_panel",
+        "name": attrs.get("friendly_name") or entity_id,
+        "state": item.get("state") or "unknown",
+        "codeFormat": attrs.get("code_format"),
+        "changedBy": attrs.get("changed_by"),
+        "codeArmRequired": attrs.get("code_arm_required"),
+        "armMode": attrs.get("arm_mode"),
+        "nextState": attrs.get("next_state"),
+        "openSensors": attrs.get("open_sensors"),
+        "bypassedSensors": attrs.get("bypassed_sensors"),
+        "delay": attrs.get("delay"),
+        "lastTriggered": attrs.get("last_triggered"),
+        "supportedFeatures": attrs.get("supported_features"),
+    }
+
+
+def _fetch_ha_alarm_state(ha_url: str, token: str, entity_id: str) -> dict:
+    entity_id = (entity_id or "").strip()
+    if not entity_id.startswith("alarm_control_panel."):
+        raise ValueError("Entity must be an alarm_control_panel.* entity")
+    item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
+    return _normalize_alarm_control_item(item)
+
+
+def _fetch_ha_alarm_states_for_entities(ha_url: str, token: str, entity_ids: list[str]) -> list[dict]:
+    wanted = []
+    seen = set()
+    for raw in entity_ids or []:
+        entity_id = str(raw or "").strip()
+        if not entity_id.startswith("alarm_control_panel.") or entity_id in seen:
+            continue
+        seen.add(entity_id)
+        wanted.append(entity_id)
+    return [_fetch_ha_alarm_state(ha_url, token, entity_id) for entity_id in wanted]
+
+
+def _call_alarm_service(ha_url: str, token: str, entity_id: str, action: str, code: str | None = None) -> dict:
+    entity_id = (entity_id or "").strip()
+    if not entity_id.startswith("alarm_control_panel."):
+        raise ValueError("Entity must be an alarm_control_panel.* entity")
+
+    service_by_action = {
+        "disarm": "alarm_disarm",
+        "arm_home": "alarm_arm_home",
+        "arm_away": "alarm_arm_away",
+        "arm_night": "alarm_arm_night",
+    }
+    action = (action or "disarm").strip().lower()
+    service = service_by_action.get(action)
+    if not service:
+        raise ValueError("Unsupported alarm action")
+
+    payload = {"entity_id": entity_id}
+    code_value = str(code or "").strip()
+    if code_value:
+        payload["code"] = code_value
+
+    _ha_json_request(ha_url, token, "POST", f"/api/services/alarm_control_panel/{service}", payload)
+    try:
+        return _fetch_ha_alarm_state(ha_url, token, entity_id)
+    except Exception:
+        optimistic_state = "disarmed" if action == "disarm" else action.replace("arm_", "armed_")
+        return {"entityId": entity_id, "name": entity_id, "domain": "alarm_control_panel", "state": optimistic_state}
 
 
 def _fetch_ha_entities(ha_url: str, token: str, domains: list[str] | None = None) -> list[dict]:
@@ -602,7 +675,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action"}:
+        if path not in {"/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action"}:
             self.send_error(404, "Not found")
             return
 
@@ -621,6 +694,24 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                     payload.get("domains", []),
                 )
                 return _json(self, 200, {"ok": True, "entities": entities, "count": len(entities)})
+
+            if path == "/api/ha/alarm/states":
+                alarms = _fetch_ha_alarm_states_for_entities(
+                    payload.get("url", ""),
+                    payload.get("token", ""),
+                    payload.get("entityIds", []),
+                )
+                return _json(self, 200, {"ok": True, "alarms": alarms, "count": len(alarms)})
+
+            if path == "/api/ha/alarm/action":
+                alarm = _call_alarm_service(
+                    payload.get("url", ""),
+                    payload.get("token", ""),
+                    payload.get("entityId", ""),
+                    payload.get("action", "disarm"),
+                    payload.get("code", ""),
+                )
+                return _json(self, 200, {"ok": True, "alarm": alarm})
 
             if path == "/api/ha/cover/states":
                 covers = _fetch_ha_cover_states_for_entities(
