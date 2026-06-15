@@ -3,6 +3,11 @@ const ABS_MAX = 95;
 const DIAL_SWEEP_DEG = 270;
 const DIAL_START_DEG = 225;
 const CONFIG_STORAGE_KEY = "smartThermostat.config.v2";
+const HA_SYNC_INTERVAL_MS = 3000;
+const HA_SYNC_AFTER_COMMAND_DELAYS = [900, 2400, 5200];
+let haSyncInFlight = false;
+let haSyncLastError = "";
+let lastBlindUserInteractionAt = 0;
 
 const defaultBlindConfig = {
   room: "living",
@@ -276,6 +281,7 @@ function gotoPage(pageName) {
   const index = state.pages.indexOf(pageName);
   elements.screenTrack.style.transform = `translateX(-${index * 33.3333}%)`;
   document.querySelectorAll(".nav-pill").forEach((button) => button.classList.toggle("active", button.dataset.goto === pageName));
+  if (pageName === "blinds") pollHomeAssistantLinkedCovers({ force: true });
 }
 
 function goRelative(direction) {
@@ -566,7 +572,6 @@ function renderBlinds() {
   elements.blindCards.style.setProperty("--blind-columns", columns);
 
   room.blinds.forEach((blind) => {
-    const linkedLabel = blind.haName || blind.haEntityId || "";
     const card = document.createElement("div");
     card.className = "blind-card";
     card.dataset.blindCard = blind.id;
@@ -576,7 +581,6 @@ function renderBlinds() {
       <div class="blind-top">
         <div>
           <div class="blind-name">${blind.name}</div>
-          ${linkedLabel ? `<div class="ha-link-chip">${linkedLabel}</div>` : `<div class="ha-link-chip unlinked">Hold to link</div>`}
         </div>
         <div class="blind-percent">${blind.position}%</div>
       </div>
@@ -591,6 +595,7 @@ function renderBlinds() {
 }
 
 function setBlindPosition(blindId, position) {
+  lastBlindUserInteractionAt = Date.now();
   const room = getActiveRoom();
   const blind = room.blinds.find((item) => item.id === blindId);
   if (!blind) return;
@@ -623,6 +628,7 @@ async function applyBlindAction(action, blindId = null) {
   const linkedTargets = targets.filter((blind) => blind.haEntityId);
   if (!linkedTargets.length) return;
   await Promise.all(linkedTargets.map((blind) => sendBlindToHomeAssistant(blind, normalizedAction)));
+  scheduleHaBlindSync();
 }
 
 function createBlind(roomKey, index) {
@@ -745,11 +751,13 @@ function findCoverEntity(entityId) {
 function applyEntityStateToBlind(blind, entity) {
   if (!blind || !entity) return;
   blind.position = normalizeHaPosition(entity, blind.position);
-  if (entity.name) blind.haName = entity.name;
+  if (entity.name) {
+    blind.haName = entity.name;
+    blind.name = entity.name;
+  }
 }
 
-function syncLinkedBlindsFromCovers() {
-  const covers = state.integrations.homeAssistant.coverEntities || [];
+function syncLinkedBlindsFromCovers(covers = state.integrations.homeAssistant.coverEntities || [], options = {}) {
   if (!covers.length) return false;
   let changed = false;
   Object.values(state.blinds.rooms || {}).forEach((room) => {
@@ -762,8 +770,83 @@ function syncLinkedBlindsFromCovers() {
       changed = changed || before !== blind.position;
     });
   });
-  if (changed) saveConfig();
+  if (changed && !options.skipSave) saveConfig();
   return changed;
+}
+
+function upsertCoverEntity(entity) {
+  if (!entity?.entityId) return;
+  const list = state.integrations.homeAssistant.coverEntities || [];
+  const existing = list.find((item) => item.entityId === entity.entityId);
+  if (existing) Object.assign(existing, entity);
+  else list.push(entity);
+  state.integrations.homeAssistant.coverEntities = list;
+}
+
+function getLinkedCoverEntityIds() {
+  const ids = [];
+  Object.values(state.blinds.rooms || {}).forEach((room) => {
+    (room.blinds || []).forEach((blind) => {
+      if (blind.haEntityId && !ids.includes(blind.haEntityId)) ids.push(blind.haEntityId);
+    });
+  });
+  return ids;
+}
+
+async function fetchLinkedCoverStatesViaLocalBackend(entityIds) {
+  const ha = state.integrations.homeAssistant;
+  const baseUrl = getHaBaseUrl();
+  if (!baseUrl || !ha.token) throw new Error("Missing Home Assistant URL or token");
+  const response = await fetch("/api/ha/cover/states", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: baseUrl, token: ha.token, entityIds }),
+  });
+  if (!response.ok) {
+    let message = `Local backend returned ${response.status}`;
+    try {
+      const payload = await response.json();
+      message = payload.error || message;
+    } catch (_) {}
+    throw new Error(message);
+  }
+  const payload = await response.json();
+  return payload.covers || [];
+}
+
+function scheduleHaBlindSync() {
+  HA_SYNC_AFTER_COMMAND_DELAYS.forEach((delay) => {
+    window.setTimeout(() => pollHomeAssistantLinkedCovers({ force: true }), delay);
+  });
+}
+
+async function pollHomeAssistantLinkedCovers(options = {}) {
+  const linkedEntityIds = getLinkedCoverEntityIds();
+  if (!linkedEntityIds.length) return;
+  if (!options.force && state.currentPage !== "blinds") return;
+  if (!options.force && document.visibilityState === "hidden") return;
+  if (!options.force && Date.now() - lastBlindUserInteractionAt < 1200) return;
+  if (haSyncInFlight) return;
+
+  haSyncInFlight = true;
+  try {
+    const covers = await fetchLinkedCoverStatesViaLocalBackend(linkedEntityIds);
+    covers.forEach(upsertCoverEntity);
+    const changed = syncLinkedBlindsFromCovers(covers);
+    if (changed) renderBlinds();
+    if (haSyncLastError) {
+      addHaLog("info", "Live blind sync recovered", `${covers.length} linked cover states refreshed`);
+      haSyncLastError = "";
+    }
+  } catch (error) {
+    const message = error.message || String(error);
+    if (message !== haSyncLastError) {
+      haSyncLastError = message;
+      addHaLog("warn", "Live blind sync paused", message);
+    }
+  } finally {
+    haSyncInFlight = false;
+  }
 }
 
 async function callCoverActionViaLocalBackend(entityId, action, position = null) {
@@ -806,6 +889,7 @@ async function sendBlindToHomeAssistant(blind, action, position = null) {
       renderBlinds();
       renderCoverPreview();
     }
+    scheduleHaBlindSync();
     return entityState;
   } catch (error) {
     addHaLog("error", `Cover ${action} failed`, `${blind.haEntityId}: ${error.message || error}`);
@@ -900,6 +984,7 @@ async function loadCoverEntitiesFromHomeAssistant(options = {}) {
     syncLinkedBlindsFromCovers();
     saveConfig({ toast: !options.quiet });
     renderBlinds();
+    pollHomeAssistantLinkedCovers({ force: true });
     setHaStatus(`Connected. Loaded ${covers.length} Home Assistant cover entries.`, "ok");
     showToast(`Loaded ${covers.length} cover entries`);
   } else {
@@ -971,10 +1056,12 @@ function assignEntityToBlind(entityId, name) {
   if (!blind) return;
   blind.haEntityId = entityId || "";
   blind.haName = name || "";
+  if (name) blind.name = name;
   const entity = entityId ? findCoverEntity(entityId) : null;
   if (entity) applyEntityStateToBlind(blind, entity);
   saveConfig({ toast: true });
   renderBlinds();
+  pollHomeAssistantLinkedCovers({ force: true });
   closeEntityPicker();
 }
 
@@ -1209,6 +1296,7 @@ function init() {
   setInterval(updateClock, 1000);
   setInterval(mockSensorDrift, 4500);
   setInterval(mockTrackProgress, 1200);
+  setInterval(() => pollHomeAssistantLinkedCovers(), HA_SYNC_INTERVAL_MS);
 }
 
 init();

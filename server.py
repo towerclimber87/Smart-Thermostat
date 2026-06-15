@@ -90,6 +90,69 @@ def _fetch_ha_covers(ha_url: str, token: str) -> list[dict]:
     return covers
 
 
+def _fetch_ha_cover_states_for_entities(ha_url: str, token: str, entity_ids: list[str]) -> list[dict]:
+    """Fetch current state for selected cover entities using one HA states call.
+
+    This is intentionally lightweight for the Pi UI: the browser polls this endpoint
+    only for linked blinds, and this function makes a single Home Assistant REST
+    request per poll instead of one request per blind.
+    """
+    wanted = []
+    seen = set()
+    for raw in entity_ids or []:
+        entity_id = str(raw or "").strip()
+        if not entity_id.startswith("cover.") or entity_id in seen:
+            continue
+        seen.add(entity_id)
+        wanted.append(entity_id)
+
+    if not wanted:
+        return []
+
+    ha_url = _normalize_ha_url(ha_url)
+    token = (token or "").strip()
+    if not token:
+        raise ValueError("Missing Home Assistant token")
+
+    req = request.Request(
+        f"{ha_url}/api/states",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "User-Agent": "SmartThermostatPanel/0.1",
+        },
+        method="GET",
+    )
+    try:
+        with request.urlopen(req, timeout=8) as resp:
+            raw = resp.read()
+    except error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")[:500]
+        raise RuntimeError(f"Home Assistant returned HTTP {exc.code}: {body}") from exc
+    except error.URLError as exc:
+        raise RuntimeError(f"Could not reach Home Assistant: {exc.reason}") from exc
+
+    states = json.loads(raw.decode("utf-8"))
+    wanted_set = set(wanted)
+    covers = []
+    for item in states:
+        entity_id = str(item.get("entity_id", ""))
+        if entity_id not in wanted_set:
+            continue
+        attrs = item.get("attributes") or {}
+        covers.append({
+            "entityId": entity_id,
+            "name": attrs.get("friendly_name") or entity_id,
+            "state": item.get("state") or "unknown",
+            "currentPosition": attrs.get("current_position"),
+            "supportedFeatures": attrs.get("supported_features"),
+        })
+
+    # Preserve the caller's entity order so UI updates stay predictable.
+    by_id = {item["entityId"]: item for item in covers}
+    return [by_id[entity_id] for entity_id in wanted if entity_id in by_id]
+
+
 def _ha_json_request(ha_url: str, token: str, method: str, path: str, payload: dict | None = None) -> object:
     ha_url = _normalize_ha_url(ha_url)
     token = (token or "").strip()
@@ -196,7 +259,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/ha/covers", "/api/ha/cover/action"}:
+        if path not in {"/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states"}:
             self.send_error(404, "Not found")
             return
 
@@ -206,6 +269,14 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
             if path == "/api/ha/covers":
                 covers = _fetch_ha_covers(payload.get("url", ""), payload.get("token", ""))
+                return _json(self, 200, {"ok": True, "covers": covers, "count": len(covers)})
+
+            if path == "/api/ha/cover/states":
+                covers = _fetch_ha_cover_states_for_entities(
+                    payload.get("url", ""),
+                    payload.get("token", ""),
+                    payload.get("entityIds", []),
+                )
                 return _json(self, 200, {"ok": True, "covers": covers, "count": len(covers)})
 
             state = _call_cover_service(
