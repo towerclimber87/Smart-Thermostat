@@ -16,7 +16,7 @@
     <section class="panel-controls" aria-label="Panel controls">
       <div id="tempMiniStatus" class="temp-mini-status" aria-label="Current thermostat summary">
         <div class="temp-mini-pill current">
-          <span id="headerCurrentTemp">72°</span>
+          <span id="headerCurrentTemp">70°</span>
           <small>Current</small>
         </div>
         <div id="headerSetPill" class="temp-mini-pill set cool">
@@ -67,6 +67,41 @@
             </div>
           </div>
 
+          <aside class="virtual-thermostat-panel" aria-label="Virtual thermostat hardware simulator">
+            <div class="virtual-section">
+              <p class="virtual-title">Virtual Outputs</p>
+              <div class="relay-stack" aria-label="GPIO output placeholders">
+                <div id="relayFan" class="relay-pill" data-relay="fan">
+                  <span class="relay-dot" aria-hidden="true"></span>
+                  <strong>Fan</strong>
+                  <em>Off</em>
+                </div>
+                <div id="relayHeat" class="relay-pill" data-relay="heat">
+                  <span class="relay-dot" aria-hidden="true"></span>
+                  <strong>Heat</strong>
+                  <em>Off</em>
+                </div>
+                <div id="relayCool" class="relay-pill" data-relay="cool">
+                  <span class="relay-dot" aria-hidden="true"></span>
+                  <strong>Cool</strong>
+                  <em>Off</em>
+                </div>
+              </div>
+            </div>
+
+            <div class="virtual-section virtual-sensor-section">
+              <label class="virtual-sensor-label" for="virtualTempSlider">
+                <span>Virtual Temp</span>
+                <strong id="virtualTempValue">70°</strong>
+              </label>
+              <input id="virtualTempSlider" class="virtual-temp-slider" type="range" min="65" max="75" step="1" value="70" aria-label="Set virtual current temperature" />
+              <div class="virtual-temp-range" aria-hidden="true">
+                <span>65°</span>
+                <span>75°</span>
+              </div>
+            </div>
+          </aside>
+
           <div class="thermostat-focus">
             <button id="tempDown" class="temp-step temp-left" aria-label="Decrease setpoint">−</button>
 
@@ -75,7 +110,7 @@
               <div class="dial-knob" aria-hidden="true"></div>
               <div class="dial-inner">
                 <p id="primaryTempLabel" class="current-label">Current</p>
-                <div class="current-temp"><span id="currentTemp">72</span><small>°F</small></div>
+                <div class="current-temp"><span id="currentTemp">70</span><small>°F</small></div>
                 <div id="secondaryTempRow" class="target-row"><span id="secondaryTempLabel">Set to</span> <strong><span id="targetTemp">70</span>°</strong></div>
                 <div id="modeBadge" class="mode-badge cool">Cool Target</div>
               </div>

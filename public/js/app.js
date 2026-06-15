@@ -73,7 +73,7 @@ const state = {
   pages: ["blinds", "thermostat", "audio"],
   currentPage: "thermostat",
   thermostat: {
-    currentTemp: 72,
+    currentTemp: 70,
     targetTemp: 70,
     lastComfortTarget: 70,
     mode: "cool",
@@ -140,6 +140,11 @@ const elements = {
   awayCoolValue: document.getElementById("awayCoolValue"),
   fanSummary: document.getElementById("fanSummary"),
   fanChip: document.getElementById("fanChip"),
+  relayFan: document.getElementById("relayFan"),
+  relayHeat: document.getElementById("relayHeat"),
+  relayCool: document.getElementById("relayCool"),
+  virtualTempSlider: document.getElementById("virtualTempSlider"),
+  virtualTempValue: document.getElementById("virtualTempValue"),
   dialMinLabel: document.getElementById("dialMinLabel"),
   dialMaxLabel: document.getElementById("dialMaxLabel"),
   settingsOverlay: document.getElementById("settingsOverlay"),
@@ -476,6 +481,27 @@ function setTargetTemp(temp, options = {}) {
   renderThermostat();
 }
 
+function setVirtualCurrentTemp(temp) {
+  const next = clamp(Number(temp), 65, 75);
+  state.thermostat.currentTemp = next;
+  renderThermostat();
+}
+
+function getThermostatOutputs() {
+  const t = state.thermostat;
+  const heat = t.mode === "heat" && t.currentTemp < t.targetTemp;
+  const cool = t.mode === "cool" && t.currentTemp > t.targetTemp;
+  const fan = t.fan === "on" || (t.fan === "auto" && (heat || cool));
+  return { fan, heat, cool };
+}
+
+function renderRelayStatus(element, isOn) {
+  if (!element) return;
+  element.classList.toggle("on", Boolean(isOn));
+  const status = element.querySelector("em");
+  if (status) status.textContent = isOn ? "On" : "Off";
+}
+
 function renderThermostat() {
   const t = state.thermostat;
   const { min, max } = getModeLimits();
@@ -489,6 +515,8 @@ function renderThermostat() {
   if (elements.secondaryTempLabel) elements.secondaryTempLabel.textContent = showingSetpoint ? "Current" : "Set to";
   if (elements.headerCurrentTemp) elements.headerCurrentTemp.textContent = `${currentRounded}°`;
   if (elements.headerSetTemp) elements.headerSetTemp.textContent = `${targetRounded}°`;
+  if (elements.virtualTempValue) elements.virtualTempValue.textContent = `${currentRounded}°`;
+  if (elements.virtualTempSlider && document.activeElement !== elements.virtualTempSlider) elements.virtualTempSlider.value = String(clamp(currentRounded, 65, 75));
   if (elements.headerSetPill) {
     elements.headerSetPill.classList.toggle("heat", t.mode === "heat" && !t.away);
     elements.headerSetPill.classList.toggle("cool", t.mode === "cool" && !t.away);
@@ -512,8 +540,12 @@ function renderThermostat() {
   elements.app.classList.toggle("heat-mode", t.mode === "heat" && !t.away);
   elements.app.classList.toggle("cool-mode", t.mode === "cool" && !t.away);
 
-  const isCalling = t.mode === "cool" ? t.currentTemp > t.targetTemp : t.currentTemp < t.targetTemp;
-  const action = isCalling ? (t.mode === "cool" ? "Cooling" : "Heating") : "Idle";
+  const outputs = getThermostatOutputs();
+  renderRelayStatus(elements.relayFan, outputs.fan);
+  renderRelayStatus(elements.relayHeat, outputs.heat);
+  renderRelayStatus(elements.relayCool, outputs.cool);
+
+  const action = outputs.cool ? "Cooling" : outputs.heat ? "Heating" : outputs.fan ? "Fan On" : "Idle";
   elements.runtimeState.textContent = t.away ? `Away • ${action}` : action;
 
   elements.modeBadge.textContent = t.away ? `${titleCase(t.mode)} Safety` : `${titleCase(t.mode)} Target`;
@@ -2157,6 +2189,7 @@ function bindEvents() {
   elements.awayToggle.addEventListener("click", toggleAway);
   elements.awayHomeButton?.addEventListener("click", setHomeMode);
   elements.fanChip?.addEventListener("click", cycleFanMode);
+  elements.virtualTempSlider?.addEventListener("input", (event) => setVirtualCurrentTemp(event.target.value));
 
   elements.settingsButton.addEventListener("click", openSettings);
   elements.settingsClose.addEventListener("click", closeSettings);
@@ -2337,7 +2370,8 @@ function init() {
   renderBlinds();
   gotoPage("thermostat");
   setInterval(updateClock, 1000);
-  setInterval(mockSensorDrift, 4500);
+  // The virtual temperature slider is now the temporary sensor input.
+  // setInterval(mockSensorDrift, 4500);
   setInterval(mockTrackProgress, 1200);
   setInterval(() => pollHomeAssistantLinkedCovers(), HA_SYNC_INTERVAL_MS);
   setInterval(() => pollHomeAssistantMediaPlayer(), HA_AUDIO_SYNC_INTERVAL_MS);

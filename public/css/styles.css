@@ -1968,6 +1968,108 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
 }
 .thermo-dial.setpoint-preview .target-row { color: rgba(222,235,251,.76); }
 
+/* 2026-06-15 virtual thermostat GPIO and sensor placeholders */
+.virtual-thermostat-panel {
+  position: absolute;
+  z-index: 4;
+  left: clamp(28px, 4.1vw, 76px);
+  top: clamp(178px, 29vh, 318px);
+  width: clamp(190px, 14vw, 268px);
+  padding: 16px;
+  border-radius: 28px;
+  border: 1px solid rgba(255,255,255,.115);
+  background: linear-gradient(160deg, rgba(255,255,255,.08), rgba(255,255,255,.035));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.10), 0 22px 54px rgba(0,0,0,.24);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+.virtual-section + .virtual-section {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255,255,255,.08);
+}
+.virtual-title,
+.virtual-sensor-label span {
+  color: rgba(200,216,232,.72);
+  text-transform: uppercase;
+  letter-spacing: .16em;
+  font-size: .62rem;
+  font-weight: 950;
+}
+.relay-stack { display: grid; gap: 8px; margin-top: 10px; }
+.relay-pill {
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: 14px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.052);
+  color: rgba(245,249,255,.88);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.06);
+}
+.relay-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: rgba(255,255,255,.84);
+  box-shadow: 0 0 0 3px rgba(255,255,255,.055);
+}
+.relay-pill strong {
+  font-size: .92rem;
+  font-weight: 950;
+}
+.relay-pill em {
+  color: rgba(219,232,247,.66);
+  font-size: .76rem;
+  font-style: normal;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: .11em;
+}
+.relay-pill.on {
+  border-color: rgba(99,241,173,.34);
+  background: rgba(99,241,173,.14);
+  color: #f3fff9;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.10), 0 0 26px rgba(99,241,173,.08);
+}
+.relay-pill.on .relay-dot {
+  background: var(--green);
+  box-shadow: 0 0 0 3px rgba(99,241,173,.12), 0 0 18px rgba(99,241,173,.68);
+}
+.relay-pill.on em { color: #d7ffeb; }
+.virtual-sensor-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.virtual-sensor-label strong {
+  color: #ffffff;
+  font-size: clamp(1.1rem, 1.35vw, 1.45rem);
+  line-height: 1;
+  font-weight: 1000;
+  letter-spacing: -.045em;
+  font-variant-numeric: tabular-nums;
+}
+.virtual-temp-slider {
+  width: 100%;
+  height: 34px;
+  margin: 8px 0 0;
+  accent-color: var(--cyan);
+  cursor: pointer;
+}
+.virtual-temp-range {
+  display: flex;
+  justify-content: space-between;
+  color: rgba(199,214,229,.58);
+  font-size: .75rem;
+  font-weight: 900;
+  margin-top: -3px;
+}
+
 .away-mode-overlay {
   position: absolute;
   inset: 0;
@@ -2047,6 +2149,33 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
     grid-template-columns: minmax(144px, 188px) minmax(330px, 1fr) minmax(144px, 188px);
     gap: 16px;
   }
+}
+@media (max-width: 1200px) {
+  .virtual-thermostat-panel {
+    left: clamp(18px, 2vw, 34px);
+    top: clamp(168px, 27vh, 286px);
+    width: clamp(176px, 16vw, 218px);
+    padding: 13px;
+  }
+  .relay-pill { min-height: 38px; padding: 0 10px; gap: 8px; }
+}
+@media (max-width: 900px) {
+  .thermostat-stage { grid-template-rows: auto auto minmax(0,1fr) auto; }
+  .virtual-thermostat-panel {
+    position: relative;
+    left: auto;
+    top: auto;
+    width: min(520px, 92vw);
+    margin: -8px auto 4px;
+    padding: 12px;
+    display: grid;
+    grid-template-columns: 1.25fr 1fr;
+    gap: 12px;
+  }
+  .virtual-section + .virtual-section { margin-top: 0; padding-top: 0; border-top: 0; }
+  .relay-stack { grid-template-columns: repeat(3, minmax(0,1fr)); }
+  .relay-pill { grid-template-columns: 10px 1fr; gap: 6px; min-height: 38px; }
+  .relay-pill em { display: none; }
 }
 @media (max-width: 900px) {
   .thermostat-bottom-row {
