@@ -60,6 +60,7 @@
 
       <article class="screen screen-thermostat" data-screen="thermostat" aria-label="Thermostat controls">
         <section class="thermostat-stage">
+          <button id="thermostatInfoButton" class="panel-info-button" type="button" aria-label="Panel information">i</button>
           <div class="thermostat-topline">
             <div class="thermostat-title-block">
               <div class="outdoor-top-badge">Outdoor <strong id="outdoorTempTopValue">78°</strong></div>
@@ -487,6 +488,48 @@
 
         <div id="settingsFooter" class="settings-footer">
           <button id="settingsDone" class="scene-btn">Done</button>
+        </div>
+      </aside>
+    </section>
+
+    <section id="lightColorOverlay" class="settings-overlay light-color-overlay" aria-hidden="true">
+      <div class="settings-backdrop" data-close-light-color></div>
+      <aside class="light-color-sheet" role="dialog" aria-modal="true" aria-labelledby="lightColorPickerTitle">
+        <div class="settings-header compact-picker-header">
+          <div>
+            <p class="eyebrow">Color Control</p>
+            <h2 id="lightColorPickerTitle">Choose Color</h2>
+          </div>
+          <button id="lightColorPickerClose" class="icon-button close" aria-label="Close light color picker">×</button>
+        </div>
+        <div class="light-color-current">
+          <span id="lightColorPreview" aria-hidden="true"></span>
+          <strong id="lightColorName">Select a preset</strong>
+        </div>
+        <div id="lightColorPresetGrid" class="light-color-preset-grid" aria-label="Light color presets"></div>
+        <button class="scene-btn light-color-done" type="button" data-close-light-color>Done</button>
+      </aside>
+    </section>
+
+    <section id="thermostatInfoOverlay" class="settings-overlay thermostat-info-overlay" aria-hidden="true">
+      <div class="settings-backdrop" data-close-thermostat-info></div>
+      <aside class="panel-info-sheet" role="dialog" aria-modal="true" aria-labelledby="thermostatInfoTitle">
+        <div class="settings-header compact-picker-header">
+          <div>
+            <p class="eyebrow">Panel Information</p>
+            <h2 id="thermostatInfoTitle">Thermostat Info</h2>
+          </div>
+          <button id="thermostatInfoClose" class="icon-button close" aria-label="Close panel information">×</button>
+        </div>
+        <div class="panel-info-grid">
+          <div class="panel-info-row">
+            <span>IP Address</span>
+            <strong id="unitIpValue">Loading…</strong>
+          </div>
+          <div class="panel-info-row">
+            <span>Version</span>
+            <strong id="unitVersionValue">Loading…</strong>
+          </div>
         </div>
       </aside>
     </section>

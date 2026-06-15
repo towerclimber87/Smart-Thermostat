@@ -2,7 +2,8 @@ const ABS_MIN = 45;
 const ABS_MAX = 95;
 const DIAL_SWEEP_DEG = 270;
 const DIAL_START_DEG = 225;
-const CONFIG_STORAGE_KEY = "smartThermostat.config.v2";
+const LEGACY_CONFIG_STORAGE_KEY = "smartThermostat.config.v2";
+const CONFIG_API_ENDPOINT = "/api/config";
 const HA_SYNC_INTERVAL_MS = 3000;
 const HA_SYNC_AFTER_COMMAND_DELAYS = [900, 2400, 5200];
 const HA_AUDIO_SYNC_INTERVAL_MS = 3000;
@@ -14,6 +15,20 @@ const HA_ALARM_SYNC_INTERVAL_MS = 3000;
 const HA_ALARM_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
 const LOCAL_THERMOSTAT_SYNC_INTERVAL_MS = 1000;
 const LOCAL_THERMOSTAT_PUSH_DEBOUNCE_MS = 300;
+const LIGHT_COLOR_PRESETS = [
+  { name: "Warm White", color: "#ffd76f" },
+  { name: "Soft White", color: "#fff2cc" },
+  { name: "White", color: "#ffffff" },
+  { name: "Red", color: "#ff3b3b" },
+  { name: "Orange", color: "#ff8a2a" },
+  { name: "Yellow", color: "#ffe04b" },
+  { name: "Green", color: "#35e27a" },
+  { name: "Cyan", color: "#35eaff" },
+  { name: "Blue", color: "#3f7cff" },
+  { name: "Purple", color: "#8b5cff" },
+  { name: "Pink", color: "#ff5ec7" },
+  { name: "Night", color: "#6fa8ff" },
+];
 const ALARM_AUTO_SUBMIT_LENGTH = 4;
 const ALARM_ARM_AWAY_DELAY_SECONDS = 60;
 let haSyncInFlight = false;
@@ -61,6 +76,11 @@ let lastAlarmUserInteractionAt = 0;
 let setpointPreviewUntil = 0;
 let setpointPreviewTimeout = null;
 let alarmArmAwayTimer = null;
+let activeLightColorLightId = "";
+let configSaveTimer = null;
+let configSaveInFlight = false;
+let configSaveQueued = false;
+let configQueuedToast = false;
 
 const defaultBlindConfig = {
   room: "living",
@@ -91,16 +111,16 @@ const defaultLightConfig = {
     living: {
       label: "Living Room",
       lights: [
-        { id: "ll-1", name: "Main Lights", brightness: 85, on: true, haEntityId: "", haName: "" },
-        { id: "ll-2", name: "Accent Lights", brightness: 45, on: true, haEntityId: "", haName: "" },
-        { id: "ll-3", name: "Lamp", brightness: 65, on: true, haEntityId: "", haName: "" },
+        { id: "ll-1", name: "Main Lights", brightness: 85, on: true, haEntityId: "", haName: "", color: "#ffd76f", colorSupported: false },
+        { id: "ll-2", name: "Accent Lights", brightness: 45, on: true, haEntityId: "", haName: "", color: "#ffd76f", colorSupported: false },
+        { id: "ll-3", name: "Lamp", brightness: 65, on: true, haEntityId: "", haName: "", color: "#ffd76f", colorSupported: false },
       ],
     },
     kitchen: {
       label: "Kitchen",
       lights: [
-        { id: "kl-1", name: "Ceiling", brightness: 80, on: true, haEntityId: "", haName: "" },
-        { id: "kl-2", name: "Island", brightness: 55, on: true, haEntityId: "", haName: "" },
+        { id: "kl-1", name: "Ceiling", brightness: 80, on: true, haEntityId: "", haName: "", color: "#ffd76f", colorSupported: false },
+        { id: "kl-2", name: "Island", brightness: 55, on: true, haEntityId: "", haName: "", color: "#ffd76f", colorSupported: false },
       ],
     },
   },
@@ -196,6 +216,7 @@ const state = {
   lightEntityPicker: { roomKey: null, lightId: null },
   audioEntityPicker: { kind: null, domain: null, entities: [], search: "" },
   diagnostics: { haLogs: [] },
+  systemInfo: { ipAddress: "", version: "", host: "" },
 };
 
 const elements = {
@@ -251,6 +272,11 @@ const elements = {
   alarmArmCancelButton: document.getElementById("alarmArmCancelButton"),
   alarmDisarmCodeInput: document.getElementById("alarmDisarmCodeInput"),
   saveAlarmCodeButton: document.getElementById("saveAlarmCodeButton"),
+  thermostatInfoButton: document.getElementById("thermostatInfoButton"),
+  thermostatInfoOverlay: document.getElementById("thermostatInfoOverlay"),
+  thermostatInfoClose: document.getElementById("thermostatInfoClose"),
+  unitIpValue: document.getElementById("unitIpValue"),
+  unitVersionValue: document.getElementById("unitVersionValue"),
   dialMinLabel: document.getElementById("dialMinLabel"),
   dialMaxLabel: document.getElementById("dialMaxLabel"),
   settingsOverlay: document.getElementById("settingsOverlay"),
@@ -283,6 +309,12 @@ const elements = {
   lightCards: document.getElementById("lightCards"),
   lightRoomTitle: document.getElementById("lightRoomTitle"),
   lightRoomSummary: document.getElementById("lightRoomSummary"),
+  lightColorOverlay: document.getElementById("lightColorOverlay"),
+  lightColorPickerTitle: document.getElementById("lightColorPickerTitle"),
+  lightColorPickerClose: document.getElementById("lightColorPickerClose"),
+  lightColorPresetGrid: document.getElementById("lightColorPresetGrid"),
+  lightColorPreview: document.getElementById("lightColorPreview"),
+  lightColorName: document.getElementById("lightColorName"),
   haUrlInput: document.getElementById("haUrlInput"),
   haTokenInput: document.getElementById("haTokenInput"),
   audioHaUrlInput: document.getElementById("audioHaUrlInput"),
@@ -352,6 +384,49 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
+}
+
+function normalizeHexColor(value, fallback = "#ffd76f") {
+  const raw = String(value || "").trim();
+  const short = /^#?([0-9a-f]{3})$/i.exec(raw);
+  if (short) {
+    const [r, g, b] = short[1].split("").map((part) => part + part);
+    return `#${r}${g}${b}`.toLowerCase();
+  }
+  const full = /^#?([0-9a-f]{6})$/i.exec(raw);
+  return full ? `#${full[1]}`.toLowerCase() : fallback;
+}
+
+function hexToRgb(value) {
+  const hex = normalizeHexColor(value).slice(1);
+  return {
+    r: parseInt(hex.slice(0, 2), 16),
+    g: parseInt(hex.slice(2, 4), 16),
+    b: parseInt(hex.slice(4, 6), 16),
+  };
+}
+
+function rgbToHex(r, g, b) {
+  return `#${[r, g, b].map((part) => clamp(Math.round(Number(part) || 0), 0, 255).toString(16).padStart(2, "0")).join("")}`;
+}
+
+function lightDisplayName(light) {
+  return String(light?.haName || light?.name || "Light").trim() || "Light";
+}
+
+function getLightPresetName(color) {
+  const normalized = normalizeHexColor(color);
+  return LIGHT_COLOR_PRESETS.find((preset) => normalizeHexColor(preset.color) === normalized)?.name || "Custom";
+}
+
+function setOverlayOpen(overlay, open) {
+  if (!overlay) return;
+  overlay.classList.toggle("open", Boolean(open));
+  overlay.setAttribute("aria-hidden", open ? "false" : "true");
+}
+
+function lightColorModesSupportColor(modes = []) {
+  return Array.isArray(modes) && modes.some((mode) => ["hs", "rgb", "rgbw", "rgbww", "xy"].includes(String(mode || "").toLowerCase()));
 }
 
 function maskToken(token) {
@@ -494,7 +569,7 @@ function buildSavedConfig() {
     limits: state.thermostat.limits,
   };
   return {
-    version: 8,
+    version: 9,
     thermostat: thermostatToSave,
     alarm: {
       disarmCode: String(state.alarm.disarmCode || "").replace(/\D/g, "").slice(0, 8),
@@ -505,77 +580,155 @@ function buildSavedConfig() {
   };
 }
 
-function loadSavedConfig() {
-  try {
-    const raw = localStorage.getItem(CONFIG_STORAGE_KEY);
-    if (!raw) return;
-    const saved = JSON.parse(raw);
-    if (saved?.thermostat) {
-      const defaults = clone(state.thermostat);
-      const savedThermostat = saved.thermostat || {};
-      const legacyTarget = Number(savedThermostat.autoOutdoorTarget);
-      const legacyDifferential = Number(savedThermostat.autoOutdoorDifferential);
-      state.thermostat = {
-        ...defaults,
-        ...savedThermostat,
-        autoCoolOutdoorTarget: Number.isFinite(Number(savedThermostat.autoCoolOutdoorTarget))
-          ? Number(savedThermostat.autoCoolOutdoorTarget)
-          : (Number.isFinite(legacyTarget) ? legacyTarget : defaults.autoCoolOutdoorTarget),
-        autoHeatOutdoorTarget: Number.isFinite(Number(savedThermostat.autoHeatOutdoorTarget))
-          ? Number(savedThermostat.autoHeatOutdoorTarget)
-          : (Number.isFinite(legacyTarget) && Number.isFinite(legacyDifferential) ? legacyTarget - legacyDifferential : defaults.autoHeatOutdoorTarget),
-        coolFanRemainOnMinutes: Number.isFinite(Number(savedThermostat.coolFanRemainOnMinutes))
-          ? Number(savedThermostat.coolFanRemainOnMinutes)
-          : defaults.coolFanRemainOnMinutes,
-        limits: {
-          ...defaults.limits,
-          ...(savedThermostat.limits || {}),
-        },
-        away: false,
-        autoPendingMode: "",
-        autoLockoutUntil: 0,
-        lastHeatRunAt: 0,
-        lastCoolRunAt: 0,
-        coolRelayWasOn: false,
-        coolFanHoldUntil: 0,
-      };
-      state.thermostat.autoHeatOutdoorTarget = Math.min(state.thermostat.autoHeatOutdoorTarget, state.thermostat.autoCoolOutdoorTarget - 1);
-    }
-    if (saved?.alarm) {
-      const savedCode = String(saved.alarm.disarmCode || "").replace(/\D/g, "").slice(0, 8);
-      if (savedCode) state.alarm.disarmCode = savedCode;
-    }
-    if (saved?.blinds?.rooms) state.blinds = saved.blinds;
-    if (saved?.lights?.rooms) {
-      state.lights = { ...clone(defaultLightConfig), ...saved.lights, rooms: saved.lights.rooms };
-      Object.values(state.lights.rooms || {}).forEach((room) => {
-        room.lights = Array.isArray(room.lights) && room.lights.length ? room.lights : [createLight(state.lights.room || "room", 1)];
-        room.lights.forEach((light, index) => {
-          light.id = light.id || `light-${Date.now().toString(36)}-${index + 1}`;
-          light.name = light.name || `Light ${index + 1}`;
-          light.brightness = clamp(Number(light.brightness ?? 80), 0, 100);
-          light.on = light.on !== false && light.brightness > 0;
-          light.haEntityId = light.haEntityId || "";
-          light.haName = light.haName || "";
-        });
+function applySavedConfig(saved = {}) {
+  if (saved?.thermostat) {
+    const defaults = clone(state.thermostat);
+    const savedThermostat = saved.thermostat || {};
+    const legacyTarget = Number(savedThermostat.autoOutdoorTarget);
+    const legacyDifferential = Number(savedThermostat.autoOutdoorDifferential);
+    state.thermostat = {
+      ...defaults,
+      ...savedThermostat,
+      autoCoolOutdoorTarget: Number.isFinite(Number(savedThermostat.autoCoolOutdoorTarget))
+        ? Number(savedThermostat.autoCoolOutdoorTarget)
+        : (Number.isFinite(legacyTarget) ? legacyTarget : defaults.autoCoolOutdoorTarget),
+      autoHeatOutdoorTarget: Number.isFinite(Number(savedThermostat.autoHeatOutdoorTarget))
+        ? Number(savedThermostat.autoHeatOutdoorTarget)
+        : (Number.isFinite(legacyTarget) && Number.isFinite(legacyDifferential) ? legacyTarget - legacyDifferential : defaults.autoHeatOutdoorTarget),
+      coolFanRemainOnMinutes: Number.isFinite(Number(savedThermostat.coolFanRemainOnMinutes))
+        ? Number(savedThermostat.coolFanRemainOnMinutes)
+        : defaults.coolFanRemainOnMinutes,
+      limits: {
+        ...defaults.limits,
+        ...(savedThermostat.limits || {}),
+      },
+      away: false,
+      autoPendingMode: "",
+      autoLockoutUntil: 0,
+      lastHeatRunAt: 0,
+      lastCoolRunAt: 0,
+      coolRelayWasOn: false,
+      coolFanHoldUntil: 0,
+    };
+    state.thermostat.autoHeatOutdoorTarget = Math.min(state.thermostat.autoHeatOutdoorTarget, state.thermostat.autoCoolOutdoorTarget - 1);
+  }
+  if (saved?.alarm) {
+    const savedCode = String(saved.alarm.disarmCode || "").replace(/\D/g, "").slice(0, 8);
+    if (savedCode) state.alarm.disarmCode = savedCode;
+  }
+  if (saved?.blinds?.rooms) state.blinds = saved.blinds;
+  if (saved?.lights?.rooms) {
+    state.lights = { ...clone(defaultLightConfig), ...saved.lights, rooms: saved.lights.rooms };
+    Object.values(state.lights.rooms || {}).forEach((room) => {
+      room.lights = Array.isArray(room.lights) && room.lights.length ? room.lights : [createLight(state.lights.room || "room", 1)];
+      room.lights.forEach((light, index) => {
+        light.id = light.id || `light-${Date.now().toString(36)}-${index + 1}`;
+        light.name = light.name || `Light ${index + 1}`;
+        light.brightness = clamp(Number(light.brightness ?? 80), 0, 100);
+        light.on = light.on !== false && light.brightness > 0;
+        light.color = normalizeHexColor(light.color);
+        light.colorSupported = Boolean(light.colorSupported);
+        light.haEntityId = light.haEntityId || "";
+        light.haName = light.haName || "";
       });
-      getActiveLightRoom();
+    });
+    getActiveLightRoom();
+  }
+  if (saved?.integrations?.homeAssistant) {
+    state.integrations.homeAssistant = {
+      ...clone(defaultIntegrations.homeAssistant),
+      ...saved.integrations.homeAssistant,
+    };
+  }
+}
+
+function readLegacySavedConfig() {
+  try {
+    const raw = localStorage.getItem(LEGACY_CONFIG_STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (error) {
+    console.warn("Unable to read legacy local config", error);
+    return null;
+  }
+}
+
+async function postConfigToServer(config) {
+  const response = await fetch(CONFIG_API_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    cache: "no-store",
+    body: JSON.stringify({ config }),
+  });
+  if (!response.ok) throw new Error(`Config save failed (${response.status})`);
+  return response.json();
+}
+
+async function loadSavedConfig() {
+  try {
+    const response = await fetch(`${CONFIG_API_ENDPOINT}?_=${Date.now()}`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`Config load failed (${response.status})`);
+    const payload = await response.json();
+    if (payload?.exists && payload?.config && typeof payload.config === "object" && Object.keys(payload.config).length) {
+      applySavedConfig(payload.config);
+      try { localStorage.removeItem(LEGACY_CONFIG_STORAGE_KEY); } catch (_) {}
+      return;
     }
-    if (saved?.integrations?.homeAssistant) {
-      state.integrations.homeAssistant = {
-        ...clone(defaultIntegrations.homeAssistant),
-        ...saved.integrations.homeAssistant,
-      };
+
+    const legacySaved = readLegacySavedConfig();
+    if (legacySaved && typeof legacySaved === "object") {
+      applySavedConfig(legacySaved);
+      try {
+        await postConfigToServer(buildSavedConfig());
+        localStorage.removeItem(LEGACY_CONFIG_STORAGE_KEY);
+      } catch (migrationError) {
+        console.warn("Unable to migrate legacy config to panel", migrationError);
+      }
     }
   } catch (error) {
-    console.warn("Unable to load saved config", error);
+    console.warn("Unable to load saved config from panel", error);
+    const legacySaved = readLegacySavedConfig();
+    if (legacySaved && typeof legacySaved === "object") {
+      applySavedConfig(legacySaved);
+    }
+  }
+}
+
+async function flushConfigSave() {
+  configSaveTimer = null;
+  if (configSaveInFlight) {
+    configSaveQueued = true;
+    return;
+  }
+  configSaveInFlight = true;
+  const shouldToast = configQueuedToast;
+  configQueuedToast = false;
+  try {
+    await postConfigToServer(buildSavedConfig());
+    try { localStorage.removeItem(LEGACY_CONFIG_STORAGE_KEY); } catch (error) { /* ignore */ }
+    if (shouldToast) showToast("Config saved");
+  } catch (error) {
+    console.warn("Unable to save config to panel", error);
+    if (shouldToast) showToast("Save failed");
+  } finally {
+    configSaveInFlight = false;
+    if (configSaveQueued) {
+      configSaveQueued = false;
+      flushConfigSave();
+    }
   }
 }
 
 function saveConfig(options = {}) {
-  localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(buildSavedConfig(), null, 2));
-  if (options.toast) showToast("Config saved");
   if (options.sync !== false) scheduleLocalThermostatPush();
+  if (options.toast) configQueuedToast = true;
+  configSaveQueued = true;
+  clearTimeout(configSaveTimer);
+  configSaveTimer = setTimeout(() => {
+    if (!configSaveQueued) return;
+    configSaveQueued = false;
+    flushConfigSave();
+  }, 180);
 }
 
 function localThermostatPayload() {
@@ -694,6 +847,46 @@ async function fetchLocalThermostatStatus(options = {}) {
   } finally {
     localThermostatSyncInFlight = false;
   }
+}
+
+function renderSystemInfo() {
+  const ip = state.systemInfo.ipAddress || window.location.hostname || "Unavailable";
+  const version = state.systemInfo.version || "Unavailable";
+  if (elements.unitIpValue) elements.unitIpValue.textContent = ip;
+  if (elements.unitVersionValue) elements.unitVersionValue.textContent = version;
+}
+
+async function fetchSystemInfo() {
+  try {
+    const response = await fetch(`/api/system/info?_=${Date.now()}`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`System info returned ${response.status}`);
+    const payload = await response.json();
+    state.systemInfo = {
+      ipAddress: payload.ipAddress || payload.ip || window.location.hostname || "",
+      version: payload.version || "",
+      host: payload.host || "",
+    };
+  } catch (error) {
+    state.systemInfo = {
+      ...state.systemInfo,
+      ipAddress: state.systemInfo.ipAddress || window.location.hostname || "Unavailable",
+      version: state.systemInfo.version || "Unavailable",
+    };
+    console.warn("Unable to load system info", error);
+  } finally {
+    renderSystemInfo();
+  }
+}
+
+function openThermostatInfo() {
+  state.systemInfo = { ...state.systemInfo, ipAddress: state.systemInfo.ipAddress || "Loading…", version: state.systemInfo.version || "Loading…" };
+  renderSystemInfo();
+  setOverlayOpen(elements.thermostatInfoOverlay, true);
+  fetchSystemInfo();
+}
+
+function closeThermostatInfo() {
+  setOverlayOpen(elements.thermostatInfoOverlay, false);
 }
 
 function scheduleLocalThermostatPush() {
@@ -2580,6 +2773,8 @@ function createLight(roomKey, index) {
     name: `Light ${index}`,
     brightness: 80,
     on: true,
+    color: "#ffd76f",
+    colorSupported: false,
     haEntityId: "",
     haName: "",
   };
@@ -2595,6 +2790,8 @@ function setRoomLightCount(roomKey, count) {
     if (!light.name) light.name = `Light ${index + 1}`;
     light.brightness = clamp(Number(light.brightness ?? 80), 0, 100);
     light.on = light.on !== false && light.brightness > 0;
+    light.color = normalizeHexColor(light.color);
+    light.colorSupported = Boolean(light.colorSupported);
   });
   saveConfig();
   renderLightConfigList();
@@ -2701,22 +2898,44 @@ function updateLightCard(light) {
   if (!card) return;
   const brightness = clamp(Number(light.brightness || 0), 0, 100);
   const on = light.on !== false && brightness > 0;
+  const color = normalizeHexColor(light.color);
+  const rgb = hexToRgb(color);
+  const colorSupported = Boolean(light.colorSupported);
+  const displayName = lightDisplayName(light);
+
   card.classList.toggle("off", !on);
   card.classList.toggle("linked", Boolean(light.haEntityId));
+  card.classList.toggle("color-capable", colorSupported);
   card.style.setProperty("--light-level", `${brightness}%`);
   card.style.setProperty("--light-glow", (on ? 0.18 + brightness / 125 : 0.08).toFixed(3));
+  card.style.setProperty("--light-color", color);
+  card.style.setProperty("--light-color-rgb", `${rgb.r}, ${rgb.g}, ${rgb.b}`);
+
+  const title = card.querySelector("[data-light-title]");
+  if (title) {
+    title.textContent = displayName;
+    title.setAttribute("title", displayName);
+  }
+
+  const iconButton = card.querySelector("[data-light-icon-toggle]");
+  if (iconButton) {
+    iconButton.setAttribute("aria-label", `${on ? "Turn off" : "Turn on"} ${displayName}`);
+    iconButton.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+
   const slider = card.querySelector("[data-light-slider]");
   if (slider && document.activeElement !== slider) slider.value = String(brightness);
   setRangeVisual(slider);
+
   const value = card.querySelector("[data-light-value]");
   if (value) value.textContent = `${Math.round(brightness)}%`;
-  const toggle = card.querySelector("[data-light-toggle]");
-  if (toggle) {
-    toggle.textContent = on ? "On" : "Off";
-    toggle.setAttribute("aria-pressed", on ? "true" : "false");
-  }
-  const entity = card.querySelector("[data-light-entity]");
-  if (entity) entity.textContent = light.haEntityId ? (light.haName || light.haEntityId) : "Hold to assign";
+
+  const colorRow = card.querySelector("[data-light-color-row]");
+  if (colorRow) colorRow.hidden = !colorSupported;
+  const colorButton = card.querySelector("[data-light-color-open]");
+  if (colorButton) colorButton.setAttribute("aria-label", `Change ${displayName} color`);
+  const colorSwatch = card.querySelector("[data-light-color-swatch]");
+  if (colorSwatch) colorSwatch.style.background = color;
 }
 
 function renderLights() {
@@ -2739,22 +2958,36 @@ function renderLights() {
     card.className = "light-card";
     card.dataset.lightCard = light.id;
     card.dataset.roomKey = state.lights.room;
-    const linkedText = light.haEntityId ? (light.haName || light.haEntityId) : "Hold to assign";
+    light.color = normalizeHexColor(light.color);
+    light.colorSupported = Boolean(light.colorSupported);
+    const displayName = lightDisplayName(light);
+    const safeLightId = escapeHtml(light.id);
+    const safeLightName = escapeHtml(displayName);
     card.innerHTML = `
       <div class="light-card-top">
         <div class="light-title-block">
-          <strong title="${escapeHtml(light.name)}">${escapeHtml(light.name)}</strong>
-          <span data-light-entity>${escapeHtml(linkedText)}</span>
+          <strong data-light-title title="${safeLightName}">${safeLightName}</strong>
         </div>
-        <button class="light-toggle" data-light-toggle data-light-id="${escapeHtml(light.id)}" type="button">On</button>
       </div>
       <div class="light-vertical-body">
-        <div class="light-icon-wrap" aria-hidden="true">
-          <span class="light-bulb-icon"></span>
+        <button class="light-icon-button light-icon-wrap modern-light-icon-wrap" data-light-icon-toggle data-light-id="${safeLightId}" type="button" aria-label="Toggle ${safeLightName}">
+          <span class="light-modern-icon" aria-hidden="true">
+            <svg viewBox="0 0 72 72" focusable="false">
+              <path class="fixture" d="M22 12h28c3.8 0 6.8 3 6.8 6.8v2.4H15.2v-2.4C15.2 15 18.2 12 22 12Z"></path>
+              <path class="beam" d="M21 25h30l7.5 31.5c.8 3.3-1.7 6.5-5.1 6.5H18.6c-3.4 0-5.9-3.2-5.1-6.5L21 25Z"></path>
+              <path class="lens" d="M24 25h24c-1.4 5.7-6.1 9.6-12 9.6S25.4 30.7 24 25Z"></path>
+            </svg>
+          </span>
+        </button>
+        <div class="light-color-row" data-light-color-row hidden>
+          <button class="light-color-wheel" data-light-color-open data-light-id="${safeLightId}" type="button" title="Change light color" aria-label="Change ${safeLightName} color">
+            <span class="sr-only">${safeLightName} color</span>
+            <span class="light-color-swatch" data-light-color-swatch></span>
+          </button>
         </div>
-        <label class="light-slider-rail" for="lightSlider-${escapeHtml(light.id)}">
-          <span class="sr-only">${escapeHtml(light.name)} brightness</span>
-          <input id="lightSlider-${escapeHtml(light.id)}" class="light-slider light-slider-vertical" data-light-slider data-light-id="${escapeHtml(light.id)}" type="range" min="0" max="100" step="1" value="${Math.round(light.brightness)}" aria-label="${escapeHtml(light.name)} brightness" />
+        <label class="light-slider-rail" for="lightSlider-${safeLightId}">
+          <span class="sr-only">${safeLightName} brightness</span>
+          <input id="lightSlider-${safeLightId}" class="light-slider light-slider-vertical" data-light-slider data-light-id="${safeLightId}" type="range" min="0" max="100" step="1" value="${Math.round(light.brightness)}" aria-label="${safeLightName} brightness" />
         </label>
         <div class="light-value-stack">
           <strong data-light-value>${Math.round(light.brightness)}%</strong>
@@ -2779,6 +3012,58 @@ function setLightBrightness(lightId, brightness, options = {}) {
   if (options.send) sendLightToHomeAssistant(light, light.on ? "on" : "off", light.brightness);
 }
 
+function setLightColor(lightId, color, options = {}) {
+  lastLightUserInteractionAt = Date.now();
+  const light = findLightInActiveRoom(lightId);
+  if (!light || !light.colorSupported) return;
+  light.color = normalizeHexColor(color, light.color || "#ffd76f");
+  if (Number(light.brightness || 0) <= 0) light.brightness = clamp(Number(light.lastBrightness || 80), 1, 100);
+  light.on = true;
+  light.localHoldUntil = Date.now() + 1800;
+  updateLightCard(light);
+  saveConfig();
+  if (options.send) sendLightToHomeAssistant(light, "color", light.brightness, light.color);
+}
+
+function renderLightColorPicker() {
+  const light = findLightInActiveRoom(activeLightColorLightId);
+  if (!light || !elements.lightColorPresetGrid) return;
+  const current = normalizeHexColor(light.color);
+  const displayName = lightDisplayName(light);
+  if (elements.lightColorPickerTitle) elements.lightColorPickerTitle.textContent = displayName;
+  if (elements.lightColorPreview) elements.lightColorPreview.style.background = current;
+  if (elements.lightColorName) elements.lightColorName.textContent = getLightPresetName(current);
+  elements.lightColorPresetGrid.innerHTML = LIGHT_COLOR_PRESETS.map((preset) => {
+    const color = normalizeHexColor(preset.color);
+    const selected = color === current ? " selected" : "";
+    return `
+      <button class="light-color-preset${selected}" data-light-preset-color="${color}" type="button" style="--preset-color: ${color}">
+        <span class="preset-swatch" aria-hidden="true"></span>
+        <strong>${escapeHtml(preset.name)}</strong>
+      </button>
+    `;
+  }).join("");
+}
+
+function openLightColorPicker(lightId) {
+  const light = findLightInActiveRoom(lightId);
+  if (!light || !light.colorSupported) return;
+  activeLightColorLightId = lightId;
+  renderLightColorPicker();
+  setOverlayOpen(elements.lightColorOverlay, true);
+}
+
+function closeLightColorPicker() {
+  activeLightColorLightId = "";
+  setOverlayOpen(elements.lightColorOverlay, false);
+}
+
+function applyLightPresetColor(color) {
+  if (!activeLightColorLightId) return;
+  setLightColor(activeLightColorLightId, color, { send: true });
+  renderLightColorPicker();
+}
+
 function toggleLight(lightId) {
   const light = findLightInActiveRoom(lightId);
   if (!light) return;
@@ -2799,12 +3084,16 @@ function normalizeLightEntity(entity, fallback = {}) {
   const brightness = entity?.brightnessPct ?? entity?.brightness ?? fallback.brightness ?? 0;
   const pct = clamp(Math.round(Number(brightness)), 0, 100);
   const on = String(entity?.state || "").toLowerCase() === "on" && pct > 0;
+  const colorSupported = Boolean(entity?.colorSupported) || lightColorModesSupportColor(entity?.supportedColorModes);
+  const color = normalizeHexColor(entity?.colorHex || fallback.color);
   return {
     entityId: entity?.entityId || fallback.haEntityId || "",
     name: entity?.name || fallback.haName || entity?.entityId || "",
     state: entity?.state || (on ? "on" : "off"),
     brightness: pct,
     on,
+    color,
+    colorSupported,
   };
 }
 
@@ -2817,6 +3106,8 @@ function applyEntityStateToLight(light, entity) {
   if (normalized.name && light.name === light.haEntityId) { light.name = normalized.name; changed = true; }
   if (light.brightness !== normalized.brightness) { light.brightness = normalized.brightness; changed = true; }
   if (light.on !== normalized.on) { light.on = normalized.on; changed = true; }
+  if (light.color !== normalized.color) { light.color = normalized.color; changed = true; }
+  if (light.colorSupported !== normalized.colorSupported) { light.colorSupported = normalized.colorSupported; changed = true; }
   return changed;
 }
 
@@ -2892,7 +3183,7 @@ async function pollHomeAssistantLights(options = {}) {
   }
 }
 
-async function sendLightToHomeAssistant(light, action = "on", brightness = light?.brightness) {
+async function sendLightToHomeAssistant(light, action = "on", brightness = light?.brightness, color = light?.color) {
   if (!light?.haEntityId) return null;
   const ha = state.integrations.homeAssistant;
   const baseUrl = getHaBaseUrl();
@@ -2902,7 +3193,7 @@ async function sendLightToHomeAssistant(light, action = "on", brightness = light
     const payload = await fetchJsonWithTimeout("/api/ha/light/action", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: baseUrl, token: ha.token, entityId: light.haEntityId, action, brightness }),
+      body: JSON.stringify({ url: baseUrl, token: ha.token, entityId: light.haEntityId, action, brightness, color }),
     });
     if (payload.light) {
       applyEntityStateToLight(light, payload.light);
@@ -3409,7 +3700,7 @@ function bindLightInteractions() {
 
   elements.lightCards.addEventListener("pointerdown", (event) => {
     if (event.button !== undefined && event.button !== 0) return;
-    if (event.target.closest("[data-light-toggle]")) return;
+    if (event.target.closest("[data-light-icon-toggle], [data-light-slider], [data-light-color-open], .light-color-wheel")) return;
     const card = event.target.closest("[data-light-card]");
     if (!card) return;
     press = {
@@ -3627,6 +3918,16 @@ function bindEvents() {
   elements.settingsClose.addEventListener("click", closeSettings);
   elements.settingsDone.addEventListener("click", closeSettings);
   document.querySelectorAll("[data-close-settings]").forEach((el) => el.addEventListener("click", closeSettings));
+  elements.thermostatInfoButton?.addEventListener("click", openThermostatInfo);
+  elements.thermostatInfoClose?.addEventListener("click", closeThermostatInfo);
+  document.querySelectorAll("[data-close-thermostat-info]").forEach((el) => el.addEventListener("click", closeThermostatInfo));
+  elements.lightColorPickerClose?.addEventListener("click", closeLightColorPicker);
+  document.querySelectorAll("[data-close-light-color]").forEach((el) => el.addEventListener("click", closeLightColorPicker));
+  elements.lightColorPresetGrid?.addEventListener("click", (event) => {
+    const preset = event.target.closest("[data-light-preset-color]");
+    if (!preset) return;
+    applyLightPresetColor(preset.dataset.lightPresetColor);
+  });
   document.getElementById("addRoomButton").addEventListener("click", addRoom);
   document.getElementById("openBlindHaConfig").addEventListener("click", showBlindHaView);
   document.getElementById("backToBlindSetup").addEventListener("click", showBlindSetupView);
@@ -3786,9 +4087,16 @@ function bindEvents() {
     applyBlindAction(button.dataset.action, button.dataset.blindId);
   });
   elements.lightCards?.addEventListener("click", (event) => {
-    const toggle = event.target.closest("[data-light-toggle]");
-    if (!toggle) return;
-    toggleLight(toggle.dataset.lightId);
+    const colorButton = event.target.closest("[data-light-color-open]");
+    if (colorButton) {
+      event.preventDefault();
+      openLightColorPicker(colorButton.dataset.lightId);
+      return;
+    }
+    const iconButton = event.target.closest("[data-light-icon-toggle]");
+    if (!iconButton) return;
+    event.preventDefault();
+    toggleLight(iconButton.dataset.lightId);
   });
   elements.lightCards?.addEventListener("input", (event) => {
     const slider = event.target.closest("[data-light-slider]");
@@ -3826,7 +4134,7 @@ function bindEvents() {
     if (event.key === "ArrowLeft") goRelative(-1);
     if (event.key === "+" || event.key === "=") adjustSetpoint(1);
     if (event.key === "-" || event.key === "_") adjustSetpoint(-1);
-    if (event.key === "Escape") { closeSettings(); closeEntityPicker(); closeAudioEntityPicker(); closeAlarmKeypad(); closeAlarmArmOptions(); }
+    if (event.key === "Escape") { closeSettings(); closeEntityPicker(); closeAudioEntityPicker(); closeAlarmKeypad(); closeAlarmArmOptions(); closeLightColorPicker(); closeThermostatInfo(); }
   });
 }
 
@@ -3845,8 +4153,8 @@ function mockTrackProgress() {
   renderAudio();
 }
 
-function init() {
-  loadSavedConfig();
+async function init() {
+  await loadSavedConfig();
   state.thermostat.away = false;
   syncAlarmFromConfig();
   bindEvents();
@@ -3873,4 +4181,7 @@ function init() {
   pollHomeAssistantAlarm({ force: true });
 }
 
-init();
+init().catch((error) => {
+  console.error("Smart thermostat failed to start", error);
+  showToast("Startup error");
+});

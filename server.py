@@ -21,7 +21,9 @@ from urllib.parse import urlparse
 ROOT = Path(__file__).resolve().parent
 PUBLIC = ROOT / "public"
 DATA_DIR = ROOT / "data"
+VERSION_FILE = ROOT / "VERSION"
 THERMOSTAT_STATE_FILE = DATA_DIR / "thermostat-state.json"
+PANEL_CONFIG_FILE = DATA_DIR / "panel-config.json"
 
 
 def _json(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> None:
@@ -204,6 +206,57 @@ def _write_thermostat_record(thermostat: dict) -> dict:
     return record
 
 
+def _normalize_panel_config(config: object) -> dict | None:
+    if not isinstance(config, dict):
+        return None
+    return _deepcopy_json(config)
+
+
+def _read_panel_config_record() -> dict:
+    if not PANEL_CONFIG_FILE.exists():
+        return {"version": 1, "updatedAt": 0, "config": None}
+
+    try:
+        raw = json.loads(PANEL_CONFIG_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        raw = {}
+
+    version = 1
+    updated_at = 0
+    config = None
+    if isinstance(raw, dict):
+        version = int(raw.get("version", 1) or 1)
+        updated_at = int(raw.get("updatedAt", 0) or 0)
+        config = _normalize_panel_config(raw.get("config"))
+        if config is None and any(key in raw for key in ("thermostat", "alarm", "blinds", "lights", "integrations")):
+            config = _normalize_panel_config(raw)
+
+    return {"version": version, "updatedAt": updated_at, "config": config}
+
+
+def _write_panel_config_record(config: dict) -> dict:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    safe_config = _normalize_panel_config(config) or {}
+    existing = _read_panel_config_record()
+    next_version = int(existing.get("version", 0) or 0) + 1
+    record = {"version": next_version, "updatedAt": int(time.time()), "config": safe_config}
+    temp_path = PANEL_CONFIG_FILE.with_suffix(".json.tmp")
+    temp_path.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
+    temp_path.replace(PANEL_CONFIG_FILE)
+    return record
+
+
+def _panel_config_payload() -> dict:
+    record = _read_panel_config_record()
+    return {
+        "ok": True,
+        "version": record["version"],
+        "updatedAt": record["updatedAt"],
+        "exists": isinstance(record.get("config"), dict),
+        "config": record.get("config"),
+    }
+
+
 def _thermostat_outputs(thermostat: dict) -> dict:
     mode = _normalize_mode(thermostat.get("mode"), "cool")
     active_mode = thermostat.get("autoActiveMode") if mode == "auto" else mode
@@ -287,6 +340,45 @@ def _local_host_name() -> str:
         return "iha-thermostat"
 
 
+def _local_ip_address() -> str:
+    candidates: list[str] = []
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("8.8.8.8", 80))
+            candidates.append(probe.getsockname()[0])
+    except Exception:
+        pass
+
+    try:
+        for info in socket.getaddrinfo(_local_host_name(), None, socket.AF_INET, socket.SOCK_STREAM):
+            candidates.append(info[4][0])
+    except Exception:
+        pass
+
+    for ip_address in candidates:
+        if ip_address and not ip_address.startswith("127."):
+            return ip_address
+    return candidates[0] if candidates else "127.0.0.1"
+
+
+def _read_version_value() -> str:
+    try:
+        version = VERSION_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        version = "0.2.6"
+    return version or "0.2.6"
+
+
+def _system_info_payload() -> dict:
+    return {
+        "ok": True,
+        "ipAddress": _local_ip_address(),
+        "host": _local_host_name(),
+        "version": _read_version_value(),
+    }
+
+
 def _discovery_payload() -> dict:
     status = _thermostat_status_payload()
     return {
@@ -295,7 +387,7 @@ def _discovery_payload() -> dict:
         "unique_id": "iha-smart-thermostat-local",
         "manufacturer": "IHA",
         "model": "Smart Thermostat Wall Panel",
-        "sw_version": "0.2.5",
+        "sw_version": _read_version_value(),
         "host": _local_host_name(),
         "endpoints": {
             "status": "/api/thermostat/status",
@@ -711,6 +803,33 @@ def _call_switch_service(ha_url: str, token: str, entity_id: str, action: str) -
 
 
 
+def _rgb_to_hex(rgb_value) -> str:
+    if not isinstance(rgb_value, (list, tuple)) or len(rgb_value) < 3:
+        return "#ffd76f"
+    try:
+        parts = [max(0, min(255, int(round(float(part))))) for part in rgb_value[:3]]
+    except (TypeError, ValueError):
+        return "#ffd76f"
+    return "#" + "".join(f"{part:02x}" for part in parts)
+
+
+def _hex_to_rgb(color_value: str | None) -> list[int] | None:
+    raw = str(color_value or "").strip().lstrip("#")
+    if len(raw) == 3:
+        raw = "".join(part * 2 for part in raw)
+    if len(raw) != 6:
+        return None
+    try:
+        return [int(raw[idx:idx + 2], 16) for idx in (0, 2, 4)]
+    except ValueError:
+        return None
+
+
+def _light_supports_color(color_modes) -> bool:
+    color_mode_set = {str(mode or "").lower() for mode in (color_modes or [])}
+    return bool(color_mode_set.intersection({"hs", "rgb", "rgbw", "rgbww", "xy"}))
+
+
 def _normalize_light_item(item: dict) -> dict:
     attrs = item.get("attributes") or {}
     entity_id = str(item.get("entity_id", ""))
@@ -723,14 +842,31 @@ def _normalize_light_item(item: dict) -> dict:
     state = item.get("state") or "unknown"
     if str(state).lower() != "on":
         brightness_pct = 0
+
+    supported_color_modes = attrs.get("supported_color_modes") or []
+    rgb_color = attrs.get("rgb_color")
+    hs_color = attrs.get("hs_color")
+    color_hex = _rgb_to_hex(rgb_color)
+    if color_hex == "#ffd76f" and isinstance(hs_color, (list, tuple)) and len(hs_color) >= 2:
+        try:
+            import colorsys
+            hue = max(0.0, min(360.0, float(hs_color[0]))) / 360.0
+            saturation = max(0.0, min(100.0, float(hs_color[1]))) / 100.0
+            red, green, blue = colorsys.hsv_to_rgb(hue, saturation, 1.0)
+            color_hex = _rgb_to_hex([red * 255, green * 255, blue * 255])
+        except Exception:
+            color_hex = "#ffd76f"
+
     return {
         "entityId": entity_id,
         "domain": "light",
         "name": attrs.get("friendly_name") or entity_id,
         "state": state,
         "brightnessPct": brightness_pct,
-        "supportedColorModes": attrs.get("supported_color_modes") or [],
+        "supportedColorModes": supported_color_modes,
         "colorMode": attrs.get("color_mode") or "",
+        "colorSupported": _light_supports_color(supported_color_modes) or bool(rgb_color or hs_color),
+        "colorHex": color_hex,
     }
 
 
@@ -754,12 +890,12 @@ def _fetch_ha_light_states_for_entities(ha_url: str, token: str, entity_ids: lis
     return [_fetch_ha_light_state(ha_url, token, entity_id) for entity_id in wanted]
 
 
-def _call_light_service(ha_url: str, token: str, entity_id: str, action: str, brightness: int | float | None = None) -> dict:
+def _call_light_service(ha_url: str, token: str, entity_id: str, action: str, brightness: int | float | None = None, color: str | None = None) -> dict:
     entity_id = (entity_id or "").strip()
     if not entity_id.startswith("light."):
         raise ValueError("Entity must be a light.* entity")
     action = (action or "on").strip().lower()
-    if action not in {"on", "off", "toggle", "brightness"}:
+    if action not in {"on", "off", "toggle", "brightness", "color"}:
         raise ValueError("Unsupported light action")
 
     if action == "off":
@@ -773,6 +909,9 @@ def _call_light_service(ha_url: str, token: str, entity_id: str, action: str, br
                 payload["brightness_pct"] = max(0, min(100, int(round(float(brightness)))))
             except (TypeError, ValueError):
                 pass
+        rgb_color = _hex_to_rgb(color)
+        if action == "color" and rgb_color:
+            payload["rgb_color"] = rgb_color
         _ha_json_request(ha_url, token, "POST", "/api/services/light/turn_on", payload)
 
     try:
@@ -790,7 +929,10 @@ def _call_light_service(ha_url: str, token: str, entity_id: str, action: str, br
             "name": entity_id,
             "state": "off" if action == "off" else "on",
             "brightnessPct": fallback_brightness,
+            "colorSupported": bool(_hex_to_rgb(color)),
+            "colorHex": f"#{str(color or '').strip().lstrip('#').lower()}" if _hex_to_rgb(color) else "#ffd76f",
         }
+
 
 def _normalize_number_control(item: dict, kind: str | None = None) -> dict:
     attrs = item.get("attributes") or {}
@@ -1016,6 +1158,10 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api/health":
             return _json(self, 200, {"ok": True})
+        if path == "/api/system/info":
+            return _json(self, 200, _system_info_payload())
+        if path == "/api/config":
+            return _json(self, 200, _panel_config_payload())
         if path == "/api/thermostat/status":
             return _json(self, 200, _thermostat_status_payload())
         if path == "/api/discovery":
@@ -1038,13 +1184,20 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/thermostat/status", "/api/thermostat/control", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/light/states", "/api/ha/light/action"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/light/states", "/api/ha/light/action"}:
             self.send_error(404, "Not found")
             return
 
         try:
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+
+            if path == "/api/config":
+                config_payload = payload.get("config", payload) if isinstance(payload, dict) else {}
+                if not isinstance(config_payload, dict):
+                    return _json(self, 400, {"ok": False, "error": "config must be an object"})
+                record = _write_panel_config_record(config_payload)
+                return _json(self, 200, {"ok": True, "version": record["version"], "updatedAt": record["updatedAt"], "config": record["config"]})
 
             if path in {"/api/thermostat/status", "/api/thermostat/control"}:
                 return _json(self, 200, _handle_thermostat_update(payload))
@@ -1094,6 +1247,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                     payload.get("entityId", ""),
                     payload.get("action", "on"),
                     payload.get("brightness"),
+                    payload.get("color"),
                 )
                 return _json(self, 200, {"ok": True, "light": light})
 

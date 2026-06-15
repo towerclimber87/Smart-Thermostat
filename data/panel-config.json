@@ -1,0 +1,3813 @@
+{
+  "config": {
+    "alarm": {
+      "disarmCode": "1111"
+    },
+    "blinds": {
+      "room": "living",
+      "rooms": {
+        "kitchen": {
+          "blinds": [
+            {
+              "haEntityId": "cover.kitchen_blind_1",
+              "haName": "Kitchen-Robby-Blinds Kitchen Blind 1",
+              "id": "kit-1",
+              "name": "Kitchen-Robby-Blinds Kitchen Blind 1",
+              "position": 100
+            },
+            {
+              "haEntityId": "cover.kitchen_blind_2",
+              "haName": "Kitchen-Robby-Blinds Kitchen Blind 2",
+              "id": "kit-2",
+              "name": "Kitchen-Robby-Blinds Kitchen Blind 2",
+              "position": 100
+            },
+            {
+              "haEntityId": "cover.kitchen_blind_3",
+              "haName": "Kitchen-Robby-Blinds Kitchen Blind 3",
+              "id": "kit-3",
+              "name": "Kitchen-Robby-Blinds Kitchen Blind 3",
+              "position": 100
+            }
+          ],
+          "label": "Kitchen"
+        },
+        "living": {
+          "blinds": [
+            {
+              "haEntityId": "cover.livingroom_blind_1",
+              "haName": "West Left",
+              "id": "lr-1",
+              "name": "West Left",
+              "position": 100
+            },
+            {
+              "haEntityId": "cover.livingroom_blind_2",
+              "haName": "West Right",
+              "id": "lr-2",
+              "name": "West Right",
+              "position": 100
+            },
+            {
+              "haEntityId": "cover.livingroom_blind_3",
+              "haName": "North 1",
+              "id": "lr-3",
+              "name": "North 1",
+              "position": 100
+            },
+            {
+              "haEntityId": "cover.livingroom_blind_4",
+              "haName": "North 2",
+              "id": "lr-4",
+              "name": "North 2",
+              "position": 100
+            }
+          ],
+          "label": "Living Room"
+        }
+      }
+    },
+    "integrations": {
+      "homeAssistant": {
+        "alarmAvailableEntities": [
+          {
+            "armMode": null,
+            "bypassedSensors": null,
+            "changedBy": null,
+            "codeArmRequired": false,
+            "codeFormat": null,
+            "delay": null,
+            "domain": "alarm_control_panel",
+            "entityId": "alarm_control_panel.alarmo",
+            "lastTriggered": "2026-05-20 14:29:09",
+            "name": "Alarmo",
+            "nextState": "disarmed",
+            "openSensors": null,
+            "state": "disarmed",
+            "supportedFeatures": 11
+          },
+          {
+            "armMode": null,
+            "bypassedSensors": null,
+            "changedBy": null,
+            "codeArmRequired": false,
+            "codeFormat": "number",
+            "delay": null,
+            "domain": "alarm_control_panel",
+            "entityId": "alarm_control_panel.home_alarm",
+            "lastTriggered": null,
+            "name": "Home Alarm",
+            "nextState": null,
+            "openSensors": null,
+            "state": "disarmed",
+            "supportedFeatures": 63
+          },
+          {
+            "armMode": null,
+            "bypassedSensors": null,
+            "changedBy": null,
+            "codeArmRequired": false,
+            "codeFormat": null,
+            "delay": null,
+            "domain": "alarm_control_panel",
+            "entityId": "alarm_control_panel.udm_se_morris_alarm_manager",
+            "lastTriggered": null,
+            "name": "UDM SE-Morris Alarm Manager",
+            "nextState": null,
+            "openSensors": null,
+            "state": "disarmed",
+            "supportedFeatures": 2
+          }
+        ],
+        "alarmEntity": {
+          "armMode": null,
+          "bypassedSensors": null,
+          "changedBy": null,
+          "codeArmRequired": false,
+          "codeFormat": null,
+          "delay": null,
+          "domain": "alarm_control_panel",
+          "entityId": "alarm_control_panel.alarmo",
+          "lastTriggered": "2026-05-20 14:29:09",
+          "name": "Alarmo",
+          "nextState": "disarmed",
+          "openSensors": null,
+          "state": "disarmed",
+          "supportedFeatures": 11
+        },
+        "audioAvailableEntities": {
+          "mediaPlayers": [],
+          "numbers": [
+            {
+              "domain": "number",
+              "entityId": "number.back_door_infrared_custom_lux_trigger",
+              "kind": "",
+              "max": 30,
+              "min": 0,
+              "mode": "auto",
+              "name": "Back Door Infrared custom lux trigger",
+              "state": "unavailable",
+              "step": 1,
+              "unit": "",
+              "value": null
+            },
+            {
+              "domain": "number",
+              "entityId": "number.back_door_microphone_level",
+              "kind": "",
+              "max": 100,
+              "min": 1,
+              "mode": "auto",
+              "name": "Back Door Microphone level",
+              "state": "100",
+              "step": 1,
+              "unit": "%",
+              "value": 100
+            },
+            {
+              "domain": "number",
+              "entityId": "number.backyard_infrared_custom_lux_trigger",
+              "kind": "",
+              "max": 30,
+              "min": 0,
+              "mode": "auto",
+              "name": "Backyard Infrared custom lux trigger",
+              "state": "unavailable",
+              "step": 1,
+              "unit": "",
+              "value": null
+            },
+            {
+              "domain": "number",
+              "entityId": "number.backyard_microphone_level",
+              "kind": "",
+              "max": 100,
+              "min": 1,
+              "mode": "auto",
+              "name": "Backyard Microphone level",
+              "state": "100",
+              "step": 1,
+              "unit": "%",
+              "value": 100
+            },
+            {
+              "domain": "number",
+              "entityId": "number.in_wall_dimmer_switch_basic_2",
+              "kind": "",
+              "max": 99,
+              "min": 0,
+              "mode": "auto",
+              "name": "Basic",
+              "state": "unavailable",
+              "step": 1,
+              "unit": "",
+              "value": null
+            },
+            {
+              "domain": "number",
+              "entityId": "number.in_wall_dimmer_switch_basic_3",
+              "kind": "",
+              "max": 99,
+              "min": 0,
+              "mode": "auto",
+              "name": "Basic",
+              "state": "unavailable",
+              "step": 1,
+              "unit": "",
+              "value": null
+            },
+            {
+              "domain": "number",
+              "entityId": "number.octoprint_bed_temperature",
+              "kind": "",
+              "max": 572,
+              "min": 32,
+              "mode": "box",
+              "name": "Bed temperature",
+              "state": "unavailable",
+              "step": 1,
+              "unit": "\u00b0F",
+              "value": null
+            },
+            {
+              "domain": "number",
+              "entityId": "number.bedroom_artwork_intensity",
+              "kind": "",
+              "max": 255,
+              "min": 0,
+              "mode": "auto",
+              "name": "Bedroom Artwork Intensity",
+              "state": "128",
+              "step": 1,
+              "unit": "",
+              "value": 128
+            },
+            {
+              "domain": "number",
+              "entityId": "number.bedroom_artwork_speed",
+              "kind": "",
+              "max": 255,
+              "min": 0,
+              "mode": "auto",
+              "name": "Bedroom Artwork Speed",
+              "state": "32",
+              "step": 1,
+              "unit": "",
+              "value": 32
+            },
+            {
+              "domain": "number",
+              "entityId": "number.bedroom_balance",
+              "kind": "",
+              "max": 100,
+              "min": -100,
+              "mode": "auto",
+              "name": "Bedroom Balance",
+              "state": "0",
+              "step": 1,
+              "unit": "",
+              "value": 0
+            },
+            {
+              "domain": "number",
+              "entityId": "number.bedroom_bass",
+              "kind": "",
+              "max": 10,
+              "min": -10,
+              "mode": "auto",
+              "name": "Bedroom Bass",
+              "state": "-3",
+              "step": 1,
+              "unit": "",
+              "value": -3
+            },
+            {
+              "domain": "number",
+              "entityId": "number.bed_light_intensity",
+              "kind": "",
+              "max": 255,
+              "min": 0,
+              "mode": "auto",
+              "name": "Bedroom Bed Light Intensity",
+              "state": "250",
+              "step": 1,
+              "unit": "",
+              "value": 250
+            },
+            {
+              "domain": "number",
+              "entityId": "number.bed_light_speed",
+              "kind": "",
+              "max": 255,
+              "min": 0,
+              "mode": "auto",
+              "name": "Bedroom Bed Light Speed",
+              "state": "250",
+              "step": 1,
+              "unit": "",
+              "value": 250
+            },
+            {
+              "domain": "number",
+              "entityId": "number.bedroom_treble",
+              "kind": "",
+              "max": 10,
+              "min": -10,
+              "mode": "auto",
+              "name": "Bedroom Treble",
+              "state": "8",
+              "step": 1,
+              "unit": "",
+              "value": 8
+            },
+            {
+              "domain": "number",
+              "entityId": "number.bedroom_blinds_1_duration",
+              "kind": "",
+              "max": 1000,
+              "min": 200,
+              "mode": "box",
+              "name": "Bedroom-Blinds Bedroom Blinds 1 Duration",
+              "state": "650.0",
+              "step": 1,
+              "unit": "",
+              "value": 650
+            },
+            {
+              "domain": "number",
+              "entityId": "number.bedroom_blinds_2_duration",
+              "kind": "",
+              "max": 1000,
+              "min": 200,
+              "mode": "box",
+              "name": "Bedroom-Blinds Bedroom Blinds 2 Duration",
+              "state": "650.0",
+              "step": 1,
+              "unit": "",
+              "value": 650
+            },
+            {
+              "domain": "number",
+              "entityId": "number.auto_close_timer_minutes_2",
+              "kind": "",
+              "max": 15,
+              "min": 0,
+              "mode": "auto",
+              "name": "Bedroom-Door Auto Close Timer (Minutes)",
+              "state": "4.0",
+              "step": 1,
+              "unit": "",
+              "value": 4
+            },
+            {
+              "domain": "number",
+              "entityId": "number.latch_strength_2",
+              "kind": "",
+              "max": 1.3,
+              "min": 0.4,
+              "mode": "auto",
+              "name": "Bedroom-Door Latch Strength",
+              "state": "0.44",
+              "step": 0.01,
+              "unit": "",
+              "value": 0.44
+            },
+            {
+              "domain": "number",
+              "entityId": "number.motion_offtime_delay_2",
+              "kind": "",
+              "max": 0.17,
+              "min": 0.03,
+              "mode": "auto",
+              "name": "Bedroom-Door Motion Offtime Delay",
+              "state": "0.03",
+              "step": 0.01,
+              "unit": "",
+              "value": 0.03
+            },
+            {
+              "domain": "number",
+              "entityId": "number.motion_sensitivity",
+              "kind": "",
+              "max": 0.5,
+              "min": 0.2,
+              "mode": "auto",
+              "name": "Bedroom-Door Motion Sensitivity",
+              "state": "0.5",
+              "step": 0.01,
+              "unit": "",
+              "value": 0.5
+            },
+            {
+              "domain": "number",
+              "entityId": "number.swing_strength_2",
+              "kind": "",
+              "max": 1.3,
+              "min": 0.4,
+              "mode": "auto",
+              "name": "Bedroom-Door Swing Strength",
+              "state": "1.3",
+              "step": 0.01,
+              "unit": "",
+              "value": 1.3
+            },
+            {
+              "domain": "number",
+              "entityId": "number.bedroom_nest",
+              "kind": "",
+              "max": 80,
+              "min": 60,
+              "mode": "auto",
+              "name": "Bedroom-Thermostat Bedroom Nest",
+              "state": "69.0",
+              "step": 1,
+              "unit": "",
+              "value": 69
+            },
+            {
+              "domain": "number",
+              "entityId": "number.set_temp_2",
+              "kind": "",
+              "max": 125,
+              "min": 90,
+              "mode": "auto",
+              "name": "Couch-Coffee Set Temp",
+              "state": "112.0",
+              "step": 2,
+              "unit": "\u00b0F",
+              "value": 112
+            },
+            {
+              "domain": "number",
+              "entityId": "number.set_time",
+              "kind": "",
+              "max": 60,
+              "min": 1,
+              "mode": "auto",
+              "name": "Desk-Coffee-And-Lights Set Time",
+              "state": "1.0",
+              "step": 1,
+              "unit": "",
+              "value": 1
+            },
+            {
+              "domain": "number",
+              "entityId": "number.octoprint_extruder_temperature",
+              "kind": "",
+              "max": 572,
+              "min": 32,
+              "mode": "box",
+              "name": "Extruder temperature",
+              "state": "unavailable",
+              "step": 1,
+              "unit": "\u00b0F",
+              "value": null
+            },
+            {
+              "domain": "number",
+              "entityId": "number.motion_offtime_delay",
+              "kind": "",
+              "max": 0.17,
+              "min": 0.03,
+              "mode": "auto",
+              "name": "Final-Touch-Screen Motion Offtime Delay",
+              "state": "unavailable",
+              "step": 0.01,
+              "unit": "",
+              "value": null
+            },
+            {
+              "domain": "number",
+              "entityId": "number.motion_sensitivity_2",
+              "kind": "",
+              "max": 0.5,
+              "min": 0.2,
+              "mode": "auto",
+              "name": "Final-Touch-Screen Motion Sensitivity",
+              "state": "unavailable",
+              "step": 0.01,
+              "unit": "",
+              "value": null
+            },
+            {
+              "domain": "number",
+              "entityId": "number.front_yard_north_infrared_custom_lux_trigger",
+              "kind": "",
+              "max": 30,
+              "min": 0,
+              "mode": "auto",
+              "name": "Front Yard North Infrared custom lux trigger",
+              "state": "unavailable",
+              "step": 1,
+              "unit": "",
+              "value": null
+            },
+            {
+              "domain": "number",
+              "entityId": "number.front_yard_north_microphone_level",
+              "kind": "",
+              "max": 100,
+              "min": 1,
+              "mode": "auto",
+              "name": "Front Yard North Microphone level",
+              "state": "100",
+              "step": 1,
+              "unit": "%",
+              "value": 100
+            },
+            {
+              "domain": "number",
+              "entityId": "number.front_yard_south_infrared_custom_lux_trigger",
+              "kind": "",
+              "max": 30,
+              "min": 0,
+              "mode": "auto",
+              "name": "Front yard South Infrared custom lux trigger",
+              "state": "unavailable",
+              "step": 1,
+              "unit": "",
+              "value": null
+            },
+            {
+              "domain": "number",
+              "entityId": "number.front_yard_south_microphone_level",
+              "kind": "",
+              "max": 100,
+              "min": 1,
+              "mode": "auto",
+              "name": "Front yard South Microphone level",
+              "state": "100",
+              "step": 1,
+              "unit": "%",
+              "value": 100
+            },
+            {
+              "domain": "number",
+              "entityId": "number.garage_bay_infrared_custom_lux_trigger",
+              "kind": "",
+              "max": 30,
+              "min": 0,
+              "mode": "auto",
+              "name": "Garage Bay Infrared custom lux trigger",
+              "state": "unavailable",
+              "step": 1,
+              "unit": "",
+              "value": null
+            },
+            {
+              "domain": "number",
+              "entityId": "number.garage_bay_microphone_level",
+              "kind": "",
+              "max": 100,
+              "min": 1,
+              "mode": "auto",
+              "name": "Garage Bay Microphone level",
+              "state": "71",
+              "step": 1,
+              "unit": "%",
+              "value": 71
+            },
+            {
+              "domain": "number",
+              "entityId": "number.relay_timeout_5",
+              "kind": "",
+              "max": 10,
+              "min": 0.01,
+              "mode": "slider",
+              "name": "Keypad-Bedroom-Door Relay Timeout",
+              "state": "2.16",
+              "step": 0.05,
+              "unit": "",
+              "value": 2.16
+            },
+            {
+              "domain": "number",
+              "entityId": "number.relay_timeout",
+              "kind": "",
+              "max": 10,
+              "min": 0.01,
+              "mode": "slider",
+              "name": "Keypad-Frontdoor Relay Timeout",
+              "state": "3.6",
+              "step": 0.05,
+              "unit": "",
+              "value": 3.6
+            },
+            {
+              "domain": "number",
+              "entityId": "number.relay_timeout_2",
+              "kind": "",
+              "max": 10,
+              "min": 0.01,
+              "mode": "slider",
+              "name": "Keypad-Garage Relay Timeout",
+              "state": "1.31",
+              "step": 0.05,
+              "unit": "",
+              "value": 1.31
+            },
+            {
+              "domain": "number",
+              "entityId": "number.relay_timeout_4",
+              "kind": "",
+              "max": 10,
+              "min": 0.01,
+              "mode": "slider",
+              "name": "Keypad-Garage-Bay Relay Timeout",
+              "state": "0.56",
+              "step": 0.05,
+              "unit": "",
+              "value": 0.56
+            },
+            {
+              "domain": "number",
+              "entityId": "number.relay_timeout_3",
+              "kind": "",
+              "max": 10,
+              "min": 0.01,
+              "mode": "slider",
+              "name": "Keypad-Office Relay Timeout",
+              "state": "2.11",
+              "step": 0.05,
+              "unit": "",
+              "value": 2.11
+            },
+            {
+              "domain": "number",
+              "entityId": "number.kitchen_infrared_custom_lux_trigger",
+              "kind": "",
+              "max": 30,
+              "min": 0,
+              "mode": "auto",
+              "name": "Kitchen Infrared custom lux trigger",
+              "state": "unavailable",
+              "step": 1,
+              "unit": "",
+              "value": null
+            },
+            {
+              "domain": "number",
+              "entityId": "number.kitchen_microphone_level",
+              "kind": "",
+              "max": 100,
+              "min": 1,
+              "mode": "auto",
+              "name": "Kitchen Microphone level",
+              "state": "72",
+              "step": 1,
+              "unit": "%",
+              "value": 72
+            },
+            {
+              "domain": "number",
+              "entityId": "number.duration_kitchen_blind_1",
+              "kind": "",
+              "max": 10000,
+              "min": 200,
+              "mode": "box",
+              "name": "Kitchen-Robby-Blinds Duration Kitchen Blind 1",
+              "state": "5500.0",
+              "step": 1,
+              "unit": "",
+              "value": 5500
+            },
+            {
+              "domain": "number",
+              "entityId": "number.duration_kitchen_blind_2",
+              "kind": "",
+              "max": 10000,
+              "min": 200,
+              "mode": "box",
+              "name": "Kitchen-Robby-Blinds Duration Kitchen Blind 2",
+              "state": "5500.0",
+              "step": 1,
+              "unit": "",
+              "value": 5500
+            },
+            {
+              "domain": "number",
+              "entityId": "number.duration_kitchen_blind_3",
+              "kind": "",
+              "max": 10000,
+              "min": 200,
+              "mode": "box",
+              "name": "Kitchen-Robby-Blinds Duration Kitchen Blind 3",
+              "state": "5500.0",
+              "step": 1,
+              "unit": "",
+              "value": 5500
+            },
+            {
+              "domain": "number",
+              "entityId": "number.duration_robby_blind",
+              "kind": "",
+              "max": 10000,
+              "min": 200,
+              "mode": "box",
+              "name": "Kitchen-Robby-Blinds Duration Robby Blind",
+              "state": "200.0",
+              "step": 1,
+              "unit": "",
+              "value": 200
+            },
+            {
+              "domain": "number",
+              "entityId": "number.group_delay",
+              "kind": "",
+              "max": 0.5,
+              "min": 0,
+              "mode": "box",
+              "name": "Kitchen-Robby-Blinds Group Delay",
+              "state": "0.0",
+              "step": 0.05,
+              "unit": "",
+              "value": 0
+            },
+            {
+              "domain": "number",
+              "entityId": "number.livingroom_infrared_custom_lux_trigger",
+              "kind": "",
+              "max": 30,
+              "min": 0,
+              "mode": "auto",
+              "name": "Livingroom Infrared custom lux trigger",
+              "state": "unavailable",
+              "step": 1,
+              "unit": "",
+              "value": null
+            },
+            {
+              "domain": "number",
+              "entityId": "number.livingroom_microphone_level",
+              "kind": "",
+              "max": 100,
+              "min": 1,
+              "mode": "auto",
+              "name": "Livingroom Microphone level",
+              "state": "78",
+              "step": 1,
+              "unit": "%",
+              "value": 78
+            },
+            {
+              "domain": "number",
+              "entityId": "number.livingroom_sonos_audio_delay",
+              "kind": "",
+              "max": 5,
+              "min": 0,
+              "mode": "auto",
+              "name": "Livingroom Sonos Audio delay",
+              "state": "0",
+              "step": 1,
+              "unit": "",
+              "value": 0
+            },
+            {
+              "domain": "number",
+              "entityId": "number.livingroom_sonos_balance",
+              "kind": "",
+              "max": 100,
+              "min": -100,
+              "mode": "auto",
+              "name": "Livingroom Sonos Balance",
+              "state": "0",
+              "step": 1,
+              "unit": "",
+              "value": 0
+            },
+            {
+              "domain": "number",
+              "entityId": "number.sonosf_bass",
+              "kind": "",
+              "max": 10,
+              "min": -10,
+              "mode": "auto",
+              "name": "Livingroom Sonos Bass",
+              "state": "10",
+              "step": 1,
+              "unit": "",
+              "value": 10
+            },
+            {
+              "domain": "number",
+              "entityId": "number.livingroom_sonos_music_surround_level",
+              "kind": "",
+              "max": 15,
+              "min": -15,
+              "mode": "auto",
+              "name": "Livingroom Sonos Music surround level",
+              "state": "15",
+              "step": 1,
+              "unit": "",
+              "value": 15
+            },
+            {
+              "domain": "number",
+              "entityId": "number.sonos_sub_gain",
+              "kind": "",
+              "max": 15,
+              "min": -15,
+              "mode": "auto",
+              "name": "Livingroom Sonos Sub gain",
+              "state": "9",
+              "step": 1,
+              "unit": "",
+              "value": 9
+            },
+            {
+              "domain": "number",
+              "entityId": "number.livingroom_sonos_surround_level",
+              "kind": "",
+              "max": 15,
+              "min": -15,
+              "mode": "auto",
+              "name": "Livingroom Sonos Surround level",
+              "state": "0",
+              "step": 1,
+              "unit": "",
+              "value": 0
+            },
+            {
+              "domain": "number",
+              "entityId": "number.sonosf_treble",
+              "kind": "",
+              "max": 10,
+              "min": -10,
+              "mode": "auto",
+              "name": "Livingroom Sonos Treble",
+              "state": "-10",
+              "step": 1,
+              "unit": "",
+              "value": -10
+            },
+            {
+              "domain": "number",
+              "entityId": "number.duration_livingroom_blind_1",
+              "kind": "",
+              "max": 10000,
+              "min": 200,
+              "mode": "box",
+              "name": "Livingroom-Blinds Duration Livingroom Blind 1",
+              "state": "650.0",
+              "step": 1,
+              "unit": "",
+              "value": 650
+            },
+            {
+              "domain": "number",
+              "entityId": "number.duration_livingroom_blind_2",
+              "kind": "",
+              "max": 10000,
+              "min": 200,
+              "mode": "box",
+              "name": "Livingroom-Blinds Duration Livingroom Blind 2",
+              "state": "650.0",
+              "step": 1,
+              "unit": "",
+              "value": 650
+            },
+            {
+              "domain": "number",
+              "entityId": "number.duration_livingroom_blind_3",
+              "kind": "",
+              "max": 10000,
+              "min": 200,
+              "mode": "box",
+              "name": "Livingroom-Blinds Duration Livingroom Blind 3",
+              "state": "650.0",
+              "step": 1,
+              "unit": "",
+              "value": 650
+            },
+            {
+              "domain": "number",
+              "entityId": "number.duration_livingroom_blind_4",
+              "kind": "",
+              "max": 10000,
+              "min": 200,
+              "mode": "box",
+              "name": "Livingroom-Blinds Duration Livingroom Blind 4",
+              "state": "650.0",
+              "step": 1,
+              "unit": "",
+              "value": 650
+            },
+            {
+              "domain": "number",
+              "entityId": "number.group_delay_2",
+              "kind": "",
+              "max": 0.5,
+              "min": 0,
+              "mode": "box",
+              "name": "Livingroom-Blinds Group Delay",
+              "state": "0.0",
+              "step": 0.05,
+              "unit": "",
+              "value": 0
+            },
+            {
+              "domain": "number",
+              "entityId": "number.code_set_3",
+              "kind": "",
+              "max": 100000000000,
+              "min": 1000,
+              "mode": "box",
+              "name": "Livingroom-Gun-Art Code Set",
+              "state": "1000.0",
+              "step": 0.05,
+              "unit": "",
+              "value": 1000
+            },
+            {
+              "domain": "number",
+              "entityId": "number.livingroom_nest",
+              "kind": "",
+              "max": 80,
+              "min": 60,
+              "mode": "auto",
+              "name": "Livingroom-Thermostat Livingroom Nest",
+              "state": "72.0",
+              "step": 1,
+              "unit": "",
+              "value": 72
+            },
+            {
+              "domain": "number",
+              "entityId": "number.mirror_mirror_brightness",
+              "kind": "",
+              "max": 1,
+              "min": 0.05,
+              "mode": "auto",
+              "name": "Mirror Mirror Brightness",
+              "state": "0.99",
+              "step": 0.01,
+              "unit": "",
+              "value": 0.99
+            },
+            {
+              "domain": "number",
+              "entityId": "number.night_stand_drawer_relay_timeout",
+              "kind": "",
+              "max": 10,
+              "min": 0.01,
+              "mode": "slider",
+              "name": "Night-Stand-Drawer Relay Timeout",
+              "state": "unavailable",
+              "step": 0.05,
+              "unit": "",
+              "value": null
+            },
+            {
+              "domain": "number",
+              "entityId": "number.jasco_products_43080_251bcefe_level_on_level",
+              "kind": "",
+              "max": 255,
+              "min": 0,
+              "mode": "auto",
+              "name": "Nursery Light On level",
+              "state": "255",
+              "step": 1,
+              "unit": "",
+              "value": 255
+            },
+            {
+              "domain": "number",
+              "entityId": "number.receptacle_indicator_value",
+              "kind": "",
+              "max": 255,
+              "min": 0,
+              "mode": "auto",
+              "name": "Receptacle Indicator value",
+              "state": "unknown",
+              "step": 1,
+              "unit": "",
+              "value": null
+            },
+            {
+              "domain": "number",
+              "entityId": "number.shower_fan_turn_off_in",
+              "kind": "",
+              "max": 65536,
+              "min": 0,
+              "mode": "box",
+              "name": "Shower Fan Turn off in",
+              "state": "120",
+              "step": 1,
+              "unit": "",
+              "value": 120
+            },
+            {
+              "domain": "number",
+              "entityId": "number.g5_turret_ultra_wide_dynamic_range",
+              "kind": "",
+              "max": 3,
+              "min": 0,
+              "mode": "auto",
+              "name": "Wide dynamic range",
+              "state": "unavailable",
+              "step": 1,
+              "unit": "",
+              "value": null
+            },
+            {
+              "domain": "number",
+              "entityId": "number.g5_turret_ultra_wide_dynamic_range_2",
+              "kind": "",
+              "max": 3,
+              "min": 0,
+              "mode": "auto",
+              "name": "Wide dynamic range",
+              "state": "unavailable",
+              "step": 1,
+              "unit": "",
+              "value": null
+            },
+            {
+              "domain": "number",
+              "entityId": "number.g5_turret_ultra_wide_dynamic_range_3",
+              "kind": "",
+              "max": 3,
+              "min": 0,
+              "mode": "auto",
+              "name": "Wide dynamic range",
+              "state": "unavailable",
+              "step": 1,
+              "unit": "",
+              "value": null
+            },
+            {
+              "domain": "number",
+              "entityId": "number.g5_turret_ultra_wide_dynamic_range_4",
+              "kind": "",
+              "max": 3,
+              "min": 0,
+              "mode": "auto",
+              "name": "Wide dynamic range",
+              "state": "unavailable",
+              "step": 1,
+              "unit": "",
+              "value": null
+            },
+            {
+              "domain": "number",
+              "entityId": "number.g5_turret_ultra_wide_dynamic_range_5",
+              "kind": "",
+              "max": 3,
+              "min": 0,
+              "mode": "auto",
+              "name": "Wide dynamic range",
+              "state": "unavailable",
+              "step": 1,
+              "unit": "",
+              "value": null
+            },
+            {
+              "domain": "number",
+              "entityId": "number.g5_turret_ultra_wide_dynamic_range_6",
+              "kind": "",
+              "max": 3,
+              "min": 0,
+              "mode": "auto",
+              "name": "Wide dynamic range",
+              "state": "unavailable",
+              "step": 1,
+              "unit": "",
+              "value": null
+            }
+          ],
+          "switches": [
+            {
+              "domain": "switch",
+              "entityId": "switch.all_heater",
+              "name": "all Heaters",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.back_door_detections_animal",
+              "name": "Back Door Animal detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.back_door_detections_baby_cry",
+              "name": "Back Door Baby cry detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.back_door_detections_co_alarm",
+              "name": "Back Door CO alarm detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_motion_5",
+              "name": "Back Door Motion",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_overlay_show_date_5",
+              "name": "Back Door Overlay: show date",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_overlay_show_logo_5",
+              "name": "Back Door Overlay: show logo",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_overlay_show_name_5",
+              "name": "Back Door Overlay: show name",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_overlay_show_nerd_mode_5",
+              "name": "Back Door Overlay: show nerd mode",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.back_door_detections_person",
+              "name": "Back Door Person detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_privacy_mode_5",
+              "name": "Back Door Privacy mode",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.back_door_detections_smoke",
+              "name": "Back Door Smoke detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.back_door_detections_speaking",
+              "name": "Back Door Speaking detection",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.back_door_status_light",
+              "name": "Back Door Status light",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.back_door_detections_vehicle",
+              "name": "Back Door Vehicle detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.backyard_animal_detection",
+              "name": "Backyard Animal detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.backyard_baby_cry_detection",
+              "name": "Backyard Baby cry detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.backyard_co_alarm_detection",
+              "name": "Backyard CO alarm detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_motion_6",
+              "name": "Backyard Motion",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_overlay_show_date_6",
+              "name": "Backyard Overlay: show date",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_overlay_show_logo_6",
+              "name": "Backyard Overlay: show logo",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_overlay_show_name_6",
+              "name": "Backyard Overlay: show name",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_overlay_show_nerd_mode_6",
+              "name": "Backyard Overlay: show nerd mode",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.backyard_person_detection",
+              "name": "Backyard Person detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.backyard_privacy_mode",
+              "name": "Backyard Privacy mode",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.backyard_smoke_detection",
+              "name": "Backyard Smoke detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.backyard_speaking_detection",
+              "name": "Backyard Speaking detection",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.backyard_status_light",
+              "name": "Backyard Status light",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.backyard_vehicle_detection",
+              "name": "Backyard Vehicle detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.firetv_8074763bfc45ae20_mute",
+              "name": "Bathroom Mirror FireTV 8074763bfc45ae20 Mute",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.bedroom_ac_relay",
+              "name": "Bedroom AC Relay",
+              "state": "unavailable"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.bedroom_artwork_freeze",
+              "name": "Bedroom Artwork Freeze",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.bedroom_artwork_nightlight",
+              "name": "Bedroom Artwork Nightlight",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.bedroom_artwork_reverse",
+              "name": "Bedroom Artwork Reverse",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.bedroom_artwork_sync_receive",
+              "name": "Bedroom Artwork Sync receive",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.bedroom_artwork_sync_send",
+              "name": "Bedroom Artwork Sync send",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.bedroom_bed_light_freeze",
+              "name": "Bedroom Bed Light Freeze",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.bed_light_nightlight",
+              "name": "Bedroom Bed Light Nightlight",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.bed_light_reverse",
+              "name": "Bedroom Bed Light Reverse",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.bed_light_sync_receive",
+              "name": "Bedroom Bed Light Sync receive",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.bed_light_sync_send",
+              "name": "Bedroom Bed Light Sync send",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.bedroom_crossfade",
+              "name": "Bedroom Crossfade",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.bedroom_fan",
+              "name": "Bedroom Fan",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.bedroom_fan_rotate",
+              "name": "Bedroom Fan Rotate",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.bedroom_fan_speed",
+              "name": "Bedroom Fan Speed",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.bedroom_loudness",
+              "name": "Bedroom Loudness",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.bedroom_sound_power",
+              "name": "Bedroom Sound Power",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.bedroom_sound_volume",
+              "name": "Bedroom Sound Volume +",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.bedroom_sound_volume_2",
+              "name": "Bedroom Sound Volume -",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.bedroom_tv",
+              "name": "Bedroom TV",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.bedroom_tv_autoplay",
+              "name": "Bedroom TV autoplay",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.bedroom_ungroup_on_autoplay",
+              "name": "Bedroom Ungroup on autoplay",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.forward",
+              "name": "Bedroom-Bed forward",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.door_contact_disable_enable_2",
+              "name": "Bedroom-Door Door Contact (Disable/Enable)",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.candle",
+              "name": "Candle Candle",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.porch_light_1",
+              "name": "Christmas-Light-Main-Power Christmas Light Main Power",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.heater_2",
+              "name": "Coffee-Pot Heater",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.couch_coffee",
+              "name": "Couch-Coffee Couch Coffee",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.couch_heater_coil",
+              "name": "Couch-Coffee Couch Heater Coil",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.desk_heater",
+              "name": "Desk Heater",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.coffee",
+              "name": "Desk-Coffee-And-Lights Coffee",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.heater_coil",
+              "name": "Desk-Coffee-And-Lights Heater Coil",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.restart_2",
+              "name": "Desk-Coffee-And-Lights Restart",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.cool",
+              "name": "Final-Touch-Screen Cool",
+              "state": "unavailable"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.fan",
+              "name": "Final-Touch-Screen Fan",
+              "state": "unavailable"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.heat",
+              "name": "Final-Touch-Screen Heat",
+              "state": "unavailable"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.fish_tank_blue_light",
+              "name": "Fish-Tank-Lights Fish Tank Blue Light",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.fish_tank_white_light",
+              "name": "Fish-Tank-Lights Fish Tank White Light",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.front_yard_north_detections_animal",
+              "name": "Front Yard North Animal detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.front_yard_north_detections_baby_cry",
+              "name": "Front Yard North Baby cry detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.front_yard_north_detections_co_alarm",
+              "name": "Front Yard North CO alarm detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.front_yard_north_motion",
+              "name": "Front Yard North Motion",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.front_yard_north_overlay_show_date",
+              "name": "Front Yard North Overlay: show date",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.front_yard_north_overlay_show_logo",
+              "name": "Front Yard North Overlay: show logo",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.front_yard_north_overlay_show_name",
+              "name": "Front Yard North Overlay: show name",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.front_yard_north_overlay_show_nerd_mode",
+              "name": "Front Yard North Overlay: show nerd mode",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.front_yard_north_detections_person",
+              "name": "Front Yard North Person detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.front_yard_north_privacy_mode",
+              "name": "Front Yard North Privacy mode",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.front_yard_north_detections_smoke",
+              "name": "Front Yard North Smoke detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.front_yard_north_detections_speaking",
+              "name": "Front Yard North Speaking detection",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.front_yard_north_status_light",
+              "name": "Front Yard North Status light",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.front_yard_north_detections_vehicle",
+              "name": "Front Yard North Vehicle detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.front_yard_south_detections_animal",
+              "name": "Front yard South Animal detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.front_yard_south_detections_baby_cry",
+              "name": "Front yard South Baby cry detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.front_yard_south_detections_co_alarm",
+              "name": "Front yard South CO alarm detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_motion",
+              "name": "Front yard South Motion",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_overlay_show_date",
+              "name": "Front yard South Overlay: show date",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_overlay_show_logo",
+              "name": "Front yard South Overlay: show logo",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_overlay_show_name",
+              "name": "Front yard South Overlay: show name",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_overlay_show_nerd_mode",
+              "name": "Front yard South Overlay: show nerd mode",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.front_yard_south_detections_person",
+              "name": "Front yard South Person detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_privacy_mode",
+              "name": "Front yard South Privacy mode",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.front_yard_south_detections_smoke",
+              "name": "Front yard South Smoke detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.front_yard_south_detections_speaking",
+              "name": "Front yard South Speaking detection",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.front_yard_south_status_light",
+              "name": "Front yard South Status light",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.front_yard_south_detections_vehicle",
+              "name": "Front yard South Vehicle detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.garage_bay_detections_animal",
+              "name": "Garage Bay Animal detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.garage_bay_detections_baby_cry",
+              "name": "Garage Bay Baby cry detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.garage_bay_detections_co_alarm",
+              "name": "Garage Bay CO alarm detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_motion_4",
+              "name": "Garage Bay Motion",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_overlay_show_date_4",
+              "name": "Garage Bay Overlay: show date",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_overlay_show_logo_4",
+              "name": "Garage Bay Overlay: show logo",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_overlay_show_name_4",
+              "name": "Garage Bay Overlay: show name",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_overlay_show_nerd_mode_4",
+              "name": "Garage Bay Overlay: show nerd mode",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.garage_bay_detections_person",
+              "name": "Garage Bay Person detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_privacy_mode_4",
+              "name": "Garage Bay Privacy mode",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.garage_bay_remote",
+              "name": "Garage Bay Remote",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.garage_bay_detections_smoke",
+              "name": "Garage Bay Smoke detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.garage_bay_detections_speaking",
+              "name": "Garage Bay Speaking detection",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.garage_bay_status_light",
+              "name": "Garage Bay Status light",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.garage_bay_detections_vehicle",
+              "name": "Garage Bay Vehicle detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.tp_link_smart_dimmer_8fa7_led",
+              "name": "Garage light LED",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.tp_link_smart_dimmer_7609_led",
+              "name": "Guest hallway LED",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.nursery_temp_restart_2",
+              "name": "Guest-Room-Motion-2 Nursery Temp Restart 2",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.guest_temp_controller_lock",
+              "name": "Guest-Temp-Controller guest-temp-controller Lock",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.guest_temp_controller_test",
+              "name": "Guest-Temp-Controller test",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.hdmi_3",
+              "name": "HDMI 3",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.hdmi_4",
+              "name": "HDMI 4",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.house_alexa",
+              "name": "House Alexa",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.house_climate_control_room_3_heater_relay",
+              "name": "House-Climate-Control ${room_3} Heater Relay",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.on_board_relay",
+              "name": "House-Rack-1 On Board Relay",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.pico_buzzer",
+              "name": "House-Rack-1 Pico Buzzer",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.test_switch",
+              "name": "House-Rack-1 Test Switch",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.bedroomdoor_red_led",
+              "name": "House-System-3 Bedroomdoor Red LED",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.fire_place_trigger",
+              "name": "House-System-3 Fire Place Trigger",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.frontdoor_red_led",
+              "name": "House-System-3 Frontdoor Red LED",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.garage_door_trigger",
+              "name": "House-System-3 Garage Door Trigger",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.iot",
+              "name": "IOT Enabled",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.keypad_bedroom_door_guest_access",
+              "name": "Keypad-Bedroom-Door Keypad Bedroom Door Guest Access",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.keypad_front_door_guest_access",
+              "name": "Keypad-Frontdoor Keypad Front Door Guest Access",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.keypad_garage_door_guest_access",
+              "name": "Keypad-Garage Keypad Garage Door Guest Access",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.keypad_garage_bay_guest_access",
+              "name": "Keypad-Garage-Bay Keypad Garage Bay Guest Access",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.keypad_office_door_guest_access",
+              "name": "Keypad-Office Keypad Office Door Guest Access",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.kitchen_alexa",
+              "name": "Kitchen Alexa Blocked",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.kitchen_detections_animal",
+              "name": "Kitchen Animal detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.kitchen_detections_baby_cry",
+              "name": "Kitchen Baby cry detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.kitchen_detections_co_alarm",
+              "name": "Kitchen CO alarm detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.tp_link_smart_dimmer_c7cc_led",
+              "name": "Kitchen light LED",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_motion_2",
+              "name": "Kitchen Motion",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_overlay_show_date_2",
+              "name": "Kitchen Overlay: show date",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_overlay_show_logo_2",
+              "name": "Kitchen Overlay: show logo",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_overlay_show_name_2",
+              "name": "Kitchen Overlay: show name",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_overlay_show_nerd_mode_2",
+              "name": "Kitchen Overlay: show nerd mode",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.kitchen_detections_person",
+              "name": "Kitchen Person detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_privacy_mode_2",
+              "name": "Kitchen Privacy mode",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.kitchen_detections_smoke",
+              "name": "Kitchen Smoke detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.kitchen_detections_speaking",
+              "name": "Kitchen Speaking detection",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.kitchen_status_light",
+              "name": "Kitchen Status light",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.kitchen_detections_vehicle",
+              "name": "Kitchen Vehicle detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.little_tv_relay",
+              "name": "Little-Tv little_tv_relay",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.tp_link_smart_dimmer_a167_led",
+              "name": "Living room light LED",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.livingroom_ac_power",
+              "name": "Livingroom AC Power",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.livingroom_alexa",
+              "name": "Livingroom Alexa Blocked",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.livingroom_detections_animal",
+              "name": "Livingroom Animal detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.livingroom_detections_baby_cry",
+              "name": "Livingroom Baby cry detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.livingroom_detections_co_alarm",
+              "name": "Livingroom CO alarm detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_motion_3",
+              "name": "Livingroom Motion",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_overlay_show_date_3",
+              "name": "Livingroom Overlay: show date",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_overlay_show_logo_3",
+              "name": "Livingroom Overlay: show logo",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_overlay_show_name_3",
+              "name": "Livingroom Overlay: show name",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_overlay_show_nerd_mode_3",
+              "name": "Livingroom Overlay: show nerd mode",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.livingroom_detections_person",
+              "name": "Livingroom Person detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.g5_turret_ultra_privacy_mode_3",
+              "name": "Livingroom Privacy mode",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.livingroom_projector",
+              "name": "Livingroom Projector",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.livingroom_detections_smoke",
+              "name": "Livingroom Smoke detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.livingroom_sonos_crossfade",
+              "name": "Livingroom Sonos Crossfade",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.livingroom_sonos_loudness",
+              "name": "Livingroom Sonos Loudness",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.livingroom_sonos_night_sound",
+              "name": "Livingroom Sonos Night sound",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.livingroom_sonos_speech_enhancement",
+              "name": "Livingroom Sonos Speech enhancement",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.sonos_sub",
+              "name": "Livingroom Sonos Subwoofer enabled",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.sonos_sonosf_surround_enabled",
+              "name": "Livingroom Sonos Surround enabled",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.livingroom_sonos_surround_music_full_volume",
+              "name": "Livingroom Sonos Surround music full volume",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.livingroom_sonos_tv_autoplay",
+              "name": "Livingroom Sonos TV autoplay",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.livingroom_sonos_ungroup_on_autoplay",
+              "name": "Livingroom Sonos Ungroup on autoplay",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.livingroom_detections_speaking",
+              "name": "Livingroom Speaking detection",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.livingroom_status_light",
+              "name": "Livingroom Status light",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.livingroom_tv_power",
+              "name": "Livingroom TV Power",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.smarttv_4k_mute",
+              "name": "Livingroom TV SmartTV 4K Mute",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.livingroom_detections_vehicle",
+              "name": "Livingroom Vehicle detection",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.livingroom_volume",
+              "name": "Livingroom Volume +",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.livingroom_volume_2",
+              "name": "Livingroom Volume -",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.latch",
+              "name": "Livingroom-Gun-Art latch",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.mini_climate_card_pre_release",
+              "name": "mini climate card Pre-release",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.mirror",
+              "name": "Mirror",
+              "state": "unavailable"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.morris",
+              "name": "Morris Enabled",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.morris_media",
+              "name": "Morris Media Enabled",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.night_stand_drawer_drawer_open",
+              "name": "Night-Stand-Drawer Drawer Open",
+              "state": "unavailable"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.night_stand_drawer_night_stand_drawer_guest_access",
+              "name": "Night-Stand-Drawer Night Stand Drawer Guest Access",
+              "state": "unavailable"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.nursery_ac_relay",
+              "name": "Nursery AC Relay",
+              "state": "unavailable"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.office_ac_power",
+              "name": "Office AC Power",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.tp_link_smart_dimmer_c4a9_led",
+              "name": "Office light LED",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.office_outlets",
+              "name": "Office Outlets",
+              "state": "unavailable"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.onn_g801x_a16a_mute",
+              "name": "Office TV onn G801X A16A Mute",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.office_bench_spare_1",
+              "name": "Office-Bench-Light Office Bench Spare 1",
+              "state": "unavailable"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.office_bench_spare_2",
+              "name": "Office-Bench-Light Office Bench Spare 2",
+              "state": "unavailable"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.office_bench_spare_3",
+              "name": "Office-Bench-Light Office Bench Spare 3",
+              "state": "unavailable"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.office_bench_spare_4",
+              "name": "Office-Bench-Light Office Bench Spare 4",
+              "state": "unavailable"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.office_button_controller_lock",
+              "name": "Office-Button-Controller office-button-controller Lock",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.office_computer",
+              "name": "Office-Computer Office Computer",
+              "state": "unavailable"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.office_computer_power_cord_office_computer_power_cord",
+              "name": "Office-Computer-Power-Cord Office Computer Power Cord",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.1",
+              "name": "Office-Door 1",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.2",
+              "name": "Office-Door 2",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.office_door_close",
+              "name": "Office-Door Office Door Close",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.office_door_open",
+              "name": "Office-Door Office Door Open",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.office_door_reset",
+              "name": "Office-Door Office Door Reset",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.office_exhaust",
+              "name": "Office-Exhaust Office Exhaust",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.office_bench_overhead_lights",
+              "name": "Office-Overhead-Light Office Bench Overhead Lights",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.office_temp_controller_lock",
+              "name": "Office-Temp-Controller office-temp-controller Lock",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.outside_light",
+              "name": "Outside Light",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.printer_light",
+              "name": "Printer Light",
+              "state": "unavailable"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.printer_light_1",
+              "name": "Printer-Lamp-1 Printer Light 1",
+              "state": "unavailable"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.printer_light_2",
+              "name": "Printer-Lamp-2 Printer Light 2",
+              "state": "unavailable"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.projector_screen",
+              "name": "Projector Screen",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.nursery_ac_power",
+              "name": "Receptacle",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.screen_helper_subwoffler",
+              "name": "screen helper subwoffler",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.screen_helper_surround",
+              "name": "screen helper surround",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.screen_lock",
+              "name": "Screen Lock",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.screen_projector_helper",
+              "name": "Screen Projector Helper",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.shower_fan",
+              "name": "Shower Fan",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.shower_fan_auto_off_enabled",
+              "name": "Shower Fan Auto-off enabled",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.shower_fan_auto_update_enabled",
+              "name": "Shower Fan Auto-update enabled",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.shower_fan_led",
+              "name": "Shower Fan LED",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.unassigned_smart_away",
+              "name": "Smart Bridge 2 Unassigned Smart Away",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.solder_fan",
+              "name": "Solder-Fan Solder Fan",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.solder_iron",
+              "name": "Solder-Iron Solder Iron",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.bedroom_hallway_light",
+              "name": "switch.bedroom_hallway_light",
+              "state": "unavailable"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.udm_se_morris_analytics_enabled",
+              "name": "UDM SE-Morris Analytics enabled",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.udm_se_morris_insights_enabled",
+              "name": "UDM SE-Morris Insights enabled",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.unifi_network_beta_app",
+              "name": "UniFi Network Beta App",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.unifi_network_beta_app_temp_certbot_http_challenge",
+              "name": "UniFi Network Beta App Temp-Certbot HTTP Challenge",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.unifi_network_blue",
+              "name": "UniFi Network Blue",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.unifi_network_daily_reort_test_1",
+              "name": "UniFi Network daily reort test 1",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.unifi_network_fns_testing_checker",
+              "name": "UniFi Network FNS Testing Checker",
+              "state": "off"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.unifi_network_mqtt",
+              "name": "UniFi Network MQTT",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.unifi_network_remote_desktop_to_office_computer",
+              "name": "UniFi Network Remote Desktop To Office computer",
+              "state": "on"
+            },
+            {
+              "domain": "switch",
+              "entityId": "switch.unifi_network_vpn",
+              "name": "UniFi Network VPN",
+              "state": "on"
+            }
+          ]
+        },
+        "audioControlEntities": {
+          "bass": {
+            "entityId": "number.sonosf_bass",
+            "kind": "bass",
+            "max": 10,
+            "min": -10,
+            "mode": "auto",
+            "name": "Livingroom Sonos Bass",
+            "state": "-10",
+            "step": 1,
+            "unit": "",
+            "value": -10
+          },
+          "gain": {
+            "entityId": "number.sonos_sub_gain",
+            "kind": "gain",
+            "max": 15,
+            "min": -15,
+            "mode": "auto",
+            "name": "Livingroom Sonos Sub gain",
+            "state": "-15",
+            "step": 1,
+            "unit": "",
+            "value": -15
+          },
+          "projector": {
+            "domain": "switch",
+            "entityId": "switch.livingroom_projector",
+            "name": "Livingroom Projector",
+            "state": "off"
+          },
+          "subwoofer": {
+            "domain": "switch",
+            "entityId": "switch.sonos_sub",
+            "name": "Livingroom Sonos Subwoofer enabled",
+            "state": "on"
+          },
+          "surround": {
+            "domain": "switch",
+            "entityId": "switch.sonos_sonosf_surround_enabled",
+            "name": "Livingroom Sonos Surround enabled",
+            "state": "on"
+          },
+          "treble": {
+            "entityId": "number.sonosf_treble",
+            "kind": "treble",
+            "max": 10,
+            "min": -10,
+            "mode": "auto",
+            "name": "Livingroom Sonos Treble",
+            "state": "10",
+            "step": 1,
+            "unit": "",
+            "value": 10
+          }
+        },
+        "coverEntities": [
+          {
+            "currentPosition": null,
+            "entityId": "cover.all_doors",
+            "name": "All doors",
+            "state": "closed",
+            "supportedFeatures": 3
+          },
+          {
+            "currentPosition": 0,
+            "entityId": "cover.bed",
+            "name": "Bedroom-Bed Bed",
+            "state": "closed",
+            "supportedFeatures": 15
+          },
+          {
+            "currentPosition": 0,
+            "entityId": "cover.bedroom_blinds",
+            "name": "Bedroom-Blinds Bedroom Blinds",
+            "state": "closed",
+            "supportedFeatures": 15
+          },
+          {
+            "currentPosition": 0,
+            "entityId": "cover.bedroom_blinds_1",
+            "name": "Bedroom-Blinds Bedroom Blinds 1",
+            "state": "closed",
+            "supportedFeatures": 15
+          },
+          {
+            "currentPosition": 0,
+            "entityId": "cover.bedroom_blinds_2",
+            "name": "Bedroom-Blinds Bedroom Blinds 2",
+            "state": "closed",
+            "supportedFeatures": 15
+          },
+          {
+            "currentPosition": null,
+            "entityId": "cover.bedroom_door",
+            "name": "Bedroom-Door Bedroom Door",
+            "state": "closed",
+            "supportedFeatures": 3
+          },
+          {
+            "currentPosition": 0,
+            "entityId": "cover.house_blind",
+            "name": "House Blind",
+            "state": "closed",
+            "supportedFeatures": 15
+          },
+          {
+            "currentPosition": 100,
+            "entityId": "cover.kitchen_blind_1",
+            "name": "Kitchen-Robby-Blinds Kitchen Blind 1",
+            "state": "open",
+            "supportedFeatures": 15
+          },
+          {
+            "currentPosition": 100,
+            "entityId": "cover.kitchen_blind_2",
+            "name": "Kitchen-Robby-Blinds Kitchen Blind 2",
+            "state": "open",
+            "supportedFeatures": 15
+          },
+          {
+            "currentPosition": 100,
+            "entityId": "cover.kitchen_blind_3",
+            "name": "Kitchen-Robby-Blinds Kitchen Blind 3",
+            "state": "open",
+            "supportedFeatures": 15
+          },
+          {
+            "currentPosition": 0,
+            "entityId": "cover.kitchen_blinds",
+            "name": "Kitchen-Robby-Blinds Kitchen Blinds",
+            "state": "closed",
+            "supportedFeatures": 15
+          },
+          {
+            "currentPosition": 0,
+            "entityId": "cover.kitchen_east_blind",
+            "name": "Kitchen-Robby-Blinds Kitchen East Blind",
+            "state": "closed",
+            "supportedFeatures": 15
+          },
+          {
+            "currentPosition": 0,
+            "entityId": "cover.kitchen_north_blind",
+            "name": "Kitchen-Robby-Blinds Kitchen North Blind",
+            "state": "closed",
+            "supportedFeatures": 15
+          },
+          {
+            "currentPosition": 100,
+            "entityId": "cover.robby_blind",
+            "name": "Kitchen-Robby-Blinds Robby Blind",
+            "state": "open",
+            "supportedFeatures": 15
+          },
+          {
+            "currentPosition": 0,
+            "entityId": "cover.living_space_blind",
+            "name": "Living Space Blind",
+            "state": "closed",
+            "supportedFeatures": 15
+          },
+          {
+            "currentPosition": 100,
+            "entityId": "cover.livingroom_blind_3",
+            "name": "North 1",
+            "state": "open",
+            "supportedFeatures": 15
+          },
+          {
+            "currentPosition": 100,
+            "entityId": "cover.livingroom_blind_4",
+            "name": "North 2",
+            "state": "open",
+            "supportedFeatures": 15
+          },
+          {
+            "currentPosition": 0,
+            "entityId": "cover.livingroom_blinds",
+            "name": "Livingroom-Blinds Livingroom Blinds",
+            "state": "closed",
+            "supportedFeatures": 15
+          },
+          {
+            "currentPosition": 0,
+            "entityId": "cover.north_blinds",
+            "name": "Livingroom-Blinds North Blinds",
+            "state": "closed",
+            "supportedFeatures": 15
+          },
+          {
+            "currentPosition": 0,
+            "entityId": "cover.west_blinds",
+            "name": "Livingroom-Blinds West Blinds",
+            "state": "closed",
+            "supportedFeatures": 15
+          },
+          {
+            "currentPosition": null,
+            "entityId": "cover.office_door",
+            "name": "Office-Door Office Door",
+            "state": "closed",
+            "supportedFeatures": 3
+          },
+          {
+            "currentPosition": 100,
+            "entityId": "cover.livingroom_blind_1",
+            "name": "West Left",
+            "state": "open",
+            "supportedFeatures": 15
+          },
+          {
+            "currentPosition": 100,
+            "entityId": "cover.livingroom_blind_2",
+            "name": "West Right",
+            "state": "open",
+            "supportedFeatures": 15
+          }
+        ],
+        "lightAvailableEntities": [
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.rack_light",
+            "name": "19-Rack-Light Rack Light",
+            "state": "off",
+            "supportedColorModes": [
+              "rgb"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.5_port_switch_led",
+            "name": "5 Port Switch LED",
+            "state": "off",
+            "supportedColorModes": [
+              "onoff"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "onoff",
+            "domain": "light",
+            "entityId": "light.ac_lite_bedroom_wifi_led",
+            "name": "AC Lite-Bedroom Wifi LED",
+            "state": "on",
+            "supportedColorModes": [
+              "onoff"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.ac_lite_garage_wifi_led",
+            "name": "AC Lite-Garage Wifi LED",
+            "state": "off",
+            "supportedColorModes": [
+              "onoff"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.back_light",
+            "name": "Back Light",
+            "state": "off",
+            "supportedColorModes": [
+              "brightness"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.back_light_basic",
+            "name": "Back Light Basic",
+            "state": "off",
+            "supportedColorModes": [
+              "brightness"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.back_yard_light",
+            "name": "Back Yard Light",
+            "state": "off",
+            "supportedColorModes": [
+              "brightness"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.bed_light",
+            "name": "Bed Light",
+            "state": "off",
+            "supportedColorModes": [
+              "rgb"
+            ]
+          },
+          {
+            "brightnessPct": 100,
+            "colorMode": "brightness",
+            "domain": "light",
+            "entityId": "light.bed_motion_basic",
+            "name": "Bed Motion Basic",
+            "state": "on",
+            "supportedColorModes": [
+              "brightness"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.bedrom_lights",
+            "name": "Bedrom Lights",
+            "state": "off",
+            "supportedColorModes": [
+              "brightness"
+            ]
+          },
+          {
+            "brightnessPct": 100,
+            "colorMode": "rgb",
+            "domain": "light",
+            "entityId": "light.bedroom_artwork",
+            "name": "Bedroom Artwork",
+            "state": "on",
+            "supportedColorModes": [
+              "rgb"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.bedroom_closet_light",
+            "name": "Bedroom Closet Light",
+            "state": "off",
+            "supportedColorModes": [
+              "brightness"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.bedroom_hallway_light",
+            "name": "Bedroom Hallway Light",
+            "state": "off",
+            "supportedColorModes": [
+              "brightness"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.bedroom_light_one",
+            "name": "Bedroom Light One",
+            "state": "off",
+            "supportedColorModes": [
+              "brightness"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.bedroom_light_three",
+            "name": "Bedroom Light Three",
+            "state": "off",
+            "supportedColorModes": [
+              "brightness"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.bedroom_light_three_basic",
+            "name": "Bedroom Light Three Basic",
+            "state": "off",
+            "supportedColorModes": [
+              "brightness"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.bedroom_light_two",
+            "name": "Bedroom Light Two",
+            "state": "off",
+            "supportedColorModes": [
+              "brightness"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.bedroom_lights",
+            "name": "Bedroom Lights",
+            "state": "off",
+            "supportedColorModes": [
+              "brightness"
+            ]
+          },
+          {
+            "brightnessPct": 50,
+            "colorMode": "rgb",
+            "domain": "light",
+            "entityId": "light.bookshelf_lights_all_bookshelves",
+            "name": "Bookshelf Lights All Bookshelves",
+            "state": "on",
+            "supportedColorModes": [
+              "rgb"
+            ]
+          },
+          {
+            "brightnessPct": 100,
+            "colorMode": "rgb",
+            "domain": "light",
+            "entityId": "light.bookshelf_lights_bookshelf_1",
+            "name": "Bookshelf Lights Bookshelf 1",
+            "state": "on",
+            "supportedColorModes": [
+              "rgb"
+            ]
+          },
+          {
+            "brightnessPct": 100,
+            "colorMode": "rgb",
+            "domain": "light",
+            "entityId": "light.bookshelf_lights_bookshelf_2",
+            "name": "Bookshelf Lights Bookshelf 2",
+            "state": "on",
+            "supportedColorModes": [
+              "rgb"
+            ]
+          },
+          {
+            "brightnessPct": 100,
+            "colorMode": "rgb",
+            "domain": "light",
+            "entityId": "light.bookshelf_lights_bookshelf_3",
+            "name": "Bookshelf Lights Bookshelf 3",
+            "state": "on",
+            "supportedColorModes": [
+              "rgb"
+            ]
+          },
+          {
+            "brightnessPct": 100,
+            "colorMode": "rgb",
+            "domain": "light",
+            "entityId": "light.bookshelf_lights_bookshelf_4",
+            "name": "Bookshelf Lights Bookshelf 4",
+            "state": "on",
+            "supportedColorModes": [
+              "rgb"
+            ]
+          },
+          {
+            "brightnessPct": 100,
+            "colorMode": "rgb",
+            "domain": "light",
+            "entityId": "light.bookshelf_lights_bookshelf_5",
+            "name": "Bookshelf Lights Bookshelf 5",
+            "state": "on",
+            "supportedColorModes": [
+              "rgb"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.porch_light_1",
+            "name": "Christmas-Light-Main-Power Christmas Light Main Power",
+            "state": "off",
+            "supportedColorModes": [
+              "onoff"
+            ]
+          },
+          {
+            "brightnessPct": 50,
+            "colorMode": "rgb",
+            "domain": "light",
+            "entityId": "light.coffee_light",
+            "name": "Desk-Coffee-And-Lights Coffee Light",
+            "state": "on",
+            "supportedColorModes": [
+              "rgb"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.light_3",
+            "name": "Final-Touch-Screen Light",
+            "state": "unavailable",
+            "supportedColorModes": [
+              "rgb"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.floor_lights",
+            "name": "Floor Lights",
+            "state": "off",
+            "supportedColorModes": [
+              "onoff"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.garage_light",
+            "name": "Garage Light",
+            "state": "off",
+            "supportedColorModes": [
+              "brightness"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.guest_bathroom_light",
+            "name": "Guest Bathroom Light",
+            "state": "unavailable",
+            "supportedColorModes": [
+              "brightness"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.guest_hallway_light",
+            "name": "Guest Hallway Light",
+            "state": "off",
+            "supportedColorModes": [
+              "brightness"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.nursery_light_1",
+            "name": "Guest-Room-Motion-1 nursery light 1",
+            "state": "off",
+            "supportedColorModes": [
+              "rgb"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.nursery_light_2",
+            "name": "Guest-Room-Motion-2 nursery light 2",
+            "state": "off",
+            "supportedColorModes": [
+              "rgb"
+            ]
+          },
+          {
+            "brightnessPct": 40,
+            "colorMode": "brightness",
+            "domain": "light",
+            "entityId": "light.guestroom_light",
+            "name": "Guestroom Light",
+            "state": "on",
+            "supportedColorModes": [
+              "brightness"
+            ]
+          },
+          {
+            "brightnessPct": 55,
+            "colorMode": "rgb",
+            "domain": "light",
+            "entityId": "light.status_led_rgb",
+            "name": "House-Rack-1 Status LED RGB",
+            "state": "on",
+            "supportedColorModes": [
+              "rgb"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.kitchen_light",
+            "name": "Kitchen Light",
+            "state": "off",
+            "supportedColorModes": [
+              "brightness"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.light_block_kids",
+            "name": "Light-Block Kids",
+            "state": "unavailable",
+            "supportedColorModes": [
+              "rgb"
+            ]
+          },
+          {
+            "brightnessPct": 100,
+            "colorMode": "brightness",
+            "domain": "light",
+            "entityId": "light.livingroom_light",
+            "name": "Livingroom Light",
+            "state": "on",
+            "supportedColorModes": [
+              "brightness"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.mirror_light_1",
+            "name": "Mirror Light 1",
+            "state": "off",
+            "supportedColorModes": [
+              "rgb"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.mirror_light_2",
+            "name": "Mirror Light 2",
+            "state": "off",
+            "supportedColorModes": [
+              "rgb"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.mirror_neopixel_light",
+            "name": "Mirror NeoPixel Light",
+            "state": "off",
+            "supportedColorModes": [
+              "rgb"
+            ]
+          },
+          {
+            "brightnessPct": 100,
+            "colorMode": "brightness",
+            "domain": "light",
+            "entityId": "light.office_light",
+            "name": "Office Light",
+            "state": "on",
+            "supportedColorModes": [
+              "brightness"
+            ]
+          },
+          {
+            "brightnessPct": 100,
+            "colorMode": "brightness",
+            "domain": "light",
+            "entityId": "light.office_motion_basic",
+            "name": "Office Motion Basic",
+            "state": "on",
+            "supportedColorModes": [
+              "brightness"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.office_bench_light",
+            "name": "Office-Bench-Light Office Bench Light",
+            "state": "unavailable",
+            "supportedColorModes": [
+              "rgb"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.office_bench_light_left",
+            "name": "Office-Bench-Light Office Bench Light Left",
+            "state": "unavailable",
+            "supportedColorModes": [
+              "rgb"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.office_bench_light_middle",
+            "name": "Office-Bench-Light Office Bench Light Middle",
+            "state": "unavailable",
+            "supportedColorModes": [
+              "rgb"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.office_bench_light_right",
+            "name": "Office-Bench-Light Office Bench Light Right",
+            "state": "unavailable",
+            "supportedColorModes": [
+              "rgb"
+            ]
+          },
+          {
+            "brightnessPct": 100,
+            "colorMode": "brightness",
+            "domain": "light",
+            "entityId": "light.office_button_controller",
+            "name": "Office-Button-Controller office-button-controller",
+            "state": "on",
+            "supportedColorModes": [
+              "brightness"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.outside_light",
+            "name": "Outside Light",
+            "state": "off",
+            "supportedColorModes": [
+              "onoff"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.outside_light_basic",
+            "name": "Outside Light Basic",
+            "state": "off",
+            "supportedColorModes": [
+              "brightness"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.pantry_light",
+            "name": "Pantry Light",
+            "state": "off",
+            "supportedColorModes": [
+              "brightness"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.shower_light",
+            "name": "Shower Light",
+            "state": "off",
+            "supportedColorModes": [
+              "brightness"
+            ]
+          },
+          {
+            "brightnessPct": 80,
+            "colorMode": "rgb",
+            "domain": "light",
+            "entityId": "light.tv_light",
+            "name": "Tv-Light TV Light",
+            "state": "on",
+            "supportedColorModes": [
+              "rgb"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.u7_lite_livingroom_wifi_led",
+            "name": "U7 Lite Livingroom Wifi LED",
+            "state": "off",
+            "supportedColorModes": [
+              "onoff"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "onoff",
+            "domain": "light",
+            "entityId": "light.washer_on_off",
+            "name": "Washer on_off",
+            "state": "on",
+            "supportedColorModes": [
+              "onoff"
+            ]
+          },
+          {
+            "brightnessPct": 100,
+            "colorMode": "rgb",
+            "domain": "light",
+            "entityId": "light.wine_light",
+            "name": "Wine-Light Wine Light",
+            "state": "on",
+            "supportedColorModes": [
+              "rgb"
+            ]
+          },
+          {
+            "brightnessPct": 0,
+            "colorMode": "",
+            "domain": "light",
+            "entityId": "light.yard_light",
+            "name": "Yard Light",
+            "state": "off",
+            "supportedColorModes": [
+              "brightness"
+            ]
+          }
+        ],
+        "mediaPlayerEntities": [
+          {
+            "entityId": "media_player.bathroom_mirror",
+            "isVolumeMuted": null,
+            "mediaAlbum": "",
+            "mediaArtist": "",
+            "mediaContentId": "",
+            "mediaContentType": "",
+            "mediaDuration": null,
+            "mediaPosition": null,
+            "mediaTitle": "",
+            "name": "Bathroom Mirror",
+            "pictureUrl": "",
+            "source": "Chromecast",
+            "sourceList": [
+              "FireTV",
+              "Cable/Antenna",
+              "HDMI 1",
+              "Chromecast",
+              "Composite",
+              "Media Player"
+            ],
+            "state": "idle",
+            "supportedFeatures": 18817,
+            "volumeLevel": null
+          },
+          {
+            "entityId": "media_player.bathroom_mirror_apple_tv",
+            "isVolumeMuted": null,
+            "mediaAlbum": "",
+            "mediaArtist": "",
+            "mediaContentId": "",
+            "mediaContentType": "",
+            "mediaDuration": null,
+            "mediaPosition": null,
+            "mediaTitle": "",
+            "name": "Bathroom Mirror Apple TV",
+            "pictureUrl": "",
+            "source": "",
+            "sourceList": [],
+            "state": "idle",
+            "supportedFeatures": 450487,
+            "volumeLevel": null
+          },
+          {
+            "entityId": "media_player.bedroom_sonos",
+            "isVolumeMuted": false,
+            "mediaAlbum": "",
+            "mediaArtist": "",
+            "mediaContentId": "https://homeassistant-spooky.ihadev.com/static/sounds/scratches/scratches_2.mp3?t=QodoPYYYLVQ",
+            "mediaContentType": "music",
+            "mediaDuration": 68,
+            "mediaPosition": 0,
+            "mediaTitle": "",
+            "name": "Bedroom",
+            "pictureUrl": "",
+            "source": "",
+            "sourceList": [
+              "Line-in"
+            ],
+            "state": "idle",
+            "supportedFeatures": 8321599,
+            "volumeLevel": 0.56
+          },
+          {
+            "entityId": "media_player.living_room_apple_tv",
+            "isVolumeMuted": null,
+            "mediaAlbum": "",
+            "mediaArtist": "",
+            "mediaContentId": "",
+            "mediaContentType": "",
+            "mediaDuration": null,
+            "mediaPosition": null,
+            "mediaTitle": "",
+            "name": "Bedroom Apple TV",
+            "pictureUrl": "",
+            "source": "",
+            "sourceList": [
+              "App\u00a0Store",
+              "Arcade",
+              "Computers",
+              "Developer",
+              "Disney+",
+              "Emby",
+              "Fitness",
+              "HBO Max",
+              "Hulu",
+              "Movies",
+              "Movies Anywhere",
+              "Music",
+              "Netflix",
+              "Paramount+",
+              "Photos",
+              "Pluto TV",
+              "Podcasts",
+              "Prime Video",
+              "Protect",
+              "Search",
+              "Settings",
+              "Snake.io+",
+              "Speedtest",
+              "TV",
+              "TV Shows",
+              "WIRED",
+              "YouTube"
+            ],
+            "state": "off",
+            "supportedFeatures": 450487,
+            "volumeLevel": null
+          },
+          {
+            "entityId": "media_player.den_2",
+            "isVolumeMuted": null,
+            "mediaAlbum": "",
+            "mediaArtist": "",
+            "mediaContentId": "",
+            "mediaContentType": "",
+            "mediaDuration": null,
+            "mediaPosition": null,
+            "mediaTitle": "",
+            "name": "Den 2",
+            "pictureUrl": "",
+            "source": "",
+            "sourceList": [],
+            "state": "unavailable",
+            "supportedFeatures": 56253,
+            "volumeLevel": null
+          },
+          {
+            "entityId": "media_player.living_room_2",
+            "isVolumeMuted": null,
+            "mediaAlbum": "",
+            "mediaArtist": "",
+            "mediaContentId": "",
+            "mediaContentType": "",
+            "mediaDuration": null,
+            "mediaPosition": null,
+            "mediaTitle": "",
+            "name": "Living Room",
+            "pictureUrl": "",
+            "source": "",
+            "sourceList": [],
+            "state": "unavailable",
+            "supportedFeatures": 56253,
+            "volumeLevel": null
+          },
+          {
+            "entityId": "media_player.living_room_apple_tv_2",
+            "isVolumeMuted": null,
+            "mediaAlbum": "",
+            "mediaArtist": "",
+            "mediaContentId": "",
+            "mediaContentType": "",
+            "mediaDuration": null,
+            "mediaPosition": null,
+            "mediaTitle": "",
+            "name": "Living room Apple TV",
+            "pictureUrl": "",
+            "source": "",
+            "sourceList": [],
+            "state": "idle",
+            "supportedFeatures": 450487,
+            "volumeLevel": null
+          },
+          {
+            "entityId": "media_player.living_room_tv",
+            "isVolumeMuted": null,
+            "mediaAlbum": "",
+            "mediaArtist": "",
+            "mediaContentId": "",
+            "mediaContentType": "",
+            "mediaDuration": null,
+            "mediaPosition": null,
+            "mediaTitle": "",
+            "name": "Living Room TV",
+            "pictureUrl": "",
+            "source": "",
+            "sourceList": [],
+            "state": "unavailable",
+            "supportedFeatures": 0,
+            "volumeLevel": null
+          },
+          {
+            "entityId": "media_player.livingroom_sonos",
+            "isVolumeMuted": false,
+            "mediaAlbum": "",
+            "mediaArtist": "",
+            "mediaContentId": "x-sonos-htastream:RINCON_949F3EC255B701400:spdif",
+            "mediaContentType": "music",
+            "mediaDuration": null,
+            "mediaPosition": null,
+            "mediaTitle": "TV",
+            "name": "Livingroom Sonos",
+            "pictureUrl": "",
+            "source": "TV",
+            "sourceList": [
+              "TV"
+            ],
+            "state": "playing",
+            "supportedFeatures": 8321599,
+            "volumeLevel": 0.35
+          },
+          {
+            "entityId": "media_player.livingroom_tv",
+            "isVolumeMuted": null,
+            "mediaAlbum": "",
+            "mediaArtist": "",
+            "mediaContentId": "",
+            "mediaContentType": "",
+            "mediaDuration": null,
+            "mediaPosition": null,
+            "mediaTitle": "",
+            "name": "Livingroom TV",
+            "pictureUrl": "",
+            "source": "",
+            "sourceList": [
+              "Home",
+              "TV",
+              "AirPlay",
+              "HDMI 1",
+              "HDMI 2",
+              "HDMI 3",
+              "HDMI 4",
+              "AV",
+              "AVR0",
+              "AVR1",
+              "AVR2",
+              "AVR3",
+              "AVR4",
+              "AVR5"
+            ],
+            "state": "off",
+            "supportedFeatures": 18817,
+            "volumeLevel": null
+          },
+          {
+            "entityId": "media_player.livingroom_2",
+            "isVolumeMuted": null,
+            "mediaAlbum": "",
+            "mediaArtist": "",
+            "mediaContentId": "",
+            "mediaContentType": "",
+            "mediaDuration": null,
+            "mediaPosition": null,
+            "mediaTitle": "",
+            "name": "media_player.livingroom_2",
+            "pictureUrl": "",
+            "source": "",
+            "sourceList": [],
+            "state": "unavailable",
+            "supportedFeatures": 131968,
+            "volumeLevel": null
+          },
+          {
+            "entityId": "media_player.mirror_cast",
+            "isVolumeMuted": null,
+            "mediaAlbum": "",
+            "mediaArtist": "",
+            "mediaContentId": "",
+            "mediaContentType": "",
+            "mediaDuration": null,
+            "mediaPosition": null,
+            "mediaTitle": "",
+            "name": "Mirror Cast",
+            "pictureUrl": "",
+            "source": "",
+            "sourceList": [],
+            "state": "unavailable",
+            "supportedFeatures": 131968,
+            "volumeLevel": null
+          },
+          {
+            "entityId": "media_player.smarttv_4k",
+            "isVolumeMuted": null,
+            "mediaAlbum": "",
+            "mediaArtist": "",
+            "mediaContentId": "",
+            "mediaContentType": "",
+            "mediaDuration": null,
+            "mediaPosition": null,
+            "mediaTitle": "",
+            "name": "New atV",
+            "pictureUrl": "",
+            "source": "",
+            "sourceList": [],
+            "state": "off",
+            "supportedFeatures": 153529,
+            "volumeLevel": null
+          },
+          {
+            "entityId": "media_player.office_apple_tv",
+            "isVolumeMuted": null,
+            "mediaAlbum": "",
+            "mediaArtist": "",
+            "mediaContentId": "",
+            "mediaContentType": "",
+            "mediaDuration": null,
+            "mediaPosition": null,
+            "mediaTitle": "",
+            "name": "Office Apple TV",
+            "pictureUrl": "",
+            "source": "",
+            "sourceList": [],
+            "state": "idle",
+            "supportedFeatures": 450487,
+            "volumeLevel": null
+          },
+          {
+            "entityId": "media_player.office_tv",
+            "isVolumeMuted": null,
+            "mediaAlbum": "",
+            "mediaArtist": "",
+            "mediaContentId": "",
+            "mediaContentType": "",
+            "mediaDuration": null,
+            "mediaPosition": null,
+            "mediaTitle": "",
+            "name": "Office TV",
+            "pictureUrl": "",
+            "source": "pi",
+            "sourceList": [
+              "HomeScreen",
+              "Live\u00a0TV",
+              "pi",
+              "Apple TV",
+              "Server",
+              "HDMI4",
+              "AV",
+              "SVideo",
+              "ComponentVideo",
+              "AirPlay"
+            ],
+            "state": "idle",
+            "supportedFeatures": 18817,
+            "volumeLevel": null
+          },
+          {
+            "entityId": "media_player.unnamed_room",
+            "isVolumeMuted": null,
+            "mediaAlbum": "",
+            "mediaArtist": "",
+            "mediaContentId": "",
+            "mediaContentType": "",
+            "mediaDuration": null,
+            "mediaPosition": null,
+            "mediaTitle": "",
+            "name": "Unnamed Room",
+            "pictureUrl": "",
+            "source": "",
+            "sourceList": [],
+            "state": "unavailable",
+            "supportedFeatures": 56253,
+            "volumeLevel": null
+          }
+        ],
+        "selectedMediaPlayerId": "media_player.livingroom_sonos",
+        "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJhNGM1NTk3OTY4NmU0MTA3ODRiMTM3YzY0MzExOTVhMyIsImlhdCI6MTc4MTUzNzc0NSwiZXhwIjoyMDk2ODk3NzQ1fQ.UKGZjZDlTFOIt3AUajLFjQlC4I5SQDkIrFYf7zxBGBQ",
+        "url": "http://192.168.1.135:8123/"
+      }
+    },
+    "lights": {
+      "room": "living",
+      "rooms": {
+        "living": {
+          "label": "Living Room",
+          "lights": [
+            {
+              "brightness": 100,
+              "color": "#ffd76f",
+              "colorSupported": false,
+              "haEntityId": "light.livingroom_light",
+              "haName": "Livingroom Light",
+              "id": "ll-1",
+              "lastBrightness": 100,
+              "name": "Livingroom Light",
+              "on": true
+            },
+            {
+              "brightness": 80,
+              "color": "#ffd76f",
+              "colorSupported": false,
+              "haEntityId": "light.kitchen_light",
+              "haName": "Kitchen Light",
+              "id": "ll-2",
+              "lastBrightness": 80,
+              "name": "Kitchen Light",
+              "on": true
+            },
+            {
+              "brightness": 0,
+              "color": "#ffd76f",
+              "colorSupported": true,
+              "haEntityId": "light.tv_light",
+              "haName": "TV Light",
+              "id": "ll-3",
+              "lastBrightness": 100,
+              "name": "Tv-Light TV Light",
+              "on": false
+            },
+            {
+              "brightness": 80,
+              "color": "#ffd76f",
+              "colorSupported": false,
+              "haEntityId": "",
+              "haName": "",
+              "id": "living-light-mqfdjfqu-4",
+              "name": "Light 4",
+              "on": true
+            },
+            {
+              "brightness": 80,
+              "color": "#ffd76f",
+              "colorSupported": false,
+              "haEntityId": "",
+              "haName": "",
+              "id": "living-light-mqfdjfqu-5",
+              "name": "Light 5",
+              "on": true
+            },
+            {
+              "brightness": 80,
+              "color": "#ffd76f",
+              "colorSupported": false,
+              "haEntityId": "",
+              "haName": "",
+              "id": "living-light-mqfdjfqu-6",
+              "name": "Light 6",
+              "on": true
+            }
+          ]
+        }
+      }
+    },
+    "thermostat": {
+      "autoActiveMode": "heat",
+      "autoChangeoverLockoutMinutes": 120,
+      "autoCoolOutdoorTarget": 70,
+      "autoHeatOutdoorTarget": 65,
+      "awayCool": 85,
+      "awayHeat": 55,
+      "coolFanRemainOnMinutes": 2,
+      "currentTemp": 71,
+      "fan": "auto",
+      "humidity": 45,
+      "lastComfortTarget": 72,
+      "limits": {
+        "auto": {
+          "max": 80,
+          "min": 60
+        },
+        "cool": {
+          "max": 80,
+          "min": 65
+        },
+        "heat": {
+          "max": 78,
+          "min": 60
+        }
+      },
+      "mode": "cool",
+      "name": "Livingroom Test",
+      "outdoorTemp": 40,
+      "targetTemp": 72
+    },
+    "version": 9
+  },
+  "updatedAt": 1781540524,
+  "version": 13
+}
