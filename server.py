@@ -86,11 +86,15 @@ def _intish(value, fallback: float, minimum: float | None = None, maximum: float
 
 def _normalize_mode(value: object, fallback: str = "cool") -> str:
     mode = str(value or fallback).strip().lower()
+    if mode.startswith("hvacmode."):
+        mode = mode.split(".", 1)[1]
     if mode in {"heat_cool", "auto"}:
         return "auto"
     if mode in {"heat", "cool"}:
         return mode
-    # Keep the wall panel in a valid mode even if an external integration sends off.
+    # Keep the wall panel in a valid operating mode even if HA sends off.
+    # The UI does not have an Off mode, so an off command should not corrupt
+    # the saved heat/cool/auto setting.
     return fallback if fallback in {"heat", "cool", "auto"} else "cool"
 
 
@@ -298,6 +302,11 @@ def _thermostat_status_payload() -> dict:
         "updatedAt": record["updatedAt"],
         "name": thermostat.get("name") or "IHA Thermostat",
         "thermostat": thermostat_detail,
+        # Home Assistant integration payload. Older panel builds returned the
+        # thermostat details under `thermostat`; the HA custom integration reads
+        # `climate`. Keep both so the wall UI and HA stay in sync.
+        "climate": thermostat_detail,
+        "outputs": outputs,
         "currentTemp": thermostat["currentTemp"],
         "targetTemp": thermostat["targetTemp"],
         "current_temperature": thermostat["currentTemp"],
