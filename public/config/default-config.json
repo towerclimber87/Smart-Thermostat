@@ -74,7 +74,15 @@
       "audioControlEntities": {
         "gain": null,
         "bass": null,
-        "treble": null
+        "treble": null,
+        "subwoofer": null,
+        "surround": null,
+        "projector": null
+      },
+      "audioAvailableEntities": {
+        "mediaPlayers": [],
+        "numbers": [],
+        "switches": []
       }
     }
   }

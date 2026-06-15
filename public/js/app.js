@@ -28,6 +28,7 @@ let lastAudioUserInteractionAt = 0;
 let audioSliderActive = { name: "", until: 0 };
 let audioVolumeHoldUntil = 0;
 let audioToneHoldUntil = { gain: 0, bass: 0, treble: 0 };
+let audioPickerOpenedAt = 0;
 
 const defaultBlindConfig = {
   room: "living",
@@ -59,7 +60,8 @@ const defaultIntegrations = {
     coverEntities: [],
     mediaPlayerEntities: [],
     selectedMediaPlayerId: "",
-    audioControlEntities: { gain: null, bass: null, treble: null },
+    audioControlEntities: { gain: null, bass: null, treble: null, subwoofer: null, surround: null, projector: null },
+    audioAvailableEntities: { mediaPlayers: [], numbers: [], switches: [] },
   },
 };
 
@@ -89,6 +91,9 @@ const state = {
     gain: 0,
     bass: 2,
     treble: 4,
+    subwoofer: false,
+    surround: false,
+    projector: false,
     entityId: "",
     entityName: "",
     status: "idle",
@@ -106,6 +111,7 @@ const state = {
   blinds: JSON.parse(JSON.stringify(defaultBlindConfig)),
   integrations: JSON.parse(JSON.stringify(defaultIntegrations)),
   entityPicker: { roomKey: null, blindId: null },
+  audioEntityPicker: { kind: null, domain: null, entities: [], search: "" },
   diagnostics: { haLogs: [] },
 };
 
@@ -184,6 +190,16 @@ const elements = {
   loadAudioMediaPlayers: document.getElementById("loadAudioMediaPlayers"),
   backToAudioSetup: document.getElementById("backToAudioSetup"),
   selectedMediaDeviceText: document.getElementById("selectedMediaDeviceText"),
+  subwooferToggle: document.getElementById("subwooferToggle"),
+  surroundToggle: document.getElementById("surroundToggle"),
+  projectorToggle: document.getElementById("projectorToggle"),
+  audioEntityPickerOverlay: document.getElementById("audioEntityPickerOverlay"),
+  audioEntityPickerTitle: document.getElementById("audioEntityPickerTitle"),
+  audioEntityPickerEyebrow: document.getElementById("audioEntityPickerEyebrow"),
+  audioEntityPickerHelp: document.getElementById("audioEntityPickerHelp"),
+  audioEntityPickerList: document.getElementById("audioEntityPickerList"),
+  audioEntityPickerClose: document.getElementById("audioEntityPickerClose"),
+  audioEntitySearch: document.getElementById("audioEntitySearch"),
 };
 
 function clone(value) {
@@ -685,12 +701,24 @@ function updateAudioValueLabel(name) {
 
 function getAudioToneControls() {
   const ha = state.integrations.homeAssistant;
-  if (!ha.audioControlEntities) ha.audioControlEntities = { gain: null, bass: null, treble: null };
+  if (!ha.audioControlEntities) ha.audioControlEntities = {};
+  ["gain", "bass", "treble", "subwoofer", "surround", "projector"].forEach((key) => {
+    if (!Object.prototype.hasOwnProperty.call(ha.audioControlEntities, key)) ha.audioControlEntities[key] = null;
+  });
+  if (!ha.audioAvailableEntities) ha.audioAvailableEntities = { mediaPlayers: [], numbers: [], switches: [] };
   return ha.audioControlEntities;
 }
 
 function getAudioToneControl(kind) {
   return getAudioToneControls()[kind] || null;
+}
+
+function getAudioSwitchControl(kind) {
+  return getAudioToneControls()[kind] || null;
+}
+
+function isSwitchOn(control) {
+  return String(control?.state || "").toLowerCase() === "on";
 }
 
 function normalizeAudioControlValue(control, fallback = 0) {
@@ -875,6 +903,22 @@ function renderAudio() {
     setRangeVisual(slider);
     if (value) value.textContent = name === "volume" ? Math.round(Number(a[name] || 0)) : formatControlValue(a[name]);
   });
+  renderAudioFeatureControls();
+}
+
+function renderAudioFeatureControls() {
+  ["subwoofer", "surround", "projector"].forEach((kind) => {
+    const button = elements[`${kind}Toggle`];
+    if (!button) return;
+    const control = getAudioSwitchControl(kind);
+    const linked = Boolean(control?.entityId);
+    const on = isSwitchOn(control);
+    button.classList.toggle("linked", linked);
+    button.classList.toggle("on", on);
+    button.classList.toggle("unlinked", !linked);
+    button.title = linked ? `${control.name || control.entityId}: ${on ? "On" : "Off"}` : `Hold to assign ${kind}`;
+    button.setAttribute("aria-pressed", on ? "true" : "false");
+  });
 }
 
 function upsertMediaPlayerEntity(entity) {
@@ -978,6 +1022,90 @@ async function fetchAudioControlStatesViaLocalBackend() {
     body: JSON.stringify({ url: baseUrl, token: ha.token, controls }),
   }, 9000);
   return payload.controls || {};
+}
+
+async function fetchHaEntitiesViaLocalBackend(domains = []) {
+  const ha = state.integrations.homeAssistant;
+  const baseUrl = getHaBaseUrl();
+  if (!baseUrl || !ha.token) throw new Error("Missing Home Assistant URL or token");
+  const payload = await fetchJsonWithTimeout("/api/ha/entities", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: baseUrl, token: ha.token, domains }),
+  }, 12000);
+  return payload.entities || [];
+}
+
+async function fetchAudioSwitchStatesViaLocalBackend() {
+  const ha = state.integrations.homeAssistant;
+  const baseUrl = getHaBaseUrl();
+  const controls = getAudioToneControls();
+  const hasControls = ["subwoofer", "surround", "projector"].some((kind) => controls[kind]?.entityId);
+  if (!baseUrl || !ha.token || !hasControls) return {};
+  const payload = await fetchJsonWithTimeout("/api/ha/audio/switch_states", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: baseUrl, token: ha.token, controls }),
+  }, 9000);
+  return payload.controls || {};
+}
+
+function applyAudioSwitchControls(controls = {}) {
+  const target = getAudioToneControls();
+  let changed = false;
+  ["subwoofer", "surround", "projector"].forEach((kind) => {
+    if (!Object.prototype.hasOwnProperty.call(controls, kind)) return;
+    const next = controls[kind];
+    if (!next) return;
+    const before = JSON.stringify(target[kind] || null);
+    target[kind] = next;
+    state.audio[kind] = isSwitchOn(next);
+    changed = changed || before !== JSON.stringify(next);
+  });
+  if (changed) saveConfig();
+  return changed;
+}
+
+async function sendAudioSwitchAction(kind) {
+  const control = getAudioSwitchControl(kind);
+  if (!control?.entityId) {
+    showToast(`Hold ${kind} to assign a switch`);
+    return null;
+  }
+  const ha = state.integrations.homeAssistant;
+  const baseUrl = getHaBaseUrl();
+  if (!baseUrl || !ha.token) {
+    showToast("Add Home Assistant config first");
+    return null;
+  }
+  if (audioMediaActionInFlight) {
+    showToast("Audio command in progress…");
+    return null;
+  }
+  audioMediaActionInFlight = true;
+  lastAudioUserInteractionAt = Date.now();
+  renderAudio();
+  try {
+    const payload = await fetchJsonWithTimeout("/api/ha/audio/switch/action", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: baseUrl, token: ha.token, entityId: control.entityId, action: "toggle" }),
+    }, 10000);
+    if (payload.control) {
+      getAudioToneControls()[kind] = payload.control;
+      state.audio[kind] = isSwitchOn(payload.control);
+      saveConfig();
+    }
+    scheduleAudioSync();
+    return payload.control;
+  } catch (error) {
+    addHaLog("error", `${titleCase(kind)} switch failed`, error.message || String(error));
+    showToast(`${titleCase(kind)} command failed`);
+    return null;
+  } finally {
+    audioMediaActionInFlight = false;
+    renderAudio();
+  }
 }
 
 async function loadAudioControlsForSelected(options = {}) {
@@ -1095,8 +1223,10 @@ async function pollHomeAssistantMediaPlayer(options = {}) {
       try {
         const controls = await fetchAudioControlStatesViaLocalBackend();
         if (controls) applyAudioControls(controls);
+        const switches = await fetchAudioSwitchStatesViaLocalBackend();
+        if (switches) applyAudioSwitchControls(switches);
       } catch (error) {
-        addHaLog("warn", "Audio tone sync skipped", error.message || String(error));
+        addHaLog("warn", "Audio control sync skipped", error.message || String(error));
       }
     }
 
@@ -1204,6 +1334,18 @@ function renderRoomTabs() {
   });
 }
 
+
+function applyBlindVisualVars(card, position) {
+  const pct = clamp(Number(position) || 0, 0, 100);
+  const openRatio = pct / 100;
+  const angle = Math.round(openRatio * 68);
+  card.style.setProperty("--blind-open", `${pct}%`);
+  card.style.setProperty("--blind-open-ratio", openRatio.toFixed(3));
+  card.style.setProperty("--blind-slat-angle", `${angle}deg`);
+  card.style.setProperty("--blind-light", (0.16 + openRatio * 0.48).toFixed(3));
+  card.style.setProperty("--blind-shadow", (0.72 - openRatio * 0.42).toFixed(3));
+}
+
 function renderBlinds() {
   const room = getActiveRoom();
   elements.blindRoomTitle.textContent = room.label;
@@ -1218,7 +1360,8 @@ function renderBlinds() {
     card.className = "blind-card";
     card.dataset.blindCard = blind.id;
     card.dataset.roomKey = state.blinds.room;
-    card.style.setProperty("--blind-open", `${blind.position}%`);
+    applyBlindVisualVars(card, blind.position);
+    const slats = Array.from({ length: 18 }, (_, index) => `<span class="blind-slat" style="--slat-index:${index}"></span>`).join("");
     card.innerHTML = `
       <div class="blind-top">
         <div>
@@ -1228,7 +1371,7 @@ function renderBlinds() {
       </div>
       <button class="blind-action primary" data-blind-id="${blind.id}" data-action="open">Open</button>
       <div class="shade-stage" data-blind-stage="${blind.id}" role="slider" aria-label="${blind.name} position" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${blind.position}" tabindex="0">
-        <div class="blind-window" aria-hidden="true"></div>
+        <div class="blind-window venetian-blinds" aria-hidden="true">${slats}</div>
       </div>
       <button class="blind-action close-blind" data-blind-id="${blind.id}" data-action="close">Close</button>
     `;
@@ -1244,7 +1387,7 @@ function setBlindPosition(blindId, position) {
   blind.position = clamp(Number(position), 0, 100);
   const card = document.querySelector(`[data-blind-card="${blindId}"]`);
   if (!card) return;
-  card.style.setProperty("--blind-open", `${blind.position}%`);
+  applyBlindVisualVars(card, blind.position);
   card.querySelector(".blind-percent").textContent = `${blind.position}%`;
   card.querySelector("[data-blind-stage]").setAttribute("aria-valuenow", String(blind.position));
   saveConfig();
@@ -1818,6 +1961,138 @@ function bindBlindInteractions() {
   elements.blindCards.addEventListener("pointercancel", finishShadeDrag);
 }
 
+function getAudioPickerMeta(kind) {
+  if (kind === "media") return { domain: "media_player", title: "Choose Media Device", help: "Select the media_player this card should control." };
+  if (["gain", "bass", "treble"].includes(kind)) return { domain: "number", title: `Assign ${titleCase(kind)}`, help: "Select the Home Assistant number entry for this control." };
+  if (["subwoofer", "surround", "projector"].includes(kind)) return { domain: "switch", title: `Assign ${titleCase(kind)}`, help: "Select the Home Assistant switch entry for this button." };
+  return { domain: "", title: "Assign Entity", help: "Select the Home Assistant entity for this control." };
+}
+
+function scoreEntityForSearch(entity, search) {
+  const q = String(search || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  if (!q) return 1;
+  const hay = `${entity.name || ""} ${entity.entityId || ""}`.toLowerCase();
+  const compact = hay.replace(/[^a-z0-9]+/g, "");
+  if (compact.includes(q)) return 10;
+  const words = q.match(/[a-z0-9]+/g) || [];
+  return words.every((w) => compact.includes(w)) ? 5 : 0;
+}
+
+function renderAudioEntityPicker() {
+  const picker = state.audioEntityPicker;
+  if (!elements.audioEntityPickerList) return;
+  const search = elements.audioEntitySearch?.value || picker.search || "";
+  const entities = (picker.entities || []).filter((entity) => scoreEntityForSearch(entity, search) > 0);
+  if (elements.audioEntityPickerTitle) elements.audioEntityPickerTitle.textContent = getAudioPickerMeta(picker.kind).title;
+  if (elements.audioEntityPickerHelp) elements.audioEntityPickerHelp.textContent = getAudioPickerMeta(picker.kind).help;
+  elements.audioEntityPickerList.innerHTML = entities.length ? entities.map((entity) => {
+    const stateText = entity.state !== undefined && entity.state !== null ? String(entity.state) : "";
+    const valueText = entity.domain === "number" && entity.value !== null && entity.value !== undefined ? `Value ${formatControlValue(entity.value)}` : stateText;
+    return `
+      <button class="audio-entity-row" data-audio-entity-id="${escapeHtml(entity.entityId)}">
+        <strong>${escapeHtml(entity.name || entity.entityId)}</strong>
+        <span>${escapeHtml(entity.entityId)}</span>
+        <em>${escapeHtml(valueText || entity.domain || "")}</em>
+      </button>
+    `;
+  }).join("") : `<div class="empty-state compact">No matching entities.</div>`;
+}
+
+async function openAudioEntityPicker(kind) {
+  audioPickerOpenedAt = Date.now();
+  const meta = getAudioPickerMeta(kind);
+  if (!meta.domain) return;
+  readHaFieldsFromScreen("audio");
+  if (!getHaBaseUrl() || !state.integrations.homeAssistant.token) {
+    showToast("Add Home Assistant config first");
+    openSettings();
+    showAudioHaView();
+    return;
+  }
+  state.audioEntityPicker = { kind, domain: meta.domain, entities: [], search: "" };
+  elements.audioEntityPickerOverlay?.classList.add("open");
+  elements.audioEntityPickerOverlay?.setAttribute("aria-hidden", "false");
+  if (elements.audioEntitySearch) {
+    elements.audioEntitySearch.value = "";
+    window.setTimeout(() => elements.audioEntitySearch.focus(), 80);
+  }
+  renderAudioEntityPicker();
+  try {
+    const entities = await fetchHaEntitiesViaLocalBackend([meta.domain]);
+    state.audioEntityPicker.entities = entities;
+    const ha = state.integrations.homeAssistant;
+    if (!ha.audioAvailableEntities) ha.audioAvailableEntities = { mediaPlayers: [], numbers: [], switches: [] };
+    if (meta.domain === "media_player") ha.audioAvailableEntities.mediaPlayers = entities;
+    if (meta.domain === "number") ha.audioAvailableEntities.numbers = entities;
+    if (meta.domain === "switch") ha.audioAvailableEntities.switches = entities;
+    renderAudioEntityPicker();
+  } catch (error) {
+    addHaLog("error", "Audio entity load failed", error.message || String(error));
+    showToast("Could not load Home Assistant entities");
+  }
+}
+
+function closeAudioEntityPicker() {
+  elements.audioEntityPickerOverlay?.classList.remove("open");
+  elements.audioEntityPickerOverlay?.setAttribute("aria-hidden", "true");
+  state.audioEntityPicker = { kind: null, domain: null, entities: [], search: "" };
+}
+
+function selectAudioEntity(entityId) {
+  const picker = state.audioEntityPicker;
+  const entity = (picker.entities || []).find((item) => item.entityId === entityId);
+  if (!entity) return;
+  const kind = picker.kind;
+  if (kind === "media") {
+    upsertMediaPlayerEntity(entity);
+    state.integrations.homeAssistant.selectedMediaPlayerId = entity.entityId;
+    applyMediaEntityState(entity);
+    closeAudioEntityPicker();
+    saveConfig({ toast: true });
+    loadAudioControlsForSelected({ quiet: true });
+    scheduleAudioSync();
+    renderAudio();
+    return;
+  }
+  if (["gain", "bass", "treble"].includes(kind)) {
+    const control = { ...entity, kind };
+    getAudioToneControls()[kind] = control;
+    state.audio[kind] = normalizeAudioControlValue(control, state.audio[kind]);
+    closeAudioEntityPicker();
+    saveConfig({ toast: true });
+    renderAudio();
+    return;
+  }
+  if (["subwoofer", "surround", "projector"].includes(kind)) {
+    getAudioToneControls()[kind] = entity;
+    state.audio[kind] = isSwitchOn(entity);
+    closeAudioEntityPicker();
+    saveConfig({ toast: true });
+    renderAudio();
+  }
+}
+
+function bindLongPress(target, callback, options = {}) {
+  if (!target) return;
+  let timer = null;
+  let startX = 0;
+  let startY = 0;
+  const delay = options.delay || 3000;
+  const cancel = () => { if (timer) window.clearTimeout(timer); timer = null; };
+  target.addEventListener("pointerdown", (event) => {
+    if (event.button !== undefined && event.button !== 0) return;
+    if (!target.matches("[data-audio-picker]") && event.target.closest("[data-audio-picker]")) return;
+    if (event.target.closest("input, select, textarea, button") && !event.target.closest("[data-audio-picker]")) return;
+    startX = event.clientX; startY = event.clientY;
+    timer = window.setTimeout(() => { timer = null; callback(event); }, delay);
+  });
+  target.addEventListener("pointermove", (event) => {
+    if (!timer) return;
+    if (Math.abs(event.clientX - startX) > 12 || Math.abs(event.clientY - startY) > 12) cancel();
+  });
+  ["pointerup", "pointercancel", "pointerleave"].forEach((name) => target.addEventListener(name, cancel));
+}
+
 function bindEvents() {
   document.querySelectorAll(".nav-pill").forEach((button) => button.addEventListener("click", () => gotoPage(button.dataset.goto)));
   document.getElementById("tempDown").addEventListener("click", () => adjustSetpoint(-1));
@@ -1881,6 +2156,25 @@ function bindEvents() {
   document.getElementById("prevTrack").addEventListener("click", () => changeTrack(-1));
   document.getElementById("nextTrack").addEventListener("click", () => changeTrack(1));
   elements.playPause.addEventListener("click", togglePlayback);
+  bindLongPress(document.querySelector(".audio-side-card"), () => openAudioEntityPicker("media"));
+  document.querySelectorAll("[data-audio-picker]").forEach((control) => {
+    const kind = control.dataset.audioPicker;
+    bindLongPress(control, (event) => { event.preventDefault(); event.stopPropagation(); openAudioEntityPicker(kind); });
+  });
+  ["subwoofer", "surround", "projector"].forEach((kind) => {
+    elements[`${kind}Toggle`]?.addEventListener("click", () => {
+      if (Date.now() - audioPickerOpenedAt < 900) return;
+      sendAudioSwitchAction(kind);
+    });
+  });
+  elements.audioEntityPickerClose?.addEventListener("click", closeAudioEntityPicker);
+  document.querySelectorAll("[data-close-audio-entity-picker]").forEach((el) => el.addEventListener("click", closeAudioEntityPicker));
+  elements.audioEntitySearch?.addEventListener("input", () => { state.audioEntityPicker.search = elements.audioEntitySearch.value; renderAudioEntityPicker(); });
+  elements.audioEntityPickerList?.addEventListener("click", (event) => {
+    const row = event.target.closest("[data-audio-entity-id]");
+    if (!row) return;
+    selectAudioEntity(row.dataset.audioEntityId);
+  });
   ["volume", "gain", "bass", "treble"].forEach((name) => {
     const slider = document.getElementById(`${name}Slider`);
     if (!slider) return;
@@ -1955,7 +2249,7 @@ function bindEvents() {
     if (event.key === "ArrowLeft") goRelative(-1);
     if (event.key === "+" || event.key === "=") adjustSetpoint(1);
     if (event.key === "-" || event.key === "_") adjustSetpoint(-1);
-    if (event.key === "Escape") { closeSettings(); closeEntityPicker(); }
+    if (event.key === "Escape") { closeSettings(); closeEntityPicker(); closeAudioEntityPicker(); }
   });
 }
 

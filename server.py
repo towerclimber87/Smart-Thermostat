@@ -287,6 +287,77 @@ def _fetch_ha_media_state(ha_url: str, token: str, entity_id: str) -> dict:
     return _normalize_media_player_item(ha_url, item)
 
 
+def _normalize_generic_entity(item: dict) -> dict:
+    attrs = item.get("attributes") or {}
+    entity_id = str(item.get("entity_id", ""))
+    domain = entity_id.split(".", 1)[0] if "." in entity_id else ""
+    payload = {
+        "entityId": entity_id,
+        "domain": domain,
+        "name": attrs.get("friendly_name") or entity_id,
+        "state": item.get("state") or "unknown",
+    }
+    if domain == "number":
+        payload.update(_normalize_number_control(item))
+        payload["domain"] = domain
+    if domain == "media_player":
+        attrs = item.get("attributes") or {}
+        payload.update({
+            "volumeLevel": attrs.get("volume_level"),
+            "source": attrs.get("source") or "",
+            "sourceList": attrs.get("source_list") or [],
+            "mediaTitle": attrs.get("media_title") or "",
+            "mediaArtist": attrs.get("media_artist") or "",
+            "mediaAlbum": attrs.get("media_album_name") or attrs.get("media_album") or "",
+        })
+        payload["domain"] = domain
+    return payload
+
+
+def _fetch_ha_entities(ha_url: str, token: str, domains: list[str] | None = None) -> list[dict]:
+    wanted = {str(domain).strip().lower() for domain in (domains or []) if str(domain).strip()}
+    states = _ha_json_request(ha_url, token, "GET", "/api/states")
+    if not isinstance(states, list):
+        return []
+    entities = []
+    for item in states:
+        entity_id = str(item.get("entity_id", ""))
+        domain = entity_id.split(".", 1)[0] if "." in entity_id else ""
+        if wanted and domain not in wanted:
+            continue
+        entities.append(_normalize_generic_entity(item))
+    entities.sort(key=lambda item: (item.get("domain", ""), str(item.get("name") or item.get("entityId") or "").lower()))
+    return entities
+
+
+def _fetch_ha_switch_control_states(ha_url: str, token: str, controls: dict) -> dict:
+    refreshed: dict[str, dict | None] = {}
+    for kind in ("subwoofer", "surround", "projector"):
+        entity_id = str((controls.get(kind) or {}).get("entityId") or "").strip()
+        if not entity_id.startswith("switch."):
+            refreshed[kind] = None
+            continue
+        item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
+        refreshed[kind] = _normalize_generic_entity(item)
+    return refreshed
+
+
+def _call_switch_service(ha_url: str, token: str, entity_id: str, action: str) -> dict:
+    entity_id = (entity_id or "").strip()
+    if not entity_id.startswith("switch."):
+        raise ValueError("Entity must be a switch.* entity")
+    action = (action or "toggle").strip().lower()
+    service = {"on": "turn_on", "off": "turn_off", "toggle": "toggle"}.get(action)
+    if not service:
+        raise ValueError("Unsupported switch action")
+    _ha_json_request(ha_url, token, "POST", f"/api/services/switch/{service}", {"entity_id": entity_id})
+    try:
+        item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
+        return _normalize_generic_entity(item)
+    except Exception:
+        return {"entityId": entity_id, "name": entity_id, "domain": "switch", "state": action}
+
+
 
 
 def _normalize_number_control(item: dict, kind: str | None = None) -> dict:
@@ -531,7 +602,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action"}:
+        if path not in {"/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action"}:
             self.send_error(404, "Not found")
             return
 
@@ -542,6 +613,14 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
             if path == "/api/ha/covers":
                 covers = _fetch_ha_covers(payload.get("url", ""), payload.get("token", ""))
                 return _json(self, 200, {"ok": True, "covers": covers, "count": len(covers)})
+
+            if path == "/api/ha/entities":
+                entities = _fetch_ha_entities(
+                    payload.get("url", ""),
+                    payload.get("token", ""),
+                    payload.get("domains", []),
+                )
+                return _json(self, 200, {"ok": True, "entities": entities, "count": len(entities)})
 
             if path == "/api/ha/cover/states":
                 covers = _fetch_ha_cover_states_for_entities(
@@ -580,12 +659,29 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                 )
                 return _json(self, 200, {"ok": True, "controls": controls})
 
+            if path == "/api/ha/audio/switch_states":
+                controls = _fetch_ha_switch_control_states(
+                    payload.get("url", ""),
+                    payload.get("token", ""),
+                    payload.get("controls", {}),
+                )
+                return _json(self, 200, {"ok": True, "controls": controls})
+
             if path == "/api/ha/audio/control/action":
                 control = _call_number_service(
                     payload.get("url", ""),
                     payload.get("token", ""),
                     payload.get("entityId", ""),
                     payload.get("value"),
+                )
+                return _json(self, 200, {"ok": True, "control": control})
+
+            if path == "/api/ha/audio/switch/action":
+                control = _call_switch_service(
+                    payload.get("url", ""),
+                    payload.get("token", ""),
+                    payload.get("entityId", ""),
+                    payload.get("action", "toggle"),
                 )
                 return _json(self, 200, {"ok": True, "control": control})
 

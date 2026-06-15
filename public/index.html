@@ -135,21 +135,56 @@
                 </div>
               </div>
 
-              <div class="transport-controls media-transport">
-                <button id="prevTrack" class="transport" aria-label="Previous track">⏮</button>
-                <button id="playPause" class="transport primary" aria-label="Play or pause">▶</button>
-                <button id="nextTrack" class="transport" aria-label="Next track">⏭</button>
+              <div class="audio-action-row">
+                <button id="subwooferToggle" class="audio-feature-toggle" data-audio-switch="subwoofer" data-audio-picker="subwoofer" aria-label="Toggle subwoofer">
+                  <span class="feature-icon subwoofer-icon" aria-hidden="true">
+                    <svg viewBox="0 0 64 64" focusable="false">
+                      <rect class="cabinet" x="12" y="6" width="40" height="52" rx="8"></rect>
+                      <circle class="woofer-ring" cx="32" cy="36" r="15"></circle>
+                      <circle class="woofer-core" cx="32" cy="36" r="6"></circle>
+                      <circle class="tweeter" cx="32" cy="18" r="4"></circle>
+                    </svg>
+                  </span><strong>Sub</strong>
+                </button>
+                <div class="transport-controls media-transport">
+                  <button id="prevTrack" class="transport" aria-label="Previous track">⏮</button>
+                  <button id="playPause" class="transport primary" aria-label="Play or pause">▶</button>
+                  <button id="nextTrack" class="transport" aria-label="Next track">⏭</button>
+                </div>
+                <button id="surroundToggle" class="audio-feature-toggle" data-audio-switch="surround" data-audio-picker="surround" aria-label="Toggle surround sound">
+                  <span class="feature-icon surround-icon" aria-hidden="true">
+                    <svg viewBox="0 0 72 64" focusable="false">
+                      <circle class="listener" cx="36" cy="34" r="7"></circle>
+                      <path class="arc arc-left" d="M22 18c-8 5-13 11-13 18s5 13 13 18"></path>
+                      <path class="arc arc-right" d="M50 18c8 5 13 11 13 18s-5 13-13 18"></path>
+                      <rect class="speaker speaker-left" x="6" y="8" width="10" height="14" rx="3"></rect>
+                      <rect class="speaker speaker-right" x="56" y="8" width="10" height="14" rx="3"></rect>
+                      <rect class="speaker speaker-rear-left" x="10" y="46" width="10" height="12" rx="3"></rect>
+                      <rect class="speaker speaker-rear-right" x="52" y="46" width="10" height="12" rx="3"></rect>
+                    </svg>
+                  </span><strong>Surround</strong>
+                </button>
               </div>
 
               <div class="audio-volume-card">
                 <label for="volumeSlider">Volume <strong><span id="volumeValue">42</span>%</strong></label>
                 <input id="volumeSlider" type="range" min="0" max="100" value="42" />
+                <button id="projectorToggle" class="audio-projector-button" data-audio-switch="projector" data-audio-picker="projector" aria-label="Toggle projector">
+                  <span class="projector-icon" aria-hidden="true">
+                    <svg viewBox="0 0 72 42" focusable="false">
+                      <rect x="8" y="12" width="38" height="20" rx="5"></rect>
+                      <circle cx="52" cy="22" r="8"></circle>
+                      <path d="M18 34h20m-10 0v6"></path>
+                      <path class="beam" d="M61 18l9-5v18l-9-5"></path>
+                    </svg>
+                  </span>
+                </button>
               </div>
 
               <div class="audio-tone-grid">
-                <div class="tone-control"><label for="gainSlider">Gain <strong id="gainValue">0</strong></label><input id="gainSlider" type="range" min="-10" max="10" value="0" /></div>
-                <div class="tone-control"><label for="bassSlider">Bass <strong id="bassValue">2</strong></label><input id="bassSlider" type="range" min="-10" max="10" value="2" /></div>
-                <div class="tone-control"><label for="trebleSlider">Treble <strong id="trebleValue">4</strong></label><input id="trebleSlider" type="range" min="-10" max="10" value="4" /></div>
+                <div class="tone-control" data-audio-picker="gain"><label for="gainSlider">Gain <strong id="gainValue">0</strong></label><input id="gainSlider" type="range" min="-10" max="10" value="0" /></div>
+                <div class="tone-control" data-audio-picker="bass"><label for="bassSlider">Bass <strong id="bassValue">2</strong></label><input id="bassSlider" type="range" min="-10" max="10" value="2" /></div>
+                <div class="tone-control" data-audio-picker="treble"><label for="trebleSlider">Treble <strong id="trebleValue">4</strong></label><input id="trebleSlider" type="range" min="-10" max="10" value="4" /></div>
               </div>
             </div>
           </div>
@@ -257,22 +292,22 @@
 
         <div id="audioSettingsView" class="settings-view" hidden>
           <div id="audioSetupView" class="settings-subview audio-setup-subview">
-            <div class="setup-actions-row audio-setup-actions">
-              <button id="loadMediaPlayers" class="scene-btn room-open">Load Media Devices</button>
-              <button id="openAudioHaConfig" class="scene-btn secondary">Home Assistant Config</button>
-            </div>
-
-            <section class="audio-device-picker-card">
-              <div class="ha-entity-head">
-                <div>
-                  <p class="eyebrow">Media Players</p>
-                  <h3>Choose Device</h3>
-                </div>
-                <span id="mediaPlayerCount" class="entity-count-pill">0</span>
+            <section class="audio-setup-card compact-audio-setup">
+              <div>
+                <p class="eyebrow">Audio Setup</p>
+                <h3>Press and hold a control to assign it.</h3>
               </div>
-              <div id="selectedMediaDeviceText" class="selected-device-line">No media player selected.</div>
-              <div id="mediaPlayerList" class="media-player-list"></div>
+              <button id="openAudioHaConfig" class="scene-btn secondary compact-config-button">Home Assistant Config</button>
             </section>
+            <section class="audio-assignment-help">
+              <div><strong>Media card</strong><span>Hold to choose the media player.</span></div>
+              <div><strong>Gain / Bass / Treble</strong><span>Hold to assign number entries.</span></div>
+              <div><strong>Sub / Surround / Projector</strong><span>Hold to assign switch entries.</span></div>
+            </section>
+            <div id="mediaPlayerCount" class="hidden-count" hidden>0</div>
+            <div id="selectedMediaDeviceText" class="selected-device-line" hidden>No media player selected.</div>
+            <div id="mediaPlayerList" class="media-player-list" hidden></div>
+            <button id="loadMediaPlayers" class="hidden-loader" hidden>Load Media Devices</button>
           </div>
 
           <div id="audioHaView" class="settings-subview ha-config-subview audio-ha-subview" hidden>
@@ -288,9 +323,8 @@
                   <textarea id="audioHaTokenInput" rows="3" spellcheck="false"></textarea>
                 </label>
               </div>
-              <div class="setup-actions-row compact-actions audio-ha-actions">
+              <div class="setup-actions-row compact-actions audio-ha-actions single-action">
                 <button id="saveAudioHaConfig" class="scene-btn room-open">Save</button>
-                <button id="loadAudioMediaPlayers" class="scene-btn secondary">Load Devices</button>
               </div>
             </section>
           </div>
@@ -314,6 +348,25 @@
         </div>
         <div class="entity-picker-help">Long-press a blind, then select the matching cover entity.</div>
         <div id="entityPickerList" class="entity-picker-list"></div>
+      </aside>
+    </section>
+
+    <section id="audioEntityPickerOverlay" class="settings-overlay entity-overlay audio-picker-overlay" aria-hidden="true">
+      <div class="settings-backdrop" data-close-audio-entity-picker></div>
+      <aside class="settings-sheet entity-sheet audio-entity-sheet" role="dialog" aria-modal="true" aria-labelledby="audioEntityPickerTitle">
+        <div class="settings-header compact-picker-header">
+          <div>
+            <p id="audioEntityPickerEyebrow" class="eyebrow">Home Assistant</p>
+            <h2 id="audioEntityPickerTitle">Assign Audio Control</h2>
+          </div>
+          <button id="audioEntityPickerClose" class="icon-button close" aria-label="Close audio entity picker">×</button>
+        </div>
+        <label class="entity-search-field">
+          <span>Search</span>
+          <input id="audioEntitySearch" type="search" autocomplete="off" spellcheck="false" placeholder="Type to filter…" />
+        </label>
+        <div id="audioEntityPickerHelp" class="entity-picker-help">Choose the Home Assistant entity for this control.</div>
+        <div id="audioEntityPickerList" class="entity-picker-list audio-entity-picker-list"></div>
       </aside>
     </section>
 
