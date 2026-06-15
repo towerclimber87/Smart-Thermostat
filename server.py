@@ -26,6 +26,7 @@ DATA_DIR = ROOT / "data"
 VERSION_FILE = ROOT / "VERSION"
 THERMOSTAT_STATE_FILE = DATA_DIR / "thermostat-state.json"
 PANEL_CONFIG_FILE = DATA_DIR / "panel-config.json"
+APP_STARTED_AT = time.time()
 
 
 def _json(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> None:
@@ -377,13 +378,42 @@ def _read_version_value() -> str:
     try:
         version = VERSION_FILE.read_text(encoding="utf-8").strip()
     except OSError:
-        version = "0.2.6"
-    return version or "0.2.6"
+        version = "0.3.0"
+    return version or "0.3.0"
+
+
+def _format_duration(seconds: float | int | None) -> str:
+    try:
+        total = max(0, int(float(seconds or 0)))
+    except (TypeError, ValueError):
+        total = 0
+    days, rem = divmod(total, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, _ = divmod(rem, 60)
+    parts: list[str] = []
+    if days:
+        parts.append(f"{days}d")
+    if hours or days:
+        parts.append(f"{hours}h")
+    parts.append(f"{minutes}m")
+    return " ".join(parts)
+
+
+def _system_uptime_seconds() -> float:
+    try:
+        raw = Path("/proc/uptime").read_text(encoding="utf-8").split()[0]
+        return float(raw)
+    except (OSError, IndexError, ValueError):
+        return 0.0
 
 
 def _system_info_payload() -> dict:
     thermostat = _read_thermostat_record()["thermostat"]
     thermostat_name = str(thermostat.get("name") or "IHA Thermostat").strip() or "IHA Thermostat"
+    system_uptime_seconds = _system_uptime_seconds()
+    app_uptime_seconds = max(0, time.time() - APP_STARTED_AT)
+    system_uptime = _format_duration(system_uptime_seconds)
+    app_uptime = _format_duration(app_uptime_seconds)
     return {
         "ok": True,
         "ipAddress": _local_ip_address(),
@@ -391,6 +421,11 @@ def _system_info_payload() -> dict:
         "version": _read_version_value(),
         "name": thermostat_name,
         "thermostatName": thermostat_name,
+        "uptime": f"System {system_uptime} • App {app_uptime}",
+        "systemUptime": system_uptime,
+        "appUptime": app_uptime,
+        "systemUptimeSeconds": int(system_uptime_seconds),
+        "appUptimeSeconds": int(app_uptime_seconds),
     }
 
 
@@ -460,6 +495,19 @@ def _schedule_service_restart() -> None:
         subprocess.run(["sudo", "systemctl", "restart", service_name], check=False)
 
     threading.Thread(target=_restart, daemon=True).start()
+
+
+def _schedule_server_reboot() -> None:
+    def _reboot() -> None:
+        time.sleep(1.5)
+        subprocess.run(["sudo", "-n", "systemctl", "reboot"], check=False)
+
+    threading.Thread(target=_reboot, daemon=True).start()
+
+
+def _reboot_payload() -> dict:
+    _schedule_server_reboot()
+    return {"ok": True, "message": "Restart command sent. The server will reboot now."}
 
 
 def _fetch_update_payload() -> dict:
@@ -1395,7 +1443,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action"}:
             self.send_error(404, "Not found")
             return
 
@@ -1412,6 +1460,10 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
             if path == "/api/system/fetch-update":
                 result = _fetch_update_payload()
+                return _json(self, 200 if result.get("ok") else 500, result)
+
+            if path == "/api/system/reboot":
+                result = _reboot_payload()
                 return _json(self, 200 if result.get("ok") else 500, result)
 
             if path in {"/api/thermostat/status", "/api/thermostat/control"}:

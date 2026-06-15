@@ -256,7 +256,7 @@ const state = {
   roomControlEntityPicker: { roomKey: null, controlId: null },
   audioEntityPicker: { kind: null, domain: null, entities: [], search: "" },
   diagnostics: { haLogs: [] },
-  systemInfo: { ipAddress: "", version: "", host: "", thermostatName: "" },
+  systemInfo: { ipAddress: "", version: "", host: "", thermostatName: "", uptime: "", systemUptime: "", appUptime: "" },
 };
 
 const elements = {
@@ -323,7 +323,9 @@ const elements = {
   unitNameValue: document.getElementById("unitNameValue"),
   unitIpValue: document.getElementById("unitIpValue"),
   unitVersionValue: document.getElementById("unitVersionValue"),
+  unitUptimeValue: document.getElementById("unitUptimeValue"),
   fetchUpdateButton: document.getElementById("fetchUpdateButton"),
+  restartServerButton: document.getElementById("restartServerButton"),
   fetchUpdateStatus: document.getElementById("fetchUpdateStatus"),
   dialMinLabel: document.getElementById("dialMinLabel"),
   dialMaxLabel: document.getElementById("dialMaxLabel"),
@@ -966,8 +968,10 @@ function renderSystemInfo() {
   const version = state.systemInfo.version || "Unavailable";
   const name = state.systemInfo.thermostatName || getThermostatName();
   if (elements.unitNameValue) elements.unitNameValue.textContent = name;
+  const uptime = state.systemInfo.uptime || state.systemInfo.systemUptime || "Unavailable";
   if (elements.unitIpValue) elements.unitIpValue.textContent = ip;
   if (elements.unitVersionValue) elements.unitVersionValue.textContent = version;
+  if (elements.unitUptimeValue) elements.unitUptimeValue.textContent = uptime;
 }
 
 async function fetchSystemInfo() {
@@ -980,6 +984,9 @@ async function fetchSystemInfo() {
       version: payload.version || "",
       host: payload.host || "",
       thermostatName: payload.thermostatName || payload.name || getThermostatName(),
+      uptime: payload.uptime || payload.systemUptime || "",
+      systemUptime: payload.systemUptime || "",
+      appUptime: payload.appUptime || "",
     };
   } catch (error) {
     state.systemInfo = {
@@ -987,6 +994,9 @@ async function fetchSystemInfo() {
       ipAddress: state.systemInfo.ipAddress || window.location.hostname || "Unavailable",
       version: state.systemInfo.version || "Unavailable",
       thermostatName: state.systemInfo.thermostatName || getThermostatName(),
+      uptime: state.systemInfo.uptime || "Unavailable",
+      systemUptime: state.systemInfo.systemUptime || "",
+      appUptime: state.systemInfo.appUptime || "",
     };
     console.warn("Unable to load system info", error);
   } finally {
@@ -1032,8 +1042,36 @@ async function fetchPanelUpdate() {
   }
 }
 
+async function restartPanelServer() {
+  if (!elements.restartServerButton) return;
+  const confirmed = window.confirm("Restart the LivingroomClimate server now?");
+  if (!confirmed) return;
+  elements.restartServerButton.disabled = true;
+  if (elements.fetchUpdateButton) elements.fetchUpdateButton.disabled = true;
+  setFetchUpdateStatus("Restarting server…", "info");
+  try {
+    const response = await fetch(`/api/system/reboot?_=${Date.now()}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || `Restart returned ${response.status}`);
+    }
+    setFetchUpdateStatus(payload.message || "Restart command sent. The panel will go offline briefly.", "success");
+    showToast("Restart command sent");
+  } catch (error) {
+    const message = error.message || String(error);
+    setFetchUpdateStatus(message, "error");
+    showToast("Restart failed");
+    elements.restartServerButton.disabled = false;
+    if (elements.fetchUpdateButton) elements.fetchUpdateButton.disabled = false;
+  }
+}
+
 function openThermostatInfo() {
-  state.systemInfo = { ...state.systemInfo, thermostatName: state.systemInfo.thermostatName || getThermostatName(), ipAddress: state.systemInfo.ipAddress || "Loading…", version: state.systemInfo.version || "Loading…" };
+  state.systemInfo = { ...state.systemInfo, thermostatName: state.systemInfo.thermostatName || getThermostatName(), ipAddress: state.systemInfo.ipAddress || "Loading…", version: state.systemInfo.version || "Loading…", uptime: state.systemInfo.uptime || "Loading…" };
   renderSystemInfo();
   setOverlayOpen(elements.thermostatInfoOverlay, true);
   fetchSystemInfo();
@@ -4725,6 +4763,7 @@ function bindEvents() {
   elements.thermostatInfoButton?.addEventListener("click", openThermostatInfo);
   elements.thermostatInfoClose?.addEventListener("click", closeThermostatInfo);
   elements.fetchUpdateButton?.addEventListener("click", fetchPanelUpdate);
+  elements.restartServerButton?.addEventListener("click", restartPanelServer);
   document.querySelectorAll("[data-close-thermostat-info]").forEach((el) => el.addEventListener("click", closeThermostatInfo));
   elements.lightColorPickerClose?.addEventListener("click", closeLightColorPicker);
   document.querySelectorAll("[data-close-light-color]").forEach((el) => el.addEventListener("click", closeLightColorPicker));

@@ -4438,16 +4438,24 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   }
 }
 
-/* 2026-06-15 local update button in thermostat info popup */
-.panel-info-update-row {
+/* 2026-06-15 local update/restart buttons in thermostat info popup */
+.panel-info-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
-}
-.fetch-update-btn {
-  width: 100%;
-  min-height: 54px;
   margin-top: 2px;
 }
-.fetch-update-btn:disabled {
+.fetch-update-btn,
+.restart-server-btn {
+  width: 100%;
+  min-height: 54px;
+}
+.restart-server-btn {
+  background: linear-gradient(135deg, rgba(255,190,96,.96), rgba(255,122,94,.94));
+  color: #261008;
+}
+.fetch-update-btn:disabled,
+.restart-server-btn:disabled {
   opacity: .68;
   cursor: wait;
 }
