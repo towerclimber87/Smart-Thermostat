@@ -12,6 +12,10 @@ let haSyncLastError = "";
 let haAudioSyncInFlight = false;
 let haAudioSyncLastError = "";
 let audioVolumeDebounce = null;
+let audioTrackCommandLock = null;
+let audioPlaybackLockedUntil = 0;
+const AUDIO_TRACK_ACK_TIMEOUT_MS = 6500;
+const AUDIO_PLAYBACK_LOCK_MS = 1400;
 let lastBlindUserInteractionAt = 0;
 let lastAudioUserInteractionAt = 0;
 
@@ -81,6 +85,9 @@ const state = {
     artist: "",
     album: "",
     artUrl: "",
+    source: "",
+    sourceList: [],
+    mediaContentId: "",
     mediaPosition: null,
     mediaDuration: null,
     tracks: [],
@@ -146,6 +153,11 @@ const elements = {
   trackAlbum: document.getElementById("trackAlbum"),
   trackProgress: document.getElementById("trackProgress"),
   playPause: document.getElementById("playPause"),
+  prevTrack: document.getElementById("prevTrack"),
+  nextTrack: document.getElementById("nextTrack"),
+  audioSourceCard: document.getElementById("audioSourceCard"),
+  audioSourceSelect: document.getElementById("audioSourceSelect"),
+  audioSourceValue: document.getElementById("audioSourceValue"),
   albumArt: document.getElementById("albumArt"),
   albumInitials: document.getElementById("albumInitials"),
   audioPlayerName: document.getElementById("audioPlayerName"),
@@ -606,6 +618,41 @@ function initialsFromName(value) {
   return parts.map((part) => part.charAt(0).toUpperCase()).join("") || "♪";
 }
 
+function normalizeSourceList(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).filter(Boolean);
+  if (typeof value === "string" && value.trim()) return [value.trim()];
+  return [];
+}
+
+function mediaSignatureFromValues(title, contentId, artUrl) {
+  return [title || "", contentId || "", artUrl || ""].join("|");
+}
+
+function mediaSignatureFromEntity(entity) {
+  return mediaSignatureFromValues(entity?.mediaTitle, entity?.mediaContentId, entity?.pictureUrl);
+}
+
+function getCurrentAudioSignature() {
+  return mediaSignatureFromValues(state.audio.title, state.audio.mediaContentId, state.audio.artUrl);
+}
+
+function isAudioTrackLocked() {
+  if (!audioTrackCommandLock) return false;
+  if (Date.now() > audioTrackCommandLock.until) {
+    audioTrackCommandLock = null;
+    return false;
+  }
+  return true;
+}
+
+function maybeResolveAudioTrackLock(entity = null) {
+  if (!audioTrackCommandLock) return;
+  const signature = entity ? mediaSignatureFromEntity(entity) : getCurrentAudioSignature();
+  if (Date.now() > audioTrackCommandLock.until || (signature && signature !== audioTrackCommandLock.before)) {
+    audioTrackCommandLock = null;
+  }
+}
+
 function applyMediaEntityState(entity) {
   if (!entity?.entityId) return;
   state.audio.entityId = entity.entityId;
@@ -617,15 +664,18 @@ function applyMediaEntityState(entity) {
   state.audio.album = entity.mediaAlbum || "";
   state.audio.artUrl = entity.pictureUrl || "";
   state.audio.source = entity.source || "";
+  state.audio.sourceList = normalizeSourceList(entity.sourceList);
+  state.audio.mediaContentId = entity.mediaContentId || "";
   state.audio.volume = normalizeVolume(entity, state.audio.volume);
   state.audio.mediaPosition = entity.mediaPosition ?? null;
   state.audio.mediaDuration = entity.mediaDuration ?? null;
+  maybeResolveAudioTrackLock(entity);
 }
 
 function renderAudio() {
   const a = state.audio;
   const selected = getSelectedMediaPlayer();
-  if (selected) applyMediaEntityState(selected);
+  maybeResolveAudioTrackLock();
 
   const hasDevice = Boolean(state.integrations.homeAssistant.selectedMediaPlayerId || a.entityId);
   const deviceName = a.entityName || selected?.name || "No device selected";
@@ -652,10 +702,31 @@ function renderAudio() {
   }
   if (elements.albumInitials) elements.albumInitials.textContent = hasDevice ? initialsFromName(title || deviceName) : "♪";
 
+  const trackLocked = isAudioTrackLocked();
+  if (elements.prevTrack) elements.prevTrack.disabled = trackLocked;
+  if (elements.nextTrack) elements.nextTrack.disabled = trackLocked;
+  if (elements.playPause) elements.playPause.disabled = Date.now() < audioPlaybackLockedUntil;
+
+  const sourceList = normalizeSourceList(a.sourceList || selected?.sourceList);
+  if (elements.audioSourceCard && elements.audioSourceSelect) {
+    const showSources = hasDevice && sourceList.length > 0;
+    elements.audioSourceCard.hidden = !showSources;
+    if (showSources) {
+      const selectedSource = a.source || sourceList[0] || "";
+      if (document.activeElement !== elements.audioSourceSelect) {
+        elements.audioSourceSelect.innerHTML = sourceList.map((source) =>
+          `<option value="${escapeHtml(source)}" ${source === selectedSource ? "selected" : ""}>${escapeHtml(source)}</option>`
+        ).join("");
+        elements.audioSourceSelect.value = selectedSource;
+      }
+      if (elements.audioSourceValue) elements.audioSourceValue.textContent = selectedSource || "—";
+    }
+  }
+
   ["volume", "gain", "bass", "treble"].forEach((name) => {
     const slider = document.getElementById(`${name}Slider`);
     const value = document.getElementById(`${name}Value`);
-    if (slider) slider.value = a[name];
+    if (slider && document.activeElement !== slider) slider.value = a[name];
     if (value) value.textContent = a[name];
   });
 }
@@ -679,12 +750,19 @@ function renderMediaPlayerList() {
     elements.selectedMediaDeviceText.textContent = selected ? `Selected: ${selected.name}` : "No media player selected.";
   }
   elements.mediaPlayerList.innerHTML = players.length
-    ? players.map((entity) => `
-      <button class="media-player-row ${entity.entityId === selectedId ? "active" : ""}" data-media-player-id="${escapeHtml(entity.entityId)}">
-        <div><strong>${escapeHtml(entity.name || entity.entityId)}</strong><span>${escapeHtml(entity.mediaTitle || entity.entityId)}</span></div>
-        <em class="media-player-state">${escapeHtml(entity.state || "idle")}</em>
-      </button>
-    `).join("")
+    ? players.map((entity) => {
+      const meta = entity.mediaTitle || entity.source || "No active media";
+      return `
+        <button class="media-player-row ${entity.entityId === selectedId ? "active" : ""}" data-media-player-id="${escapeHtml(entity.entityId)}">
+          <div class="media-player-main">
+            <strong>${escapeHtml(entity.name || entity.entityId)}</strong>
+            <span class="media-player-entity">${escapeHtml(entity.entityId)}</span>
+            <span class="media-player-meta">${escapeHtml(meta)}</span>
+          </div>
+          <em class="media-player-state">${escapeHtml(entity.state || "idle")}</em>
+        </button>
+      `;
+    }).join("")
     : `<div class="empty-state compact">No media devices loaded yet.</div>`;
 }
 
@@ -829,6 +907,12 @@ async function sendAudioAction(action, value = null) {
   try {
     const entityState = await callMediaActionViaLocalBackend(action, value);
     if (entityState?.entityId) {
+      if (action === "volume" && value !== null && value !== undefined) {
+        entityState.volumeLevel = clamp(Number(value), 0, 100) / 100;
+      }
+      if (action === "source" && value) {
+        entityState.source = String(value);
+      }
       upsertMediaPlayerEntity(entityState);
       applyMediaEntityState(entityState);
       saveConfig();
@@ -844,11 +928,26 @@ async function sendAudioAction(action, value = null) {
   }
 }
 
-function changeTrack(delta) {
-  sendAudioAction(delta > 0 ? "next" : "previous");
+async function changeTrack(delta) {
+  if (isAudioTrackLocked()) {
+    showToast("Changing track…");
+    return;
+  }
+  const before = getCurrentAudioSignature();
+  audioTrackCommandLock = { before, until: Date.now() + AUDIO_TRACK_ACK_TIMEOUT_MS };
+  renderAudio();
+  const result = await sendAudioAction(delta > 0 ? "next" : "previous");
+  if (!result) audioTrackCommandLock = null;
+  maybeResolveAudioTrackLock(result);
+  renderAudio();
 }
 function togglePlayback() {
-  sendAudioAction("play_pause");
+  if (Date.now() < audioPlaybackLockedUntil) return;
+  audioPlaybackLockedUntil = Date.now() + AUDIO_PLAYBACK_LOCK_MS;
+  renderAudio();
+  sendAudioAction("play_pause").finally(() => {
+    window.setTimeout(() => { renderAudio(); }, AUDIO_PLAYBACK_LOCK_MS);
+  });
 }
 
 function renderRoomTabs() {
@@ -1504,6 +1603,13 @@ function bindEvents() {
     const row = event.target.closest("[data-media-player-id]");
     if (row) selectMediaPlayer(row.dataset.mediaPlayerId);
   });
+  elements.audioSourceSelect?.addEventListener("change", (event) => {
+    const source = event.target.value;
+    state.audio.source = source;
+    lastAudioUserInteractionAt = Date.now();
+    renderAudio();
+    sendAudioAction("source", source);
+  });
 
   elements.roomConfigList.addEventListener("input", (event) => {
     const roomNameInput = event.target.closest("[data-room-name-input]");
@@ -1590,6 +1696,7 @@ function mockSensorDrift() {
   renderThermostat();
 }
 function mockTrackProgress() {
+  if (state.integrations.homeAssistant.selectedMediaPlayerId) return;
   if (!state.audio.playing) return;
   state.audio.progress += 1;
   if (state.audio.progress > 100) changeTrack(1);

@@ -1126,3 +1126,101 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   .audio-art { width: 220px; }
   .audio-side-card { grid-template-rows: auto auto auto auto; }
 }
+
+
+/* 2026-06-15 audio control polish: live volume, source selector, wrapped media devices, command lock */
+.audio-source-card {
+  border-radius: 22px;
+  padding: 14px 16px;
+  background: rgba(77,238,255,.055);
+  border: 1px solid rgba(77,238,255,.12);
+}
+.audio-source-card[hidden] { display: none !important; }
+.audio-source-card label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  color: rgba(213,229,245,.84);
+  font-weight: 950;
+  margin-bottom: 10px;
+}
+.audio-source-card select {
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 16px;
+  padding: 0 14px;
+  background: rgba(2, 8, 18, .48);
+  color: rgba(240, 248, 255, .95);
+  font-weight: 900;
+  outline: none;
+}
+.media-transport .transport:disabled {
+  opacity: .46;
+  cursor: wait;
+  filter: grayscale(.2);
+}
+.audio-volume-card input,
+.tone-control input {
+  touch-action: none;
+  cursor: pointer;
+}
+.media-player-list {
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+}
+.media-player-row {
+  min-height: 118px;
+  align-items: stretch;
+  overflow: hidden;
+}
+.media-player-main {
+  min-width: 0;
+  display: grid;
+  align-content: center;
+  gap: 5px;
+}
+.media-player-row strong,
+.media-player-row span {
+  min-width: 0;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.12;
+}
+.media-player-row strong {
+  color: rgba(244,250,255,.95);
+  font-size: .98rem;
+}
+.media-player-entity {
+  color: rgba(160,184,207,.70) !important;
+  font-size: .74rem !important;
+}
+.media-player-meta {
+  color: rgba(77,238,255,.82) !important;
+  font-size: .78rem !important;
+}
+.media-player-state {
+  align-self: start;
+  justify-self: end;
+  max-width: 86px;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+#audioSetupView[hidden],
+#audioHaView[hidden] { display: none !important; }
+#audioHaView:not([hidden]) { display: grid !important; }
+.audio-ha-card {
+  max-width: min(980px, 100%);
+}
+.audio-ha-actions .scene-btn {
+  min-height: 48px;
+  border-radius: 18px;
+  font-size: .92rem;
+  padding-inline: 12px;
+}
+@media (max-width: 1280px) {
+  .media-player-list { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+  .media-player-row { min-height: 124px; }
+}

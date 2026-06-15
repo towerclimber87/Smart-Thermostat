@@ -127,6 +127,11 @@
                 <button id="nextTrack" class="transport" aria-label="Next track">››</button>
               </div>
 
+              <div id="audioSourceCard" class="audio-source-card" hidden>
+                <label for="audioSourceSelect">Source <strong id="audioSourceValue">—</strong></label>
+                <select id="audioSourceSelect" aria-label="Audio source"></select>
+              </div>
+
               <div class="audio-volume-card">
                 <label for="volumeSlider">Volume <strong><span id="volumeValue">42</span>%</strong></label>
                 <input id="volumeSlider" type="range" min="0" max="100" value="42" />

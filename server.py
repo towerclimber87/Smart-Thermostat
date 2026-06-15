@@ -193,18 +193,28 @@ def _normalize_media_player_item(ha_url: str, item: dict) -> dict:
     picture = attrs.get("entity_picture") or ""
     if picture and picture.startswith("/"):
         picture = f"{_normalize_ha_url(ha_url)}{picture}"
+
+    source_list = attrs.get("source_list") or []
+    if isinstance(source_list, str):
+        source_list = [source_list] if source_list.strip() else []
+    elif not isinstance(source_list, list):
+        source_list = []
+
     return {
         "entityId": entity_id,
         "name": attrs.get("friendly_name") or entity_id,
         "state": item.get("state") or "unknown",
         "volumeLevel": attrs.get("volume_level"),
         "isVolumeMuted": attrs.get("is_volume_muted"),
+        "mediaContentId": attrs.get("media_content_id") or "",
+        "mediaContentType": attrs.get("media_content_type") or "",
         "mediaTitle": attrs.get("media_title") or "",
         "mediaArtist": attrs.get("media_artist") or "",
         "mediaAlbum": attrs.get("media_album_name") or attrs.get("media_album") or "",
         "mediaPosition": attrs.get("media_position"),
         "mediaDuration": attrs.get("media_duration"),
         "source": attrs.get("source") or "",
+        "sourceList": source_list,
         "pictureUrl": picture,
         "supportedFeatures": attrs.get("supported_features"),
     }
@@ -314,6 +324,7 @@ def _call_media_service(ha_url: str, token: str, entity_id: str, action: str, va
         "volume": "volume_set",
         "volume_up": "volume_up",
         "volume_down": "volume_down",
+        "source": "select_source",
     }
     service = service_by_action.get(action)
     if not service:
@@ -324,6 +335,12 @@ def _call_media_service(ha_url: str, token: str, entity_id: str, action: str, va
         if value is None:
             raise ValueError("Missing volume value")
         payload["volume_level"] = max(0, min(100, float(value))) / 100
+
+    if action == "source":
+        source = str(value or "").strip()
+        if not source:
+            raise ValueError("Missing source value")
+        payload["source"] = source
 
     _ha_json_request(ha_url, token, "POST", f"/api/services/media_player/{service}", payload)
     try:
