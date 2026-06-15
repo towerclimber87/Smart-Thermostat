@@ -33,6 +33,7 @@ const LIGHT_COLOR_PRESETS = [
   { name: "Night", color: "#6fa8ff" },
 ];
 const ALARM_AUTO_SUBMIT_LENGTH = 4;
+const SETTINGS_ACCESS_CODE = "3762";
 const ALARM_ARM_AWAY_DELAY_SECONDS = 60;
 let haSyncInFlight = false;
 let haSyncLastError = "";
@@ -216,6 +217,7 @@ const AUDIO_PRESETS = {
 const state = {
   pages: ["blinds", "audio", "thermostat", "lights", "room"],
   currentPage: "thermostat",
+  settingsAccessCode: "",
   thermostat: {
     name: "IHA Thermostat",
     currentTemp: 70,
@@ -372,6 +374,12 @@ const elements = {
   settingsOverlay: document.getElementById("settingsOverlay"),
   settingsSheet: document.getElementById("settingsSheet"),
   settingsButton: document.getElementById("settingsButton"),
+  settingsCodeOverlay: document.getElementById("settingsCodeOverlay"),
+  settingsCodeClose: document.getElementById("settingsCodeClose"),
+  settingsCodeStatus: document.getElementById("settingsCodeStatus"),
+  settingsCodeDots: document.getElementById("settingsCodeDots"),
+  settingsCodeGrid: document.getElementById("settingsCodeGrid"),
+  settingsUnlockButton: document.getElementById("settingsUnlockButton"),
   tempMiniStatus: document.getElementById("tempMiniStatus"),
   headerCurrentTemp: document.getElementById("headerCurrentTemp"),
   headerSetTemp: document.getElementById("headerSetTemp"),
@@ -2169,6 +2177,70 @@ function adjustAutoSetting(kind, delta) {
   if (t.away) applyAwayTarget();
   renderThermostat();
   saveConfig();
+}
+
+
+function renderSettingsCodePrompt() {
+  if (!elements.settingsCodeDots) return;
+  const code = state.settingsAccessCode || "";
+  elements.settingsCodeDots.innerHTML = Array.from({ length: 4 }, (_, index) =>
+    `<span class="${index < code.length ? "filled" : ""}"></span>`
+  ).join("");
+  if (elements.settingsCodeStatus && !elements.settingsCodeStatus.dataset.error) {
+    elements.settingsCodeStatus.textContent = "Enter the 4-digit settings code.";
+  }
+  elements.settingsUnlockButton?.toggleAttribute("disabled", code.length !== 4);
+}
+
+function openSettingsCodePrompt() {
+  if (!isSettingsAllowedByAlarm()) {
+    showToast("Disarm the alarm before opening settings");
+    return;
+  }
+  state.settingsAccessCode = "";
+  if (elements.settingsCodeStatus) {
+    elements.settingsCodeStatus.dataset.error = "";
+    elements.settingsCodeStatus.textContent = "Enter the 4-digit settings code.";
+  }
+  elements.settingsCodeOverlay?.classList.add("open");
+  elements.settingsCodeOverlay?.setAttribute("aria-hidden", "false");
+  renderSettingsCodePrompt();
+}
+
+function closeSettingsCodePrompt() {
+  state.settingsAccessCode = "";
+  elements.settingsCodeOverlay?.classList.remove("open");
+  elements.settingsCodeOverlay?.setAttribute("aria-hidden", "true");
+  if (elements.settingsCodeStatus) elements.settingsCodeStatus.dataset.error = "";
+  renderSettingsCodePrompt();
+}
+
+function verifySettingsCode() {
+  if ((state.settingsAccessCode || "").length !== 4) return;
+  if (state.settingsAccessCode === SETTINGS_ACCESS_CODE) {
+    closeSettingsCodePrompt();
+    openSettings();
+    return;
+  }
+  state.settingsAccessCode = "";
+  if (elements.settingsCodeStatus) {
+    elements.settingsCodeStatus.dataset.error = "1";
+    elements.settingsCodeStatus.textContent = "Incorrect code. Try again.";
+  }
+  renderSettingsCodePrompt();
+}
+
+function handleSettingsCodeKey(value) {
+  const current = state.settingsAccessCode || "";
+  if (value === "clear") state.settingsAccessCode = "";
+  else if (value === "back") state.settingsAccessCode = current.slice(0, -1);
+  else if (/^\d$/.test(value) && current.length < 4) state.settingsAccessCode = current + value;
+  if (elements.settingsCodeStatus) {
+    elements.settingsCodeStatus.dataset.error = "";
+    elements.settingsCodeStatus.textContent = "Enter the 4-digit settings code.";
+  }
+  renderSettingsCodePrompt();
+  if ((state.settingsAccessCode || "").length === 4) verifySettingsCode();
 }
 
 function hideAllSettingsViews() {
@@ -4927,7 +4999,14 @@ function bindEvents() {
   elements.saveThermostatNameButton?.addEventListener("click", () => saveThermostatName({ toast: true, force: true }));
   elements.thermostatNameInput?.addEventListener("change", () => saveThermostatName({ toast: false }));
 
-  elements.settingsButton.addEventListener("click", openSettings);
+  elements.settingsCodeClose?.addEventListener("click", closeSettingsCodePrompt);
+  document.querySelectorAll("[data-close-settings-code]").forEach((el) => el.addEventListener("click", closeSettingsCodePrompt));
+  elements.settingsCodeGrid?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-settings-key]");
+    if (button) handleSettingsCodeKey(button.dataset.settingsKey);
+  });
+  elements.settingsUnlockButton?.addEventListener("click", verifySettingsCode);
+  elements.settingsButton.addEventListener("click", openSettingsCodePrompt);
   elements.settingsClose.addEventListener("click", closeSettings);
   elements.settingsDone.addEventListener("click", closeSettings);
   document.querySelectorAll("[data-close-settings]").forEach((el) => el.addEventListener("click", closeSettings));
@@ -5185,6 +5264,13 @@ function bindEvents() {
   bindBlindInteractions();
   bindLightInteractions();
   window.addEventListener("keydown", (event) => {
+    const settingsCodeOpen = elements.settingsCodeOverlay?.classList.contains("open");
+    if (settingsCodeOpen) {
+      if (/^\d$/.test(event.key)) { event.preventDefault(); handleSettingsCodeKey(event.key); return; }
+      if (event.key === "Backspace") { event.preventDefault(); handleSettingsCodeKey("back"); return; }
+      if (event.key === "Enter") { event.preventDefault(); verifySettingsCode(); return; }
+      if (event.key === "Escape") { event.preventDefault(); closeSettingsCodePrompt(); return; }
+    }
     const alarmKeypadOpen = elements.alarmKeypadOverlay?.classList.contains("open");
     if (alarmKeypadOpen) {
       if (/^\d$/.test(event.key)) { event.preventDefault(); handleAlarmKey(event.key); return; }
@@ -5195,7 +5281,7 @@ function bindEvents() {
     if (event.key === "ArrowLeft") goRelative(-1);
     if (event.key === "+" || event.key === "=") adjustSetpoint(1);
     if (event.key === "-" || event.key === "_") adjustSetpoint(-1);
-    if (event.key === "Escape") { closeSettings(); closeEntityPicker(); closeAudioEntityPicker(); closeAlarmKeypad(); closeAlarmArmOptions(); closeLightColorPicker(); closeThermostatInfo(); }
+    if (event.key === "Escape") { closeSettingsCodePrompt(); closeSettings(); closeEntityPicker(); closeAudioEntityPicker(); closeAlarmKeypad(); closeAlarmArmOptions(); closeLightColorPicker(); closeThermostatInfo(); }
   });
 }
 

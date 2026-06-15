@@ -4689,3 +4689,12 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
     radial-gradient(circle at 50% 22%, rgba(255,255,255,.12), transparent 42%),
     linear-gradient(150deg, rgba(24,31,46,.975), rgba(6,12,24,.99)) !important;
 }
+
+/* 2026-06-15 settings access keypad */
+.settings-code-overlay {
+  z-index: 95;
+}
+
+.settings-code-overlay .alarm-keypad-status[data-error="1"] {
+  color: #ffb8c4;
+}
