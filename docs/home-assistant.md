@@ -87,7 +87,7 @@ The wall panel now polls the local thermostat API every second, cache-busts thos
 
 ## Current compatibility note
 
-Version `0.2.4` keeps `ATTR_TEMPERATURE` imported from `homeassistant.const`, polls the thermostat faster, and syncs the thermostat name through discovery, device info, and the Home Assistant config entry title.
+Version `0.2.5` keeps the local thermostat API endpoints live (`/api/thermostat/status`, `/api/thermostat/control`, and `/api/discovery`) so Home Assistant polling does not fall through to static-file 404s.
 
 ## Network note
 

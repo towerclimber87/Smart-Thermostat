@@ -11,6 +11,8 @@ import argparse
 import json
 import mimetypes
 import os
+import socket
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib import request, error
@@ -18,6 +20,8 @@ from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent
 PUBLIC = ROOT / "public"
+DATA_DIR = ROOT / "data"
+THERMOSTAT_STATE_FILE = DATA_DIR / "thermostat-state.json"
 
 
 def _json(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> None:
@@ -29,6 +33,277 @@ def _json(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> None:
     handler.end_headers()
     handler.close_connection = True
     handler.wfile.write(body)
+
+
+DEFAULT_THERMOSTAT = {
+    "name": "IHA Thermostat",
+    "currentTemp": 70,
+    "targetTemp": 70,
+    "lastComfortTarget": 70,
+    "mode": "cool",
+    "fan": "auto",
+    "away": False,
+    "awayHeat": 55,
+    "awayCool": 85,
+    "humidity": 45,
+    "outdoorTemp": 78,
+    "autoCoolOutdoorTarget": 70,
+    "autoHeatOutdoorTarget": 65,
+    "autoChangeoverLockoutMinutes": 120,
+    "coolFanRemainOnMinutes": 2,
+    "autoActiveMode": "cool",
+    "autoPendingMode": "",
+    "autoLockoutUntil": 0,
+    "lastHeatRunAt": 0,
+    "lastCoolRunAt": 0,
+    "coolRelayWasOn": False,
+    "coolFanHoldUntil": 0,
+    "limits": {
+        "cool": {"min": 65, "max": 80},
+        "heat": {"min": 60, "max": 78},
+        "auto": {"min": 60, "max": 80},
+    },
+}
+
+
+def _number(value, fallback: float, minimum: float | None = None, maximum: float | None = None) -> float:
+    try:
+        next_value = float(value)
+    except (TypeError, ValueError):
+        next_value = float(fallback)
+    if minimum is not None:
+        next_value = max(float(minimum), next_value)
+    if maximum is not None:
+        next_value = min(float(maximum), next_value)
+    return next_value
+
+
+def _intish(value, fallback: float, minimum: float | None = None, maximum: float | None = None) -> int:
+    return int(round(_number(value, fallback, minimum, maximum)))
+
+
+def _normalize_mode(value: object, fallback: str = "cool") -> str:
+    mode = str(value or fallback).strip().lower()
+    if mode in {"heat_cool", "auto"}:
+        return "auto"
+    if mode in {"heat", "cool"}:
+        return mode
+    # Keep the wall panel in a valid mode even if an external integration sends off.
+    return fallback if fallback in {"heat", "cool", "auto"} else "cool"
+
+
+def _normalize_fan(value: object, fallback: str = "auto") -> str:
+    fan = str(value or fallback).strip().lower()
+    return fan if fan in {"off", "on", "auto"} else fallback
+
+
+def _deepcopy_json(value: object) -> object:
+    return json.loads(json.dumps(value))
+
+
+def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None = None) -> dict:
+    base = _deepcopy_json(DEFAULT_THERMOSTAT)
+    for source in (existing or {}, incoming or {}):
+        if not isinstance(source, dict):
+            continue
+        if isinstance(source.get("thermostat"), dict):
+            source = source["thermostat"]
+
+        if "name" in source:
+            name = str(source.get("name") or "").strip()
+            if name:
+                base["name"] = name[:80]
+
+        hvac_mode = source.get("hvac_mode", source.get("hvacMode", source.get("mode")))
+        if hvac_mode is not None:
+            base["mode"] = _normalize_mode(hvac_mode, base["mode"])
+
+        fan_mode = source.get("fan_mode", source.get("fanMode", source.get("fan")))
+        if fan_mode is not None:
+            base["fan"] = _normalize_fan(fan_mode, base["fan"])
+
+        preset = source.get("preset_mode", source.get("presetMode"))
+        if "away" in source:
+            base["away"] = bool(source.get("away"))
+        elif preset is not None:
+            base["away"] = str(preset).strip().lower() == "away"
+
+        for key, fallback, minimum, maximum in (
+            ("currentTemp", base["currentTemp"], -40, 130),
+            ("targetTemp", base["targetTemp"], 45, 95),
+            ("lastComfortTarget", base["lastComfortTarget"], 45, 95),
+            ("awayHeat", base["awayHeat"], 45, 72),
+            ("awayCool", base["awayCool"], 72, 95),
+            ("humidity", base["humidity"], 0, 100),
+            ("outdoorTemp", base["outdoorTemp"], -40, 130),
+            ("autoCoolOutdoorTarget", base["autoCoolOutdoorTarget"], 41, 100),
+            ("autoHeatOutdoorTarget", base["autoHeatOutdoorTarget"], 40, 99),
+            ("autoChangeoverLockoutMinutes", base["autoChangeoverLockoutMinutes"], 120, 720),
+            ("coolFanRemainOnMinutes", base["coolFanRemainOnMinutes"], 0, 10),
+            ("autoLockoutUntil", base["autoLockoutUntil"], 0, None),
+            ("lastHeatRunAt", base["lastHeatRunAt"], 0, None),
+            ("lastCoolRunAt", base["lastCoolRunAt"], 0, None),
+            ("coolFanHoldUntil", base["coolFanHoldUntil"], 0, None),
+        ):
+            if key in source:
+                base[key] = _number(source.get(key), fallback, minimum, maximum)
+
+        if "temperature" in source:
+            base["targetTemp"] = _number(source.get("temperature"), base["targetTemp"], 45, 95)
+        if "target_temperature" in source:
+            base["targetTemp"] = _number(source.get("target_temperature"), base["targetTemp"], 45, 95)
+        if "current_temperature" in source:
+            base["currentTemp"] = _number(source.get("current_temperature"), base["currentTemp"], -40, 130)
+
+        if "autoActiveMode" in source:
+            base["autoActiveMode"] = _normalize_mode(source.get("autoActiveMode"), base["autoActiveMode"])
+        if "autoPendingMode" in source:
+            pending = str(source.get("autoPendingMode") or "").strip().lower()
+            base["autoPendingMode"] = pending if pending in {"", "heat", "cool"} else ""
+        if "coolRelayWasOn" in source:
+            base["coolRelayWasOn"] = bool(source.get("coolRelayWasOn"))
+
+        incoming_limits = source.get("limits") if isinstance(source.get("limits"), dict) else {}
+        for mode in ("cool", "heat", "auto"):
+            current = base["limits"].get(mode) or DEFAULT_THERMOSTAT["limits"][mode]
+            update = incoming_limits.get(mode) if isinstance(incoming_limits.get(mode), dict) else {}
+            low = _intish(update.get("min", current.get("min")), current.get("min"), 45, 95)
+            high = _intish(update.get("max", current.get("max")), current.get("max"), low + 2, 95)
+            base["limits"][mode] = {"min": min(low, high - 2), "max": high}
+
+    base["autoHeatOutdoorTarget"] = min(base["autoHeatOutdoorTarget"], base["autoCoolOutdoorTarget"] - 1)
+    mode_limits = base["limits"].get(base["mode"], {"min": 45, "max": 95})
+    if not base["away"]:
+        base["targetTemp"] = _number(base["targetTemp"], 70, mode_limits.get("min"), mode_limits.get("max"))
+        base["lastComfortTarget"] = _number(base["lastComfortTarget"], base["targetTemp"], mode_limits.get("min"), mode_limits.get("max"))
+    return base
+
+
+def _read_thermostat_record() -> dict:
+    if not THERMOSTAT_STATE_FILE.exists():
+        thermostat = _merge_thermostat_state()
+        return {"version": 1, "updatedAt": int(time.time()), "thermostat": thermostat}
+    try:
+        raw = json.loads(THERMOSTAT_STATE_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        raw = {}
+    thermostat = _merge_thermostat_state(raw.get("thermostat", raw if isinstance(raw, dict) else {}))
+    return {
+        "version": int(raw.get("version", 1)) if isinstance(raw, dict) else 1,
+        "updatedAt": int(raw.get("updatedAt", 0) or 0) if isinstance(raw, dict) else 0,
+        "thermostat": thermostat,
+    }
+
+
+def _write_thermostat_record(thermostat: dict) -> dict:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    record = {"version": 1, "updatedAt": int(time.time()), "thermostat": _merge_thermostat_state(thermostat)}
+    temp_path = THERMOSTAT_STATE_FILE.with_suffix(".json.tmp")
+    temp_path.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
+    temp_path.replace(THERMOSTAT_STATE_FILE)
+    return record
+
+
+def _thermostat_outputs(thermostat: dict) -> dict:
+    mode = _normalize_mode(thermostat.get("mode"), "cool")
+    active_mode = thermostat.get("autoActiveMode") if mode == "auto" else mode
+    active_mode = _normalize_mode(active_mode, "cool")
+    current = _number(thermostat.get("currentTemp"), 70)
+    target = _number(thermostat.get("targetTemp"), 70)
+    heat = active_mode == "heat" and current < target
+    cool = active_mode == "cool" and current > target
+    fan = bool(cool or thermostat.get("fan") == "on")
+    action = "heating" if heat else "cooling" if cool else "fan" if fan else "idle"
+    return {"fan": fan, "heat": heat, "cool": cool, "hvacAction": action, "controlMode": active_mode}
+
+
+def _thermostat_status_payload() -> dict:
+    record = _read_thermostat_record()
+    thermostat = record["thermostat"]
+    outputs = _thermostat_outputs(thermostat)
+    hvac_mode = "heat_cool" if thermostat["mode"] == "auto" else thermostat["mode"]
+    preset_mode = "away" if thermostat.get("away") else "home"
+    thermostat_detail = {
+        **thermostat,
+        "current_temperature": thermostat["currentTemp"],
+        "target_temperature": thermostat["targetTemp"],
+        "temperature": thermostat["targetTemp"],
+        "hvac_mode": hvac_mode,
+        "hvacMode": hvac_mode,
+        "hvac_action": outputs["hvacAction"],
+        "hvacAction": outputs["hvacAction"],
+        "fan_mode": thermostat["fan"],
+        "fanMode": thermostat["fan"],
+        "preset_mode": preset_mode,
+        "presetMode": preset_mode,
+        "outdoor_temperature": thermostat["outdoorTemp"],
+        "relays": {"fan": outputs["fan"], "heat": outputs["heat"], "cool": outputs["cool"]},
+    }
+    payload = {
+        "ok": True,
+        "version": record["version"],
+        "updatedAt": record["updatedAt"],
+        "name": thermostat.get("name") or "IHA Thermostat",
+        "thermostat": thermostat_detail,
+        "currentTemp": thermostat["currentTemp"],
+        "targetTemp": thermostat["targetTemp"],
+        "current_temperature": thermostat["currentTemp"],
+        "target_temperature": thermostat["targetTemp"],
+        "temperature": thermostat["targetTemp"],
+        "mode": thermostat["mode"],
+        "hvac_mode": hvac_mode,
+        "hvacMode": hvac_mode,
+        "hvac_action": outputs["hvacAction"],
+        "hvacAction": outputs["hvacAction"],
+        "fan": thermostat["fan"],
+        "fan_mode": thermostat["fan"],
+        "fanMode": thermostat["fan"],
+        "preset_mode": preset_mode,
+        "presetMode": preset_mode,
+        "away": thermostat.get("away"),
+        "humidity": thermostat["humidity"],
+        "outdoorTemp": thermostat["outdoorTemp"],
+        "outdoor_temperature": thermostat["outdoorTemp"],
+        "relays": {"fan": outputs["fan"], "heat": outputs["heat"], "cool": outputs["cool"]},
+        "relayFan": outputs["fan"],
+        "relayHeat": outputs["heat"],
+        "relayCool": outputs["cool"],
+    }
+    return payload
+
+
+def _handle_thermostat_update(payload: dict) -> dict:
+    existing = _read_thermostat_record()["thermostat"]
+    incoming = payload.get("thermostat", payload) if isinstance(payload, dict) else {}
+    merged = _merge_thermostat_state(existing, incoming)
+    _write_thermostat_record(merged)
+    return _thermostat_status_payload()
+
+
+def _local_host_name() -> str:
+    try:
+        return socket.gethostname()
+    except Exception:
+        return "iha-thermostat"
+
+
+def _discovery_payload() -> dict:
+    status = _thermostat_status_payload()
+    return {
+        "ok": True,
+        "name": status["name"],
+        "unique_id": "iha-smart-thermostat-local",
+        "manufacturer": "IHA",
+        "model": "Smart Thermostat Wall Panel",
+        "sw_version": "0.2.5",
+        "host": _local_host_name(),
+        "endpoints": {
+            "status": "/api/thermostat/status",
+            "control": "/api/thermostat/control",
+            "discovery": "/api/discovery",
+        },
+        "thermostat": status["thermostat"],
+    }
 
 
 def _safe_join_public(path: str) -> Path | None:
@@ -654,10 +929,14 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
         print(f"{self.address_string()} - {fmt % args}")
 
     def do_GET(self) -> None:
-        if self.path == "/api/health":
-            return _json(self, 200, {"ok": True})
-
         path = urlparse(self.path).path
+        if path == "/api/health":
+            return _json(self, 200, {"ok": True})
+        if path == "/api/thermostat/status":
+            return _json(self, 200, _thermostat_status_payload())
+        if path == "/api/discovery":
+            return _json(self, 200, _discovery_payload())
+
         file_path = _safe_join_public(path)
         if not file_path or not file_path.exists() or not file_path.is_file():
             self.send_error(404, "Not found")
@@ -675,13 +954,16 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action"}:
+        if path not in {"/api/thermostat/status", "/api/thermostat/control", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action"}:
             self.send_error(404, "Not found")
             return
 
         try:
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+
+            if path in {"/api/thermostat/status", "/api/thermostat/control"}:
+                return _json(self, 200, _handle_thermostat_update(payload))
 
             if path == "/api/ha/covers":
                 covers = _fetch_ha_covers(payload.get("url", ""), payload.get("token", ""))

@@ -9,6 +9,8 @@ const HA_AUDIO_SYNC_INTERVAL_MS = 3000;
 const HA_AUDIO_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
 const HA_ALARM_SYNC_INTERVAL_MS = 3000;
 const HA_ALARM_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
+const LOCAL_THERMOSTAT_SYNC_INTERVAL_MS = 1000;
+const LOCAL_THERMOSTAT_PUSH_DEBOUNCE_MS = 300;
 const ALARM_AUTO_SUBMIT_LENGTH = 4;
 const ALARM_ARM_AWAY_DELAY_SECONDS = 60;
 let haSyncInFlight = false;
@@ -18,6 +20,11 @@ let haAudioControlSyncInFlight = false;
 let haAudioSyncLastError = "";
 let haAlarmSyncInFlight = false;
 let haAlarmSyncLastError = "";
+let localThermostatSyncInFlight = false;
+let localThermostatPushTimer = null;
+let localThermostatPushInFlight = false;
+let localThermostatLastError = "";
+let lastLocalThermostatPushAt = 0;
 let haAudioSyncTick = 0;
 let audioMediaActionInFlight = false;
 let audioVolumeDebounce = null;
@@ -85,6 +92,7 @@ const state = {
   pages: ["blinds", "thermostat", "audio"],
   currentPage: "thermostat",
   thermostat: {
+    name: "IHA Thermostat",
     currentTemp: 70,
     targetTemp: 70,
     lastComfortTarget: 70,
@@ -395,6 +403,7 @@ function getActiveRoom() {
 
 function buildSavedConfig() {
   const thermostatToSave = {
+    name: state.thermostat.name || "IHA Thermostat",
     currentTemp: state.thermostat.currentTemp,
     targetTemp: state.thermostat.targetTemp,
     lastComfortTarget: state.thermostat.lastComfortTarget,
@@ -477,8 +486,148 @@ function loadSavedConfig() {
 function saveConfig(options = {}) {
   localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(buildSavedConfig(), null, 2));
   if (options.toast) showToast("Config saved");
-  // Future Raspberry Pi backend hook: POST buildSavedConfig() to a local service
-  // that writes /etc/smart-thermostat/config.json or the project config file.
+  if (options.sync !== false) scheduleLocalThermostatPush();
+}
+
+function localThermostatPayload() {
+  const outputs = getThermostatOutputs({ recordRuntime: false });
+  return {
+    thermostat: {
+      ...buildSavedConfig().thermostat,
+      relays: { fan: outputs.fan, heat: outputs.heat, cool: outputs.cool },
+      hvacAction: outputs.cool ? "cooling" : outputs.heat ? "heating" : outputs.coolingFanHold || outputs.fan ? "fan" : "idle",
+    },
+  };
+}
+
+function applyLocalThermostatState(remote = {}) {
+  const source = remote.thermostat || remote;
+  if (!source || typeof source !== "object") return false;
+  const t = state.thermostat;
+  let changed = false;
+
+  const setNumber = (key, min = -Infinity, max = Infinity) => {
+    const raw = source[key];
+    if (raw === undefined || raw === null || raw === "") return;
+    const next = clamp(Number(raw), min, max);
+    if (!Number.isFinite(next) || Number(t[key]) === next) return;
+    t[key] = next;
+    changed = true;
+  };
+
+  const setString = (key, allowed = null) => {
+    const raw = source[key];
+    if (raw === undefined || raw === null) return;
+    const next = String(raw).trim();
+    if (!next || (allowed && !allowed.includes(next)) || t[key] === next) return;
+    t[key] = next;
+    changed = true;
+  };
+
+  setString("name");
+  setNumber("currentTemp", ABS_MIN, ABS_MAX);
+  setNumber("targetTemp", ABS_MIN, ABS_MAX);
+  setNumber("lastComfortTarget", ABS_MIN, ABS_MAX);
+  setNumber("awayHeat", 45, 72);
+  setNumber("awayCool", 72, 95);
+  setNumber("humidity", 0, 100);
+  setNumber("outdoorTemp", -40, 130);
+  setNumber("autoCoolOutdoorTarget", 41, 100);
+  setNumber("autoHeatOutdoorTarget", 40, 99);
+  setNumber("autoChangeoverLockoutMinutes", AUTO_CHANGEOVER_MINUTES, 720);
+  setNumber("coolFanRemainOnMinutes", 0, 10);
+
+  const incomingMode = source.hvac_mode || source.hvacMode || source.mode;
+  if (incomingMode !== undefined) {
+    const modeMap = { heat_cool: "auto", auto: "auto", cool: "cool", heat: "heat" };
+    const next = modeMap[String(incomingMode).toLowerCase()] || "";
+    if (next && t.mode !== next) { t.mode = next; changed = true; }
+  }
+
+  const incomingFan = source.fan_mode || source.fanMode || source.fan;
+  if (incomingFan !== undefined) {
+    const next = String(incomingFan).toLowerCase();
+    if (["off", "on", "auto"].includes(next) && t.fan !== next) { t.fan = next; changed = true; }
+  }
+
+  if (source.preset_mode !== undefined || source.presetMode !== undefined || source.away !== undefined) {
+    const preset = String(source.preset_mode ?? source.presetMode ?? "").toLowerCase();
+    const nextAway = source.away !== undefined ? Boolean(source.away) : preset === "away";
+    if (t.away !== nextAway) { t.away = nextAway; changed = true; }
+  }
+
+  if (source.limits && typeof source.limits === "object") {
+    ["cool", "heat", "auto"].forEach((mode) => {
+      const incoming = source.limits[mode] || {};
+      if (!t.limits[mode]) t.limits[mode] = {};
+      ["min", "max"].forEach((bound) => {
+        const raw = incoming[bound];
+        if (raw === undefined || raw === null || raw === "") return;
+        const next = clamp(Number(raw), ABS_MIN, ABS_MAX);
+        if (!Number.isFinite(next) || t.limits[mode][bound] === next) return;
+        t.limits[mode][bound] = next;
+        changed = true;
+      });
+    });
+  }
+
+  t.autoHeatOutdoorTarget = Math.min(t.autoHeatOutdoorTarget, t.autoCoolOutdoorTarget - 1);
+  if (t.away) applyAwayTarget();
+  if (!t.away) {
+    const { min, max } = getModeLimits();
+    t.targetTemp = clamp(t.targetTemp, min, max);
+    t.lastComfortTarget = clamp(t.lastComfortTarget, min, max);
+  }
+  if (t.mode === "auto") getAutoControlMode();
+  return changed;
+}
+
+async function fetchLocalThermostatStatus(options = {}) {
+  if (!options.force && document.visibilityState === "hidden") return;
+  if (localThermostatPushTimer || Date.now() - lastLocalThermostatPushAt < 1200) return;
+  if (localThermostatSyncInFlight || localThermostatPushInFlight) return;
+  localThermostatSyncInFlight = true;
+  try {
+    const response = await fetch(`/api/thermostat/status?_=${Date.now()}`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`Local thermostat returned ${response.status}`);
+    const payload = await response.json();
+    if (applyLocalThermostatState(payload)) {
+      renderThermostat();
+      saveConfig({ sync: false });
+    }
+    if (localThermostatLastError) localThermostatLastError = "";
+  } catch (error) {
+    const message = error.message || String(error);
+    if (message !== localThermostatLastError) {
+      localThermostatLastError = message;
+      console.warn("Local thermostat sync paused", message);
+    }
+  } finally {
+    localThermostatSyncInFlight = false;
+  }
+}
+
+function scheduleLocalThermostatPush() {
+  clearTimeout(localThermostatPushTimer);
+  localThermostatPushTimer = setTimeout(pushLocalThermostatStatus, LOCAL_THERMOSTAT_PUSH_DEBOUNCE_MS);
+}
+
+async function pushLocalThermostatStatus() {
+  localThermostatPushTimer = null;
+  if (localThermostatPushInFlight) return;
+  localThermostatPushInFlight = true;
+  lastLocalThermostatPushAt = Date.now();
+  try {
+    await fetch("/api/thermostat/status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(localThermostatPayload()),
+    });
+  } catch (error) {
+    console.warn("Unable to save thermostat state to local backend", error);
+  } finally {
+    localThermostatPushInFlight = false;
+  }
 }
 
 function updateClock() {
@@ -670,12 +819,14 @@ function setTargetTemp(temp, options = {}) {
   t.targetTemp = next;
   if (!t.away) t.lastComfortTarget = next;
   renderThermostat();
+  if (options.save !== false) saveConfig();
 }
 
 function setVirtualCurrentTemp(temp) {
   const next = clamp(Number(temp), 65, 75);
   state.thermostat.currentTemp = next;
   renderThermostat();
+  saveConfig();
 }
 
 function setVirtualOutdoorTemp(temp) {
@@ -684,6 +835,7 @@ function setVirtualOutdoorTemp(temp) {
   if (state.thermostat.mode === "auto") getAutoControlMode();
   if (state.thermostat.away) applyAwayTarget();
   renderThermostat();
+  saveConfig();
 }
 
 function getThermostatOutputs(options = {}) {
@@ -786,8 +938,10 @@ function renderThermostat() {
     elements.runtimeState.textContent = action;
   }
 
-  elements.modeBadge.textContent = t.away ? `${titleCase(controlMode)} Safety` : t.mode === "auto" ? `Auto ${titleCase(controlMode)}` : `${titleCase(t.mode)} Target`;
-  elements.modeBadge.className = `mode-badge ${t.mode === "auto" ? `${controlMode} auto` : t.mode}`;
+  if (elements.modeBadge) {
+    elements.modeBadge.textContent = t.away ? `${titleCase(controlMode)} Safety` : t.mode === "auto" ? `Auto ${titleCase(controlMode)}` : `${titleCase(t.mode)} Target`;
+    elements.modeBadge.className = `mode-badge ${t.mode === "auto" ? `${controlMode} auto` : t.mode}`;
+  }
   elements.awayToggle.classList.toggle("active", t.away);
   elements.awayToggle.classList.toggle("home-state", t.away);
   elements.awayToggle.textContent = t.away ? "Home" : "Away";
@@ -1257,6 +1411,7 @@ function setAwaySafety(kind, delta) {
   if (kind === "cool") t.awayCool = clamp(t.awayCool + delta, 72, 95);
   if (t.away) applyAwayTarget();
   renderThermostat();
+  saveConfig();
 }
 
 function adjustLimit(mode, bound, delta) {
@@ -1269,6 +1424,7 @@ function adjustLimit(mode, bound, delta) {
     state.thermostat.lastComfortTarget = clamp(state.thermostat.lastComfortTarget, limits.min, limits.max);
   }
   renderThermostat();
+  saveConfig();
 }
 
 function adjustAutoSetting(kind, delta) {
@@ -1286,6 +1442,7 @@ function adjustAutoSetting(kind, delta) {
   if (t.mode === "auto") getAutoControlMode();
   if (t.away) applyAwayTarget();
   renderThermostat();
+  saveConfig();
 }
 
 function hideAllSettingsViews() {
@@ -3094,6 +3251,7 @@ function init() {
   bindEvents();
   updateClock();
   renderThermostat();
+  fetchLocalThermostatStatus({ force: true });
   renderAlarmWidget();
   renderAudio();
   renderBlinds();
@@ -3102,6 +3260,7 @@ function init() {
   setInterval(() => {
     if (state.currentPage === "thermostat") renderThermostat();
   }, 5000);
+  setInterval(() => fetchLocalThermostatStatus(), LOCAL_THERMOSTAT_SYNC_INTERVAL_MS);
   // The virtual temperature slider is now the temporary sensor input.
   // setInterval(mockSensorDrift, 4500);
   setInterval(mockTrackProgress, 1200);
