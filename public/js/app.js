@@ -5,19 +5,27 @@ const DIAL_START_DEG = 225;
 const CONFIG_STORAGE_KEY = "smartThermostat.config.v2";
 const HA_SYNC_INTERVAL_MS = 3000;
 const HA_SYNC_AFTER_COMMAND_DELAYS = [900, 2400, 5200];
-const HA_AUDIO_SYNC_INTERVAL_MS = 3000;
+const HA_AUDIO_SYNC_INTERVAL_MS = 2500;
 const HA_AUDIO_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
 let haSyncInFlight = false;
 let haSyncLastError = "";
 let haAudioSyncInFlight = false;
+let haAudioControlSyncInFlight = false;
 let haAudioSyncLastError = "";
 let audioVolumeDebounce = null;
+let audioToneDebounces = { gain: null, bass: null, treble: null };
 let audioTrackCommandLock = null;
 let audioPlaybackLockedUntil = 0;
 const AUDIO_TRACK_ACK_TIMEOUT_MS = 6500;
 const AUDIO_PLAYBACK_LOCK_MS = 1400;
+const AUDIO_SLIDER_RELEASE_MS = 900;
+const AUDIO_VOLUME_SETTLE_MS = 1800;
+const AUDIO_TONE_SETTLE_MS = 1500;
 let lastBlindUserInteractionAt = 0;
 let lastAudioUserInteractionAt = 0;
+let audioSliderActive = { name: "", until: 0 };
+let audioVolumeHoldUntil = 0;
+let audioToneHoldUntil = { gain: 0, bass: 0, treble: 0 };
 
 const defaultBlindConfig = {
   room: "living",
@@ -49,6 +57,7 @@ const defaultIntegrations = {
     coverEntities: [],
     mediaPlayerEntities: [],
     selectedMediaPlayerId: "",
+    audioControlEntities: { gain: null, bass: null, treble: null },
   },
 };
 
@@ -118,6 +127,9 @@ const elements = {
   settingsOverlay: document.getElementById("settingsOverlay"),
   settingsSheet: document.getElementById("settingsSheet"),
   settingsButton: document.getElementById("settingsButton"),
+  headerCurrentTemp: document.getElementById("headerCurrentTemp"),
+  headerSetTemp: document.getElementById("headerSetTemp"),
+  headerSetPill: document.getElementById("headerSetPill"),
   settingsClose: document.getElementById("settingsClose"),
   settingsDone: document.getElementById("settingsDone"),
   settingsTitle: document.getElementById("settingsTitle"),
@@ -286,7 +298,7 @@ function getActiveRoom() {
 
 function buildSavedConfig() {
   return {
-    version: 2,
+    version: 4,
     blinds: state.blinds,
     integrations: state.integrations,
   };
@@ -405,6 +417,13 @@ function renderThermostat() {
   const { min, max } = getModeLimits();
   elements.currentTemp.textContent = Math.round(t.currentTemp);
   elements.targetTemp.textContent = Math.round(t.targetTemp);
+  if (elements.headerCurrentTemp) elements.headerCurrentTemp.textContent = `${Math.round(t.currentTemp)}°`;
+  if (elements.headerSetTemp) elements.headerSetTemp.textContent = `${Math.round(t.targetTemp)}°`;
+  if (elements.headerSetPill) {
+    elements.headerSetPill.classList.toggle("heat", t.mode === "heat" && !t.away);
+    elements.headerSetPill.classList.toggle("cool", t.mode === "cool" && !t.away);
+    elements.headerSetPill.classList.toggle("away", t.away);
+  }
   elements.humidityValue.textContent = t.humidity;
   elements.awayHeatValue.textContent = t.awayHeat;
   elements.awayCoolValue.textContent = t.awayCool;
@@ -624,6 +643,95 @@ function normalizeSourceList(value) {
   return [];
 }
 
+function formatControlValue(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "0";
+  return Math.abs(number % 1) < 0.001 ? String(Math.round(number)) : number.toFixed(1);
+}
+
+function isAudioSliderActive(name) {
+  return audioSliderActive.name === name && Date.now() < audioSliderActive.until;
+}
+
+function markAudioSliderActive(name, duration = AUDIO_SLIDER_RELEASE_MS) {
+  audioSliderActive = { name, until: Date.now() + duration };
+}
+
+function releaseAudioSlider(name) {
+  if (!name || audioSliderActive.name === name) {
+    audioSliderActive.until = Math.min(audioSliderActive.until, Date.now() + 120);
+  }
+}
+
+function getAudioToneControls() {
+  const ha = state.integrations.homeAssistant;
+  if (!ha.audioControlEntities) ha.audioControlEntities = { gain: null, bass: null, treble: null };
+  return ha.audioControlEntities;
+}
+
+function getAudioToneControl(kind) {
+  return getAudioToneControls()[kind] || null;
+}
+
+function normalizeAudioControlValue(control, fallback = 0) {
+  const raw = control?.value ?? control?.state;
+  const number = Number(raw);
+  return Number.isFinite(number) ? number : Number(fallback || 0);
+}
+
+function applyAudioControlEntity(kind, control, options = {}) {
+  if (!["gain", "bass", "treble"].includes(kind)) return false;
+  const controls = getAudioToneControls();
+  controls[kind] = control || null;
+  if (!control) return false;
+  if (Date.now() < (audioToneHoldUntil[kind] || 0) && !options.force) return false;
+  state.audio[kind] = normalizeAudioControlValue(control, state.audio[kind]);
+  return true;
+}
+
+function applyAudioControls(controls, options = {}) {
+  if (!controls) return false;
+  let changed = false;
+  ["gain", "bass", "treble"].forEach((kind) => {
+    if (Object.prototype.hasOwnProperty.call(controls, kind)) {
+      if (applyAudioControlEntity(kind, controls[kind], options)) changed = true;
+    }
+  });
+  return changed;
+}
+
+async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 10000) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    let payload = null;
+    try { payload = await response.json(); } catch (_) {}
+    if (!response.ok) {
+      throw new Error(payload?.error || `Local backend returned ${response.status}`);
+    }
+    return payload || {};
+  } catch (error) {
+    if (error.name === "AbortError") throw new Error("Local backend request timed out");
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+function setRangeVisual(slider) {
+  if (!slider) return;
+  const min = Number(slider.min || 0);
+  const max = Number(slider.max || 100);
+  const value = Number(slider.value || 0);
+  const pct = max === min ? 0 : clamp(((value - min) / (max - min)) * 100, 0, 100);
+  slider.style.setProperty("--range-fill", `${pct}%`);
+}
+
+function updateAllRangeVisuals() {
+  ["volume", "gain", "bass", "treble"].forEach((name) => setRangeVisual(document.getElementById(`${name}Slider`)));
+}
+
 function mediaSignatureFromValues(title, contentId, artUrl) {
   return [title || "", contentId || "", artUrl || ""].join("|");
 }
@@ -666,7 +774,9 @@ function applyMediaEntityState(entity) {
   state.audio.source = entity.source || "";
   state.audio.sourceList = normalizeSourceList(entity.sourceList);
   state.audio.mediaContentId = entity.mediaContentId || "";
-  state.audio.volume = normalizeVolume(entity, state.audio.volume);
+  if (Date.now() >= audioVolumeHoldUntil && !isAudioSliderActive("volume")) {
+    state.audio.volume = normalizeVolume(entity, state.audio.volume);
+  }
   state.audio.mediaPosition = entity.mediaPosition ?? null;
   state.audio.mediaDuration = entity.mediaDuration ?? null;
   maybeResolveAudioTrackLock(entity);
@@ -726,8 +836,24 @@ function renderAudio() {
   ["volume", "gain", "bass", "treble"].forEach((name) => {
     const slider = document.getElementById(`${name}Slider`);
     const value = document.getElementById(`${name}Value`);
-    if (slider && document.activeElement !== slider) slider.value = a[name];
-    if (value) value.textContent = a[name];
+    if (!slider) return;
+
+    if (name !== "volume") {
+      const control = getAudioToneControl(name);
+      const min = control?.min ?? -10;
+      const max = control?.max ?? 10;
+      const step = control?.step ?? 1;
+      slider.min = Number.isFinite(Number(min)) ? String(min) : "-10";
+      slider.max = Number.isFinite(Number(max)) ? String(max) : "10";
+      slider.step = Number.isFinite(Number(step)) && Number(step) > 0 ? String(step) : "1";
+      if (control && Date.now() >= (audioToneHoldUntil[name] || 0) && !isAudioSliderActive(name)) {
+        state.audio[name] = normalizeAudioControlValue(control, state.audio[name]);
+      }
+    }
+
+    if (!isAudioSliderActive(name)) slider.value = a[name];
+    setRangeVisual(slider);
+    if (value) value.textContent = name === "volume" ? Math.round(Number(a[name] || 0)) : formatControlValue(a[name]);
   });
 }
 
@@ -775,6 +901,7 @@ function selectMediaPlayer(entityId) {
   renderMediaPlayerList();
   renderAudio();
   pollHomeAssistantMediaPlayer({ force: true });
+  loadAudioControlsForSelected({ quiet: true });
 }
 
 async function fetchMediaPlayersViaLocalBackend() {
@@ -799,18 +926,92 @@ async function fetchMediaStatesViaLocalBackend(entityIds) {
   const ha = state.integrations.homeAssistant;
   const baseUrl = getHaBaseUrl();
   if (!baseUrl || !ha.token) throw new Error("Missing Home Assistant URL or token");
-  const response = await fetch("/api/ha/media/states", {
+  const payload = await fetchJsonWithTimeout("/api/ha/media/states", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url: baseUrl, token: ha.token, entityIds }),
-  });
-  if (!response.ok) {
-    let message = `Local backend returned ${response.status}`;
-    try { const payload = await response.json(); message = payload.error || message; } catch (_) {}
-    throw new Error(message);
-  }
-  const payload = await response.json();
+  }, 9000);
   return payload.players || [];
+}
+
+async function fetchAudioControlsViaLocalBackend(mediaPlayerId, mediaPlayerName) {
+  const ha = state.integrations.homeAssistant;
+  const baseUrl = getHaBaseUrl();
+  if (!baseUrl || !ha.token || !mediaPlayerId) throw new Error("Missing Home Assistant audio config");
+  const payload = await fetchJsonWithTimeout("/api/ha/audio/controls", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: baseUrl, token: ha.token, mediaPlayerId, mediaPlayerName }),
+  }, 12000);
+  return payload.controls || {};
+}
+
+async function fetchAudioControlStatesViaLocalBackend() {
+  const ha = state.integrations.homeAssistant;
+  const baseUrl = getHaBaseUrl();
+  const controls = getAudioToneControls();
+  const hasControls = ["gain", "bass", "treble"].some((kind) => controls[kind]?.entityId);
+  if (!baseUrl || !ha.token || !hasControls) return {};
+  const payload = await fetchJsonWithTimeout("/api/ha/audio/control_states", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: baseUrl, token: ha.token, controls }),
+  }, 9000);
+  return payload.controls || {};
+}
+
+async function loadAudioControlsForSelected(options = {}) {
+  const entityId = state.integrations.homeAssistant.selectedMediaPlayerId || state.audio.entityId;
+  if (!entityId || haAudioControlSyncInFlight) return {};
+  const selected = getSelectedMediaPlayer();
+  haAudioControlSyncInFlight = true;
+  try {
+    const controls = await fetchAudioControlsViaLocalBackend(entityId, selected?.name || state.audio.entityName || "");
+    applyAudioControls(controls, { force: true });
+    saveConfig();
+    renderAudio();
+    if (!options.quiet) {
+      const found = ["gain", "bass", "treble"].filter((kind) => controls[kind]?.entityId);
+      showToast(found.length ? `Linked audio controls: ${found.join(", ")}` : "No HA tone controls found");
+    }
+    return controls;
+  } catch (error) {
+    if (!options.quiet) showToast("Could not load audio controls");
+    addHaLog("warn", "Audio tone control lookup failed", error.message || String(error));
+    return {};
+  } finally {
+    haAudioControlSyncInFlight = false;
+  }
+}
+
+async function sendAudioToneAction(kind, value) {
+  const control = getAudioToneControl(kind);
+  if (!control?.entityId) {
+    saveConfig();
+    return null;
+  }
+  const ha = state.integrations.homeAssistant;
+  const baseUrl = getHaBaseUrl();
+  if (!baseUrl || !ha.token) throw new Error("Missing Home Assistant config");
+  audioToneHoldUntil[kind] = Date.now() + AUDIO_TONE_SETTLE_MS;
+  try {
+    const payload = await fetchJsonWithTimeout("/api/ha/audio/control/action", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: baseUrl, token: ha.token, entityId: control.entityId, value }),
+    }, 10000);
+    if (payload.control) {
+      payload.control.kind = kind;
+      getAudioToneControls()[kind] = payload.control;
+      if (Date.now() >= audioToneHoldUntil[kind]) state.audio[kind] = normalizeAudioControlValue(payload.control, state.audio[kind]);
+    }
+    scheduleAudioSync();
+    return payload.control || null;
+  } catch (error) {
+    addHaLog("error", `${titleCase(kind)} control failed`, error.message || String(error));
+    showToast(`${titleCase(kind)} command failed`);
+    return null;
+  }
 }
 
 async function loadMediaPlayersFromHomeAssistant(options = {}) {
@@ -829,6 +1030,7 @@ async function loadMediaPlayersFromHomeAssistant(options = {}) {
     const selected = players.find((entity) => entity.entityId === selectedId) || players[0];
     if (selected && !selectedId) state.integrations.homeAssistant.selectedMediaPlayerId = selected.entityId;
     if (selected) applyMediaEntityState(selected);
+    if (selected) await loadAudioControlsForSelected({ quiet: true });
     saveConfig({ toast: !options.quiet });
     renderMediaPlayerList();
     renderAudio();
@@ -855,14 +1057,21 @@ async function pollHomeAssistantMediaPlayer(options = {}) {
   if (!entityId) return;
   if (!options.force && state.currentPage !== "audio") return;
   if (!options.force && document.visibilityState === "hidden") return;
-  if (!options.force && Date.now() - lastAudioUserInteractionAt < 900) return;
+  if (!options.force && Date.now() - lastAudioUserInteractionAt < 650) return;
   if (haAudioSyncInFlight) return;
 
   haAudioSyncInFlight = true;
   try {
-    const players = await fetchMediaStatesViaLocalBackend([entityId]);
+    const [players, controls] = await Promise.all([
+      fetchMediaStatesViaLocalBackend([entityId]),
+      fetchAudioControlStatesViaLocalBackend().catch((error) => {
+        addHaLog("warn", "Audio tone sync skipped", error.message || String(error));
+        return null;
+      }),
+    ]);
     players.forEach(upsertMediaPlayerEntity);
     if (players[0]) applyMediaEntityState(players[0]);
+    if (controls) applyAudioControls(controls);
     renderAudio();
     renderMediaPlayerList();
     if (haAudioSyncLastError) haAudioSyncLastError = "";
@@ -884,17 +1093,11 @@ async function callMediaActionViaLocalBackend(action, value = null) {
   if (!baseUrl || !ha.token || !entityId) throw new Error("Missing Home Assistant media player config");
   const body = { url: baseUrl, token: ha.token, entityId, action };
   if (value !== null && value !== undefined) body.value = value;
-  const response = await fetch("/api/ha/media/action", {
+  const payload = await fetchJsonWithTimeout("/api/ha/media/action", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-  });
-  if (!response.ok) {
-    let message = `Local backend returned ${response.status}`;
-    try { const payload = await response.json(); message = payload.error || message; } catch (_) {}
-    throw new Error(message);
-  }
-  const payload = await response.json();
+  }, 12000);
   return payload.state;
 }
 
@@ -908,6 +1111,7 @@ async function sendAudioAction(action, value = null) {
     const entityState = await callMediaActionViaLocalBackend(action, value);
     if (entityState?.entityId) {
       if (action === "volume" && value !== null && value !== undefined) {
+        audioVolumeHoldUntil = Date.now() + AUDIO_VOLUME_SETTLE_MS;
         entityState.volumeLevel = clamp(Number(value), 0, 100) / 100;
       }
       if (action === "source" && value) {
@@ -1641,14 +1845,40 @@ function bindEvents() {
   document.getElementById("nextTrack").addEventListener("click", () => changeTrack(1));
   elements.playPause.addEventListener("click", togglePlayback);
   ["volume", "gain", "bass", "treble"].forEach((name) => {
-    document.getElementById(`${name}Slider`).addEventListener("input", (event) => {
+    const slider = document.getElementById(`${name}Slider`);
+    if (!slider) return;
+    const scheduleSliderCommand = (delay = 420) => {
+      if (name === "volume" && state.integrations.homeAssistant.selectedMediaPlayerId) {
+        audioVolumeHoldUntil = Date.now() + AUDIO_VOLUME_SETTLE_MS;
+        clearTimeout(audioVolumeDebounce);
+        audioVolumeDebounce = setTimeout(() => sendAudioAction("volume", state.audio.volume), delay);
+      }
+      if (["gain", "bass", "treble"].includes(name)) {
+        audioToneHoldUntil[name] = Date.now() + AUDIO_TONE_SETTLE_MS;
+        const control = getAudioToneControl(name);
+        if (control?.entityId) {
+          clearTimeout(audioToneDebounces[name]);
+          audioToneDebounces[name] = setTimeout(() => sendAudioToneAction(name, state.audio[name]), delay);
+        } else {
+          saveConfig();
+        }
+      }
+    };
+    slider.addEventListener("pointerdown", () => markAudioSliderActive(name, 60 * 1000));
+    slider.addEventListener("pointerup", () => { releaseAudioSlider(name); scheduleSliderCommand(0); });
+    slider.addEventListener("pointercancel", () => releaseAudioSlider(name));
+    slider.addEventListener("blur", () => releaseAudioSlider(name));
+    slider.addEventListener("input", (event) => {
       state.audio[name] = Number(event.target.value);
       lastAudioUserInteractionAt = Date.now();
+      markAudioSliderActive(name);
+      setRangeVisual(event.target);
       renderAudio();
-      if (name === "volume" && state.integrations.homeAssistant.selectedMediaPlayerId) {
-        clearTimeout(audioVolumeDebounce);
-        audioVolumeDebounce = setTimeout(() => sendAudioAction("volume", state.audio.volume), 350);
-      }
+      scheduleSliderCommand(420);
+    });
+    slider.addEventListener("change", () => {
+      releaseAudioSlider(name);
+      scheduleSliderCommand(0);
     });
   });
 

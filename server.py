@@ -25,7 +25,9 @@ def _json(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> None:
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))
+    handler.send_header("Connection", "close")
     handler.end_headers()
+    handler.close_connection = True
     handler.wfile.write(body)
 
 
@@ -60,6 +62,7 @@ def _fetch_ha_covers(ha_url: str, token: str) -> list[dict]:
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
             "User-Agent": "SmartThermostatPanel/0.1",
+            "Connection": "close",
         },
         method="GET",
     )
@@ -120,6 +123,7 @@ def _fetch_ha_cover_states_for_entities(ha_url: str, token: str, entity_ids: lis
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
             "User-Agent": "SmartThermostatPanel/0.1",
+            "Connection": "close",
         },
         method="GET",
     )
@@ -164,6 +168,7 @@ def _ha_json_request(ha_url: str, token: str, method: str, path: str, payload: d
         "Authorization": f"Bearer {token}",
         "Accept": "application/json",
         "User-Agent": "SmartThermostatPanel/0.1",
+        "Connection": "close",
     }
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
@@ -232,6 +237,7 @@ def _fetch_ha_media_players(ha_url: str, token: str) -> list[dict]:
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
             "User-Agent": "SmartThermostatPanel/0.1",
+            "Connection": "close",
         },
         method="GET",
     )
@@ -256,6 +262,12 @@ def _fetch_ha_media_players(ha_url: str, token: str) -> list[dict]:
 
 
 def _fetch_ha_media_states_for_entities(ha_url: str, token: str, entity_ids: list[str]) -> list[dict]:
+    """Fetch selected media player states without pulling every HA entity.
+
+    The panel polls this endpoint while the Audio page is active, so keep it
+    lightweight. The old version used /api/states for every poll; this asks HA
+    only for the selected media_player entity.
+    """
     wanted = []
     seen = set()
     for raw in entity_ids or []:
@@ -264,42 +276,7 @@ def _fetch_ha_media_states_for_entities(ha_url: str, token: str, entity_ids: lis
             continue
         seen.add(entity_id)
         wanted.append(entity_id)
-    if not wanted:
-        return []
-
-    ha_url = _normalize_ha_url(ha_url)
-    token = (token or "").strip()
-    if not token:
-        raise ValueError("Missing Home Assistant token")
-
-    req = request.Request(
-        f"{ha_url}/api/states",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-            "User-Agent": "SmartThermostatPanel/0.1",
-        },
-        method="GET",
-    )
-    try:
-        with request.urlopen(req, timeout=8) as resp:
-            raw = resp.read()
-    except error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")[:500]
-        raise RuntimeError(f"Home Assistant returned HTTP {exc.code}: {body}") from exc
-    except error.URLError as exc:
-        raise RuntimeError(f"Could not reach Home Assistant: {exc.reason}") from exc
-
-    states = json.loads(raw.decode("utf-8"))
-    wanted_set = set(wanted)
-    players = []
-    for item in states:
-        entity_id = str(item.get("entity_id", ""))
-        if entity_id not in wanted_set:
-            continue
-        players.append(_normalize_media_player_item(ha_url, item))
-    by_id = {item["entityId"]: item for item in players}
-    return [by_id[entity_id] for entity_id in wanted if entity_id in by_id]
+    return [_fetch_ha_media_state(ha_url, token, entity_id) for entity_id in wanted]
 
 
 def _fetch_ha_media_state(ha_url: str, token: str, entity_id: str) -> dict:
@@ -309,6 +286,137 @@ def _fetch_ha_media_state(ha_url: str, token: str, entity_id: str) -> dict:
     item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
     return _normalize_media_player_item(ha_url, item)
 
+
+
+
+def _normalize_number_control(item: dict, kind: str | None = None) -> dict:
+    attrs = item.get("attributes") or {}
+    entity_id = str(item.get("entity_id", ""))
+    raw_state = item.get("state")
+    try:
+        value = float(raw_state)
+    except (TypeError, ValueError):
+        value = None
+
+    def num_attr(name: str, fallback: float | None = None) -> float | None:
+        raw = attrs.get(name, fallback)
+        try:
+            return float(raw) if raw is not None and raw != "" else fallback
+        except (TypeError, ValueError):
+            return fallback
+
+    return {
+        "kind": kind or "",
+        "entityId": entity_id,
+        "name": attrs.get("friendly_name") or entity_id,
+        "state": raw_state,
+        "value": value,
+        "min": num_attr("min", -10),
+        "max": num_attr("max", 10),
+        "step": num_attr("step", 1),
+        "unit": attrs.get("unit_of_measurement") or "",
+        "mode": attrs.get("mode") or "",
+    }
+
+
+def _compact_key(value: str) -> str:
+    return "".join(ch for ch in str(value or "").lower() if ch.isalnum())
+
+
+def _score_audio_control(item: dict, kind: str, player_entity_id: str, player_name: str) -> int:
+    attrs = item.get("attributes") or {}
+    entity_id = str(item.get("entity_id", ""))
+    friendly = str(attrs.get("friendly_name") or "")
+    haystack = f"{entity_id} {friendly}".lower()
+    compact = _compact_key(haystack)
+
+    kind_terms = {
+        "bass": ["bass"],
+        "treble": ["treble"],
+        "gain": ["gain", "subwoofergain", "subgain"],
+    }
+    if not any(term in compact for term in kind_terms.get(kind, [kind])):
+        return -1
+
+    player_slug = player_entity_id.split(".", 1)[-1]
+    player_compact = _compact_key(player_slug)
+    name_words = [word for word in str(player_name or "").lower().replace("-", " ").split() if len(word) > 2]
+
+    score = 5
+    if player_compact and player_compact in compact:
+        score += 20
+    for word in name_words:
+        if _compact_key(word) in compact:
+            score += 4
+    if "sonos" in compact:
+        score += 1
+    if kind == "gain" and "subwoofer" in compact:
+        score += 10
+    return score
+
+
+def _fetch_ha_audio_controls(ha_url: str, token: str, media_player_id: str, media_player_name: str = "") -> dict:
+    """Find HA number.* entities that represent tone controls for a media player.
+
+    Sonos exposes bass/treble/subwoofer-gain as number entities in Home Assistant,
+    not as generic media_player services. This lookup is done when selecting or
+    loading an audio device, not on every UI tick.
+    """
+    media_player_id = (media_player_id or "").strip()
+    if not media_player_id.startswith("media_player."):
+        raise ValueError("Entity must be a media_player.* entity")
+
+    states = _ha_json_request(ha_url, token, "GET", "/api/states")
+    if not isinstance(states, list):
+        return {"gain": None, "bass": None, "treble": None}
+
+    controls: dict[str, dict | None] = {"gain": None, "bass": None, "treble": None}
+    for kind in list(controls.keys()):
+        best = None
+        best_score = -1
+        for item in states:
+            entity_id = str(item.get("entity_id", ""))
+            if not entity_id.startswith("number."):
+                continue
+            score = _score_audio_control(item, kind, media_player_id, media_player_name)
+            if score > best_score:
+                best = item
+                best_score = score
+        if best is not None and best_score >= 8:
+            controls[kind] = _normalize_number_control(best, kind)
+    return controls
+
+
+def _fetch_ha_audio_control_states(ha_url: str, token: str, controls: dict) -> dict:
+    refreshed: dict[str, dict | None] = {}
+    for kind in ("gain", "bass", "treble"):
+        entity_id = str((controls.get(kind) or {}).get("entityId") or "").strip()
+        if not entity_id.startswith("number."):
+            refreshed[kind] = None
+            continue
+        item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
+        refreshed[kind] = _normalize_number_control(item, kind)
+    return refreshed
+
+
+def _call_number_service(ha_url: str, token: str, entity_id: str, value: int | float) -> dict:
+    entity_id = (entity_id or "").strip()
+    if not entity_id.startswith("number."):
+        raise ValueError("Entity must be a number.* entity")
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Missing or invalid numeric value") from exc
+
+    _ha_json_request(ha_url, token, "POST", "/api/services/number/set_value", {
+        "entity_id": entity_id,
+        "value": numeric_value,
+    })
+    try:
+        item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
+        return _normalize_number_control(item)
+    except Exception:
+        return {"entityId": entity_id, "name": entity_id, "value": numeric_value, "state": str(numeric_value)}
 
 def _call_media_service(ha_url: str, token: str, entity_id: str, action: str, value: int | float | None = None) -> dict:
     entity_id = (entity_id or "").strip()
@@ -416,12 +524,14 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Connection", "close")
         self.end_headers()
+        self.close_connection = True
         self.wfile.write(data)
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states"}:
+        if path not in {"/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action"}:
             self.send_error(404, "Not found")
             return
 
@@ -453,6 +563,32 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                 )
                 return _json(self, 200, {"ok": True, "players": players, "count": len(players)})
 
+            if path == "/api/ha/audio/controls":
+                controls = _fetch_ha_audio_controls(
+                    payload.get("url", ""),
+                    payload.get("token", ""),
+                    payload.get("mediaPlayerId", ""),
+                    payload.get("mediaPlayerName", ""),
+                )
+                return _json(self, 200, {"ok": True, "controls": controls})
+
+            if path == "/api/ha/audio/control_states":
+                controls = _fetch_ha_audio_control_states(
+                    payload.get("url", ""),
+                    payload.get("token", ""),
+                    payload.get("controls", {}),
+                )
+                return _json(self, 200, {"ok": True, "controls": controls})
+
+            if path == "/api/ha/audio/control/action":
+                control = _call_number_service(
+                    payload.get("url", ""),
+                    payload.get("token", ""),
+                    payload.get("entityId", ""),
+                    payload.get("value"),
+                )
+                return _json(self, 200, {"ok": True, "control": control})
+
             if path == "/api/ha/media/action":
                 state = _call_media_service(
                     payload.get("url", ""),
@@ -481,7 +617,12 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8080")))
     args = parser.parse_args()
 
-    httpd = ThreadingHTTPServer((args.host, args.port), SmartThermostatHandler)
+    class SmartThermostatHTTPServer(ThreadingHTTPServer):
+        daemon_threads = True
+        allow_reuse_address = True
+        request_queue_size = 32
+
+    httpd = SmartThermostatHTTPServer((args.host, args.port), SmartThermostatHandler)
     print(f"Smart Thermostat server running at http://{args.host}:{args.port}")
     print("Open http://localhost:%s" % args.port)
     httpd.serve_forever()

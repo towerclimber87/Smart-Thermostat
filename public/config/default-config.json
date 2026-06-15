@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "blinds": {
     "room": "living",
     "rooms": {
@@ -70,7 +70,12 @@
       "token": "",
       "coverEntities": [],
       "mediaPlayerEntities": [],
-      "selectedMediaPlayerId": ""
+      "selectedMediaPlayerId": "",
+      "audioControlEntities": {
+        "gain": null,
+        "bass": null,
+        "treble": null
+      }
     }
   }
 }

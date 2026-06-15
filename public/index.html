@@ -14,6 +14,16 @@
     <div class="ambient ambient-three"></div>
 
     <section class="panel-controls" aria-label="Panel controls">
+      <div id="tempMiniStatus" class="temp-mini-status" aria-label="Current thermostat summary">
+        <div class="temp-mini-pill current">
+          <span id="headerCurrentTemp">72°</span>
+          <small>Current</small>
+        </div>
+        <div id="headerSetPill" class="temp-mini-pill set cool">
+          <span id="headerSetTemp">70°</span>
+          <small>Set</small>
+        </div>
+      </div>
       <nav class="top-nav" aria-label="Screen navigation">
         <button class="nav-pill" data-goto="blinds">Blinds</button>
         <button class="nav-pill active" data-goto="thermostat">Thermostat</button>
@@ -114,22 +124,21 @@
 
             <div class="audio-side-card">
               <div class="audio-device-head">
-                <div>
-                  <p class="eyebrow">Media Device</p>
+                <div class="audio-device-name-block">
                   <h3 id="audioPlayerName">No device selected</h3>
+                  <span id="audioDeviceState" class="audio-state-pill">Idle</span>
                 </div>
-                <span id="audioDeviceState" class="audio-state-pill">Idle</span>
+
+                <div id="audioSourceCard" class="audio-source-card compact-source" hidden>
+                  <label for="audioSourceSelect">Source <strong id="audioSourceValue">—</strong></label>
+                  <select id="audioSourceSelect" aria-label="Audio source"></select>
+                </div>
               </div>
 
               <div class="transport-controls media-transport">
-                <button id="prevTrack" class="transport" aria-label="Previous track">‹‹</button>
+                <button id="prevTrack" class="transport" aria-label="Previous track">⏮</button>
                 <button id="playPause" class="transport primary" aria-label="Play or pause">▶</button>
-                <button id="nextTrack" class="transport" aria-label="Next track">››</button>
-              </div>
-
-              <div id="audioSourceCard" class="audio-source-card" hidden>
-                <label for="audioSourceSelect">Source <strong id="audioSourceValue">—</strong></label>
-                <select id="audioSourceSelect" aria-label="Audio source"></select>
+                <button id="nextTrack" class="transport" aria-label="Next track">⏭</button>
               </div>
 
               <div class="audio-volume-card">
