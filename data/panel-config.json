@@ -3709,7 +3709,7 @@
           "label": "Living Room",
           "lights": [
             {
-              "brightness": 100,
+              "brightness": 0,
               "color": "#ffd76f",
               "colorSupported": false,
               "haEntityId": "light.livingroom_light",
@@ -3717,10 +3717,10 @@
               "id": "ll-1",
               "lastBrightness": 100,
               "name": "Livingroom Light",
-              "on": true
+              "on": false
             },
             {
-              "brightness": 80,
+              "brightness": 0,
               "color": "#ffd76f",
               "colorSupported": false,
               "haEntityId": "light.kitchen_light",
@@ -3728,7 +3728,7 @@
               "id": "ll-2",
               "lastBrightness": 80,
               "name": "Kitchen Light",
-              "on": true
+              "on": false
             },
             {
               "brightness": 0,
@@ -3742,34 +3742,37 @@
               "on": false
             },
             {
-              "brightness": 80,
+              "brightness": 0,
               "color": "#ffd76f",
               "colorSupported": false,
               "haEntityId": "",
               "haName": "",
               "id": "living-light-mqfdjfqu-4",
+              "lastBrightness": 80,
               "name": "Light 4",
-              "on": true
+              "on": false
             },
             {
-              "brightness": 80,
+              "brightness": 0,
               "color": "#ffd76f",
               "colorSupported": false,
               "haEntityId": "",
               "haName": "",
               "id": "living-light-mqfdjfqu-5",
+              "lastBrightness": 80,
               "name": "Light 5",
-              "on": true
+              "on": false
             },
             {
-              "brightness": 80,
+              "brightness": 0,
               "color": "#ffd76f",
               "colorSupported": false,
               "haEntityId": "",
               "haName": "",
               "id": "living-light-mqfdjfqu-6",
+              "lastBrightness": 80,
               "name": "Light 6",
-              "on": true
+              "on": false
             }
           ]
         }
@@ -3808,6 +3811,6 @@
     },
     "version": 9
   },
-  "updatedAt": 1781540822,
-  "version": 42
+  "updatedAt": 1781543943,
+  "version": 51
 }

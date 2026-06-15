@@ -77,6 +77,7 @@ let setpointPreviewUntil = 0;
 let setpointPreviewTimeout = null;
 let alarmArmAwayTimer = null;
 let activeLightColorLightId = "";
+let suppressLightIconClickUntil = 0;
 let configSaveTimer = null;
 let configSaveInFlight = false;
 let configSaveQueued = false;
@@ -2919,8 +2920,10 @@ function updateLightCard(light) {
 
   const iconButton = card.querySelector("[data-light-icon-toggle]");
   if (iconButton) {
-    iconButton.setAttribute("aria-label", `${on ? "Turn off" : "Turn on"} ${displayName}`);
+    const colorHint = colorSupported ? ". Hold to change color." : "";
+    iconButton.setAttribute("aria-label", `${on ? "Turn off" : "Turn on"} ${displayName}${colorHint}`);
     iconButton.setAttribute("aria-pressed", on ? "true" : "false");
+    iconButton.setAttribute("title", colorSupported ? "Tap to toggle. Hold to change color." : "Tap to toggle.");
   }
 
   const slider = card.querySelector("[data-light-slider]");
@@ -2945,11 +2948,6 @@ function renderLights() {
   if (!elements.lightCards) return;
   elements.lightCards.innerHTML = "";
   const lights = room.lights || [];
-  const activeCount = lights.filter((light) => light.on !== false && Number(light.brightness || 0) > 0).length;
-  if (elements.lightRoomSummary) {
-    const label = `${activeCount} of ${lights.length} light${lights.length === 1 ? "" : "s"} on`;
-    elements.lightRoomSummary.textContent = label;
-  }
   elements.lightCards.style.setProperty("--light-columns", clamp(lights.length, 1, 4));
   lights.forEach((light) => {
     light.brightness = clamp(Number(light.brightness ?? 80), 0, 100);
@@ -2979,12 +2977,6 @@ function renderLights() {
             </svg>
           </span>
         </button>
-        <div class="light-color-row" data-light-color-row hidden>
-          <button class="light-color-wheel" data-light-color-open data-light-id="${safeLightId}" type="button" title="Change light color" aria-label="Change ${safeLightName} color">
-            <span class="sr-only">${safeLightName} color</span>
-            <span class="light-color-swatch" data-light-color-swatch></span>
-          </button>
-        </div>
         <label class="light-slider-rail" for="lightSlider-${safeLightId}">
           <span class="sr-only">${safeLightName} brightness</span>
           <input id="lightSlider-${safeLightId}" class="light-slider light-slider-vertical" data-light-slider data-light-id="${safeLightId}" type="range" min="0" max="100" step="1" value="${Math.round(light.brightness)}" aria-label="${safeLightName} brightness" />
@@ -3064,17 +3056,39 @@ function applyLightPresetColor(color) {
   renderLightColorPicker();
 }
 
-function toggleLight(lightId) {
-  const light = findLightInActiveRoom(lightId);
+function setLightPowerState(light, on) {
   if (!light) return;
-  const nextOn = !(light.on !== false && Number(light.brightness || 0) > 0);
-  light.on = nextOn;
-  if (nextOn && Number(light.brightness || 0) <= 0) light.brightness = clamp(Number(light.lastBrightness || 80), 1, 100);
-  if (!nextOn) {
+  light.on = Boolean(on);
+  if (light.on) {
+    if (Number(light.brightness || 0) <= 0) light.brightness = clamp(Number(light.lastBrightness || 80), 1, 100);
+  } else {
     light.lastBrightness = clamp(Number(light.brightness || light.lastBrightness || 80), 1, 100);
     light.brightness = 0;
   }
   light.localHoldUntil = Date.now() + 1800;
+}
+
+async function applyLightAction(action) {
+  const room = getActiveLightRoom();
+  const lights = Array.isArray(room.lights) ? room.lights : [];
+  if (!lights.length) return;
+  const turnOn = String(action || "").includes("on");
+  lastLightUserInteractionAt = Date.now();
+
+  lights.forEach((light) => setLightPowerState(light, turnOn));
+  saveConfig();
+  renderLights();
+
+  const linkedTargets = lights.filter((light) => light.haEntityId);
+  if (!linkedTargets.length) return;
+  await Promise.all(linkedTargets.map((light) => sendLightToHomeAssistant(light, turnOn ? "on" : "off", light.brightness)));
+}
+
+function toggleLight(lightId) {
+  const light = findLightInActiveRoom(lightId);
+  if (!light) return;
+  const nextOn = !(light.on !== false && Number(light.brightness || 0) > 0);
+  setLightPowerState(light, nextOn);
   updateLightCard(light);
   saveConfig();
   sendLightToHomeAssistant(light, nextOn ? "on" : "off", light.brightness);
@@ -3691,6 +3705,8 @@ function bindLightInteractions() {
   if (!elements.lightCards) return;
   let timer = null;
   let press = null;
+  let iconTimer = null;
+  let iconPress = null;
 
   const cancel = () => {
     clearTimeout(timer);
@@ -3698,9 +3714,36 @@ function bindLightInteractions() {
     press = null;
   };
 
+  const cancelIconHold = () => {
+    clearTimeout(iconTimer);
+    iconTimer = null;
+    iconPress = null;
+  };
+
   elements.lightCards.addEventListener("pointerdown", (event) => {
     if (event.button !== undefined && event.button !== 0) return;
-    if (event.target.closest("[data-light-icon-toggle], [data-light-slider], [data-light-color-open], .light-color-wheel")) return;
+    const iconButton = event.target.closest("[data-light-icon-toggle]");
+    if (iconButton) {
+      const light = findLightInActiveRoom(iconButton.dataset.lightId);
+      if (!light?.colorSupported) return;
+      iconPress = {
+        pointerId: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+        lightId: iconButton.dataset.lightId,
+      };
+      try { iconButton.setPointerCapture(event.pointerId); } catch (_) {}
+      iconTimer = window.setTimeout(() => {
+        const pending = iconPress;
+        cancelIconHold();
+        if (!pending) return;
+        suppressLightIconClickUntil = Date.now() + 700;
+        openLightColorPicker(pending.lightId);
+      }, 650);
+      return;
+    }
+
+    if (event.target.closest("[data-light-slider], [data-light-color-open], .light-color-wheel")) return;
     const card = event.target.closest("[data-light-card]");
     if (!card) return;
     press = {
@@ -3718,14 +3761,23 @@ function bindLightInteractions() {
   });
 
   elements.lightCards.addEventListener("pointermove", (event) => {
-    if (!press || press.pointerId !== event.pointerId) return;
-    const dx = Math.abs(event.clientX - press.x);
-    const dy = Math.abs(event.clientY - press.y);
-    if (dx > 12 || dy > 12) cancel();
+    if (press && press.pointerId === event.pointerId) {
+      const dx = Math.abs(event.clientX - press.x);
+      const dy = Math.abs(event.clientY - press.y);
+      if (dx > 12 || dy > 12) cancel();
+    }
+    if (iconPress && iconPress.pointerId === event.pointerId) {
+      const dx = Math.abs(event.clientX - iconPress.x);
+      const dy = Math.abs(event.clientY - iconPress.y);
+      if (dx > 12 || dy > 12) cancelIconHold();
+    }
   });
 
   ["pointerup", "pointercancel", "pointerleave"].forEach((name) => {
-    elements.lightCards.addEventListener(name, cancel);
+    elements.lightCards.addEventListener(name, () => {
+      cancel();
+      cancelIconHold();
+    });
   });
 }
 
@@ -4081,6 +4133,7 @@ function bindEvents() {
     pollHomeAssistantLights({ force: true });
   });
   document.querySelectorAll("[data-blind-action]").forEach((button) => button.addEventListener("click", () => applyBlindAction(button.dataset.blindAction)));
+  document.querySelectorAll("[data-light-action]").forEach((button) => button.addEventListener("click", () => applyLightAction(button.dataset.lightAction)));
   elements.blindCards.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-blind-id]");
     if (!button) return;
@@ -4096,6 +4149,7 @@ function bindEvents() {
     const iconButton = event.target.closest("[data-light-icon-toggle]");
     if (!iconButton) return;
     event.preventDefault();
+    if (Date.now() < suppressLightIconClickUntil) return;
     toggleLight(iconButton.dataset.lightId);
   });
   elements.lightCards?.addEventListener("input", (event) => {

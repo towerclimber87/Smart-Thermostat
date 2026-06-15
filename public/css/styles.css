@@ -382,7 +382,7 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
 }
 .blind-card {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 10px;
   padding: clamp(10px, 1.1vw, 14px);
   min-width: 0;
@@ -3300,6 +3300,16 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   margin-top: -10px;
   margin-bottom: -2px;
 }
+
+.light-room-actions-row {
+  justify-content: center;
+}
+.light-room-actions {
+  margin-left: 0;
+}
+.light-room-actions .scene-btn {
+  min-width: clamp(140px, 12vw, 178px);
+}
 .light-room-status {
   min-height: 42px;
   padding: 0 18px;
@@ -3372,7 +3382,7 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   place-items: center;
-  gap: 12px;
+  gap: clamp(16px, 1.35vw, 24px);
 }
 .light-icon-wrap {
   width: clamp(58px, 5vw, 76px);
@@ -3389,7 +3399,7 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   width: 100%;
   display: grid;
   place-items: center;
-  padding: 4px 0;
+  padding: 8px 0 28px;
 }
 .light-slider.light-slider-vertical {
   width: 56px;
@@ -3441,10 +3451,13 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   box-shadow: 0 14px 34px rgba(255,199,77,.28), inset 0 1px 0 rgba(255,255,255,.72);
 }
 .light-value-stack {
+  position: relative;
+  z-index: 2;
   display: grid;
   place-items: center;
   gap: 3px;
   min-height: 44px;
+  margin-top: 4px;
   color: rgba(255,244,208,.96);
 }
 .light-value-stack strong {
@@ -3541,6 +3554,20 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
     0 0 calc(10px + var(--light-glow) * 30px) rgba(var(--light-color-rgb), .25),
     inset 0 1px 0 rgba(255,255,255,.20);
 }
+
+.light-card.color-capable .modern-light-icon-wrap::after {
+  content: "";
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: conic-gradient(from 90deg, #ff3b3b, #ffca3a, #63f1ad, #4deeff, #866cff, #ff5ec7, #ff3b3b);
+  border: 2px solid rgba(9, 15, 26, .86);
+  box-shadow: 0 0 12px rgba(var(--light-color-rgb), .38);
+}
+
 .modern-light-icon-wrap::before {
   content: "";
   position: absolute;
@@ -3633,7 +3660,7 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   box-shadow: 0 0 18px rgba(var(--light-color-rgb), .65), inset 0 1px 0 rgba(255,255,255,.44);
 }
 .light-card.color-capable .light-value-stack {
-  margin-top: -2px;
+  margin-top: 4px;
 }
 .light-card .light-slider.light-slider-vertical::-webkit-slider-runnable-track {
   background:
@@ -3652,7 +3679,7 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   box-shadow: 0 14px 34px rgba(var(--light-color-rgb), .30), inset 0 1px 0 rgba(255,255,255,.72);
 }
 .light-vertical-body {
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
 /* 2026-06-15 touchscreen light color popup + thermostat info */
@@ -3715,7 +3742,7 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   -webkit-appearance: none;
 }
 .light-vertical-body {
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
 .light-color-overlay,
@@ -3752,7 +3779,7 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   backdrop-filter: blur(26px);
   -webkit-backdrop-filter: blur(26px);
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   gap: clamp(10px, 1vw, 16px);
 }
 .light-color-current {
