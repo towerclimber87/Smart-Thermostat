@@ -1906,3 +1906,154 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
 .blind-card[data-blind-card] .blind-percent {
   text-shadow: 0 2px 12px rgba(0,0,0,.24);
 }
+
+/* 2026-06-15 thermostat control pass */
+.thermostat-bottom-row {
+  position: relative;
+  z-index: 2;
+  width: min(1900px, 82vw);
+  margin: 0 auto clamp(12px, 2vh, 22px);
+  display: grid;
+  grid-template-columns: minmax(154px, 220px) minmax(360px, 472px) minmax(154px, 220px);
+  align-items: center;
+  justify-content: center;
+  gap: clamp(18px, 2.4vw, 42px);
+}
+.thermostat-bottom-row .mode-deck {
+  width: 100%;
+  margin: 0;
+}
+.thermostat-bottom-row .bottom-chip {
+  position: static;
+  top: auto;
+  left: auto;
+  right: auto;
+  transform: none;
+  width: min(220px, 100%);
+  min-width: 154px;
+  min-height: 58px;
+  height: 58px;
+  padding: 12px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+.thermostat-bottom-row .humidity-chip { justify-self: start; }
+.thermostat-bottom-row .fan-chip { justify-self: end; }
+.humidity-chip strong,
+.fan-chip strong {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.fan-chip {
+  text-align: left;
+  cursor: pointer;
+}
+.fan-chip:hover {
+  border-color: rgba(77,238,255,.25);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.12), 0 18px 42px rgba(0,0,0,.22), 0 0 28px rgba(77,238,255,.08);
+}
+.fan-segments { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+.thermo-dial .current-label,
+.thermo-dial .target-row,
+.thermo-dial .current-temp {
+  transition: opacity .18s ease, transform .18s ease, color .18s ease, text-shadow .18s ease;
+}
+.thermo-dial.setpoint-preview .current-label { color: rgba(77,238,255,.88); }
+.thermo-dial.setpoint-preview .current-temp {
+  color: #ffffff;
+  text-shadow: 0 0 30px rgba(77,238,255,.22);
+}
+.thermo-dial.setpoint-preview .target-row { color: rgba(222,235,251,.76); }
+
+.away-mode-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 14;
+  display: grid;
+  place-items: center;
+  padding: clamp(26px, 4vw, 56px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .22s ease;
+}
+.away-mode-overlay::before {
+  content: "";
+  position: absolute;
+  inset: clamp(8px, 1vw, 16px);
+  border-radius: clamp(28px, 3vw, 44px);
+  background:
+    radial-gradient(circle at 50% 40%, rgba(185, 134, 255, .28), transparent 33%),
+    rgba(2, 5, 12, .58);
+  backdrop-filter: blur(13px);
+  -webkit-backdrop-filter: blur(13px);
+}
+.away-mode-overlay.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+.away-home-card {
+  position: relative;
+  z-index: 1;
+  width: min(720px, 78vw);
+  min-height: clamp(260px, 36vh, 390px);
+  border-radius: clamp(34px, 4vw, 58px);
+  border: 1px solid rgba(222, 207, 255, .26);
+  background:
+    radial-gradient(circle at 78% 14%, rgba(255,255,255,.20), transparent 23%),
+    linear-gradient(145deg, rgba(223, 199, 255, .24), rgba(90, 47, 160, .22)),
+    rgba(10, 15, 30, .88);
+  box-shadow: 0 38px 100px rgba(0,0,0,.52), inset 0 1px 0 rgba(255,255,255,.20);
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 14px;
+  padding: clamp(26px, 4vw, 50px);
+  text-align: center;
+}
+.away-home-card span {
+  color: #d9c6ff;
+  text-transform: uppercase;
+  letter-spacing: .22em;
+  font-size: clamp(.72rem, .95vw, .9rem);
+  font-weight: 950;
+}
+.away-home-card strong {
+  display: block;
+  font-size: clamp(3.4rem, 6.8vw, 7rem);
+  line-height: .88;
+  letter-spacing: -.08em;
+}
+.away-home-card em {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 58px;
+  padding: 0 28px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #e9ddff, #b986ff);
+  color: #1a0d2b;
+  font-style: normal;
+  font-size: clamp(1rem, 1.55vw, 1.35rem);
+  font-weight: 950;
+  box-shadow: 0 14px 36px rgba(185,134,255,.28), inset 0 1px 0 rgba(255,255,255,.44);
+}
+
+@media (max-width: 1200px) {
+  .thermostat-bottom-row {
+    width: min(980px, 92vw);
+    grid-template-columns: minmax(144px, 188px) minmax(330px, 1fr) minmax(144px, 188px);
+    gap: 16px;
+  }
+}
+@media (max-width: 900px) {
+  .thermostat-bottom-row {
+    width: min(520px, 92vw);
+    grid-template-columns: 1fr;
+  }
+  .thermostat-bottom-row .bottom-chip { display: none; }
+  .thermostat-bottom-row .mode-deck { width: 100%; }
+  .away-home-card { width: min(520px, 86vw); min-height: 250px; }
+}

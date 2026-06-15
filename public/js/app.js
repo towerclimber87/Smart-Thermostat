@@ -23,12 +23,16 @@ const AUDIO_PLAYBACK_LOCK_MS = 1400;
 const AUDIO_SLIDER_RELEASE_MS = 900;
 const AUDIO_VOLUME_SETTLE_MS = 1800;
 const AUDIO_TONE_SETTLE_MS = 1500;
+const SETPOINT_PREVIEW_MS = 2000;
+const FAN_SEQUENCE = ["off", "on", "auto"];
 let lastBlindUserInteractionAt = 0;
 let lastAudioUserInteractionAt = 0;
 let audioSliderActive = { name: "", until: 0 };
 let audioVolumeHoldUntil = 0;
 let audioToneHoldUntil = { gain: 0, bass: 0, treble: 0 };
 let audioPickerOpenedAt = 0;
+let setpointPreviewUntil = 0;
+let setpointPreviewTimeout = null;
 
 const defaultBlindConfig = {
   room: "living",
@@ -122,14 +126,20 @@ const elements = {
   toast: document.getElementById("toast"),
   currentTemp: document.getElementById("currentTemp"),
   targetTemp: document.getElementById("targetTemp"),
+  primaryTempLabel: document.getElementById("primaryTempLabel"),
+  secondaryTempLabel: document.getElementById("secondaryTempLabel"),
+  secondaryTempRow: document.getElementById("secondaryTempRow"),
   humidityValue: document.getElementById("humidityValue"),
   thermoDial: document.getElementById("thermoDial"),
   modeBadge: document.getElementById("modeBadge"),
   runtimeState: document.getElementById("runtimeState"),
   awayToggle: document.getElementById("awayToggle"),
+  awayModeOverlay: document.getElementById("awayModeOverlay"),
+  awayHomeButton: document.getElementById("awayHomeButton"),
   awayHeatValue: document.getElementById("awayHeatValue"),
   awayCoolValue: document.getElementById("awayCoolValue"),
   fanSummary: document.getElementById("fanSummary"),
+  fanChip: document.getElementById("fanChip"),
   dialMinLabel: document.getElementById("dialMinLabel"),
   dialMaxLabel: document.getElementById("dialMaxLabel"),
   settingsOverlay: document.getElementById("settingsOverlay"),
@@ -420,8 +430,41 @@ function applyAwayTarget() {
   t.targetTemp = t.mode === "heat" ? t.awayHeat : t.awayCool;
 }
 
+function isSetpointPreviewActive() {
+  return Date.now() < setpointPreviewUntil;
+}
+
+function holdSetpointPreview(duration = SETPOINT_PREVIEW_MS) {
+  setpointPreviewUntil = Date.now() + duration;
+  if (setpointPreviewTimeout) window.clearTimeout(setpointPreviewTimeout);
+  setpointPreviewTimeout = window.setTimeout(() => {
+    setpointPreviewUntil = 0;
+    renderThermostat();
+  }, duration + 35);
+}
+
+function setHomeMode() {
+  const t = state.thermostat;
+  if (!t.away) return;
+  t.away = false;
+  const { min, max } = getModeLimits();
+  t.targetTemp = clamp(t.lastComfortTarget, min, max);
+  renderThermostat();
+  showToast("Home comfort restored");
+}
+
+function cycleFanMode() {
+  const t = state.thermostat;
+  const currentIndex = FAN_SEQUENCE.indexOf(t.fan);
+  const next = FAN_SEQUENCE[(currentIndex + 1) % FAN_SEQUENCE.length] || "auto";
+  t.fan = next;
+  renderThermostat();
+  showToast(`Fan ${titleCase(next)}`);
+}
+
 function setTargetTemp(temp, options = {}) {
   const t = state.thermostat;
+  if (options.preview) holdSetpointPreview();
   if (t.away && !options.keepAway) {
     t.away = false;
     showToast("Returned home");
@@ -436,16 +479,22 @@ function setTargetTemp(temp, options = {}) {
 function renderThermostat() {
   const t = state.thermostat;
   const { min, max } = getModeLimits();
-  elements.currentTemp.textContent = Math.round(t.currentTemp);
-  elements.targetTemp.textContent = Math.round(t.targetTemp);
-  if (elements.headerCurrentTemp) elements.headerCurrentTemp.textContent = `${Math.round(t.currentTemp)}°`;
-  if (elements.headerSetTemp) elements.headerSetTemp.textContent = `${Math.round(t.targetTemp)}°`;
+  const showingSetpoint = isSetpointPreviewActive();
+  const currentRounded = Math.round(t.currentTemp);
+  const targetRounded = Math.round(t.targetTemp);
+
+  elements.currentTemp.textContent = showingSetpoint ? targetRounded : currentRounded;
+  elements.targetTemp.textContent = showingSetpoint ? currentRounded : targetRounded;
+  if (elements.primaryTempLabel) elements.primaryTempLabel.textContent = showingSetpoint ? "Set To" : "Current";
+  if (elements.secondaryTempLabel) elements.secondaryTempLabel.textContent = showingSetpoint ? "Current" : "Set to";
+  if (elements.headerCurrentTemp) elements.headerCurrentTemp.textContent = `${currentRounded}°`;
+  if (elements.headerSetTemp) elements.headerSetTemp.textContent = `${targetRounded}°`;
   if (elements.headerSetPill) {
     elements.headerSetPill.classList.toggle("heat", t.mode === "heat" && !t.away);
     elements.headerSetPill.classList.toggle("cool", t.mode === "cool" && !t.away);
     elements.headerSetPill.classList.toggle("away", t.away);
   }
-  elements.humidityValue.textContent = t.humidity;
+  elements.humidityValue.textContent = `${Math.round(t.humidity)}%`;
   elements.awayHeatValue.textContent = t.awayHeat;
   elements.awayCoolValue.textContent = t.awayCool;
   elements.fanSummary.textContent = titleCase(t.fan);
@@ -458,6 +507,7 @@ function renderThermostat() {
 
   setDialVisual(t.targetTemp);
   elements.thermoDial.classList.toggle("heat", t.mode === "heat");
+  elements.thermoDial.classList.toggle("setpoint-preview", showingSetpoint);
   elements.app.classList.toggle("away-active", t.away);
   elements.app.classList.toggle("heat-mode", t.mode === "heat" && !t.away);
   elements.app.classList.toggle("cool-mode", t.mode === "cool" && !t.away);
@@ -471,6 +521,10 @@ function renderThermostat() {
   elements.awayToggle.classList.toggle("active", t.away);
   elements.awayToggle.classList.toggle("home-state", t.away);
   elements.awayToggle.textContent = t.away ? "Home" : "Away";
+  if (elements.awayModeOverlay) {
+    elements.awayModeOverlay.classList.toggle("open", t.away);
+    elements.awayModeOverlay.setAttribute("aria-hidden", t.away ? "false" : "true");
+  }
 
   document.querySelectorAll(".mode-button[data-mode]").forEach((button) => {
     button.classList.toggle("active", button.dataset.mode === t.mode);
@@ -495,22 +549,20 @@ function setMode(mode) {
 }
 
 function adjustSetpoint(delta) {
-  setTargetTemp(state.thermostat.targetTemp + delta);
+  setTargetTemp(state.thermostat.targetTemp + delta, { preview: true });
 }
 
 function toggleAway() {
   const t = state.thermostat;
-  t.away = !t.away;
   if (t.away) {
-    t.lastComfortTarget = t.targetTemp;
-    applyAwayTarget();
-    showToast("Away mode active");
-  } else {
-    const { min, max } = getModeLimits();
-    t.targetTemp = clamp(t.lastComfortTarget, min, max);
-    showToast("Home comfort restored");
+    setHomeMode();
+    return;
   }
+  t.away = true;
+  t.lastComfortTarget = t.targetTemp;
+  applyAwayTarget();
   renderThermostat();
+  showToast("Away mode active");
 }
 
 function setAwaySafety(kind, delta) {
@@ -1878,14 +1930,19 @@ function bindSwipeNavigation() {
 
 function bindThermostatDial() {
   let dragging = false;
-  const updateFromEvent = (event) => setTargetTemp(pointerToTemp(event.clientX, event.clientY));
+  const updateFromEvent = (event) => setTargetTemp(pointerToTemp(event.clientX, event.clientY), { preview: true });
   elements.thermoDial.addEventListener("pointerdown", (event) => {
     if (event.button !== undefined && event.button !== 0) return;
     event.preventDefault(); event.stopPropagation(); dragging = true;
     elements.thermoDial.setPointerCapture(event.pointerId); updateFromEvent(event);
   });
   elements.thermoDial.addEventListener("pointermove", (event) => { if (dragging) { event.preventDefault(); updateFromEvent(event); } });
-  const finishDial = (event) => { if (!dragging) return; dragging = false; try { elements.thermoDial.releasePointerCapture(event.pointerId); } catch (_) {} };
+  const finishDial = (event) => {
+    if (!dragging) return;
+    dragging = false;
+    holdSetpointPreview();
+    try { elements.thermoDial.releasePointerCapture(event.pointerId); } catch (_) {}
+  };
   elements.thermoDial.addEventListener("pointerup", finishDial);
   elements.thermoDial.addEventListener("pointercancel", finishDial);
   elements.thermoDial.addEventListener("keydown", (event) => {
@@ -2098,6 +2155,8 @@ function bindEvents() {
   document.getElementById("tempDown").addEventListener("click", () => adjustSetpoint(-1));
   document.getElementById("tempUp").addEventListener("click", () => adjustSetpoint(1));
   elements.awayToggle.addEventListener("click", toggleAway);
+  elements.awayHomeButton?.addEventListener("click", setHomeMode);
+  elements.fanChip?.addEventListener("click", cycleFanMode);
 
   elements.settingsButton.addEventListener("click", openSettings);
   elements.settingsClose.addEventListener("click", closeSettings);

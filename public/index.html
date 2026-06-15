@@ -68,20 +68,15 @@
           </div>
 
           <div class="thermostat-focus">
-            <div id="humidityChip" class="floating-chip chip-left">
-              <span>Humidity</span>
-              <strong><span id="humidityValue">45</span>%</strong>
-            </div>
-
             <button id="tempDown" class="temp-step temp-left" aria-label="Decrease setpoint">−</button>
 
             <div id="thermoDial" class="thermo-dial" aria-label="Drag thermostat dial to change setpoint" role="slider" aria-valuemin="50" aria-valuemax="90" aria-valuenow="70" tabindex="0">
               <div class="dial-glow"></div>
               <div class="dial-knob" aria-hidden="true"></div>
               <div class="dial-inner">
-                <p class="current-label">Current</p>
+                <p id="primaryTempLabel" class="current-label">Current</p>
                 <div class="current-temp"><span id="currentTemp">72</span><small>°F</small></div>
-                <div class="target-row">Set to <strong><span id="targetTemp">70</span>°</strong></div>
+                <div id="secondaryTempRow" class="target-row"><span id="secondaryTempLabel">Set to</span> <strong><span id="targetTemp">70</span>°</strong></div>
                 <div id="modeBadge" class="mode-badge cool">Cool Target</div>
               </div>
               <div id="dialMinLabel" class="dial-range min">65°</div>
@@ -89,18 +84,33 @@
             </div>
 
             <button id="tempUp" class="temp-step temp-right" aria-label="Increase setpoint">+</button>
+          </div>
 
-            <div id="fanChip" class="floating-chip chip-right">
+          <div class="thermostat-bottom-row">
+            <div id="humidityChip" class="floating-chip bottom-chip humidity-chip">
+              <span>Humidity</span>
+              <strong id="humidityValue">45%</strong>
+            </div>
+
+            <div class="mode-deck" aria-label="Thermostat mode controls">
+              <button class="mode-button active" data-mode="cool">Cool</button>
+              <button class="mode-button" data-mode="heat">Heat</button>
+              <button id="awayToggle" class="mode-button away">Away</button>
+            </div>
+
+            <button id="fanChip" class="floating-chip bottom-chip fan-chip" type="button" aria-label="Change fan mode">
               <span>Fan</span>
               <strong id="fanSummary">Auto</strong>
-            </div>
+            </button>
           </div>
 
-          <div class="mode-deck" aria-label="Thermostat mode controls">
-            <button class="mode-button active" data-mode="cool">Cool</button>
-            <button class="mode-button" data-mode="heat">Heat</button>
-            <button id="awayToggle" class="mode-button away">Away</button>
-          </div>
+          <section id="awayModeOverlay" class="away-mode-overlay" aria-hidden="true">
+            <button id="awayHomeButton" class="away-home-card" type="button" aria-label="Set thermostat back to home mode">
+              <span>Away Mode</span>
+              <strong>In Away Mode</strong>
+              <em>Press to set Home</em>
+            </button>
+          </section>
         </section>
       </article>
 
@@ -230,9 +240,10 @@
 
           <div class="settings-section">
             <div><h3>Fan</h3></div>
-            <div class="segmented" role="group" aria-label="Fan mode">
-              <button class="segment active" data-fan="auto">Auto</button>
+            <div class="segmented fan-segments" role="group" aria-label="Fan mode">
+              <button class="segment" data-fan="off">Off</button>
               <button class="segment" data-fan="on">On</button>
+              <button class="segment active" data-fan="auto">Auto</button>
             </div>
           </div>
         </div>
