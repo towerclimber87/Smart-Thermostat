@@ -12,6 +12,10 @@
     <div class="ambient ambient-one"></div>
     <div class="ambient ambient-two"></div>
     <div class="ambient ambient-three"></div>
+    <div class="climate-backdrop" aria-hidden="true">
+      <span class="climate-symbol climate-symbol-cold">❄</span>
+      <span class="climate-symbol climate-symbol-hot">☀</span>
+    </div>
 
     <section class="panel-controls" aria-label="Panel controls">
       <div id="tempMiniStatus" class="temp-mini-status" aria-label="Current thermostat summary">
@@ -26,8 +30,8 @@
       </div>
       <nav class="top-nav" aria-label="Screen navigation">
         <button class="nav-pill" data-goto="blinds">Blinds</button>
-        <button class="nav-pill active" data-goto="thermostat">Thermostat</button>
         <button class="nav-pill" data-goto="audio">Audio</button>
+        <button class="nav-pill active" data-goto="thermostat">Thermostat</button>
         <button class="nav-pill" data-goto="lights">Lights</button>
         <button class="nav-pill" data-goto="room">Room</button>
       </nav>
@@ -57,6 +61,93 @@
           </div>
 
           <div id="blindCards" class="blind-cards blind-columns"></div>
+        </section>
+      </article>
+
+      <article class="screen screen-audio" data-screen="audio" aria-label="Audio controls">
+        <section class="audio-stage panel">
+          <div class="audio-shell">
+            <div class="audio-main-card">
+              <div id="albumArt" class="audio-art" aria-hidden="true">
+                <div id="albumInitials" class="audio-art-initials">♪</div>
+              </div>
+              <div class="audio-now">
+                <p class="eyebrow">Now Playing</p>
+                <h2 id="trackTitle">Select Audio Device</h2>
+                <p id="trackArtist" class="audio-artist">Open settings to choose a media player.</p>
+                <p id="trackAlbum" class="audio-album"></p>
+                <div class="audio-progress-wrap" aria-hidden="true">
+                  <div class="progress-bar audio-progress"><span id="trackProgress"></span></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="audio-side-card">
+              <div class="audio-device-head">
+                <div class="audio-device-name-block">
+                  <h3 id="audioPlayerName">No device selected</h3>
+                  <span id="audioDeviceState" class="audio-state-pill">Idle</span>
+                </div>
+
+                <div id="audioSourceCard" class="audio-source-card compact-source" hidden>
+                  <label for="audioSourceSelect">Source <strong id="audioSourceValue">—</strong></label>
+                  <select id="audioSourceSelect" aria-label="Audio source"></select>
+                </div>
+              </div>
+
+              <div class="audio-action-row">
+                <button id="subwooferToggle" class="audio-feature-toggle" data-audio-switch="subwoofer" data-audio-picker="subwoofer" aria-label="Toggle subwoofer">
+                  <span class="feature-icon subwoofer-icon" aria-hidden="true">
+                    <svg viewBox="0 0 64 64" focusable="false">
+                      <rect class="cabinet" x="12" y="6" width="40" height="52" rx="8"></rect>
+                      <circle class="woofer-ring" cx="32" cy="36" r="15"></circle>
+                      <circle class="woofer-core" cx="32" cy="36" r="6"></circle>
+                      <circle class="tweeter" cx="32" cy="18" r="4"></circle>
+                    </svg>
+                  </span><strong>Sub</strong>
+                </button>
+                <div class="transport-controls media-transport">
+                  <button id="prevTrack" class="transport" aria-label="Previous track">⏮</button>
+                  <button id="playPause" class="transport primary" aria-label="Play or pause">▶</button>
+                  <button id="nextTrack" class="transport" aria-label="Next track">⏭</button>
+                </div>
+                <button id="surroundToggle" class="audio-feature-toggle" data-audio-switch="surround" data-audio-picker="surround" aria-label="Toggle surround sound">
+                  <span class="feature-icon surround-icon" aria-hidden="true">
+                    <svg viewBox="0 0 72 64" focusable="false">
+                      <circle class="listener" cx="36" cy="34" r="7"></circle>
+                      <path class="arc arc-left" d="M22 18c-8 5-13 11-13 18s5 13 13 18"></path>
+                      <path class="arc arc-right" d="M50 18c8 5 13 11 13 18s-5 13-13 18"></path>
+                      <rect class="speaker speaker-left" x="6" y="8" width="10" height="14" rx="3"></rect>
+                      <rect class="speaker speaker-right" x="56" y="8" width="10" height="14" rx="3"></rect>
+                      <rect class="speaker speaker-rear-left" x="10" y="46" width="10" height="12" rx="3"></rect>
+                      <rect class="speaker speaker-rear-right" x="52" y="46" width="10" height="12" rx="3"></rect>
+                    </svg>
+                  </span><strong>Surround</strong>
+                </button>
+              </div>
+
+              <div class="audio-volume-card">
+                <label for="volumeSlider">Volume <strong><span id="volumeValue">42</span>%</strong></label>
+                <input id="volumeSlider" type="range" min="0" max="100" value="42" />
+                <button id="projectorToggle" class="audio-projector-button" data-audio-switch="projector" data-audio-picker="projector" aria-label="Toggle projector">
+                  <span class="projector-icon" aria-hidden="true">
+                    <svg viewBox="0 0 72 42" focusable="false">
+                      <rect x="8" y="12" width="38" height="20" rx="5"></rect>
+                      <circle cx="52" cy="22" r="8"></circle>
+                      <path d="M18 34h20m-10 0v6"></path>
+                      <path class="beam" d="M61 18l9-5v18l-9-5"></path>
+                    </svg>
+                  </span>
+                </button>
+              </div>
+
+              <div class="audio-tone-grid">
+                <div class="tone-control" data-audio-picker="gain"><label for="gainSlider">Gain <strong id="gainValue">0</strong></label><input id="gainSlider" type="range" min="-10" max="10" value="0" /></div>
+                <div class="tone-control" data-audio-picker="bass"><label for="bassSlider">Bass <strong id="bassValue">2</strong></label><input id="bassSlider" type="range" min="-10" max="10" value="2" /></div>
+                <div class="tone-control" data-audio-picker="treble"><label for="trebleSlider">Treble <strong id="trebleValue">4</strong></label><input id="trebleSlider" type="range" min="-10" max="10" value="4" /></div>
+              </div>
+            </div>
+          </div>
         </section>
       </article>
 
@@ -194,93 +285,6 @@
               <em>Press to set Home</em>
             </button>
           </section>
-        </section>
-      </article>
-
-      <article class="screen screen-audio" data-screen="audio" aria-label="Audio controls">
-        <section class="audio-stage panel">
-          <div class="audio-shell">
-            <div class="audio-main-card">
-              <div id="albumArt" class="audio-art" aria-hidden="true">
-                <div id="albumInitials" class="audio-art-initials">♪</div>
-              </div>
-              <div class="audio-now">
-                <p class="eyebrow">Now Playing</p>
-                <h2 id="trackTitle">Select Audio Device</h2>
-                <p id="trackArtist" class="audio-artist">Open settings to choose a media player.</p>
-                <p id="trackAlbum" class="audio-album"></p>
-                <div class="audio-progress-wrap" aria-hidden="true">
-                  <div class="progress-bar audio-progress"><span id="trackProgress"></span></div>
-                </div>
-              </div>
-            </div>
-
-            <div class="audio-side-card">
-              <div class="audio-device-head">
-                <div class="audio-device-name-block">
-                  <h3 id="audioPlayerName">No device selected</h3>
-                  <span id="audioDeviceState" class="audio-state-pill">Idle</span>
-                </div>
-
-                <div id="audioSourceCard" class="audio-source-card compact-source" hidden>
-                  <label for="audioSourceSelect">Source <strong id="audioSourceValue">—</strong></label>
-                  <select id="audioSourceSelect" aria-label="Audio source"></select>
-                </div>
-              </div>
-
-              <div class="audio-action-row">
-                <button id="subwooferToggle" class="audio-feature-toggle" data-audio-switch="subwoofer" data-audio-picker="subwoofer" aria-label="Toggle subwoofer">
-                  <span class="feature-icon subwoofer-icon" aria-hidden="true">
-                    <svg viewBox="0 0 64 64" focusable="false">
-                      <rect class="cabinet" x="12" y="6" width="40" height="52" rx="8"></rect>
-                      <circle class="woofer-ring" cx="32" cy="36" r="15"></circle>
-                      <circle class="woofer-core" cx="32" cy="36" r="6"></circle>
-                      <circle class="tweeter" cx="32" cy="18" r="4"></circle>
-                    </svg>
-                  </span><strong>Sub</strong>
-                </button>
-                <div class="transport-controls media-transport">
-                  <button id="prevTrack" class="transport" aria-label="Previous track">⏮</button>
-                  <button id="playPause" class="transport primary" aria-label="Play or pause">▶</button>
-                  <button id="nextTrack" class="transport" aria-label="Next track">⏭</button>
-                </div>
-                <button id="surroundToggle" class="audio-feature-toggle" data-audio-switch="surround" data-audio-picker="surround" aria-label="Toggle surround sound">
-                  <span class="feature-icon surround-icon" aria-hidden="true">
-                    <svg viewBox="0 0 72 64" focusable="false">
-                      <circle class="listener" cx="36" cy="34" r="7"></circle>
-                      <path class="arc arc-left" d="M22 18c-8 5-13 11-13 18s5 13 13 18"></path>
-                      <path class="arc arc-right" d="M50 18c8 5 13 11 13 18s-5 13-13 18"></path>
-                      <rect class="speaker speaker-left" x="6" y="8" width="10" height="14" rx="3"></rect>
-                      <rect class="speaker speaker-right" x="56" y="8" width="10" height="14" rx="3"></rect>
-                      <rect class="speaker speaker-rear-left" x="10" y="46" width="10" height="12" rx="3"></rect>
-                      <rect class="speaker speaker-rear-right" x="52" y="46" width="10" height="12" rx="3"></rect>
-                    </svg>
-                  </span><strong>Surround</strong>
-                </button>
-              </div>
-
-              <div class="audio-volume-card">
-                <label for="volumeSlider">Volume <strong><span id="volumeValue">42</span>%</strong></label>
-                <input id="volumeSlider" type="range" min="0" max="100" value="42" />
-                <button id="projectorToggle" class="audio-projector-button" data-audio-switch="projector" data-audio-picker="projector" aria-label="Toggle projector">
-                  <span class="projector-icon" aria-hidden="true">
-                    <svg viewBox="0 0 72 42" focusable="false">
-                      <rect x="8" y="12" width="38" height="20" rx="5"></rect>
-                      <circle cx="52" cy="22" r="8"></circle>
-                      <path d="M18 34h20m-10 0v6"></path>
-                      <path class="beam" d="M61 18l9-5v18l-9-5"></path>
-                    </svg>
-                  </span>
-                </button>
-              </div>
-
-              <div class="audio-tone-grid">
-                <div class="tone-control" data-audio-picker="gain"><label for="gainSlider">Gain <strong id="gainValue">0</strong></label><input id="gainSlider" type="range" min="-10" max="10" value="0" /></div>
-                <div class="tone-control" data-audio-picker="bass"><label for="bassSlider">Bass <strong id="bassValue">2</strong></label><input id="bassSlider" type="range" min="-10" max="10" value="2" /></div>
-                <div class="tone-control" data-audio-picker="treble"><label for="trebleSlider">Treble <strong id="trebleValue">4</strong></label><input id="trebleSlider" type="range" min="-10" max="10" value="4" /></div>
-              </div>
-            </div>
-          </div>
         </section>
       </article>
 

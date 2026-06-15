@@ -174,7 +174,7 @@ const defaultIntegrations = {
 };
 
 const state = {
-  pages: ["blinds", "thermostat", "audio", "lights", "room"],
+  pages: ["blinds", "audio", "thermostat", "lights", "room"],
   currentPage: "thermostat",
   thermostat: {
     name: "IHA Thermostat",
@@ -1365,6 +1365,26 @@ function renderRelayStatus(element, isOn) {
   if (status) status.textContent = isOn ? "On" : "Off";
 }
 
+
+function renderTemperatureAtmosphere(currentTemp) {
+  const temp = Number(currentTemp);
+  const coldIntensity = Number.isFinite(temp) ? clamp((69 - temp) / 12, 0, 1) : 0;
+  const heatIntensity = Number.isFinite(temp) ? clamp((temp - 73) / 12, 0, 1) : 0;
+  const dominantTone = coldIntensity > heatIntensity && coldIntensity > 0.02
+    ? "cold"
+    : heatIntensity > 0.02
+      ? "hot"
+      : "neutral";
+
+  elements.app.dataset.tempTone = dominantTone;
+  elements.app.style.setProperty("--climate-cold-alpha", (coldIntensity * 0.58).toFixed(3));
+  elements.app.style.setProperty("--climate-hot-alpha", (heatIntensity * 0.54).toFixed(3));
+  elements.app.style.setProperty("--climate-cold-symbol", (coldIntensity * 0.19).toFixed(3));
+  elements.app.style.setProperty("--climate-hot-symbol", (heatIntensity * 0.17).toFixed(3));
+  elements.app.style.setProperty("--climate-cold-glow", (coldIntensity * 0.28).toFixed(3));
+  elements.app.style.setProperty("--climate-hot-glow", (heatIntensity * 0.26).toFixed(3));
+}
+
 function renderThermostat() {
   const t = state.thermostat;
   const { min, max } = getModeLimits();
@@ -1375,6 +1395,8 @@ function renderThermostat() {
   const outputs = getThermostatOutputs({ recordRuntime: true });
   const controlMode = outputs.controlMode;
   const now = Date.now();
+
+  renderTemperatureAtmosphere(t.currentTemp);
 
   elements.currentTemp.textContent = showingSetpoint ? targetRounded : currentRounded;
   elements.targetTemp.textContent = showingSetpoint ? currentRounded : targetRounded;
