@@ -7,6 +7,7 @@ const HA_SYNC_INTERVAL_MS = 3000;
 const HA_SYNC_AFTER_COMMAND_DELAYS = [900, 2400, 5200];
 const HA_AUDIO_SYNC_INTERVAL_MS = 3000;
 const HA_AUDIO_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
+const INACTIVE_PAGE_SYNC_INTERVAL_MS = 5 * 60 * 1000;
 const HA_ALARM_SYNC_INTERVAL_MS = 3000;
 const HA_ALARM_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
 const LOCAL_THERMOSTAT_SYNC_INTERVAL_MS = 1000;
@@ -26,6 +27,9 @@ let localThermostatPushInFlight = false;
 let localThermostatLastError = "";
 let lastLocalThermostatPushAt = 0;
 let haAudioSyncTick = 0;
+let lastInactiveBlindSyncAt = Date.now();
+let lastInactiveAudioSyncAt = Date.now();
+let lastInactiveAlarmSyncAt = Date.now();
 let audioMediaActionInFlight = false;
 let audioVolumeDebounce = null;
 let audioToneDebounces = { gain: null, bass: null, treble: null };
@@ -635,9 +639,18 @@ function updateClock() {
   elements.clock.textContent = now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
+function markPageInactiveSyncBaseline(pageName) {
+  const now = Date.now();
+  if (pageName === "blinds") lastInactiveBlindSyncAt = now;
+  if (pageName === "audio") lastInactiveAudioSyncAt = now;
+  if (pageName === "thermostat") lastInactiveAlarmSyncAt = now;
+}
+
 function gotoPage(pageName) {
   if (!state.pages.includes(pageName)) return;
+  const previousPage = state.currentPage;
   state.currentPage = pageName;
+  if (previousPage !== pageName) markPageInactiveSyncBaseline(previousPage);
   elements.app.dataset.page = pageName;
   const index = state.pages.indexOf(pageName);
   elements.screenTrack.style.transform = `translateX(-${index * 33.3333}%)`;
@@ -1110,9 +1123,13 @@ async function pollHomeAssistantAlarm(options = {}) {
   const config = getAlarmConfig();
   const entityId = state.alarm.entityId || config?.entityId || "";
   if (!entityId) return;
-  if (!options.force && state.currentPage !== "thermostat") return;
   if (!options.force && document.visibilityState === "hidden") return;
-  if (!options.force && Date.now() - lastAlarmUserInteractionAt < 1200) return;
+  const now = Date.now();
+  if (!options.force && state.currentPage !== "thermostat") {
+    if (now - lastInactiveAlarmSyncAt < INACTIVE_PAGE_SYNC_INTERVAL_MS) return;
+    lastInactiveAlarmSyncAt = now;
+  }
+  if (!options.force && state.currentPage === "thermostat" && now - lastAlarmUserInteractionAt < 1200) return;
   if (haAlarmSyncInFlight || state.alarm.disarming) return;
 
   haAlarmSyncInFlight = true;
@@ -2125,9 +2142,13 @@ function scheduleAudioSync() {
 async function pollHomeAssistantMediaPlayer(options = {}) {
   const entityId = state.integrations.homeAssistant.selectedMediaPlayerId;
   if (!entityId) return;
-  if (!options.force && state.currentPage !== "audio") return;
   if (!options.force && document.visibilityState === "hidden") return;
-  if (!options.force && Date.now() - lastAudioUserInteractionAt < 650) return;
+  const now = Date.now();
+  if (!options.force && state.currentPage !== "audio") {
+    if (now - lastInactiveAudioSyncAt < INACTIVE_PAGE_SYNC_INTERVAL_MS) return;
+    lastInactiveAudioSyncAt = now;
+  }
+  if (!options.force && state.currentPage === "audio" && now - lastAudioUserInteractionAt < 650) return;
   if (!options.force && audioMediaActionInFlight) return;
   if (haAudioSyncInFlight) return;
 
@@ -2530,9 +2551,13 @@ function scheduleHaBlindSync() {
 async function pollHomeAssistantLinkedCovers(options = {}) {
   const linkedEntityIds = getLinkedCoverEntityIds();
   if (!linkedEntityIds.length) return;
-  if (!options.force && state.currentPage !== "blinds") return;
   if (!options.force && document.visibilityState === "hidden") return;
-  if (!options.force && Date.now() - lastBlindUserInteractionAt < 1200) return;
+  const now = Date.now();
+  if (!options.force && state.currentPage !== "blinds") {
+    if (now - lastInactiveBlindSyncAt < INACTIVE_PAGE_SYNC_INTERVAL_MS) return;
+    lastInactiveBlindSyncAt = now;
+  }
+  if (!options.force && state.currentPage === "blinds" && now - lastBlindUserInteractionAt < 1200) return;
   if (haSyncInFlight) return;
 
   haSyncInFlight = true;
