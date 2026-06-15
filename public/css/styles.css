@@ -992,9 +992,11 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
 .audio-main-card {
   display: grid;
   grid-template-columns: minmax(260px, .58fr) minmax(0, 1fr);
-  gap: clamp(22px, 3vw, 42px);
+  grid-template-rows: auto minmax(0, 1fr);
+  column-gap: clamp(22px, 3vw, 42px);
+  row-gap: clamp(16px, 1.8vw, 26px);
   align-items: center;
-  padding: clamp(26px, 3.2vw, 48px);
+  padding: clamp(18px, 2.4vw, 34px) clamp(26px, 3.2vw, 48px) clamp(26px, 3.2vw, 48px);
 }
 .audio-art {
   aspect-ratio: 1;
@@ -1034,11 +1036,17 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   align-content: start;
 }
 .audio-preset-grid {
+  grid-column: 1 / -1;
   width: min(100%, 620px);
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: clamp(8px, 1vw, 12px);
-  margin-bottom: clamp(16px, 2.2vw, 28px);
+  justify-self: center;
+  margin: clamp(-6px, -.35vw, 0px) auto 0;
+}
+.audio-main-card > .audio-art,
+.audio-main-card > .audio-now {
+  grid-row: 2;
 }
 .audio-preset-button {
   min-height: clamp(76px, 7.4vw, 104px);
