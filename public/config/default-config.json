@@ -1,0 +1,32 @@
+{
+  "version": 2,
+  "blinds": {
+    "room": "living",
+    "rooms": {
+      "living": {
+        "label": "Living Room",
+        "blinds": [
+          { "id": "lr-1", "name": "Left Window", "position": 65, "haEntityId": "", "haName": "" },
+          { "id": "lr-2", "name": "Center Left", "position": 65, "haEntityId": "", "haName": "" },
+          { "id": "lr-3", "name": "Center Right", "position": 73, "haEntityId": "", "haName": "" },
+          { "id": "lr-4", "name": "Right Window", "position": 65, "haEntityId": "", "haName": "" }
+        ]
+      },
+      "kitchen": {
+        "label": "Kitchen",
+        "blinds": [
+          { "id": "kit-1", "name": "Sink Window", "position": 45, "haEntityId": "", "haName": "" },
+          { "id": "kit-2", "name": "Table Window", "position": 55, "haEntityId": "", "haName": "" },
+          { "id": "kit-3", "name": "Door Window", "position": 75, "haEntityId": "", "haName": "" }
+        ]
+      }
+    }
+  },
+  "integrations": {
+    "homeAssistant": {
+      "url": "",
+      "token": "",
+      "coverEntities": []
+    }
+  }
+}

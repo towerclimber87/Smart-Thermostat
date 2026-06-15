@@ -2,6 +2,38 @@ const ABS_MIN = 45;
 const ABS_MAX = 95;
 const DIAL_SWEEP_DEG = 270;
 const DIAL_START_DEG = 225;
+const CONFIG_STORAGE_KEY = "smartThermostat.config.v2";
+
+const defaultBlindConfig = {
+  room: "living",
+  rooms: {
+    living: {
+      label: "Living Room",
+      blinds: [
+        { id: "lr-1", name: "Left Window", position: 65, haEntityId: "", haName: "" },
+        { id: "lr-2", name: "Center Left", position: 65, haEntityId: "", haName: "" },
+        { id: "lr-3", name: "Center Right", position: 73, haEntityId: "", haName: "" },
+        { id: "lr-4", name: "Right Window", position: 65, haEntityId: "", haName: "" },
+      ],
+    },
+    kitchen: {
+      label: "Kitchen",
+      blinds: [
+        { id: "kit-1", name: "Sink Window", position: 45, haEntityId: "", haName: "" },
+        { id: "kit-2", name: "Table Window", position: 55, haEntityId: "", haName: "" },
+        { id: "kit-3", name: "Door Window", position: 75, haEntityId: "", haName: "" },
+      ],
+    },
+  },
+};
+
+const defaultIntegrations = {
+  homeAssistant: {
+    url: "",
+    token: "",
+    coverEntities: [],
+  },
+};
 
 const state = {
   pages: ["blinds", "thermostat", "audio"],
@@ -35,28 +67,10 @@ const state = {
       { title: "Afterglow Circuit", artist: "The Luma Set" },
     ],
   },
-  blinds: {
-    room: "living",
-    rooms: {
-      living: {
-        label: "Living Room",
-        blinds: [
-          { id: "lr-1", name: "Left Window", position: 65 },
-          { id: "lr-2", name: "Center Left", position: 65 },
-          { id: "lr-3", name: "Center Right", position: 73 },
-          { id: "lr-4", name: "Right Window", position: 65 },
-        ],
-      },
-      kitchen: {
-        label: "Kitchen",
-        blinds: [
-          { id: "kit-1", name: "Sink Window", position: 45 },
-          { id: "kit-2", name: "Table Window", position: 55 },
-          { id: "kit-3", name: "Door Window", position: 75 },
-        ],
-      },
-    },
-  },
+  blinds: JSON.parse(JSON.stringify(defaultBlindConfig)),
+  integrations: JSON.parse(JSON.stringify(defaultIntegrations)),
+  entityPicker: { roomKey: null, blindId: null },
+  diagnostics: { haLogs: [] },
 };
 
 const elements = {
@@ -77,23 +91,129 @@ const elements = {
   dialMinLabel: document.getElementById("dialMinLabel"),
   dialMaxLabel: document.getElementById("dialMaxLabel"),
   settingsOverlay: document.getElementById("settingsOverlay"),
+  settingsSheet: document.getElementById("settingsSheet"),
   settingsButton: document.getElementById("settingsButton"),
   settingsClose: document.getElementById("settingsClose"),
   settingsDone: document.getElementById("settingsDone"),
+  settingsTitle: document.getElementById("settingsTitle"),
+  settingsEyebrow: document.getElementById("settingsEyebrow"),
+  settingsFooter: document.getElementById("settingsFooter"),
+  thermostatSettingsView: document.getElementById("thermostatSettingsView"),
+  blindSettingsView: document.getElementById("blindSettingsView"),
+  audioSettingsView: document.getElementById("audioSettingsView"),
+  blindSetupView: document.getElementById("blindSetupView"),
+  blindHaView: document.getElementById("blindHaView"),
+  audioHaView: document.getElementById("audioHaView"),
+  roomTabs: document.getElementById("roomTabs"),
+  roomConfigList: document.getElementById("roomConfigList"),
   blindCards: document.getElementById("blindCards"),
   blindRoomTitle: document.getElementById("blindRoomTitle"),
+  haUrlInput: document.getElementById("haUrlInput"),
+  haTokenInput: document.getElementById("haTokenInput"),
+  audioHaUrlInput: document.getElementById("audioHaUrlInput"),
+  audioHaTokenInput: document.getElementById("audioHaTokenInput"),
+  haCoverList: document.getElementById("haCoverList"),
+  haEntityCount: document.getElementById("haEntityCount"),
+  haStatusLine: document.getElementById("haStatusLine"),
+  haLogList: document.getElementById("haLogList"),
+  testHaConnection: document.getElementById("testHaConnection"),
+  clearHaLog: document.getElementById("clearHaLog"),
+  loadCoverEntities: document.getElementById("loadCoverEntities"),
+  entityPickerOverlay: document.getElementById("entityPickerOverlay"),
+  entityPickerTitle: document.getElementById("entityPickerTitle"),
+  entityPickerList: document.getElementById("entityPickerList"),
+  entityPickerClose: document.getElementById("entityPickerClose"),
   trackTitle: document.getElementById("trackTitle"),
   trackArtist: document.getElementById("trackArtist"),
   trackProgress: document.getElementById("trackProgress"),
   playPause: document.getElementById("playPause"),
 };
 
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
 function titleCase(value) {
-  return value.charAt(0).toUpperCase() + value.slice(1);
+  return String(value || "").charAt(0).toUpperCase() + String(value || "").slice(1);
+}
+
+function maskToken(token) {
+  const value = String(token || "").trim();
+  if (!value) return "";
+  if (value.length <= 12) return "••••";
+  return `${value.slice(0, 6)}…${value.slice(-4)}`;
+}
+
+function redactForLog(value) {
+  let text = String(value ?? "");
+  const token = state?.integrations?.homeAssistant?.token || "";
+  if (token) text = text.split(token).join(maskToken(token));
+  text = text.replace(/Bearer\s+[A-Za-z0-9._\-]+/g, "Bearer [redacted]");
+  return text;
+}
+
+function renderHaLog() {
+  if (!elements.haLogList) return;
+  const logs = state.diagnostics.haLogs || [];
+  elements.haLogList.innerHTML = logs.length
+    ? logs.map((entry) => `
+      <div class="ha-log-row ${entry.level}">
+        <span class="ha-log-time">${entry.time}</span>
+        <strong class="ha-log-level">${entry.level.toUpperCase()}</strong>
+        <div class="ha-log-message">${entry.message}</div>
+      </div>
+    `).join("")
+    : `<div class="empty-state compact">No connection attempts yet.</div>`;
+  elements.haLogList.scrollTop = elements.haLogList.scrollHeight;
+}
+
+function setHaStatus(message, level = "info") {
+  if (!elements.haStatusLine) return;
+  elements.haStatusLine.textContent = message;
+  elements.haStatusLine.className = `ha-status-line ${level}`;
+}
+
+function addHaLog(level, message, detail = "") {
+  const now = new Date();
+  const fullMessage = detail ? `${message} — ${redactForLog(detail)}` : message;
+  state.diagnostics.haLogs.push({
+    level,
+    time: now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" }),
+    message: fullMessage,
+  });
+  state.diagnostics.haLogs = state.diagnostics.haLogs.slice(-40);
+  renderHaLog();
+  const logger = level === "error" ? console.error : level === "warn" ? console.warn : console.log;
+  logger(`[HA ${level}] ${fullMessage}`);
+}
+
+function clearHaLog() {
+  state.diagnostics.haLogs = [];
+  renderHaLog();
+  setHaStatus("Connection log cleared.", "info");
+}
+
+function readHaFieldsFromScreen(context = "blinds") {
+  const urlInput = context === "audio" ? elements.audioHaUrlInput : elements.haUrlInput;
+  const tokenInput = context === "audio" ? elements.audioHaTokenInput : elements.haTokenInput;
+  if (urlInput) state.integrations.homeAssistant.url = urlInput.value.trim();
+  if (tokenInput) state.integrations.homeAssistant.token = tokenInput.value.trim();
+}
+
+
+function slugify(value) {
+  const base = String(value || "room").toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "room";
+  let key = base;
+  let index = 2;
+  while (state.blinds.rooms[key]) {
+    key = `${base}-${index}`;
+    index += 1;
+  }
+  return key;
 }
 
 function showToast(message) {
@@ -101,6 +221,48 @@ function showToast(message) {
   elements.toast.classList.add("show");
   clearTimeout(showToast.timeout);
   showToast.timeout = setTimeout(() => elements.toast.classList.remove("show"), 1600);
+}
+
+function getRoomKeys() {
+  return Object.keys(state.blinds.rooms);
+}
+
+function getActiveRoom() {
+  const keys = getRoomKeys();
+  if (!state.blinds.rooms[state.blinds.room]) state.blinds.room = keys[0];
+  return state.blinds.rooms[state.blinds.room];
+}
+
+function buildSavedConfig() {
+  return {
+    version: 2,
+    blinds: state.blinds,
+    integrations: state.integrations,
+  };
+}
+
+function loadSavedConfig() {
+  try {
+    const raw = localStorage.getItem(CONFIG_STORAGE_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    if (saved?.blinds?.rooms) state.blinds = saved.blinds;
+    if (saved?.integrations?.homeAssistant) {
+      state.integrations.homeAssistant = {
+        ...clone(defaultIntegrations.homeAssistant),
+        ...saved.integrations.homeAssistant,
+      };
+    }
+  } catch (error) {
+    console.warn("Unable to load saved config", error);
+  }
+}
+
+function saveConfig(options = {}) {
+  localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(buildSavedConfig(), null, 2));
+  if (options.toast) showToast("Config saved");
+  // Future Raspberry Pi backend hook: POST buildSavedConfig() to a local service
+  // that writes /etc/smart-thermostat/config.json or the project config file.
 }
 
 function updateClock() {
@@ -125,14 +287,10 @@ function getModeLimits() {
   const t = state.thermostat;
   const limits = t.limits[t.mode];
   const range = { min: limits.min, max: limits.max };
-
-  // Away safety is separate from normal comfort limits, but the dial should
-  // still visually include the active safety target so the UI does not jump.
   if (t.away) {
     if (t.mode === "cool") range.max = Math.max(range.max, t.awayCool);
     if (t.mode === "heat") range.min = Math.min(range.min, t.awayHeat);
   }
-
   return range;
 }
 
@@ -282,13 +440,81 @@ function adjustLimit(mode, bound, delta) {
   renderThermostat();
 }
 
+function hideAllSettingsViews() {
+  [elements.thermostatSettingsView, elements.blindSettingsView, elements.audioSettingsView].forEach((view) => { view.hidden = true; });
+  elements.settingsSheet.classList.remove("full-setup", "ha-focus");
+  elements.settingsFooter.hidden = false;
+}
+
 function openSettings() {
+  hideAllSettingsViews();
+  if (state.currentPage === "blinds") {
+    elements.settingsTitle.textContent = "Blind Setup";
+    elements.settingsEyebrow.textContent = "Shade Setup";
+    elements.settingsSheet.classList.add("full-setup");
+    elements.blindSettingsView.hidden = false;
+    showBlindSetupView();
+  } else if (state.currentPage === "audio") {
+    elements.settingsTitle.textContent = "Audio Setup";
+    elements.settingsEyebrow.textContent = "Sonos / Home Assistant";
+    elements.settingsSheet.classList.add("full-setup");
+    elements.audioSettingsView.hidden = false;
+    renderHaFields("audio");
+  } else {
+    elements.settingsTitle.textContent = "Comfort Setup";
+    elements.settingsEyebrow.textContent = "Panel Settings";
+    elements.thermostatSettingsView.hidden = false;
+  }
   elements.settingsOverlay.classList.add("open");
   elements.settingsOverlay.setAttribute("aria-hidden", "false");
 }
+
 function closeSettings() {
   elements.settingsOverlay.classList.remove("open");
   elements.settingsOverlay.setAttribute("aria-hidden", "true");
+}
+
+function showBlindSetupView() {
+  elements.blindSetupView.hidden = false;
+  elements.blindHaView.hidden = true;
+  elements.settingsSheet.classList.add("full-setup");
+  elements.settingsSheet.classList.remove("ha-focus");
+  elements.settingsTitle.textContent = "Blind Setup";
+  elements.settingsEyebrow.textContent = "Shade Setup";
+  elements.settingsFooter.hidden = false;
+  renderRoomConfigList();
+}
+
+function showBlindHaView() {
+  elements.blindSetupView.hidden = true;
+  elements.blindHaView.hidden = false;
+  elements.settingsSheet.classList.add("full-setup", "ha-focus");
+  elements.settingsTitle.textContent = "Home Assistant Config";
+  elements.settingsEyebrow.textContent = "Blinds";
+  elements.settingsFooter.hidden = true;
+  renderHaFields("blinds");
+  renderCoverPreview();
+}
+
+function renderHaFields(context) {
+  const ha = state.integrations.homeAssistant;
+  if (context === "audio") {
+    elements.audioHaUrlInput.value = ha.url || "";
+    elements.audioHaTokenInput.value = ha.token || "";
+  } else {
+    elements.haUrlInput.value = ha.url || "";
+    elements.haTokenInput.value = ha.token || "";
+  }
+}
+
+function saveHaFields(context, options = {}) {
+  readHaFieldsFromScreen(context);
+  saveConfig({ toast: !options.silent });
+  if (!options.silent) {
+    addHaLog("info", `${titleCase(context)} Home Assistant config saved`, `URL: ${state.integrations.homeAssistant.url || "not set"}, token: ${maskToken(state.integrations.homeAssistant.token) || "not set"}`);
+    setHaStatus("Config saved locally. Load cover entries to test it.", "info");
+  }
+  renderCoverPreview();
 }
 
 function renderAudio() {
@@ -317,32 +543,55 @@ function togglePlayback() {
   renderAudio();
 }
 
+function renderRoomTabs() {
+  elements.roomTabs.innerHTML = "";
+  getRoomKeys().forEach((key) => {
+    const room = state.blinds.rooms[key];
+    const tab = document.createElement("button");
+    tab.className = "room-tab";
+    tab.dataset.room = key;
+    tab.textContent = room.label;
+    tab.classList.toggle("active", key === state.blinds.room);
+    elements.roomTabs.appendChild(tab);
+  });
+}
+
 function renderBlinds() {
-  const room = state.blinds.rooms[state.blinds.room];
+  const room = getActiveRoom();
   elements.blindRoomTitle.textContent = room.label;
   elements.blindCards.innerHTML = "";
-  document.querySelectorAll(".room-tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.room === state.blinds.room));
+  renderRoomTabs();
+
+  const columns = clamp(room.blinds.length, 1, 6);
+  elements.blindCards.style.setProperty("--blind-columns", columns);
 
   room.blinds.forEach((blind) => {
+    const linkedLabel = blind.haName || blind.haEntityId || "";
     const card = document.createElement("div");
     card.className = "blind-card";
     card.dataset.blindCard = blind.id;
+    card.dataset.roomKey = state.blinds.room;
     card.style.setProperty("--blind-open", `${blind.position}%`);
     card.innerHTML = `
-      <div class="blind-top"><div class="blind-name">${blind.name}</div><div class="blind-percent">${blind.position}%</div></div>
-      <div class="blind-actions two"><button class="blind-action primary" data-blind-id="${blind.id}" data-action="open">Open</button><button class="blind-action close-blind" data-blind-id="${blind.id}" data-action="close">Close</button></div>
+      <div class="blind-top">
+        <div>
+          <div class="blind-name">${blind.name}</div>
+          ${linkedLabel ? `<div class="ha-link-chip">${linkedLabel}</div>` : `<div class="ha-link-chip unlinked">Hold to link</div>`}
+        </div>
+        <div class="blind-percent">${blind.position}%</div>
+      </div>
+      <button class="blind-action primary" data-blind-id="${blind.id}" data-action="open">Open</button>
       <div class="shade-stage" data-blind-stage="${blind.id}" role="slider" aria-label="${blind.name} position" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${blind.position}" tabindex="0">
         <div class="blind-window" aria-hidden="true"></div>
-        <div class="blind-handle" aria-hidden="true"></div>
       </div>
-      <div class="blind-actions single"><button class="blind-action" data-blind-id="${blind.id}" data-action="stop">Stop</button></div>
+      <button class="blind-action close-blind" data-blind-id="${blind.id}" data-action="close">Close</button>
     `;
     elements.blindCards.appendChild(card);
   });
 }
 
 function setBlindPosition(blindId, position) {
-  const room = state.blinds.rooms[state.blinds.room];
+  const room = getActiveRoom();
   const blind = room.blinds.find((item) => item.id === blindId);
   if (!blind) return;
   blind.position = clamp(Number(position), 0, 100);
@@ -351,26 +600,386 @@ function setBlindPosition(blindId, position) {
   card.style.setProperty("--blind-open", `${blind.position}%`);
   card.querySelector(".blind-percent").textContent = `${blind.position}%`;
   card.querySelector("[data-blind-stage]").setAttribute("aria-valuenow", String(blind.position));
+  saveConfig();
 }
 
-function applyBlindAction(action, blindId = null) {
-  const room = state.blinds.rooms[state.blinds.room];
+async function applyBlindAction(action, blindId = null) {
+  const room = getActiveRoom();
+  const normalizedAction = action.includes("open") ? "open" : action.includes("close") ? "close" : action;
   const updateBlind = (blind) => {
-    if (action.includes("open")) blind.position = 100;
-    if (action.includes("close")) blind.position = 0;
+    if (normalizedAction === "open") blind.position = 100;
+    if (normalizedAction === "close") blind.position = 0;
   };
-  if (blindId) {
-    const blind = room.blinds.find((item) => item.id === blindId);
-    if (!blind) return;
-    updateBlind(blind);
-  } else {
-    room.blinds.forEach(updateBlind);
-  }
+
+  const targets = blindId
+    ? room.blinds.filter((item) => item.id === blindId)
+    : room.blinds.slice();
+  if (!targets.length) return;
+
+  targets.forEach(updateBlind);
+  saveConfig();
+  renderBlinds();
+
+  const linkedTargets = targets.filter((blind) => blind.haEntityId);
+  if (!linkedTargets.length) return;
+  await Promise.all(linkedTargets.map((blind) => sendBlindToHomeAssistant(blind, normalizedAction)));
+}
+
+function createBlind(roomKey, index) {
+  return {
+    id: `${roomKey}-${Date.now().toString(36)}-${index}`,
+    name: `Blind ${index}`,
+    position: 65,
+    haEntityId: "",
+    haName: "",
+  };
+}
+
+function setRoomBlindCount(roomKey, count) {
+  const room = state.blinds.rooms[roomKey];
+  if (!room) return;
+  const target = clamp(Number(count), 1, 6);
+  while (room.blinds.length < target) room.blinds.push(createBlind(roomKey, room.blinds.length + 1));
+  while (room.blinds.length > target) room.blinds.pop();
+  room.blinds.forEach((blind, index) => {
+    if (!blind.name) blind.name = `Blind ${index + 1}`;
+  });
+  saveConfig();
+  renderRoomConfigList();
   renderBlinds();
 }
 
+function addRoom() {
+  const roomNumber = getRoomKeys().length + 1;
+  const label = `New Room ${roomNumber}`;
+  const key = slugify(label);
+  state.blinds.rooms[key] = {
+    label,
+    blinds: [createBlind(key, 1)],
+  };
+  state.blinds.room = key;
+  saveConfig({ toast: true });
+  renderRoomConfigList();
+  renderBlinds();
+}
+
+function deleteRoom(roomKey) {
+  const keys = getRoomKeys();
+  if (keys.length <= 1) {
+    showToast("At least one room is required");
+    return;
+  }
+  delete state.blinds.rooms[roomKey];
+  if (state.blinds.room === roomKey) state.blinds.room = getRoomKeys()[0];
+  saveConfig({ toast: true });
+  renderRoomConfigList();
+  renderBlinds();
+}
+
+function renameRoom(roomKey, label) {
+  const room = state.blinds.rooms[roomKey];
+  if (!room) return;
+  room.label = label.trim() || "Room";
+  saveConfig();
+  renderBlinds();
+}
+
+function renameBlind(roomKey, blindId, label) {
+  const room = state.blinds.rooms[roomKey];
+  const blind = room?.blinds.find((item) => item.id === blindId);
+  if (!blind) return;
+  blind.name = label.trim() || "Blind";
+  saveConfig();
+  renderBlinds();
+}
+
+function renderRoomConfigList() {
+  if (!elements.roomConfigList) return;
+  elements.roomConfigList.innerHTML = "";
+  getRoomKeys().forEach((key) => {
+    const room = state.blinds.rooms[key];
+    const card = document.createElement("div");
+    card.className = "room-config-card";
+    card.dataset.roomConfig = key;
+    const countOptions = Array.from({ length: 6 }, (_, idx) => idx + 1)
+      .map((count) => `<option value="${count}" ${room.blinds.length === count ? "selected" : ""}>${count}</option>`)
+      .join("");
+    const blindInputs = room.blinds.map((blind, index) => `
+      <label class="mini-field">Blind ${index + 1}
+        <input type="text" value="${blind.name}" data-blind-name-input data-room-key="${key}" data-blind-id="${blind.id}" />
+      </label>
+    `).join("");
+    card.innerHTML = `
+      <div class="room-config-main">
+        <label class="form-field compact-field">Room Name
+          <input type="text" value="${room.label}" data-room-name-input data-room-key="${key}" />
+        </label>
+        <label class="form-field compact-field">Blinds
+          <select data-room-count-select data-room-key="${key}">${countOptions}</select>
+        </label>
+        <button class="danger-button" data-delete-room="${key}">Delete</button>
+      </div>
+      <div class="blind-name-grid">${blindInputs}</div>
+    `;
+    elements.roomConfigList.appendChild(card);
+  });
+}
+
+function getHaBaseUrl() {
+  return String(state.integrations.homeAssistant.url || "").replace(/\/+$/, "");
+}
+
+function normalizeHaPosition(entity, fallback = 50) {
+  const raw = entity?.currentPosition;
+  if (raw !== undefined && raw !== null && raw !== "") return clamp(Math.round(Number(raw)), 0, 100);
+  const coverState = String(entity?.state || "").toLowerCase();
+  if (coverState === "open") return 100;
+  if (coverState === "closed") return 0;
+  return clamp(Number(fallback), 0, 100);
+}
+
+function findCoverEntity(entityId) {
+  return (state.integrations.homeAssistant.coverEntities || []).find((entity) => entity.entityId === entityId);
+}
+
+function applyEntityStateToBlind(blind, entity) {
+  if (!blind || !entity) return;
+  blind.position = normalizeHaPosition(entity, blind.position);
+  if (entity.name) blind.haName = entity.name;
+}
+
+function syncLinkedBlindsFromCovers() {
+  const covers = state.integrations.homeAssistant.coverEntities || [];
+  if (!covers.length) return false;
+  let changed = false;
+  Object.values(state.blinds.rooms || {}).forEach((room) => {
+    (room.blinds || []).forEach((blind) => {
+      if (!blind.haEntityId) return;
+      const entity = covers.find((item) => item.entityId === blind.haEntityId);
+      if (!entity) return;
+      const before = blind.position;
+      applyEntityStateToBlind(blind, entity);
+      changed = changed || before !== blind.position;
+    });
+  });
+  if (changed) saveConfig();
+  return changed;
+}
+
+async function callCoverActionViaLocalBackend(entityId, action, position = null) {
+  const ha = state.integrations.homeAssistant;
+  const baseUrl = getHaBaseUrl();
+  if (!baseUrl || !ha.token) throw new Error("Missing Home Assistant URL or token");
+  const body = { url: baseUrl, token: ha.token, entityId, action };
+  if (position !== null && position !== undefined) body.position = position;
+  const response = await fetch("/api/ha/cover/action", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    let message = `Local backend returned ${response.status}`;
+    try {
+      const payload = await response.json();
+      message = payload.error || message;
+    } catch (_) {}
+    throw new Error(message);
+  }
+  const payload = await response.json();
+  return payload.state;
+}
+
+async function sendBlindToHomeAssistant(blind, action, position = null) {
+  if (!blind?.haEntityId) return null;
+  const optimistic = action === "open" ? 100 : action === "close" ? 0 : position;
+  if (optimistic !== null && optimistic !== undefined) blind.position = clamp(Number(optimistic), 0, 100);
+  renderBlinds();
+
+  try {
+    const entityState = await callCoverActionViaLocalBackend(blind.haEntityId, action, position);
+    if (entityState?.entityId) {
+      const existing = findCoverEntity(entityState.entityId);
+      if (existing) Object.assign(existing, entityState);
+      else state.integrations.homeAssistant.coverEntities.push(entityState);
+      applyEntityStateToBlind(blind, entityState);
+      saveConfig();
+      renderBlinds();
+      renderCoverPreview();
+    }
+    return entityState;
+  } catch (error) {
+    addHaLog("error", `Cover ${action} failed`, `${blind.haEntityId}: ${error.message || error}`);
+    showToast("Home Assistant cover command failed");
+    return null;
+  }
+}
+
+async function fetchCoverEntitiesViaLocalBackend(baseUrl, token) {
+  const response = await fetch("/api/ha/covers", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: baseUrl, token }),
+  });
+  if (!response.ok) {
+    let message = `Local backend returned ${response.status}`;
+    try {
+      const payload = await response.json();
+      message = payload.error || message;
+    } catch (_) {}
+    throw new Error(message);
+  }
+  const payload = await response.json();
+  return payload.covers || [];
+}
+
+async function fetchCoverEntitiesDirect(baseUrl, token) {
+  const response = await fetch(`${baseUrl}/api/states`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+  });
+  if (!response.ok) throw new Error(`Home Assistant returned ${response.status}`);
+  const states = await response.json();
+  return states
+    .filter((item) => String(item.entity_id || "").startsWith("cover."))
+    .map((item) => ({
+      entityId: item.entity_id,
+      name: item.attributes?.friendly_name || item.entity_id,
+      state: item.state || "unknown",
+      currentPosition: item.attributes?.current_position,
+      supportedFeatures: item.attributes?.supported_features,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function loadCoverEntitiesFromHomeAssistant(options = {}) {
+  readHaFieldsFromScreen("blinds");
+  const ha = state.integrations.homeAssistant;
+  const baseUrl = getHaBaseUrl();
+  renderCoverPreview();
+
+  if (!baseUrl || !ha.token) {
+    setHaStatus("Missing Home Assistant URL or token.", "warn");
+    addHaLog("warn", "Load skipped", "Missing URL or token");
+    showToast("Add HA URL and token first");
+    return ha.coverEntities;
+  }
+
+  setHaStatus("Loading cover entries…", "info");
+  addHaLog("info", "Starting cover load", `URL: ${baseUrl}, token: ${maskToken(ha.token)}`);
+  if (elements.loadCoverEntities) elements.loadCoverEntities.disabled = true;
+  if (elements.testHaConnection) elements.testHaConnection.disabled = true;
+
+  let covers = [];
+  let backendError = null;
+  let directError = null;
+
+  try {
+    addHaLog("info", "Trying local backend proxy", "/api/ha/covers");
+    covers = await fetchCoverEntitiesViaLocalBackend(baseUrl, ha.token);
+    addHaLog("info", "Local backend proxy worked", `${covers.length} cover entries returned`);
+  } catch (error) {
+    backendError = error;
+    addHaLog("warn", "Local backend proxy unavailable or failed", error.message);
+    try {
+      addHaLog("info", "Trying direct browser call", `${baseUrl}/api/states`);
+      covers = await fetchCoverEntitiesDirect(baseUrl, ha.token);
+      addHaLog("info", "Direct browser call worked", `${covers.length} cover entries returned`);
+    } catch (error2) {
+      directError = error2;
+      addHaLog("error", "Direct browser call failed", error2.message || String(error2));
+    }
+  } finally {
+    if (elements.loadCoverEntities) elements.loadCoverEntities.disabled = false;
+    if (elements.testHaConnection) elements.testHaConnection.disabled = false;
+  }
+
+  if (covers.length) {
+    state.integrations.homeAssistant.coverEntities = covers;
+    syncLinkedBlindsFromCovers();
+    saveConfig({ toast: !options.quiet });
+    renderBlinds();
+    setHaStatus(`Connected. Loaded ${covers.length} Home Assistant cover entries.`, "ok");
+    showToast(`Loaded ${covers.length} cover entries`);
+  } else {
+    const likelyCors = directError && /failed to fetch|networkerror|cors/i.test(String(directError.message || directError));
+    const message = likelyCors
+      ? "Browser call was blocked or failed. Run with server.py so the local backend can proxy Home Assistant."
+      : "No cover entries loaded. See the connection log below.";
+    setHaStatus(message, "error");
+    addHaLog("error", "No covers loaded", `Backend: ${backendError?.message || "n/a"}; Direct: ${directError?.message || "n/a"}`);
+    showToast("Could not load HA covers");
+  }
+
+  renderCoverPreview();
+  return state.integrations.homeAssistant.coverEntities;
+}
+
+function renderCoverPreview() {
+  if (!elements.haCoverList) return;
+  const covers = state.integrations.homeAssistant.coverEntities || [];
+  if (elements.haEntityCount) elements.haEntityCount.textContent = String(covers.length);
+  elements.haCoverList.innerHTML = covers.length
+    ? covers.map((entity) => {
+        const stateText = entity.state ? String(entity.state) : "unknown";
+        const pct = normalizeHaPosition(entity);
+        return `<div class="entity-row"><strong>${entity.name}</strong><span>${entity.entityId}</span><em>${pct}% · ${stateText}</em></div>`;
+      }).join("")
+    : `<div class="empty-state compact">No covers loaded.</div>`;
+}
+
+async function openEntityPicker(roomKey, blindId) {
+  const room = state.blinds.rooms[roomKey];
+  const blind = room?.blinds.find((item) => item.id === blindId);
+  if (!blind) return;
+  state.entityPicker = { roomKey, blindId };
+  elements.entityPickerTitle.textContent = `Assign ${blind.name}`;
+  elements.entityPickerOverlay.classList.add("open");
+  elements.entityPickerOverlay.setAttribute("aria-hidden", "false");
+  renderEntityPickerList(true);
+  await loadCoverEntitiesFromHomeAssistant();
+  renderEntityPickerList(false);
+}
+
+function closeEntityPicker() {
+  elements.entityPickerOverlay.classList.remove("open");
+  elements.entityPickerOverlay.setAttribute("aria-hidden", "true");
+  state.entityPicker = { roomKey: null, blindId: null };
+}
+
+function renderEntityPickerList(loading = false) {
+  const covers = state.integrations.homeAssistant.coverEntities || [];
+  if (loading) {
+    elements.entityPickerList.innerHTML = `<div class="empty-state">Loading cover entries…</div>`;
+    return;
+  }
+  if (!covers.length) {
+    elements.entityPickerList.innerHTML = `<div class="empty-state">No cover entries available. Add Home Assistant config first.</div>`;
+    return;
+  }
+  elements.entityPickerList.innerHTML = `
+    <button class="entity-pick clear" data-clear-entity>Unlink this blind</button>
+    ${covers.map((entity) => `<button class="entity-pick" data-entity-id="${entity.entityId}" data-entity-name="${entity.name}"><strong>${entity.name}</strong><span>${entity.entityId}</span></button>`).join("")}
+  `;
+}
+
+function assignEntityToBlind(entityId, name) {
+  const { roomKey, blindId } = state.entityPicker;
+  const room = state.blinds.rooms[roomKey];
+  const blind = room?.blinds.find((item) => item.id === blindId);
+  if (!blind) return;
+  blind.haEntityId = entityId || "";
+  blind.haName = name || "";
+  const entity = entityId ? findCoverEntity(entityId) : null;
+  if (entity) applyEntityStateToBlind(blind, entity);
+  saveConfig({ toast: true });
+  renderBlinds();
+  closeEntityPicker();
+}
+
 function isInteractiveTarget(target) {
-  return Boolean(target.closest("button, input, .thermo-dial, .settings-sheet, .settings-overlay, [data-blind-stage]"));
+  return Boolean(target.closest("button, input, textarea, select, .thermo-dial, .settings-sheet, .settings-overlay, [data-blind-stage]"));
 }
 
 function bindSwipeNavigation() {
@@ -413,6 +1022,73 @@ function bindThermostatDial() {
   });
 }
 
+function bindBlindInteractions() {
+  let activeShadeId = null;
+  let longPressTimer = null;
+  let press = null;
+
+  const cancelLongPress = () => {
+    clearTimeout(longPressTimer);
+    longPressTimer = null;
+    press = null;
+  };
+
+  const updateBlindFromPointer = (event) => {
+    const stage = document.querySelector(`[data-blind-stage="${activeShadeId}"]`) || event.target.closest("[data-blind-stage]");
+    if (!stage) return;
+    const rect = stage.getBoundingClientRect();
+    const pct = clamp(Math.round(((rect.bottom - event.clientY) / rect.height) * 100), 0, 100);
+    setBlindPosition(stage.dataset.blindStage, pct);
+  };
+
+  elements.blindCards.addEventListener("pointerdown", (event) => {
+    if (event.button !== undefined && event.button !== 0) return;
+    if (event.target.closest("button")) return;
+    const card = event.target.closest("[data-blind-card]");
+    const stage = event.target.closest("[data-blind-stage]");
+    if (!card) return;
+
+    press = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, roomKey: card.dataset.roomKey, blindId: card.dataset.blindCard };
+    longPressTimer = setTimeout(() => {
+      const pending = press;
+      cancelLongPress();
+      activeShadeId = null;
+      openEntityPicker(pending.roomKey, pending.blindId);
+    }, 720);
+
+    if (stage) {
+      event.preventDefault(); event.stopPropagation();
+      activeShadeId = stage.dataset.blindStage;
+      stage.setPointerCapture(event.pointerId);
+      updateBlindFromPointer(event);
+    }
+  });
+
+  elements.blindCards.addEventListener("pointermove", (event) => {
+    if (press && press.pointerId === event.pointerId) {
+      const dx = Math.abs(event.clientX - press.x);
+      const dy = Math.abs(event.clientY - press.y);
+      if (dx > 10 || dy > 10) cancelLongPress();
+    }
+    if (activeShadeId) { event.preventDefault(); updateBlindFromPointer(event); }
+  });
+
+  const finishShadeDrag = (event) => {
+    cancelLongPress();
+    if (!activeShadeId) return;
+    const stage = document.querySelector(`[data-blind-stage="${activeShadeId}"]`);
+    const blindId = activeShadeId;
+    try { stage?.releasePointerCapture(event.pointerId); } catch (_) {}
+    activeShadeId = null;
+
+    const room = getActiveRoom();
+    const blind = room.blinds.find((item) => item.id === blindId);
+    if (blind?.haEntityId) sendBlindToHomeAssistant(blind, "position", blind.position);
+  };
+  elements.blindCards.addEventListener("pointerup", finishShadeDrag);
+  elements.blindCards.addEventListener("pointercancel", finishShadeDrag);
+}
+
 function bindEvents() {
   document.querySelectorAll(".nav-pill").forEach((button) => button.addEventListener("click", () => gotoPage(button.dataset.goto)));
   document.getElementById("tempDown").addEventListener("click", () => adjustSetpoint(-1));
@@ -423,6 +1099,34 @@ function bindEvents() {
   elements.settingsClose.addEventListener("click", closeSettings);
   elements.settingsDone.addEventListener("click", closeSettings);
   document.querySelectorAll("[data-close-settings]").forEach((el) => el.addEventListener("click", closeSettings));
+  document.getElementById("addRoomButton").addEventListener("click", addRoom);
+  document.getElementById("openBlindHaConfig").addEventListener("click", showBlindHaView);
+  document.getElementById("backToBlindSetup").addEventListener("click", showBlindSetupView);
+  document.getElementById("saveHaConfig").addEventListener("click", () => saveHaFields("blinds"));
+  document.getElementById("loadCoverEntities").addEventListener("click", () => loadCoverEntitiesFromHomeAssistant());
+  elements.testHaConnection?.addEventListener("click", () => loadCoverEntitiesFromHomeAssistant({ quiet: true }));
+  elements.clearHaLog?.addEventListener("click", clearHaLog);
+  document.getElementById("openAudioHaConfig").addEventListener("click", () => {
+    elements.audioHaView.hidden = false;
+    renderHaFields("audio");
+  });
+  document.getElementById("saveAudioHaConfig").addEventListener("click", () => saveHaFields("audio"));
+
+  elements.roomConfigList.addEventListener("input", (event) => {
+    const roomNameInput = event.target.closest("[data-room-name-input]");
+    const blindNameInput = event.target.closest("[data-blind-name-input]");
+    if (roomNameInput) renameRoom(roomNameInput.dataset.roomKey, roomNameInput.value);
+    if (blindNameInput) renameBlind(blindNameInput.dataset.roomKey, blindNameInput.dataset.blindId, blindNameInput.value);
+  });
+  elements.roomConfigList.addEventListener("change", (event) => {
+    const countSelect = event.target.closest("[data-room-count-select]");
+    if (countSelect) setRoomBlindCount(countSelect.dataset.roomKey, countSelect.value);
+  });
+  elements.roomConfigList.addEventListener("click", (event) => {
+    const deleteButton = event.target.closest("[data-delete-room]");
+    if (deleteButton) deleteRoom(deleteButton.dataset.deleteRoom);
+  });
+
   document.querySelectorAll("[data-away-adjust]").forEach((button) => button.addEventListener("click", () => {
     const [kind, delta] = button.dataset.awayAdjust.split(":");
     setAwaySafety(kind, Number(delta));
@@ -443,46 +1147,39 @@ function bindEvents() {
     });
   });
 
-  document.querySelectorAll(".room-tab").forEach((tab) => tab.addEventListener("click", () => { state.blinds.room = tab.dataset.room; renderBlinds(); }));
+  elements.roomTabs.addEventListener("click", (event) => {
+    const tab = event.target.closest(".room-tab");
+    if (!tab) return;
+    state.blinds.room = tab.dataset.room;
+    saveConfig();
+    renderBlinds();
+  });
   document.querySelectorAll("[data-blind-action]").forEach((button) => button.addEventListener("click", () => applyBlindAction(button.dataset.blindAction)));
   elements.blindCards.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-blind-id]");
     if (!button) return;
-    if (button.dataset.action === "stop") return;
     applyBlindAction(button.dataset.action, button.dataset.blindId);
   });
 
-  let activeShadeId = null;
-  const updateBlindFromPointer = (event) => {
-    const stage = document.querySelector(`[data-blind-stage="${activeShadeId}"]`) || event.target.closest("[data-blind-stage]");
-    if (!stage) return;
-    const rect = stage.getBoundingClientRect();
-    const pct = clamp(Math.round(((rect.bottom - event.clientY) / rect.height) * 100), 0, 100);
-    setBlindPosition(stage.dataset.blindStage, pct);
-  };
-  elements.blindCards.addEventListener("pointerdown", (event) => {
-    const stage = event.target.closest("[data-blind-stage]");
-    if (!stage) return;
-    event.preventDefault(); event.stopPropagation(); activeShadeId = stage.dataset.blindStage; stage.setPointerCapture(event.pointerId); updateBlindFromPointer(event);
+  elements.entityPickerClose.addEventListener("click", closeEntityPicker);
+  document.querySelectorAll("[data-close-entity-picker]").forEach((el) => el.addEventListener("click", closeEntityPicker));
+  elements.entityPickerList.addEventListener("click", (event) => {
+    const clear = event.target.closest("[data-clear-entity]");
+    if (clear) return assignEntityToBlind("", "");
+    const button = event.target.closest("[data-entity-id]");
+    if (!button) return;
+    assignEntityToBlind(button.dataset.entityId, button.dataset.entityName);
   });
-  elements.blindCards.addEventListener("pointermove", (event) => { if (activeShadeId) { event.preventDefault(); updateBlindFromPointer(event); } });
-  const finishShadeDrag = (event) => {
-    if (!activeShadeId) return;
-    const stage = document.querySelector(`[data-blind-stage="${activeShadeId}"]`);
-    try { stage?.releasePointerCapture(event.pointerId); } catch (_) {}
-    activeShadeId = null;
-  };
-  elements.blindCards.addEventListener("pointerup", finishShadeDrag);
-  elements.blindCards.addEventListener("pointercancel", finishShadeDrag);
 
   bindSwipeNavigation();
   bindThermostatDial();
+  bindBlindInteractions();
   window.addEventListener("keydown", (event) => {
     if (event.key === "ArrowRight") goRelative(1);
     if (event.key === "ArrowLeft") goRelative(-1);
     if (event.key === "+" || event.key === "=") adjustSetpoint(1);
     if (event.key === "-" || event.key === "_") adjustSetpoint(-1);
-    if (event.key === "Escape") closeSettings();
+    if (event.key === "Escape") { closeSettings(); closeEntityPicker(); }
   });
 }
 
@@ -501,6 +1198,7 @@ function mockTrackProgress() {
 }
 
 function init() {
+  loadSavedConfig();
   state.thermostat.away = false;
   bindEvents();
   updateClock();

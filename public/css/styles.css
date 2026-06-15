@@ -315,3 +315,527 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   .chip-right { right: 6vw; top: 63%; }
   .mode-deck { width: min(472px, 66vw); }
 }
+
+/* 2026-06-15 Blind setup and Home Assistant config pass */
+.blinds-panel {
+  height: 100%;
+  padding: clamp(18px, 2.1vw, 28px);
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: clamp(12px, 1.35vw, 18px);
+}
+.blinds-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  min-height: 92px;
+}
+.blinds-title-row h2 { font-size: clamp(2.3rem, 3.7vw, 4rem); }
+.blind-command-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: clamp(12px, 2vw, 24px);
+  margin-top: -8px;
+}
+.room-tabs {
+  justify-content: flex-start;
+  max-width: 58%;
+  overflow-x: auto;
+  flex-wrap: nowrap;
+  padding-bottom: 2px;
+  scrollbar-width: none;
+}
+.room-tabs::-webkit-scrollbar { display: none; }
+.room-actions {
+  margin-left: auto;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+}
+.room-tab {
+  min-width: 124px;
+  white-space: nowrap;
+  background: rgba(255,255,255,.065);
+}
+.scene-btn.room-open,
+.blind-action.primary {
+  background: linear-gradient(135deg, #4eefff, #43a9ff);
+  color: #02111f;
+  border-color: rgba(80, 235, 255, .34);
+}
+.scene-btn.room-close,
+.close-blind {
+  background: linear-gradient(135deg, #f0ddff, #ad78ff);
+  color: #170d29;
+  border-color: rgba(199, 158, 255, .34);
+}
+.scene-btn.secondary {
+  background: linear-gradient(135deg, rgba(255,255,255,.12), rgba(255,255,255,.055));
+  color: rgba(239,247,255,.94);
+}
+.blind-cards.blind-columns {
+  display: grid;
+  grid-template-columns: repeat(var(--blind-columns, 4), minmax(0, 1fr));
+  gap: clamp(12px, 1.35vw, 18px);
+  min-height: 0;
+  align-items: stretch;
+}
+.blind-card {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 10px;
+  padding: clamp(10px, 1.1vw, 14px);
+  min-width: 0;
+}
+.blind-top { margin-bottom: 0; }
+.ha-link-chip {
+  margin-top: 5px;
+  max-width: 19ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: rgba(202, 219, 238, .75);
+  font-size: .68rem;
+  font-weight: 850;
+  letter-spacing: .02em;
+}
+.ha-link-chip.unlinked { color: rgba(77,238,255,.64); }
+.blind-actions.two,
+.blind-actions.single { display: contents; }
+.blind-action {
+  width: 100%;
+  min-height: clamp(44px, 4.5vh, 54px);
+  border-radius: 17px;
+  padding: 0 14px;
+}
+.shade-stage {
+  height: auto;
+  min-height: clamp(230px, 33vh, 360px);
+  border-radius: 24px;
+  cursor: ns-resize;
+  touch-action: none;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(77,238,255,.08), transparent 38%),
+    linear-gradient(180deg, rgba(4,10,23,.88), rgba(14,24,42,.96));
+}
+.blind-window {
+  inset: 10px;
+  border-radius: 20px;
+  background:
+    linear-gradient(to bottom,
+      rgba(2,8,18,.88) 0 calc(100% - var(--blind-open)),
+      rgba(156, 190, 225, .54) calc(100% - var(--blind-open)) 100%),
+    repeating-linear-gradient(to bottom, rgba(235,245,255,.18) 0 5px, rgba(18,30,50,.20) 5px 11px),
+    linear-gradient(180deg, rgba(77,238,255,.18), rgba(155,109,255,.23));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.08), inset 0 -20px 34px rgba(0,0,0,.26);
+}
+.blind-window::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% - var(--blind-open));
+  height: 2px;
+  background: linear-gradient(90deg, rgba(77,238,255,.95), rgba(155,109,255,.9));
+  box-shadow: 0 0 18px rgba(77,238,255,.35);
+}
+.blind-handle,
+.blind-handle::after { display: none !important; }
+
+/* Full-page setup sheets for the 10-inch panel */
+.settings-overlay { z-index: 80; }
+.settings-sheet.full-setup {
+  width: calc(100vw - clamp(44px, 4vw, 76px));
+  height: calc(100dvh - clamp(44px, 4vw, 76px));
+  max-height: none;
+  padding: clamp(20px, 2vw, 30px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+.settings-sheet.full-setup .settings-view,
+.settings-sheet.full-setup .settings-subview {
+  min-height: 0;
+  overflow: hidden;
+}
+.settings-sheet.full-setup .settings-header { margin-bottom: clamp(12px, 1.4vw, 20px); }
+.settings-sheet.full-setup .settings-header h2 { font-size: clamp(2.2rem, 3.8vw, 4rem); }
+.setup-actions-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 16px;
+}
+.setup-actions-row .scene-btn { min-height: 58px; border-radius: 22px; font-size: 1.02rem; }
+.setup-actions-row.compact-actions { max-width: 720px; margin-bottom: 0; }
+.room-config-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  overflow: auto;
+  max-height: calc(100% - 76px);
+  padding-right: 6px;
+}
+.room-config-card {
+  border: 1px solid rgba(255,255,255,.10);
+  border-radius: 26px;
+  background: linear-gradient(145deg, rgba(255,255,255,.08), rgba(255,255,255,.032));
+  padding: 16px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.09);
+}
+.room-config-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 110px 112px;
+  gap: 12px;
+  align-items: end;
+}
+.form-field,
+.mini-field {
+  display: grid;
+  gap: 7px;
+  color: rgba(219,232,246,.76);
+  text-transform: uppercase;
+  letter-spacing: .12em;
+  font-size: .67rem;
+  font-weight: 950;
+}
+.form-field input,
+.form-field textarea,
+.form-field select,
+.mini-field input {
+  width: 100%;
+  min-height: 48px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(0,0,0,.22);
+  color: var(--text);
+  padding: 0 14px;
+  outline: none;
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 850;
+}
+.form-field textarea { padding: 12px 14px; resize: none; min-height: 110px; }
+.form-field select { appearance: none; }
+.danger-button,
+.ghost-button,
+.entity-pick {
+  min-height: 48px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.07);
+  color: rgba(239,247,255,.9);
+  font-weight: 950;
+}
+.danger-button { background: rgba(255, 100, 125, .13); color: #ffd9df; border-color: rgba(255,100,125,.25); }
+.blind-name-grid {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.ha-focus-top { margin-bottom: 16px; }
+.settings-sheet.ha-focus .settings-header { margin-bottom: 10px; }
+.settings-sheet.ha-focus .settings-footer { display: none; }
+.settings-section.tight { margin-top: 0; gap: 16px; overflow: auto; padding-right: 6px; }
+.form-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  max-width: 900px;
+}
+.entity-list-preview,
+.entity-picker-list {
+  display: grid;
+  gap: 10px;
+  overflow: auto;
+  padding-right: 6px;
+}
+.entity-list-preview { max-height: 32vh; max-width: 900px; }
+.entity-row,
+.entity-pick,
+.empty-state,
+.entity-picker-help {
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.055);
+  border-radius: 18px;
+  padding: 13px 15px;
+}
+.entity-row,
+.entity-pick {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  text-align: left;
+}
+.entity-row span,
+.entity-pick span { color: rgba(198,216,235,.68); font-size: .82rem; font-weight: 800; }
+.entity-pick.clear { justify-content: center; color: #ffd9df; background: rgba(255,100,125,.11); }
+.entity-sheet {
+  width: min(860px, calc(100vw - 52px));
+  max-height: calc(100dvh - 70px);
+}
+.entity-picker-help { margin: 14px 0; color: rgba(218,232,248,.72); font-weight: 800; }
+.empty-state { color: rgba(218,232,248,.70); font-weight: 850; }
+
+@media (max-width: 1280px) {
+  .blind-cards.blind-columns { gap: 12px; }
+  .blind-action { min-height: 44px; }
+  .shade-stage { min-height: 245px; }
+  .room-config-list { grid-template-columns: 1fr; }
+}
+@media (max-width: 900px) {
+  .blind-command-row { align-items: stretch; flex-direction: column; }
+  .room-tabs { max-width: 100%; width: 100%; }
+  .room-actions { width: 100%; }
+  .room-actions .scene-btn { flex: 1; }
+  .blind-cards.blind-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .settings-sheet.full-setup { width: calc(100vw - 24px); height: calc(100dvh - 24px); }
+  .setup-actions-row, .room-config-main, .blind-name-grid { grid-template-columns: 1fr; }
+}
+
+
+/* 2026-06-15 Home Assistant diagnostics panel */
+.ha-action-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  max-width: 980px;
+}
+.scene-btn.subtle {
+  background: rgba(255,255,255,.065);
+  color: rgba(239,247,255,.88);
+}
+.ha-status-line {
+  max-width: 980px;
+  min-height: 44px;
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.055);
+  color: rgba(225,238,252,.82);
+  font-weight: 850;
+}
+.ha-status-line.ok { border-color: rgba(98,255,189,.28); background: rgba(98,255,189,.09); color: #d8fff0; }
+.ha-status-line.warn { border-color: rgba(255,190,95,.30); background: rgba(255,190,95,.09); color: #ffe9bd; }
+.ha-status-line.error { border-color: rgba(255,100,125,.32); background: rgba(255,100,125,.10); color: #ffdce2; }
+.ha-diagnostics {
+  max-width: 980px;
+  border-radius: 22px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: linear-gradient(180deg, rgba(0,0,0,.18), rgba(255,255,255,.035));
+  overflow: hidden;
+}
+.ha-diag-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(255,255,255,.075);
+}
+.ha-diag-head strong { font-size: .92rem; }
+.ha-diag-head span { color: rgba(199,216,235,.62); font-weight: 800; font-size: .78rem; }
+.ha-log-list {
+  max-height: 160px;
+  overflow: auto;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+.ha-log-row {
+  display: grid;
+  grid-template-columns: 92px 70px minmax(0,1fr);
+  gap: 12px;
+  align-items: start;
+  min-height: 38px;
+  border-radius: 14px;
+  padding: 9px 12px;
+  background: rgba(255,255,255,.045);
+  color: rgba(231,241,252,.86);
+  font-weight: 800;
+}
+.ha-log-time { color: rgba(191,209,229,.66); font-size: .78rem; padding-top: 1px; }
+.ha-log-level { font-size: .70rem; letter-spacing: .11em; color: rgba(77,238,255,.88); padding-top: 2px; }
+.ha-log-row.warn .ha-log-level { color: #ffd37b; }
+.ha-log-row.error .ha-log-level { color: #ff8fa1; }
+.ha-log-message {
+  display: block !important;
+  min-width: 0;
+  overflow: visible;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.25;
+  color: rgba(236,246,255,.88);
+}
+.empty-state.compact { min-height: 40px; display: flex; align-items: center; }
+@media (max-width: 1200px) {
+  .ha-action-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ha-log-row { grid-template-columns: 82px 62px minmax(0,1fr); }
+}
+
+/* 2026-06-15 HA control pass: tighter 10-inch settings layout, no demo/placeholder rows */
+.settings-sheet.ha-focus {
+  width: calc(100vw - clamp(32px, 3vw, 56px));
+  height: calc(100dvh - clamp(32px, 3vw, 56px));
+  padding: clamp(16px, 1.55vw, 24px);
+}
+.settings-sheet.ha-focus .settings-header {
+  margin-bottom: 10px;
+  align-items: flex-start;
+}
+.settings-sheet.ha-focus .settings-header h2 {
+  font-size: clamp(1.8rem, 3.1vw, 3.25rem);
+  letter-spacing: -0.07em;
+}
+.settings-sheet.ha-focus .settings-header .eyebrow { margin-bottom: 4px; }
+.ha-config-subview {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+}
+.ha-focus-top { margin: 0; }
+.ha-config-layout {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(380px, 0.82fr) minmax(420px, 1.18fr);
+  gap: clamp(14px, 1.5vw, 22px);
+  overflow: hidden;
+}
+.ha-connect-card,
+.ha-entity-card {
+  min-height: 0;
+  border-radius: 28px;
+  border: 1px solid rgba(255,255,255,.105);
+  background:
+    radial-gradient(circle at 92% 10%, rgba(77,238,255,.10), transparent 32%),
+    linear-gradient(155deg, rgba(255,255,255,.07), rgba(255,255,255,.025));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 22px 70px rgba(0,0,0,.18);
+  padding: clamp(14px, 1.35vw, 20px);
+  overflow: hidden;
+}
+.ha-connect-card {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(116px, .65fr);
+  gap: 12px;
+}
+.ha-form-grid {
+  max-width: none;
+  gap: 10px;
+}
+.ha-connect-card .form-field textarea { min-height: 76px; }
+.ha-connect-card .form-field input,
+.ha-connect-card .form-field textarea {
+  background: rgba(2, 8, 18, .46);
+}
+.ha-action-grid {
+  max-width: none;
+  margin: 0;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+.ha-action-grid .scene-btn {
+  min-height: 48px;
+  border-radius: 18px;
+  padding-inline: 10px;
+  font-size: .9rem;
+}
+.ha-status-line {
+  max-width: none;
+  min-height: 42px;
+  border-radius: 16px;
+  padding-inline: 14px;
+}
+.ha-diagnostics {
+  max-width: none;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.ha-log-list {
+  max-height: none;
+  min-height: 0;
+}
+.ha-log-row {
+  grid-template-columns: 88px 58px minmax(0,1fr);
+  min-height: 34px;
+  padding: 7px 10px;
+}
+.ha-entity-card {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+}
+.ha-entity-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px;
+}
+.ha-entity-head h3 {
+  margin: 2px 0 0;
+  font-size: clamp(1.35rem, 1.9vw, 2.1rem);
+  letter-spacing: -0.045em;
+}
+.entity-count-pill {
+  min-width: 46px;
+  min-height: 34px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, rgba(77,238,255,.24), rgba(81,162,255,.16));
+  border: 1px solid rgba(77,238,255,.22);
+  color: #dffcff;
+  font-weight: 950;
+}
+.ha-config-layout .entity-list-preview {
+  max-height: none;
+  max-width: none;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  align-content: start;
+  gap: 10px;
+  overflow: auto;
+  padding-right: 2px;
+}
+.ha-config-layout .entity-row {
+  min-height: 78px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: center;
+  justify-items: stretch;
+  gap: 5px;
+  padding: 12px 14px;
+  border-radius: 18px;
+}
+.ha-config-layout .entity-row strong,
+.entity-pick strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ha-config-layout .entity-row span,
+.ha-config-layout .entity-row em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(198,216,235,.66);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 850;
+}
+.ha-config-layout .entity-row em { color: rgba(77,238,255,.78); }
+.entity-list-preview[data-source="demo"]::before { content: none !important; display: none !important; }
+
+@media (max-width: 1120px) {
+  .ha-config-layout { grid-template-columns: 1fr; }
+  .ha-connect-card { grid-template-rows: auto auto auto minmax(86px, .45fr); }
+  .ha-config-layout .entity-list-preview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

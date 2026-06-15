@@ -28,25 +28,21 @@
     <section id="screenTrack" class="screen-track" aria-live="polite">
       <article class="screen screen-blinds" data-screen="blinds" aria-label="Blinds controls">
         <section class="panel blinds-panel">
-          <div class="blinds-header">
+          <div class="blinds-title-row">
             <div class="panel-heading vertical">
               <p class="eyebrow">Shade Control</p>
               <h2 id="blindRoomTitle">Living Room</h2>
-              <p class="panel-subtitle">Touch a blind, drag the shade, or run the whole room.</p>
-            </div>
-
-            <div class="blinds-command-center">
-              <div class="room-tabs" role="tablist" aria-label="Blind rooms">
-                <button class="room-tab active" data-room="living">Living Room</button>
-                <button class="room-tab" data-room="kitchen">Kitchen</button>
-              </div>
-              <div class="room-actions">
-                <button class="scene-btn" data-blind-action="open-room">Open Room</button>
-                <button class="scene-btn dark" data-blind-action="stop-room">Stop</button>
-                <button class="scene-btn" data-blind-action="close-room">Close Room</button>
-              </div>
             </div>
           </div>
+
+          <div class="blind-command-row">
+            <div id="roomTabs" class="room-tabs" role="tablist" aria-label="Blind rooms"></div>
+            <div class="room-actions">
+              <button class="scene-btn room-open" data-blind-action="open-room">Open Room</button>
+              <button class="scene-btn room-close" data-blind-action="close-room">Close Room</button>
+            </div>
+          </div>
+
           <div id="blindCards" class="blind-cards blind-columns"></div>
         </section>
       </article>
@@ -133,50 +129,139 @@
 
     <section id="settingsOverlay" class="settings-overlay" aria-hidden="true">
       <div class="settings-backdrop" data-close-settings></div>
-      <aside class="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <aside id="settingsSheet" class="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
         <div class="settings-header">
           <div>
-            <p class="eyebrow">Panel Settings</p>
-            <h2 id="settingsTitle">Comfort Setup</h2>
+            <p id="settingsEyebrow" class="eyebrow">Panel Settings</p>
+            <h2 id="settingsTitle">Setup</h2>
           </div>
           <button id="settingsClose" class="icon-button close" aria-label="Close settings">×</button>
         </div>
 
-        <div class="settings-section">
-          <div><h3>Away Safety</h3></div>
-          <div class="settings-grid two-col">
-            <div class="setpoint-card"><span>Heat Safety</span><div class="setpoint-controls"><button data-away-adjust="heat:-1">−</button><strong><span id="awayHeatValue">55</span>°</strong><button data-away-adjust="heat:1">+</button></div></div>
-            <div class="setpoint-card"><span>Cool Safety</span><div class="setpoint-controls"><button data-away-adjust="cool:-1">−</button><strong><span id="awayCoolValue">85</span>°</strong><button data-away-adjust="cool:1">+</button></div></div>
-          </div>
-        </div>
-
-        <div class="settings-section">
-          <div><h3>Comfort Limits</h3></div>
-          <div class="settings-grid two-col limits-grid">
-            <div class="limit-group">
-              <div class="limit-title">Cool Range</div>
-              <div class="setpoint-card"><span>Low Limit</span><div class="setpoint-controls"><button data-limit-adjust="cool:min:-1">−</button><strong><span id="coolMinValue">65</span>°</strong><button data-limit-adjust="cool:min:1">+</button></div></div>
-              <div class="setpoint-card"><span>High Limit</span><div class="setpoint-controls"><button data-limit-adjust="cool:max:-1">−</button><strong><span id="coolMaxValue">80</span>°</strong><button data-limit-adjust="cool:max:1">+</button></div></div>
-            </div>
-            <div class="limit-group">
-              <div class="limit-title">Heat Range</div>
-              <div class="setpoint-card"><span>Low Limit</span><div class="setpoint-controls"><button data-limit-adjust="heat:min:-1">−</button><strong><span id="heatMinValue">60</span>°</strong><button data-limit-adjust="heat:min:1">+</button></div></div>
-              <div class="setpoint-card"><span>High Limit</span><div class="setpoint-controls"><button data-limit-adjust="heat:max:-1">−</button><strong><span id="heatMaxValue">78</span>°</strong><button data-limit-adjust="heat:max:1">+</button></div></div>
+        <div id="thermostatSettingsView" class="settings-view">
+          <div class="settings-section">
+            <div><h3>Away Safety</h3></div>
+            <div class="settings-grid two-col">
+              <div class="setpoint-card"><span>Heat Safety</span><div class="setpoint-controls"><button data-away-adjust="heat:-1">−</button><strong><span id="awayHeatValue">55</span>°</strong><button data-away-adjust="heat:1">+</button></div></div>
+              <div class="setpoint-card"><span>Cool Safety</span><div class="setpoint-controls"><button data-away-adjust="cool:-1">−</button><strong><span id="awayCoolValue">85</span>°</strong><button data-away-adjust="cool:1">+</button></div></div>
             </div>
           </div>
-        </div>
 
-        <div class="settings-section">
-          <div><h3>Fan</h3></div>
-          <div class="segmented" role="group" aria-label="Fan mode">
-            <button class="segment active" data-fan="auto">Auto</button>
-            <button class="segment" data-fan="on">On</button>
+          <div class="settings-section">
+            <div><h3>Comfort Limits</h3></div>
+            <div class="settings-grid two-col limits-grid">
+              <div class="limit-group">
+                <div class="limit-title">Cool Range</div>
+                <div class="setpoint-card"><span>Low Limit</span><div class="setpoint-controls"><button data-limit-adjust="cool:min:-1">−</button><strong><span id="coolMinValue">65</span>°</strong><button data-limit-adjust="cool:min:1">+</button></div></div>
+                <div class="setpoint-card"><span>High Limit</span><div class="setpoint-controls"><button data-limit-adjust="cool:max:-1">−</button><strong><span id="coolMaxValue">80</span>°</strong><button data-limit-adjust="cool:max:1">+</button></div></div>
+              </div>
+              <div class="limit-group">
+                <div class="limit-title">Heat Range</div>
+                <div class="setpoint-card"><span>Low Limit</span><div class="setpoint-controls"><button data-limit-adjust="heat:min:-1">−</button><strong><span id="heatMinValue">60</span>°</strong><button data-limit-adjust="heat:min:1">+</button></div></div>
+                <div class="setpoint-card"><span>High Limit</span><div class="setpoint-controls"><button data-limit-adjust="heat:max:-1">−</button><strong><span id="heatMaxValue">78</span>°</strong><button data-limit-adjust="heat:max:1">+</button></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div><h3>Fan</h3></div>
+            <div class="segmented" role="group" aria-label="Fan mode">
+              <button class="segment active" data-fan="auto">Auto</button>
+              <button class="segment" data-fan="on">On</button>
+            </div>
           </div>
         </div>
 
-        <div class="settings-footer">
+        <div id="blindSettingsView" class="settings-view" hidden>
+          <div id="blindSetupView" class="settings-subview">
+            <div class="setup-actions-row">
+              <button id="addRoomButton" class="scene-btn room-open">Add Room</button>
+              <button id="openBlindHaConfig" class="scene-btn secondary">Home Assistant Config</button>
+            </div>
+            <div id="roomConfigList" class="room-config-list"></div>
+          </div>
+
+          <div id="blindHaView" class="settings-subview ha-config-subview" hidden>
+            <div class="ha-focus-top">
+              <button id="backToBlindSetup" class="ghost-button">← Blind Setup</button>
+            </div>
+            <div class="ha-config-layout">
+              <section class="ha-connect-card">
+                <div class="form-grid ha-form-grid">
+                  <label class="form-field">Home Assistant URL
+                    <input id="haUrlInput" type="text" autocomplete="off" spellcheck="false" />
+                  </label>
+                  <label class="form-field">Long-Lived Access Token
+                    <textarea id="haTokenInput" rows="3" spellcheck="false"></textarea>
+                  </label>
+                </div>
+                <div class="setup-actions-row compact-actions ha-action-grid">
+                  <button id="saveHaConfig" class="scene-btn room-open">Save</button>
+                  <button id="loadCoverEntities" class="scene-btn secondary">Load Covers</button>
+                  <button id="testHaConnection" class="scene-btn secondary subtle">Test</button>
+                  <button id="clearHaLog" class="scene-btn secondary subtle">Clear Log</button>
+                </div>
+                <div id="haStatusLine" class="ha-status-line">Ready.</div>
+                <div class="ha-diagnostics">
+                  <div class="ha-diag-head">
+                    <strong>Connection Log</strong>
+                    <span>Token hidden</span>
+                  </div>
+                  <div id="haLogList" class="ha-log-list"></div>
+                </div>
+              </section>
+
+              <section class="ha-entity-card">
+                <div class="ha-entity-head">
+                  <div>
+                    <p class="eyebrow">Cover Entities</p>
+                    <h3>Available Blinds</h3>
+                  </div>
+                  <span id="haEntityCount" class="entity-count-pill">0</span>
+                </div>
+                <div id="haCoverList" class="entity-list-preview"></div>
+              </section>
+            </div>
+          </div>
+        </div>
+
+        <div id="audioSettingsView" class="settings-view" hidden>
+          <div class="setup-actions-row">
+            <button id="openAudioHaConfig" class="scene-btn secondary">Home Assistant Config</button>
+          </div>
+          <div id="audioHaView" class="settings-section" hidden>
+            <div class="form-grid">
+              <label class="form-field">Home Assistant URL
+                <input id="audioHaUrlInput" type="text" autocomplete="off" />
+              </label>
+              <label class="form-field">Long-Lived Access Token
+                <textarea id="audioHaTokenInput" rows="4"></textarea>
+              </label>
+            </div>
+            <div class="setup-actions-row compact-actions">
+              <button id="saveAudioHaConfig" class="scene-btn room-open">Save Config</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="settingsFooter" class="settings-footer">
           <button id="settingsDone" class="scene-btn">Done</button>
         </div>
+      </aside>
+    </section>
+
+    <section id="entityPickerOverlay" class="settings-overlay entity-overlay" aria-hidden="true">
+      <div class="settings-backdrop" data-close-entity-picker></div>
+      <aside class="settings-sheet entity-sheet" role="dialog" aria-modal="true" aria-labelledby="entityPickerTitle">
+        <div class="settings-header">
+          <div>
+            <p class="eyebrow">Home Assistant</p>
+            <h2 id="entityPickerTitle">Assign Blind</h2>
+          </div>
+          <button id="entityPickerClose" class="icon-button close" aria-label="Close entity picker">×</button>
+        </div>
+        <div class="entity-picker-help">Long-press a blind, then select the matching cover entity.</div>
+        <div id="entityPickerList" class="entity-picker-list"></div>
       </aside>
     </section>
 
