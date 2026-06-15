@@ -3657,25 +3657,26 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
 
 /* 2026-06-15 touchscreen light color popup + thermostat info */
 .panel-info-button {
-  position: absolute;
-  top: 0;
-  left: 0;
-  z-index: 8;
-  width: 48px;
-  height: 48px;
+  position: relative;
+  z-index: 31;
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
   border-radius: 50%;
   border: 1px solid rgba(91, 222, 255, .42);
   background: linear-gradient(135deg, rgba(91,222,255,.28), rgba(75,154,255,.13));
   color: #8becff;
   font-family: Georgia, "Times New Roman", serif;
-  font-size: 1.65rem;
+  font-size: 1.52rem;
   font-style: italic;
   font-weight: 900;
   line-height: 1;
-  display: grid;
+  display: inline-grid;
   place-items: center;
   box-shadow: 0 16px 38px rgba(45, 185, 255, .18), inset 0 1px 0 rgba(255,255,255,.22);
 }
+.app-shell:not([data-page="thermostat"]) .panel-info-button { display: none; }
 .panel-info-button:active { transform: scale(.96); }
 
 .light-card-top {
@@ -3859,5 +3860,5 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
     padding: 16px;
   }
   .light-color-preset-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .panel-info-button { width: 44px; height: 44px; top: 0; left: 0; }
+  .panel-info-button { width: 44px; height: 44px; min-height: 44px; }
 }

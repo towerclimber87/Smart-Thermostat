@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="./css/styles.css" />
 </head>
 <body>
-  <main id="app" class="app-shell" aria-label="Smart Thermostat interface">
+  <main id="app" class="app-shell" data-page="thermostat" aria-label="Smart Thermostat interface">
     <div class="ambient ambient-one"></div>
     <div class="ambient ambient-two"></div>
     <div class="ambient ambient-three"></div>
@@ -32,6 +32,7 @@
       </nav>
       <div class="status-cluster">
         <div id="clock" class="clock">--:--</div>
+        <button id="thermostatInfoButton" class="panel-info-button" type="button" aria-label="Panel information">i</button>
         <button id="settingsButton" class="icon-button" aria-label="Open settings">⚙</button>
       </div>
     </section>
@@ -60,7 +61,6 @@
 
       <article class="screen screen-thermostat" data-screen="thermostat" aria-label="Thermostat controls">
         <section class="thermostat-stage">
-          <button id="thermostatInfoButton" class="panel-info-button" type="button" aria-label="Panel information">i</button>
           <div class="thermostat-topline">
             <div class="thermostat-title-block">
               <div class="outdoor-top-badge">Outdoor <strong id="outdoorTempTopValue">78°</strong></div>
