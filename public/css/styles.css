@@ -4539,3 +4539,40 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
 .fetch-update-status[data-level="error"] {
   color: rgba(255, 170, 170, .96);
 }
+
+/* 2026-06-15 keep temperature atmosphere out of state-colored security tiles */
+.alarm-control-widget,
+.door-control-widget {
+  background:
+    radial-gradient(circle at 50% 22%, rgba(255,255,255,.11), transparent 42%),
+    linear-gradient(150deg, rgba(17,26,43,.97), rgba(6,12,24,.985)) !important;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.alarm-control-widget.armed,
+.alarm-control-widget.pending,
+.alarm-control-widget.triggered {
+  background:
+    radial-gradient(circle at 50% 26%, rgba(255,104,93,.34), transparent 43%),
+    linear-gradient(150deg, rgba(64,18,22,.975), rgba(9,12,24,.99)) !important;
+}
+.alarm-control-widget.disarmed {
+  background:
+    radial-gradient(circle at 50% 24%, rgba(99,241,173,.24), transparent 43%),
+    linear-gradient(150deg, rgba(12,50,42,.975), rgba(6,13,24,.99)) !important;
+}
+.door-control-widget.closed {
+  background:
+    radial-gradient(circle at 50% 24%, rgba(99,241,173,.24), transparent 43%),
+    linear-gradient(150deg, rgba(12,50,42,.975), rgba(6,13,24,.99)) !important;
+}
+.door-control-widget.open {
+  background:
+    radial-gradient(circle at 50% 26%, rgba(255,197,78,.34), transparent 43%),
+    linear-gradient(150deg, rgba(70,42,11,.975), rgba(9,12,24,.99)) !important;
+}
+.door-control-widget.unknown {
+  background:
+    radial-gradient(circle at 50% 22%, rgba(255,255,255,.12), transparent 42%),
+    linear-gradient(150deg, rgba(24,31,46,.975), rgba(6,12,24,.99)) !important;
+}

@@ -1275,6 +1275,7 @@ function setHomeMode() {
   const { min, max } = getModeLimits();
   t.targetTemp = clamp(t.lastComfortTarget, min, max);
   renderThermostat();
+  saveConfig();
   showToast("Home comfort restored");
 }
 
@@ -2082,6 +2083,7 @@ function toggleAway() {
   t.lastComfortTarget = t.targetTemp;
   applyAwayTarget();
   renderThermostat();
+  saveConfig();
   showToast("Away mode active");
 }
 
