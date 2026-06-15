@@ -5,13 +5,15 @@ const DIAL_START_DEG = 225;
 const CONFIG_STORAGE_KEY = "smartThermostat.config.v2";
 const HA_SYNC_INTERVAL_MS = 3000;
 const HA_SYNC_AFTER_COMMAND_DELAYS = [900, 2400, 5200];
-const HA_AUDIO_SYNC_INTERVAL_MS = 2500;
+const HA_AUDIO_SYNC_INTERVAL_MS = 3000;
 const HA_AUDIO_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
 let haSyncInFlight = false;
 let haSyncLastError = "";
 let haAudioSyncInFlight = false;
 let haAudioControlSyncInFlight = false;
 let haAudioSyncLastError = "";
+let haAudioSyncTick = 0;
+let audioMediaActionInFlight = false;
 let audioVolumeDebounce = null;
 let audioToneDebounces = { gain: null, bass: null, treble: null };
 let audioTrackCommandLock = null;
@@ -127,6 +129,7 @@ const elements = {
   settingsOverlay: document.getElementById("settingsOverlay"),
   settingsSheet: document.getElementById("settingsSheet"),
   settingsButton: document.getElementById("settingsButton"),
+  tempMiniStatus: document.getElementById("tempMiniStatus"),
   headerCurrentTemp: document.getElementById("headerCurrentTemp"),
   headerSetTemp: document.getElementById("headerSetTemp"),
   headerSetPill: document.getElementById("headerSetPill"),
@@ -336,11 +339,13 @@ function updateClock() {
 function gotoPage(pageName) {
   if (!state.pages.includes(pageName)) return;
   state.currentPage = pageName;
+  elements.app.dataset.page = pageName;
   const index = state.pages.indexOf(pageName);
   elements.screenTrack.style.transform = `translateX(-${index * 33.3333}%)`;
   document.querySelectorAll(".nav-pill").forEach((button) => button.classList.toggle("active", button.dataset.goto === pageName));
+  if (elements.tempMiniStatus) elements.tempMiniStatus.hidden = pageName === "thermostat";
   if (pageName === "blinds") pollHomeAssistantLinkedCovers({ force: true });
-  if (pageName === "audio") pollHomeAssistantMediaPlayer({ force: true });
+  if (pageName === "audio") pollHomeAssistantMediaPlayer({ force: true, controls: true });
 }
 
 function goRelative(direction) {
@@ -663,6 +668,21 @@ function releaseAudioSlider(name) {
   }
 }
 
+function isAudioSliderUserLocked(name) {
+  if (isAudioSliderActive(name)) return true;
+  if (name === "volume" && Date.now() < audioVolumeHoldUntil) return true;
+  if (["gain", "bass", "treble"].includes(name) && Date.now() < (audioToneHoldUntil[name] || 0)) return true;
+  return false;
+}
+
+function updateAudioValueLabel(name) {
+  const value = document.getElementById(`${name}Value`);
+  if (!value) return;
+  value.textContent = name === "volume"
+    ? Math.round(Number(state.audio.volume || 0))
+    : formatControlValue(state.audio[name]);
+}
+
 function getAudioToneControls() {
   const ha = state.integrations.homeAssistant;
   if (!ha.audioControlEntities) ha.audioControlEntities = { gain: null, bass: null, treble: null };
@@ -774,7 +794,7 @@ function applyMediaEntityState(entity) {
   state.audio.source = entity.source || "";
   state.audio.sourceList = normalizeSourceList(entity.sourceList);
   state.audio.mediaContentId = entity.mediaContentId || "";
-  if (Date.now() >= audioVolumeHoldUntil && !isAudioSliderActive("volume")) {
+  if (!isAudioSliderUserLocked("volume")) {
     state.audio.volume = normalizeVolume(entity, state.audio.volume);
   }
   state.audio.mediaPosition = entity.mediaPosition ?? null;
@@ -812,10 +832,10 @@ function renderAudio() {
   }
   if (elements.albumInitials) elements.albumInitials.textContent = hasDevice ? initialsFromName(title || deviceName) : "♪";
 
-  const trackLocked = isAudioTrackLocked();
+  const trackLocked = isAudioTrackLocked() || audioMediaActionInFlight;
   if (elements.prevTrack) elements.prevTrack.disabled = trackLocked;
   if (elements.nextTrack) elements.nextTrack.disabled = trackLocked;
-  if (elements.playPause) elements.playPause.disabled = Date.now() < audioPlaybackLockedUntil;
+  if (elements.playPause) elements.playPause.disabled = audioMediaActionInFlight || Date.now() < audioPlaybackLockedUntil;
 
   const sourceList = normalizeSourceList(a.sourceList || selected?.sourceList);
   if (elements.audioSourceCard && elements.audioSourceSelect) {
@@ -846,12 +866,12 @@ function renderAudio() {
       slider.min = Number.isFinite(Number(min)) ? String(min) : "-10";
       slider.max = Number.isFinite(Number(max)) ? String(max) : "10";
       slider.step = Number.isFinite(Number(step)) && Number(step) > 0 ? String(step) : "1";
-      if (control && Date.now() >= (audioToneHoldUntil[name] || 0) && !isAudioSliderActive(name)) {
+      if (control && !isAudioSliderUserLocked(name)) {
         state.audio[name] = normalizeAudioControlValue(control, state.audio[name]);
       }
     }
 
-    if (!isAudioSliderActive(name)) slider.value = a[name];
+    if (!isAudioSliderUserLocked(name)) slider.value = a[name];
     setRangeVisual(slider);
     if (value) value.textContent = name === "volume" ? Math.round(Number(a[name] || 0)) : formatControlValue(a[name]);
   });
@@ -1048,7 +1068,7 @@ async function loadMediaPlayersFromHomeAssistant(options = {}) {
 
 function scheduleAudioSync() {
   HA_AUDIO_SYNC_AFTER_COMMAND_DELAYS.forEach((delay) => {
-    window.setTimeout(() => pollHomeAssistantMediaPlayer({ force: true }), delay);
+    window.setTimeout(() => pollHomeAssistantMediaPlayer({ force: true, controls: delay > 2000 }), delay);
   });
 }
 
@@ -1058,20 +1078,28 @@ async function pollHomeAssistantMediaPlayer(options = {}) {
   if (!options.force && state.currentPage !== "audio") return;
   if (!options.force && document.visibilityState === "hidden") return;
   if (!options.force && Date.now() - lastAudioUserInteractionAt < 650) return;
+  if (!options.force && audioMediaActionInFlight) return;
   if (haAudioSyncInFlight) return;
 
   haAudioSyncInFlight = true;
   try {
-    const [players, controls] = await Promise.all([
-      fetchMediaStatesViaLocalBackend([entityId]),
-      fetchAudioControlStatesViaLocalBackend().catch((error) => {
-        addHaLog("warn", "Audio tone sync skipped", error.message || String(error));
-        return null;
-      }),
-    ]);
+    const players = await fetchMediaStatesViaLocalBackend([entityId]);
     players.forEach(upsertMediaPlayerEntity);
     if (players[0]) applyMediaEntityState(players[0]);
-    if (controls) applyAudioControls(controls);
+
+    // Tone controls are much less time-sensitive than media state/volume. Do not
+    // fetch three extra number entities on every poll; that keeps the Pi/HA light.
+    haAudioSyncTick += 1;
+    const shouldSyncToneControls = Boolean(options.controls) || haAudioSyncTick % 5 === 0;
+    if (shouldSyncToneControls && !audioMediaActionInFlight) {
+      try {
+        const controls = await fetchAudioControlStatesViaLocalBackend();
+        if (controls) applyAudioControls(controls);
+      } catch (error) {
+        addHaLog("warn", "Audio tone sync skipped", error.message || String(error));
+      }
+    }
+
     renderAudio();
     renderMediaPlayerList();
     if (haAudioSyncLastError) haAudioSyncLastError = "";
@@ -1106,7 +1134,13 @@ async function sendAudioAction(action, value = null) {
     showToast("Select an audio device first");
     return null;
   }
+  if (audioMediaActionInFlight) {
+    showToast("Audio command in progress…");
+    return null;
+  }
   lastAudioUserInteractionAt = Date.now();
+  audioMediaActionInFlight = true;
+  renderAudio();
   try {
     const entityState = await callMediaActionViaLocalBackend(action, value);
     if (entityState?.entityId) {
@@ -1129,6 +1163,9 @@ async function sendAudioAction(action, value = null) {
     addHaLog("error", `Media ${action} failed`, error.message || String(error));
     showToast("Media command failed");
     return null;
+  } finally {
+    audioMediaActionInFlight = false;
+    renderAudio();
   }
 }
 
@@ -1864,17 +1901,21 @@ function bindEvents() {
         }
       }
     };
-    slider.addEventListener("pointerdown", () => markAudioSliderActive(name, 60 * 1000));
+    slider.addEventListener("pointerdown", () => markAudioSliderActive(name, 8000));
     slider.addEventListener("pointerup", () => { releaseAudioSlider(name); scheduleSliderCommand(0); });
     slider.addEventListener("pointercancel", () => releaseAudioSlider(name));
+    slider.addEventListener("lostpointercapture", () => releaseAudioSlider(name));
     slider.addEventListener("blur", () => releaseAudioSlider(name));
     slider.addEventListener("input", (event) => {
       state.audio[name] = Number(event.target.value);
       lastAudioUserInteractionAt = Date.now();
-      markAudioSliderActive(name);
+      markAudioSliderActive(name, 8000);
+      if (name === "volume") audioVolumeHoldUntil = Date.now() + AUDIO_VOLUME_SETTLE_MS;
+      if (["gain", "bass", "treble"].includes(name)) audioToneHoldUntil[name] = Date.now() + AUDIO_TONE_SETTLE_MS;
       setRangeVisual(event.target);
-      renderAudio();
-      scheduleSliderCommand(420);
+      updateAudioValueLabel(name);
+      // Do not send HA commands while dragging. This keeps the Pi/HA light and
+      // separates received state updates from actual user commands.
     });
     slider.addEventListener("change", () => {
       releaseAudioSlider(name);

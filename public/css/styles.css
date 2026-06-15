@@ -1475,3 +1475,57 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   .audio-art { width: min(30vw, 300px); border-radius: 34px; }
   .audio-now h2 { font-size: clamp(2.2rem, 5vw, 5.2rem); }
 }
+
+
+/* 2026-06-16 audio reliability and layout polish */
+.app-shell[data-page="thermostat"] .temp-mini-status,
+.temp-mini-status[hidden] {
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.media-transport {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(14px, 1.4vw, 22px);
+  min-height: clamp(100px, 10vh, 132px);
+}
+.media-transport .transport {
+  display: grid;
+  place-items: center;
+  line-height: 1;
+  padding: 0;
+  transform: none;
+  vertical-align: middle;
+  font-family: inherit;
+}
+.media-transport .transport.primary {
+  margin: 0;
+  align-self: center;
+}
+.media-transport .transport:disabled {
+  opacity: .42;
+  filter: grayscale(.2);
+  cursor: progress;
+}
+
+.audio-volume-card input[type="range"] {
+  cursor: pointer;
+  touch-action: pan-y;
+}
+.audio-tone-grid input[type="range"] {
+  cursor: pointer;
+  touch-action: none;
+}
+.audio-volume-card label {
+  position: relative;
+  z-index: 2;
+}
+
+@media (min-width: 1000px) {
+  .audio-side-card {
+    grid-template-rows: auto minmax(104px, auto) auto minmax(0, 1fr);
+  }
+}
