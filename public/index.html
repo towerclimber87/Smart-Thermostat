@@ -60,7 +60,10 @@
       <article class="screen screen-thermostat" data-screen="thermostat" aria-label="Thermostat controls">
         <section class="thermostat-stage">
           <div class="thermostat-topline">
-            <h1>Climate Control</h1>
+            <div class="thermostat-title-block">
+              <div class="outdoor-top-badge">Outdoor <strong id="outdoorTempTopValue">78°</strong></div>
+              <h1>Climate Control</h1>
+            </div>
             <div class="comfort-status" aria-live="polite">
               <span class="pulse-dot"></span>
               <strong id="runtimeState">Cooling</strong>
@@ -124,7 +127,6 @@
                 <p id="primaryTempLabel" class="current-label">Current</p>
                 <div class="current-temp"><span id="currentTemp">70</span><small>°F</small></div>
                 <div id="secondaryTempRow" class="target-row"><span id="secondaryTempLabel">Set to</span> <strong><span id="targetTemp">70</span>°</strong></div>
-                <div class="outdoor-temp-row">Outdoor <strong><span id="outdoorTempDialValue">78</span>°</strong></div>
                 <div id="modeBadge" class="mode-badge cool">Cool Target</div>
               </div>
               <div id="dialMinLabel" class="dial-range min">65°</div>
@@ -290,10 +292,16 @@
           <div class="settings-section">
             <div><h3>Auto Mode</h3></div>
             <div class="settings-grid two-col auto-settings-grid">
-              <div class="setpoint-card"><span>Outdoor Target</span><div class="setpoint-controls"><button data-auto-adjust="target:-1">−</button><strong><span id="autoOutdoorTargetValue">70</span>°</strong><button data-auto-adjust="target:1">+</button></div></div>
-              <div class="setpoint-card"><span>Swing Differential</span><div class="setpoint-controls"><button data-auto-adjust="differential:-1">−</button><strong><span id="autoOutdoorDifferentialValue">3</span>°</strong><button data-auto-adjust="differential:1">+</button></div></div>
+              <div class="setpoint-card"><span>Cool Target</span><div class="setpoint-controls"><button data-auto-adjust="coolTarget:-1">−</button><strong><span id="autoCoolOutdoorTargetValue">70</span>°</strong><button data-auto-adjust="coolTarget:1">+</button></div></div>
+              <div class="setpoint-card"><span>Heat Target</span><div class="setpoint-controls"><button data-auto-adjust="heatTarget:-1">−</button><strong><span id="autoHeatOutdoorTargetValue">65</span>°</strong><button data-auto-adjust="heatTarget:1">+</button></div></div>
               <div class="setpoint-card readout"><span>Changeover Lockout</span><div class="setpoint-controls lockout-readout"><strong id="autoLockoutValue">2 hr</strong></div></div>
-              <div class="setpoint-card readout"><span>Auto Profile</span><div class="setpoint-controls lockout-readout"><strong id="autoProfileValue">Cool</strong></div></div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div><h3>Cooling</h3></div>
+            <div class="settings-grid two-col cooling-settings-grid">
+              <div class="setpoint-card"><span>Cool Fan Remain On</span><div class="setpoint-controls"><button data-auto-adjust="coolFanRemain:-1">−</button><strong><span id="coolFanRemainValue">2</span> min</strong><button data-auto-adjust="coolFanRemain:1">+</button></div></div>
             </div>
           </div>
 
