@@ -2573,3 +2573,408 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   .alarm-shield { width: 48px; height: 54px; }
   .alarm-orbit { width: 64px; height: 64px; left: 20px; }
 }
+
+/* 2026-06-15 security workflow + full-screen thermostat settings */
+.status-cluster .icon-button[hidden] {
+  display: none !important;
+}
+.settings-sheet.thermostat-setup {
+  width: calc(100vw - clamp(28px, 3vw, 52px));
+  height: calc(100dvh - clamp(28px, 3vw, 52px));
+  padding: clamp(16px, 1.6vw, 24px);
+}
+.settings-sheet.thermostat-setup .settings-header {
+  margin-bottom: clamp(8px, 1vw, 14px);
+  align-items: flex-start;
+}
+.settings-sheet.thermostat-setup .settings-header h2 {
+  font-size: clamp(1.8rem, 3vw, 3.2rem);
+  line-height: .92;
+  letter-spacing: -.075em;
+}
+.settings-sheet.thermostat-setup #thermostatSettingsView {
+  min-height: 0;
+  overflow: auto;
+  padding-right: 6px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(10px, 1.1vw, 16px);
+  align-content: start;
+}
+.settings-sheet.thermostat-setup #thermostatSettingsView .settings-section {
+  margin-top: 0;
+  gap: 9px;
+  border-radius: 24px;
+  border: 1px solid rgba(255,255,255,.075);
+  background: rgba(255,255,255,.032);
+  padding: clamp(12px, 1.1vw, 16px);
+}
+.settings-sheet.thermostat-setup #thermostatSettingsView .settings-section h3 {
+  font-size: clamp(1rem, 1.35vw, 1.28rem);
+  letter-spacing: -.035em;
+}
+.settings-sheet.thermostat-setup .settings-grid.two-col,
+.settings-sheet.thermostat-setup .auto-settings-grid,
+.settings-sheet.thermostat-setup .cooling-settings-grid {
+  gap: 9px;
+}
+.settings-sheet.thermostat-setup .setpoint-card {
+  min-height: 58px;
+  border-radius: 18px;
+  padding: 10px 12px;
+}
+.settings-sheet.thermostat-setup .setpoint-controls {
+  gap: 8px;
+}
+.settings-sheet.thermostat-setup .setpoint-controls button {
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+}
+.settings-sheet.thermostat-setup .setpoint-controls strong {
+  min-width: 54px;
+  font-size: 1.1rem;
+}
+.settings-sheet.thermostat-setup .fan-segments {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.settings-sheet.thermostat-setup .fan-segments .segment {
+  min-height: 54px;
+  border-radius: 18px;
+}
+.alarm-code-section {
+  grid-column: 1 / -1;
+}
+.settings-hint {
+  display: block !important;
+  margin-top: 4px;
+  color: rgba(203,220,238,.68);
+  font-size: .86rem;
+  font-weight: 750;
+  line-height: 1.35;
+}
+.alarm-code-card {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(150px, auto);
+  gap: 12px;
+  align-items: end;
+}
+.alarm-code-field {
+  display: grid;
+  gap: 8px;
+  color: rgba(226,238,250,.82);
+  font-size: .78rem;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: .1em;
+}
+.alarm-code-field input {
+  min-height: 54px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(2,8,18,.46);
+  color: #f7fbff;
+  padding: 0 16px;
+  font-size: 1.45rem;
+  font-weight: 950;
+  letter-spacing: .18em;
+  outline: none;
+}
+.alarm-code-field input:focus {
+  border-color: rgba(77,238,255,.38);
+  box-shadow: 0 0 0 4px rgba(77,238,255,.08);
+}
+.alarm-code-card .scene-btn {
+  min-height: 54px;
+  border-radius: 18px;
+  white-space: nowrap;
+}
+
+.alarm-arm-overlay { z-index: 62; }
+.alarm-arm-sheet {
+  position: relative;
+  width: min(640px, calc(100vw - 44px));
+  border-radius: 34px;
+  border: 1px solid rgba(255,255,255,.14);
+  background:
+    radial-gradient(circle at 18% 0%, rgba(77,238,255,.18), transparent 38%),
+    radial-gradient(circle at 86% 18%, rgba(255,104,93,.16), transparent 36%),
+    linear-gradient(155deg, rgba(22,33,54,.97), rgba(8,14,28,.98));
+  box-shadow: 0 42px 96px rgba(0,0,0,.52), inset 0 1px 0 rgba(255,255,255,.14);
+  padding: clamp(22px, 2.6vw, 34px);
+  text-align: center;
+}
+.alarm-arm-sheet h2 {
+  margin-top: 5px;
+  color: #f8fbff;
+  font-size: clamp(2.1rem, 4.5vw, 4.4rem);
+  line-height: .9;
+  letter-spacing: -.08em;
+}
+.alarm-arm-status {
+  margin: clamp(14px, 1.6vw, 22px) auto 0;
+  min-height: 46px;
+  display: grid;
+  place-items: center;
+  border-radius: 20px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.055);
+  color: rgba(226,239,252,.82);
+  font-weight: 850;
+  line-height: 1.25;
+  padding: 0 16px;
+}
+.alarm-arm-countdown {
+  width: clamp(132px, 16vw, 180px);
+  height: clamp(132px, 16vw, 180px);
+  margin: clamp(18px, 2vw, 26px) auto 0;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(77,238,255,.26);
+  background: radial-gradient(circle, rgba(77,238,255,.20), rgba(38,83,144,.10) 58%, rgba(255,255,255,.04));
+  color: #effdff;
+  font-size: clamp(3.1rem, 6.5vw, 5.8rem);
+  font-weight: 1000;
+  letter-spacing: -.08em;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.16), 0 0 46px rgba(77,238,255,.16);
+}
+.alarm-arm-actions {
+  margin-top: clamp(18px, 2vw, 28px);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.alarm-arm-option {
+  min-height: clamp(76px, 8vw, 104px);
+  border-radius: 26px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: linear-gradient(145deg, rgba(255,255,255,.105), rgba(255,255,255,.038));
+  color: #f6fbff;
+  font-size: clamp(1rem, 1.45vw, 1.28rem);
+  font-weight: 1000;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.12), 0 16px 32px rgba(0,0,0,.20);
+}
+.alarm-arm-option.home {
+  background: linear-gradient(145deg, rgba(99,241,173,.18), rgba(255,255,255,.04));
+  border-color: rgba(99,241,173,.22);
+}
+.alarm-arm-option.away {
+  background: linear-gradient(145deg, rgba(255,104,93,.20), rgba(255,255,255,.04));
+  border-color: rgba(255,104,93,.26);
+}
+.alarm-arm-option.cancel {
+  background: rgba(255,255,255,.065);
+  color: rgba(228,238,250,.82);
+}
+.alarm-arm-overlay.counting .alarm-arm-actions {
+  grid-template-columns: 1fr;
+  max-width: 360px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.alarm-arm-overlay.counting .alarm-arm-option.home,
+.alarm-arm-overlay.counting .alarm-arm-option.away {
+  display: none;
+}
+.alarm-arm-option:disabled {
+  opacity: .5;
+  cursor: wait;
+}
+.alarm-control-widget.counting-down {
+  border-color: rgba(77,238,255,.34);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.15), 0 24px 64px rgba(0,0,0,.32), 0 0 44px rgba(77,238,255,.13);
+}
+
+.alarm-keypad-sheet {
+  width: min(390px, calc(100vw - 40px));
+  padding: 18px;
+}
+.alarm-keypad-head {
+  align-items: flex-start;
+}
+.alarm-keypad-head h2 {
+  max-width: 300px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: clamp(1.72rem, 3.05vw, 2.55rem);
+  line-height: .96;
+  letter-spacing: -.07em;
+}
+.alarm-keypad-status {
+  margin-top: 10px;
+  min-height: 34px;
+  border-radius: 16px;
+  font-size: .88rem;
+}
+.alarm-code-dots {
+  min-height: 42px;
+  gap: 9px;
+}
+.alarm-code-dots span {
+  width: 12px;
+  height: 12px;
+}
+.alarm-keypad-grid {
+  gap: 10px;
+}
+.alarm-keypad-grid button {
+  min-height: 64px;
+  border-radius: 22px;
+  font-size: 1.45rem;
+}
+.alarm-disarm-button {
+  margin-top: 12px;
+  min-height: 52px;
+}
+
+@media (max-width: 900px) {
+  .settings-sheet.thermostat-setup #thermostatSettingsView {
+    grid-template-columns: 1fr;
+  }
+  .alarm-code-card,
+  .alarm-arm-actions {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* 2026-06-15 compact 10-inch thermostat settings pass */
+.settings-sheet.thermostat-setup {
+  width: calc(100vw - 12px);
+  height: calc(100dvh - 12px);
+  padding: clamp(8px, .8vw, 12px);
+  border-radius: 22px;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+.settings-sheet.thermostat-setup .settings-header {
+  margin-bottom: 6px;
+  gap: 10px;
+  align-items: center;
+}
+.settings-sheet.thermostat-setup .settings-header .eyebrow {
+  margin-bottom: 2px;
+  font-size: clamp(.55rem, .62vw, .68rem);
+  letter-spacing: .14em;
+}
+.settings-sheet.thermostat-setup .settings-header h2 {
+  font-size: clamp(1.45rem, 2.3vw, 2.35rem);
+  line-height: .94;
+}
+.settings-sheet.thermostat-setup .icon-button.close {
+  width: 38px;
+  min-height: 38px;
+  font-size: 1.55rem;
+}
+.settings-sheet.thermostat-setup #thermostatSettingsView {
+  padding-right: 2px;
+  gap: 6px;
+}
+.settings-sheet.thermostat-setup #thermostatSettingsView .settings-section {
+  gap: 6px;
+  padding: 8px;
+  border-radius: 16px;
+}
+.settings-sheet.thermostat-setup #thermostatSettingsView .settings-section h3 {
+  font-size: clamp(.86rem, 1.05vw, 1.05rem);
+  line-height: 1;
+}
+.settings-sheet.thermostat-setup .settings-grid.two-col,
+.settings-sheet.thermostat-setup .auto-settings-grid,
+.settings-sheet.thermostat-setup .cooling-settings-grid,
+.settings-sheet.thermostat-setup .limit-group {
+  gap: 6px;
+}
+.settings-sheet.thermostat-setup .limit-title {
+  font-size: .78rem;
+  line-height: 1;
+}
+.settings-sheet.thermostat-setup .setpoint-card {
+  min-height: 46px;
+  padding: 6px 8px;
+  border-radius: 14px;
+  gap: 6px;
+}
+.settings-sheet.thermostat-setup .setpoint-card span {
+  font-size: .8rem;
+  line-height: 1.05;
+}
+.settings-sheet.thermostat-setup .setpoint-controls {
+  gap: 5px;
+}
+.settings-sheet.thermostat-setup .setpoint-controls button {
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
+  font-size: 1.05rem;
+}
+.settings-sheet.thermostat-setup .setpoint-controls strong {
+  min-width: 42px;
+  font-size: .98rem;
+}
+.settings-sheet.thermostat-setup .fan-segments {
+  gap: 6px;
+}
+.settings-sheet.thermostat-setup .fan-segments .segment {
+  min-height: 40px;
+  border-radius: 14px;
+  padding: 0 10px;
+}
+.settings-sheet.thermostat-setup .settings-hint {
+  display: none !important;
+}
+.settings-sheet.thermostat-setup .alarm-code-card {
+  grid-template-columns: minmax(220px, 1fr) minmax(122px, auto);
+  gap: 8px;
+}
+.settings-sheet.thermostat-setup .alarm-code-field {
+  gap: 5px;
+  font-size: .68rem;
+  letter-spacing: .075em;
+}
+.settings-sheet.thermostat-setup .alarm-code-field input {
+  min-height: 42px;
+  border-radius: 14px;
+  padding: 0 12px;
+  font-size: 1.08rem;
+}
+.settings-sheet.thermostat-setup .alarm-code-card .scene-btn,
+.settings-sheet.thermostat-setup .settings-footer .scene-btn {
+  min-height: 42px;
+  border-radius: 14px;
+  padding: 0 14px;
+}
+.settings-sheet.thermostat-setup .settings-footer {
+  margin-top: 6px;
+}
+
+/* Keep two compact columns on most 10-inch landscape panels instead of collapsing too early. */
+@media (max-width: 900px) and (min-width: 700px) {
+  .settings-sheet.thermostat-setup #thermostatSettingsView {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .settings-sheet.thermostat-setup .alarm-code-card {
+    grid-template-columns: minmax(220px, 1fr) minmax(122px, auto);
+  }
+}
+
+@media (max-height: 650px) {
+  .settings-sheet.thermostat-setup {
+    padding: 7px;
+  }
+  .settings-sheet.thermostat-setup .settings-header {
+    margin-bottom: 4px;
+  }
+  .settings-sheet.thermostat-setup #thermostatSettingsView .settings-section {
+    padding: 7px;
+  }
+  .settings-sheet.thermostat-setup .setpoint-card {
+    min-height: 42px;
+  }
+  .settings-sheet.thermostat-setup .fan-segments .segment,
+  .settings-sheet.thermostat-setup .alarm-code-field input,
+  .settings-sheet.thermostat-setup .alarm-code-card .scene-btn,
+  .settings-sheet.thermostat-setup .settings-footer .scene-btn {
+    min-height: 38px;
+  }
+}

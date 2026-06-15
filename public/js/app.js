@@ -10,6 +10,7 @@ const HA_AUDIO_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
 const HA_ALARM_SYNC_INTERVAL_MS = 3000;
 const HA_ALARM_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
 const ALARM_AUTO_SUBMIT_LENGTH = 4;
+const ALARM_ARM_AWAY_DELAY_SECONDS = 60;
 let haSyncInFlight = false;
 let haSyncLastError = "";
 let haAudioSyncInFlight = false;
@@ -41,6 +42,7 @@ let alarmPickerOpenedAt = 0;
 let lastAlarmUserInteractionAt = 0;
 let setpointPreviewUntil = 0;
 let setpointPreviewTimeout = null;
+let alarmArmAwayTimer = null;
 
 const defaultBlindConfig = {
   room: "living",
@@ -115,7 +117,11 @@ const state = {
     name: "Alarm",
     state: "unassigned",
     code: "",
+    disarmCode: "",
     disarming: false,
+    arming: false,
+    armMode: "",
+    armAwayCountdown: 0,
   },
   audio: {
     playing: false,
@@ -192,6 +198,16 @@ const elements = {
   alarmCodeDots: document.getElementById("alarmCodeDots"),
   alarmKeypadGrid: document.getElementById("alarmKeypadGrid"),
   alarmDisarmButton: document.getElementById("alarmDisarmButton"),
+  alarmArmOverlay: document.getElementById("alarmArmOverlay"),
+  alarmArmTitle: document.getElementById("alarmArmTitle"),
+  alarmArmStatus: document.getElementById("alarmArmStatus"),
+  alarmArmCountdown: document.getElementById("alarmArmCountdown"),
+  alarmArmActions: document.getElementById("alarmArmActions"),
+  alarmArmHomeButton: document.getElementById("alarmArmHomeButton"),
+  alarmArmAwayButton: document.getElementById("alarmArmAwayButton"),
+  alarmArmCancelButton: document.getElementById("alarmArmCancelButton"),
+  alarmDisarmCodeInput: document.getElementById("alarmDisarmCodeInput"),
+  saveAlarmCodeButton: document.getElementById("saveAlarmCodeButton"),
   dialMinLabel: document.getElementById("dialMinLabel"),
   dialMaxLabel: document.getElementById("dialMaxLabel"),
   settingsOverlay: document.getElementById("settingsOverlay"),
@@ -396,8 +412,11 @@ function buildSavedConfig() {
     limits: state.thermostat.limits,
   };
   return {
-    version: 6,
+    version: 7,
     thermostat: thermostatToSave,
+    alarm: {
+      disarmCode: String(state.alarm.disarmCode || "").replace(/\D/g, "").slice(0, 8),
+    },
     blinds: state.blinds,
     integrations: state.integrations,
   };
@@ -438,6 +457,10 @@ function loadSavedConfig() {
         coolFanHoldUntil: 0,
       };
       state.thermostat.autoHeatOutdoorTarget = Math.min(state.thermostat.autoHeatOutdoorTarget, state.thermostat.autoCoolOutdoorTarget - 1);
+    }
+    if (saved?.alarm) {
+      const savedCode = String(saved.alarm.disarmCode || "").replace(/\D/g, "").slice(0, 8);
+      if (savedCode) state.alarm.disarmCode = savedCode;
     }
     if (saved?.blinds?.rooms) state.blinds = saved.blinds;
     if (saved?.integrations?.homeAssistant) {
@@ -782,6 +805,9 @@ function renderThermostat() {
     button.disabled = forcedCooling;
     button.title = forcedCooling ? "Fan must stay on during cooling or cool fan delay" : "";
   });
+  if (elements.alarmDisarmCodeInput && document.activeElement !== elements.alarmDisarmCodeInput) {
+    elements.alarmDisarmCodeInput.value = state.alarm.disarmCode || "";
+  }
 }
 
 
@@ -793,6 +819,54 @@ function normalizeAlarmStateText(value) {
 function isAlarmArmed(stateValue = state.alarm.state) {
   const value = String(stateValue || "").toLowerCase();
   return value === "armed" || value.startsWith("armed_") || value === "arming" || value === "pending" || value === "triggered";
+}
+
+function isAlarmDisarmed(stateValue = state.alarm.state) {
+  return String(stateValue || "").toLowerCase() === "disarmed";
+}
+
+function isSettingsAllowedByAlarm() {
+  if (state.alarm.disarming || state.alarm.arming || state.alarm.armAwayCountdown > 0) return false;
+  const linked = Boolean(state.alarm.entityId || getAlarmConfig()?.entityId);
+  if (!linked) return true;
+  return isAlarmDisarmed();
+}
+
+function updateSettingsAccess() {
+  if (!elements.settingsButton) return;
+  const allowed = isSettingsAllowedByAlarm();
+  elements.settingsButton.hidden = !allowed;
+  elements.settingsButton.disabled = !allowed;
+  elements.settingsButton.setAttribute("aria-hidden", allowed ? "false" : "true");
+  if (!allowed && elements.settingsOverlay?.classList.contains("open")) closeSettings();
+}
+
+function getSavedAlarmCode() {
+  return String(state.alarm.disarmCode || "").replace(/\D/g, "").slice(0, 8);
+}
+
+function getAlarmSubmitLength() {
+  return clamp(getSavedAlarmCode().length || ALARM_AUTO_SUBMIT_LENGTH, 1, 8);
+}
+
+function saveAlarmCode(options = {}) {
+  const raw = elements.alarmDisarmCodeInput ? elements.alarmDisarmCodeInput.value : state.alarm.disarmCode;
+  const code = String(raw || "").replace(/\D/g, "").slice(0, 8);
+  if (!code) {
+    if (elements.alarmDisarmCodeInput) elements.alarmDisarmCodeInput.value = getSavedAlarmCode();
+    if (options.toast !== false) showToast("Enter a disarm code");
+    return false;
+  }
+  state.alarm.disarmCode = code;
+  if (elements.alarmDisarmCodeInput) elements.alarmDisarmCodeInput.value = code;
+  saveConfig({ toast: false });
+  if (options.toast !== false) showToast("Disarm code saved");
+  renderAlarmKeypad();
+  return true;
+}
+
+function getAlarmArmLabel(action) {
+  return action === "arm_home" ? "Arm Home" : action === "arm_away" ? "Arm Away" : "Arm";
 }
 
 function getAlarmConfig() {
@@ -844,17 +918,20 @@ function renderAlarmWidget() {
   elements.alarmWidget.classList.toggle("disarmed", linked && disarmed);
   elements.alarmWidget.classList.toggle("triggered", triggered);
   elements.alarmWidget.classList.toggle("pending", pending);
-  elements.alarmWidget.classList.toggle("busy", state.alarm.disarming);
+  elements.alarmWidget.classList.toggle("busy", state.alarm.disarming || state.alarm.arming || state.alarm.armAwayCountdown > 0);
+  elements.alarmWidget.classList.toggle("counting-down", state.alarm.armAwayCountdown > 0);
 
   if (elements.alarmWidgetTitle) elements.alarmWidgetTitle.textContent = linked ? (state.alarm.name || config?.name || "Alarm") : "Alarm";
   if (elements.alarmWidgetState) {
+    const countdownText = state.alarm.armAwayCountdown > 0 ? `Away in ${state.alarm.armAwayCountdown}s` : "";
     elements.alarmWidgetState.textContent = linked
-      ? (state.alarm.disarming ? "Disarming…" : normalizeAlarmStateText(alarmState))
+      ? (countdownText || (state.alarm.disarming ? "Disarming…" : state.alarm.arming ? "Arming…" : normalizeAlarmStateText(alarmState)))
       : "Hold to assign";
   }
   elements.alarmWidget.setAttribute("aria-label", linked
-    ? `Alarm ${normalizeAlarmStateText(alarmState)}. Press to disarm when armed. Hold to assign.`
+    ? `Alarm ${normalizeAlarmStateText(alarmState)}. Press to ${isAlarmDisarmed(alarmState) ? "arm" : "disarm"}. Hold to assign.`
     : "Alarm not assigned. Hold to assign Home Assistant alarm.");
+  updateSettingsAccess();
 }
 
 async function fetchAlarmStatesViaLocalBackend(entityIds) {
@@ -904,16 +981,30 @@ async function pollHomeAssistantAlarm(options = {}) {
   }
 }
 
+function openAlarmPanel() {
+  if (!state.alarm.entityId && getAlarmConfig()?.entityId) syncAlarmFromConfig();
+  if (!state.alarm.entityId) {
+    openAudioEntityPicker("alarm");
+    return;
+  }
+  if (isAlarmDisarmed()) {
+    openAlarmArmOptions();
+    return;
+  }
+  openAlarmKeypad();
+}
+
 function openAlarmKeypad() {
   if (!state.alarm.entityId && getAlarmConfig()?.entityId) syncAlarmFromConfig();
   if (!state.alarm.entityId) {
     openAudioEntityPicker("alarm");
     return;
   }
-  if (!isAlarmArmed()) {
-    showToast("Alarm is already disarmed");
+  if (isAlarmDisarmed()) {
+    openAlarmArmOptions();
     return;
   }
+  closeAlarmArmOptions({ keepCountdown: true });
   state.alarm.code = "";
   elements.alarmKeypadOverlay?.classList.add("open");
   elements.alarmKeypadOverlay?.setAttribute("aria-hidden", "false");
@@ -930,8 +1021,9 @@ function closeAlarmKeypad() {
 
 function renderAlarmKeypad() {
   if (!elements.alarmCodeDots) return;
-  const codeLength = Math.max(ALARM_AUTO_SUBMIT_LENGTH, state.alarm.code.length || 0);
-  elements.alarmCodeDots.innerHTML = Array.from({ length: Math.min(Math.max(codeLength, ALARM_AUTO_SUBMIT_LENGTH), 8) }, (_, index) =>
+  const submitLength = getAlarmSubmitLength();
+  const codeLength = Math.max(submitLength, state.alarm.code.length || 0);
+  elements.alarmCodeDots.innerHTML = Array.from({ length: Math.min(Math.max(codeLength, submitLength), 8) }, (_, index) =>
     `<span class="${index < state.alarm.code.length ? "filled" : ""}"></span>`
   ).join("");
   if (elements.alarmKeypadTitle) elements.alarmKeypadTitle.textContent = `Disarm ${state.alarm.name || "Alarm"}`;
@@ -950,7 +1042,86 @@ function handleAlarmKey(value) {
   else if (value === "back") state.alarm.code = state.alarm.code.slice(0, -1);
   else if (/^\d$/.test(value) && state.alarm.code.length < 8) state.alarm.code += value;
   renderAlarmKeypad();
-  if (state.alarm.code.length >= ALARM_AUTO_SUBMIT_LENGTH) sendAlarmDisarm(state.alarm.code);
+  if (state.alarm.code.length >= getAlarmSubmitLength()) sendAlarmDisarm(state.alarm.code);
+}
+
+function renderAlarmArmOptions() {
+  if (!elements.alarmArmOverlay) return;
+  const counting = state.alarm.armAwayCountdown > 0;
+  const busy = state.alarm.arming || counting;
+  const modeLabel = getAlarmArmLabel(state.alarm.armMode);
+  if (elements.alarmArmTitle) elements.alarmArmTitle.textContent = counting ? "Arming Away" : "Arm Alarm";
+  if (elements.alarmArmStatus) {
+    elements.alarmArmStatus.textContent = counting
+      ? "Leave now. The alarm will arm away when the countdown reaches zero."
+      : state.alarm.arming
+        ? `Sending ${modeLabel.toLowerCase()} command…`
+        : "Choose how you want to arm the system.";
+  }
+  if (elements.alarmArmCountdown) {
+    elements.alarmArmCountdown.hidden = !counting;
+    elements.alarmArmCountdown.textContent = String(state.alarm.armAwayCountdown || ALARM_ARM_AWAY_DELAY_SECONDS);
+  }
+  elements.alarmArmOverlay.classList.toggle("counting", counting);
+  elements.alarmArmOverlay.classList.toggle("busy", busy);
+  [elements.alarmArmHomeButton, elements.alarmArmAwayButton].forEach((button) => { if (button) button.disabled = busy; });
+  if (elements.alarmArmCancelButton) {
+    elements.alarmArmCancelButton.disabled = state.alarm.arming && !counting;
+    elements.alarmArmCancelButton.textContent = counting ? "Cancel Countdown" : "Cancel";
+  }
+  renderAlarmWidget();
+}
+
+function openAlarmArmOptions() {
+  if (!state.alarm.entityId && getAlarmConfig()?.entityId) syncAlarmFromConfig();
+  if (!state.alarm.entityId) {
+    openAudioEntityPicker("alarm");
+    return;
+  }
+  if (!isAlarmDisarmed()) {
+    openAlarmKeypad();
+    return;
+  }
+  closeAlarmKeypad();
+  elements.alarmArmOverlay?.classList.add("open");
+  elements.alarmArmOverlay?.setAttribute("aria-hidden", "false");
+  renderAlarmArmOptions();
+}
+
+function closeAlarmArmOptions(options = {}) {
+  if (!options.keepCountdown) cancelAlarmAwayCountdown({ silent: true });
+  elements.alarmArmOverlay?.classList.remove("open", "counting", "busy");
+  elements.alarmArmOverlay?.setAttribute("aria-hidden", "true");
+  renderAlarmArmOptions();
+}
+
+function cancelAlarmAwayCountdown(options = {}) {
+  if (alarmArmAwayTimer) window.clearInterval(alarmArmAwayTimer);
+  alarmArmAwayTimer = null;
+  const hadCountdown = state.alarm.armAwayCountdown > 0;
+  state.alarm.armAwayCountdown = 0;
+  if (state.alarm.armMode === "arm_away" && !state.alarm.arming) state.alarm.armMode = "";
+  if (hadCountdown && !options.silent) showToast("Arm away canceled");
+  renderAlarmArmOptions();
+}
+
+function startAlarmAwayCountdown() {
+  if (state.alarm.arming || state.alarm.armAwayCountdown > 0) return;
+  state.alarm.armMode = "arm_away";
+  state.alarm.armAwayCountdown = ALARM_ARM_AWAY_DELAY_SECONDS;
+  elements.alarmArmOverlay?.classList.add("open");
+  elements.alarmArmOverlay?.setAttribute("aria-hidden", "false");
+  renderAlarmArmOptions();
+  if (alarmArmAwayTimer) window.clearInterval(alarmArmAwayTimer);
+  alarmArmAwayTimer = window.setInterval(() => {
+    state.alarm.armAwayCountdown = Math.max(0, state.alarm.armAwayCountdown - 1);
+    renderAlarmArmOptions();
+    if (state.alarm.armAwayCountdown <= 0) {
+      window.clearInterval(alarmArmAwayTimer);
+      alarmArmAwayTimer = null;
+      sendAlarmArm("arm_away");
+    }
+  }, 1000);
 }
 
 async function callAlarmActionViaLocalBackend(action, code = "") {
@@ -973,12 +1144,21 @@ async function sendAlarmDisarm(code = state.alarm.code) {
     showToast("Hold the alarm tile to assign an alarm first");
     return;
   }
+  const enteredCode = String(code || "").replace(/\D/g, "");
+  const savedCode = getSavedAlarmCode();
+  if (savedCode && enteredCode !== savedCode) {
+    state.alarm.code = "";
+    renderAlarmKeypad();
+    showToast("Incorrect disarm code");
+    return;
+  }
+  const commandCode = savedCode || enteredCode;
   lastAlarmUserInteractionAt = Date.now();
   state.alarm.disarming = true;
   renderAlarmKeypad();
   renderAlarmWidget();
   try {
-    const alarm = await callAlarmActionViaLocalBackend("disarm", code);
+    const alarm = await callAlarmActionViaLocalBackend("disarm", commandCode);
     if (alarm?.entityId) applyAlarmEntityState(alarm);
     else state.alarm.state = "disarmed";
     state.alarm.code = "";
@@ -993,6 +1173,45 @@ async function sendAlarmDisarm(code = state.alarm.code) {
     renderAlarmKeypad();
     addHaLog("error", "Alarm disarm failed", error.message || String(error));
     showToast("Alarm disarm failed");
+  } finally {
+    renderAlarmWidget();
+  }
+}
+
+async function sendAlarmArm(action) {
+  if (state.alarm.arming || state.alarm.disarming) return;
+  if (!state.alarm.entityId && getAlarmConfig()?.entityId) syncAlarmFromConfig();
+  if (!state.alarm.entityId) {
+    showToast("Hold the alarm tile to assign an alarm first");
+    return;
+  }
+  if (!isAlarmDisarmed()) {
+    closeAlarmArmOptions();
+    openAlarmKeypad();
+    return;
+  }
+  cancelAlarmAwayCountdown({ silent: true });
+  lastAlarmUserInteractionAt = Date.now();
+  state.alarm.arming = true;
+  state.alarm.armMode = action;
+  renderAlarmArmOptions();
+  renderAlarmWidget();
+  try {
+    const alarm = await callAlarmActionViaLocalBackend(action, getSavedAlarmCode());
+    if (alarm?.entityId) applyAlarmEntityState(alarm);
+    else state.alarm.state = action === "arm_home" ? "armed_home" : "armed_away";
+    state.alarm.arming = false;
+    state.alarm.armMode = "";
+    closeAlarmArmOptions({ keepCountdown: true });
+    saveConfig({ toast: false });
+    showToast(action === "arm_home" ? "Alarm armed home" : "Alarm armed away");
+    scheduleAlarmSync();
+  } catch (error) {
+    state.alarm.arming = false;
+    state.alarm.armMode = "";
+    renderAlarmArmOptions();
+    addHaLog("error", `${getAlarmArmLabel(action)} failed`, error.message || String(error));
+    showToast(`${getAlarmArmLabel(action)} failed`);
   } finally {
     renderAlarmWidget();
   }
@@ -1071,11 +1290,15 @@ function adjustAutoSetting(kind, delta) {
 
 function hideAllSettingsViews() {
   [elements.thermostatSettingsView, elements.blindSettingsView, elements.audioSettingsView].forEach((view) => { view.hidden = true; });
-  elements.settingsSheet.classList.remove("full-setup", "ha-focus");
+  elements.settingsSheet.classList.remove("full-setup", "ha-focus", "thermostat-setup");
   elements.settingsFooter.hidden = false;
 }
 
 function openSettings() {
+  if (!isSettingsAllowedByAlarm()) {
+    showToast("Disarm the alarm before opening settings");
+    return;
+  }
   hideAllSettingsViews();
   if (state.currentPage === "blinds") {
     elements.settingsTitle.textContent = "Blind Setup";
@@ -1089,14 +1312,19 @@ function openSettings() {
   } else {
     elements.settingsTitle.textContent = "Comfort Setup";
     elements.settingsEyebrow.textContent = "Panel Settings";
+    elements.settingsSheet.classList.add("full-setup", "thermostat-setup");
     elements.thermostatSettingsView.hidden = false;
+    if (elements.alarmDisarmCodeInput) elements.alarmDisarmCodeInput.value = getSavedAlarmCode();
   }
   elements.settingsOverlay.classList.add("open");
   elements.settingsOverlay.setAttribute("aria-hidden", "false");
 }
 
 function closeSettings() {
-  if (state.currentPage === "thermostat" && elements.thermostatSettingsView && !elements.thermostatSettingsView.hidden) saveConfig();
+  if (state.currentPage === "thermostat" && elements.thermostatSettingsView && !elements.thermostatSettingsView.hidden) {
+    if (elements.alarmDisarmCodeInput) saveAlarmCode({ toast: false });
+    saveConfig();
+  }
   elements.settingsOverlay.classList.remove("open");
   elements.settingsOverlay.setAttribute("aria-hidden", "true");
 }
@@ -2657,7 +2885,7 @@ function bindEvents() {
   elements.outdoorTempSlider?.addEventListener("input", (event) => setVirtualOutdoorTemp(event.target.value));
   elements.alarmWidget?.addEventListener("click", () => {
     if (Date.now() - alarmPickerOpenedAt < 900) return;
-    openAlarmKeypad();
+    openAlarmPanel();
   });
   bindLongPress(elements.alarmWidget, (event) => {
     event.preventDefault();
@@ -2671,6 +2899,14 @@ function bindEvents() {
     if (button) handleAlarmKey(button.dataset.alarmKey);
   });
   elements.alarmDisarmButton?.addEventListener("click", () => sendAlarmDisarm());
+  elements.alarmArmHomeButton?.addEventListener("click", () => sendAlarmArm("arm_home"));
+  elements.alarmArmAwayButton?.addEventListener("click", startAlarmAwayCountdown);
+  elements.alarmArmCancelButton?.addEventListener("click", () => closeAlarmArmOptions());
+  document.querySelectorAll("[data-cancel-alarm-arm]").forEach((el) => el.addEventListener("click", () => closeAlarmArmOptions()));
+  elements.saveAlarmCodeButton?.addEventListener("click", () => saveAlarmCode({ toast: true }));
+  elements.alarmDisarmCodeInput?.addEventListener("input", (event) => {
+    event.target.value = String(event.target.value || "").replace(/\D/g, "").slice(0, 8);
+  });
 
   elements.settingsButton.addEventListener("click", openSettings);
   elements.settingsClose.addEventListener("click", closeSettings);
@@ -2832,7 +3068,7 @@ function bindEvents() {
     if (event.key === "ArrowLeft") goRelative(-1);
     if (event.key === "+" || event.key === "=") adjustSetpoint(1);
     if (event.key === "-" || event.key === "_") adjustSetpoint(-1);
-    if (event.key === "Escape") { closeSettings(); closeEntityPicker(); closeAudioEntityPicker(); closeAlarmKeypad(); }
+    if (event.key === "Escape") { closeSettings(); closeEntityPicker(); closeAudioEntityPicker(); closeAlarmKeypad(); closeAlarmArmOptions(); }
   });
 }
 

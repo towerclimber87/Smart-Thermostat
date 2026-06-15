@@ -307,7 +307,6 @@
             <div><h3>Auto Mode</h3></div>
             <div class="settings-grid two-col auto-settings-grid">
               <div class="setpoint-card"><span>Cool Target</span><div class="setpoint-controls"><button data-auto-adjust="coolTarget:-1">−</button><strong><span id="autoCoolOutdoorTargetValue">70</span>°</strong><button data-auto-adjust="coolTarget:1">+</button></div></div>
-              <div class="setpoint-card"><span>Heat Target</span><div class="setpoint-controls"><button data-auto-adjust="heatTarget:-1">−</button><strong><span id="autoHeatOutdoorTargetValue">65</span>°</strong><button data-auto-adjust="heatTarget:1">+</button></div></div>
               <div class="setpoint-card readout"><span>Changeover Lockout</span><div class="setpoint-controls lockout-readout"><strong id="autoLockoutValue">2 hr</strong></div></div>
             </div>
           </div>
@@ -325,6 +324,19 @@
               <button class="segment" data-fan="off">Off</button>
               <button class="segment" data-fan="on">On</button>
               <button class="segment active" data-fan="auto">Auto</button>
+            </div>
+          </div>
+
+          <div class="settings-section alarm-code-section">
+            <div>
+              <h3>Security Code</h3>
+              <p class="settings-hint">This code is used by the panel keypad and sent with alarm arm/disarm commands.</p>
+            </div>
+            <div class="alarm-code-card">
+              <label class="alarm-code-field">Disarm Code
+                <input id="alarmDisarmCodeInput" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="off" aria-label="Set alarm disarm code" />
+              </label>
+              <button id="saveAlarmCodeButton" class="scene-btn secondary" type="button">Save Code</button>
             </div>
           </div>
         </div>
@@ -459,6 +471,21 @@
         </label>
         <div id="audioEntityPickerHelp" class="entity-picker-help">Choose the Home Assistant entity for this control.</div>
         <div id="audioEntityPickerList" class="entity-picker-list audio-entity-picker-list"></div>
+      </aside>
+    </section>
+
+    <section id="alarmArmOverlay" class="settings-overlay alarm-arm-overlay" aria-hidden="true">
+      <div class="settings-backdrop" data-cancel-alarm-arm></div>
+      <aside class="alarm-arm-sheet" role="dialog" aria-modal="true" aria-labelledby="alarmArmTitle">
+        <p class="eyebrow">Security</p>
+        <h2 id="alarmArmTitle">Arm Alarm</h2>
+        <div id="alarmArmStatus" class="alarm-arm-status">Choose how you want to arm the system.</div>
+        <div id="alarmArmCountdown" class="alarm-arm-countdown" hidden>60</div>
+        <div id="alarmArmActions" class="alarm-arm-actions">
+          <button id="alarmArmHomeButton" class="alarm-arm-option home" type="button">Arm Home</button>
+          <button id="alarmArmCancelButton" class="alarm-arm-option cancel" type="button">Cancel</button>
+          <button id="alarmArmAwayButton" class="alarm-arm-option away" type="button">Arm Away</button>
+        </div>
       </aside>
     </section>
 
