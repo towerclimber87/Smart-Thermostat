@@ -256,7 +256,7 @@ const state = {
   roomControlEntityPicker: { roomKey: null, controlId: null },
   audioEntityPicker: { kind: null, domain: null, entities: [], search: "" },
   diagnostics: { haLogs: [] },
-  systemInfo: { ipAddress: "", version: "", host: "" },
+  systemInfo: { ipAddress: "", version: "", host: "", thermostatName: "" },
 };
 
 const elements = {
@@ -315,9 +315,12 @@ const elements = {
   alarmArmCancelButton: document.getElementById("alarmArmCancelButton"),
   alarmDisarmCodeInput: document.getElementById("alarmDisarmCodeInput"),
   saveAlarmCodeButton: document.getElementById("saveAlarmCodeButton"),
+  thermostatNameInput: document.getElementById("thermostatNameInput"),
+  saveThermostatNameButton: document.getElementById("saveThermostatNameButton"),
   thermostatInfoButton: document.getElementById("thermostatInfoButton"),
   thermostatInfoOverlay: document.getElementById("thermostatInfoOverlay"),
   thermostatInfoClose: document.getElementById("thermostatInfoClose"),
+  unitNameValue: document.getElementById("unitNameValue"),
   unitIpValue: document.getElementById("unitIpValue"),
   unitVersionValue: document.getElementById("unitVersionValue"),
   fetchUpdateButton: document.getElementById("fetchUpdateButton"),
@@ -873,7 +876,9 @@ function applyLocalThermostatState(remote = {}) {
     changed = true;
   };
 
+  const beforeName = t.name;
   setString("name");
+  if (t.name !== beforeName) state.systemInfo.thermostatName = getThermostatName();
   setNumber("currentTemp", ABS_MIN, ABS_MAX);
   setNumber("targetTemp", ABS_MIN, ABS_MAX);
   setNumber("lastComfortTarget", ABS_MIN, ABS_MAX);
@@ -959,6 +964,8 @@ async function fetchLocalThermostatStatus(options = {}) {
 function renderSystemInfo() {
   const ip = state.systemInfo.ipAddress || window.location.hostname || "Unavailable";
   const version = state.systemInfo.version || "Unavailable";
+  const name = state.systemInfo.thermostatName || getThermostatName();
+  if (elements.unitNameValue) elements.unitNameValue.textContent = name;
   if (elements.unitIpValue) elements.unitIpValue.textContent = ip;
   if (elements.unitVersionValue) elements.unitVersionValue.textContent = version;
 }
@@ -972,12 +979,14 @@ async function fetchSystemInfo() {
       ipAddress: payload.ipAddress || payload.ip || window.location.hostname || "",
       version: payload.version || "",
       host: payload.host || "",
+      thermostatName: payload.thermostatName || payload.name || getThermostatName(),
     };
   } catch (error) {
     state.systemInfo = {
       ...state.systemInfo,
       ipAddress: state.systemInfo.ipAddress || window.location.hostname || "Unavailable",
       version: state.systemInfo.version || "Unavailable",
+      thermostatName: state.systemInfo.thermostatName || getThermostatName(),
     };
     console.warn("Unable to load system info", error);
   } finally {
@@ -1024,7 +1033,7 @@ async function fetchPanelUpdate() {
 }
 
 function openThermostatInfo() {
-  state.systemInfo = { ...state.systemInfo, ipAddress: state.systemInfo.ipAddress || "Loading…", version: state.systemInfo.version || "Loading…" };
+  state.systemInfo = { ...state.systemInfo, thermostatName: state.systemInfo.thermostatName || getThermostatName(), ipAddress: state.systemInfo.ipAddress || "Loading…", version: state.systemInfo.version || "Loading…" };
   renderSystemInfo();
   setOverlayOpen(elements.thermostatInfoOverlay, true);
   fetchSystemInfo();
@@ -1410,6 +1419,9 @@ function renderThermostat() {
   if (elements.alarmDisarmCodeInput && document.activeElement !== elements.alarmDisarmCodeInput) {
     elements.alarmDisarmCodeInput.value = state.alarm.disarmCode || "";
   }
+  if (elements.thermostatNameInput && document.activeElement !== elements.thermostatNameInput) {
+    elements.thermostatNameInput.value = getThermostatName();
+  }
   renderDoorWidget();
   renderAlarmWidget();
 }
@@ -1466,6 +1478,27 @@ function saveAlarmCode(options = {}) {
   saveConfig({ toast: false });
   if (options.toast !== false) showToast("Disarm code saved");
   renderAlarmKeypad();
+  return true;
+}
+
+function normalizeThermostatName(value) {
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, 80) || "IHA Thermostat";
+}
+
+function getThermostatName() {
+  return normalizeThermostatName(state.thermostat?.name);
+}
+
+function saveThermostatName(options = {}) {
+  const raw = elements.thermostatNameInput ? elements.thermostatNameInput.value : state.thermostat.name;
+  const name = normalizeThermostatName(raw);
+  const changed = state.thermostat.name !== name;
+  state.thermostat.name = name;
+  state.systemInfo.thermostatName = name;
+  if (elements.thermostatNameInput) elements.thermostatNameInput.value = name;
+  renderSystemInfo();
+  if (changed || options.force) saveConfig({ toast: false });
+  if (options.toast !== false) showToast("Thermostat name saved");
   return true;
 }
 
@@ -2065,6 +2098,7 @@ function openSettings() {
     elements.settingsSheet.classList.add("full-setup", "thermostat-setup");
     elements.thermostatSettingsView.hidden = false;
     if (elements.alarmDisarmCodeInput) elements.alarmDisarmCodeInput.value = getSavedAlarmCode();
+    if (elements.thermostatNameInput) elements.thermostatNameInput.value = getThermostatName();
   }
   elements.settingsOverlay.classList.add("open");
   elements.settingsOverlay.setAttribute("aria-hidden", "false");
@@ -2073,6 +2107,7 @@ function openSettings() {
 function closeSettings() {
   if (state.currentPage === "thermostat" && elements.thermostatSettingsView && !elements.thermostatSettingsView.hidden) {
     if (elements.alarmDisarmCodeInput) saveAlarmCode({ toast: false });
+    if (elements.thermostatNameInput) saveThermostatName({ toast: false });
     saveConfig();
   }
   elements.settingsOverlay.classList.remove("open");
@@ -4680,6 +4715,8 @@ function bindEvents() {
   elements.alarmDisarmCodeInput?.addEventListener("input", (event) => {
     event.target.value = String(event.target.value || "").replace(/\D/g, "").slice(0, 8);
   });
+  elements.saveThermostatNameButton?.addEventListener("click", () => saveThermostatName({ toast: true, force: true }));
+  elements.thermostatNameInput?.addEventListener("change", () => saveThermostatName({ toast: false }));
 
   elements.settingsButton.addEventListener("click", openSettings);
   elements.settingsClose.addEventListener("click", closeSettings);

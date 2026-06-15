@@ -382,11 +382,15 @@ def _read_version_value() -> str:
 
 
 def _system_info_payload() -> dict:
+    thermostat = _read_thermostat_record()["thermostat"]
+    thermostat_name = str(thermostat.get("name") or "IHA Thermostat").strip() or "IHA Thermostat"
     return {
         "ok": True,
         "ipAddress": _local_ip_address(),
         "host": _local_host_name(),
         "version": _read_version_value(),
+        "name": thermostat_name,
+        "thermostatName": thermostat_name,
     }
 
 
@@ -505,9 +509,12 @@ def _fetch_update_payload() -> dict:
 
 def _discovery_payload() -> dict:
     status = _thermostat_status_payload()
+    thermostat_name = str(status.get("name") or "IHA Thermostat").strip() or "IHA Thermostat"
     return {
         "ok": True,
-        "name": status["name"],
+        "name": thermostat_name,
+        "thermostatName": thermostat_name,
+        "friendly_name": thermostat_name,
         "unique_id": "iha-smart-thermostat-local",
         "manufacturer": "IHA",
         "model": "Smart Thermostat Wall Panel",

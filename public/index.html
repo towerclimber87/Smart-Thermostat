@@ -393,6 +393,19 @@
               <button id="saveAlarmCodeButton" class="scene-btn secondary" type="button">Save Code</button>
             </div>
           </div>
+
+          <div class="settings-section thermostat-name-section">
+            <div>
+              <h3>Thermostat Name</h3>
+              <p class="settings-hint">This name appears in the panel info screen and Home Assistant discovery.</p>
+            </div>
+            <div class="thermostat-name-card">
+              <label class="thermostat-name-field">Name
+                <input id="thermostatNameInput" type="text" maxlength="80" autocomplete="off" aria-label="Set thermostat name" />
+              </label>
+              <button id="saveThermostatNameButton" class="scene-btn secondary" type="button">Save Name</button>
+            </div>
+          </div>
         </div>
 
         <div id="blindSettingsView" class="settings-view" hidden>
@@ -565,6 +578,10 @@
           <button id="thermostatInfoClose" class="icon-button close" aria-label="Close panel information">×</button>
         </div>
         <div class="panel-info-grid">
+          <div class="panel-info-row">
+            <span>Thermostat Name</span>
+            <strong id="unitNameValue">Loading…</strong>
+          </div>
           <div class="panel-info-row">
             <span>IP Address</span>
             <strong id="unitIpValue">Loading…</strong>

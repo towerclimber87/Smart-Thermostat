@@ -2642,7 +2642,8 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   min-height: 54px;
   border-radius: 18px;
 }
-.alarm-code-section {
+.alarm-code-section,
+.thermostat-name-section {
   grid-column: 1 / -1;
 }
 .settings-hint {
@@ -2653,13 +2654,15 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   font-weight: 750;
   line-height: 1.35;
 }
-.alarm-code-card {
+.alarm-code-card,
+.thermostat-name-card {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) minmax(150px, auto);
   gap: 12px;
   align-items: end;
 }
-.alarm-code-field {
+.alarm-code-field,
+.thermostat-name-field {
   display: grid;
   gap: 8px;
   color: rgba(226,238,250,.82);
@@ -2668,23 +2671,32 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   text-transform: uppercase;
   letter-spacing: .1em;
 }
-.alarm-code-field input {
+.alarm-code-field input,
+.thermostat-name-field input {
   min-height: 54px;
   border-radius: 18px;
   border: 1px solid rgba(255,255,255,.12);
   background: rgba(2,8,18,.46);
   color: #f7fbff;
   padding: 0 16px;
-  font-size: 1.45rem;
+  font-size: 1.35rem;
   font-weight: 950;
-  letter-spacing: .18em;
   outline: none;
 }
-.alarm-code-field input:focus {
+.alarm-code-field input {
+  font-size: 1.45rem;
+  letter-spacing: .18em;
+}
+.thermostat-name-field input {
+  letter-spacing: normal;
+}
+.alarm-code-field input:focus,
+.thermostat-name-field input:focus {
   border-color: rgba(77,238,255,.38);
   box-shadow: 0 0 0 4px rgba(77,238,255,.08);
 }
-.alarm-code-card .scene-btn {
+.alarm-code-card .scene-btn,
+.thermostat-name-card .scene-btn {
   min-height: 54px;
   border-radius: 18px;
   white-space: nowrap;
@@ -2923,22 +2935,26 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
 .settings-sheet.thermostat-setup .settings-hint {
   display: none !important;
 }
-.settings-sheet.thermostat-setup .alarm-code-card {
+.settings-sheet.thermostat-setup .alarm-code-card,
+.settings-sheet.thermostat-setup .thermostat-name-card {
   grid-template-columns: minmax(220px, 1fr) minmax(122px, auto);
   gap: 8px;
 }
-.settings-sheet.thermostat-setup .alarm-code-field {
+.settings-sheet.thermostat-setup .alarm-code-field,
+.settings-sheet.thermostat-setup .thermostat-name-field {
   gap: 5px;
   font-size: .68rem;
   letter-spacing: .075em;
 }
-.settings-sheet.thermostat-setup .alarm-code-field input {
+.settings-sheet.thermostat-setup .alarm-code-field input,
+.settings-sheet.thermostat-setup .thermostat-name-field input {
   min-height: 42px;
   border-radius: 14px;
   padding: 0 12px;
   font-size: 1.08rem;
 }
 .settings-sheet.thermostat-setup .alarm-code-card .scene-btn,
+.settings-sheet.thermostat-setup .thermostat-name-card .scene-btn,
 .settings-sheet.thermostat-setup .settings-footer .scene-btn {
   min-height: 42px;
   border-radius: 14px;
@@ -2973,7 +2989,9 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   }
   .settings-sheet.thermostat-setup .fan-segments .segment,
   .settings-sheet.thermostat-setup .alarm-code-field input,
+  .settings-sheet.thermostat-setup .thermostat-name-field input,
   .settings-sheet.thermostat-setup .alarm-code-card .scene-btn,
+  .settings-sheet.thermostat-setup .thermostat-name-card .scene-btn,
   .settings-sheet.thermostat-setup .settings-footer .scene-btn {
     min-height: 38px;
   }
