@@ -653,6 +653,7 @@ function buildSavedConfig() {
     lastComfortTarget: state.thermostat.lastComfortTarget,
     mode: state.thermostat.mode,
     fan: state.thermostat.fan,
+    away: Boolean(state.thermostat.away),
     awayHeat: state.thermostat.awayHeat,
     awayCool: state.thermostat.awayCool,
     humidity: state.thermostat.humidity,
@@ -848,6 +849,9 @@ function localThermostatPayload() {
   return {
     thermostat: {
       ...buildSavedConfig().thermostat,
+      away: Boolean(state.thermostat.away),
+      preset_mode: state.thermostat.away ? "away" : "home",
+      presetMode: state.thermostat.away ? "away" : "home",
       relays: { fan: outputs.fan, heat: outputs.heat, cool: outputs.cool },
       hvacAction: outputs.cool ? "cooling" : outputs.heat ? "heating" : outputs.coolingFanHold || outputs.fan ? "fan" : "idle",
     },

@@ -71,6 +71,115 @@ DEFAULT_THERMOSTAT = {
 }
 
 
+DEFAULT_HOME_ASSISTANT_CONFIG = {
+    "url": "",
+    "token": "",
+    "coverEntities": [],
+    "mediaPlayerEntities": [],
+    "selectedMediaPlayerId": "",
+    "audioControlEntities": {
+        "gain": None,
+        "bass": None,
+        "treble": None,
+        "subwoofer": None,
+        "surround": None,
+        "projector": None,
+    },
+    "audioAvailableEntities": {"mediaPlayers": [], "numbers": [], "switches": []},
+    "alarmEntity": None,
+    "alarmAvailableEntities": [],
+    "doorEntity": None,
+    "doorAvailableEntities": [],
+    "lightAvailableEntities": [],
+    "roomAvailableEntities": [],
+}
+
+
+def _merge_missing_defaults(defaults: object, saved: object) -> object:
+    """Return saved config with newly introduced default keys filled in.
+
+    Saved values always win. This is used as a small migration layer so a
+    program update can introduce a new setting without wiping the values that
+    are already on the Raspberry Pi. Lists and non-dict values are treated as
+    complete values because entity lists and room maps are user controlled.
+    """
+    if isinstance(defaults, dict) and isinstance(saved, dict):
+        merged = _deepcopy_json(defaults)
+        for key, value in saved.items():
+            if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+                merged[key] = _merge_missing_defaults(merged[key], value)
+            else:
+                merged[key] = _deepcopy_json(value)
+        return merged
+    if saved is not None:
+        return _deepcopy_json(saved)
+    return _deepcopy_json(defaults)
+
+
+def _migrate_panel_config(config: object) -> dict | None:
+    """Normalize the saved panel configuration without replacing user choices."""
+    if not isinstance(config, dict):
+        return None
+
+    migrated = _deepcopy_json(config)
+
+    if isinstance(migrated.get("thermostat"), dict):
+        thermostat = _merge_thermostat_state(migrated["thermostat"])
+        # The panel config is long-term settings, not live relay/runtime state.
+        # Keep away because the UI intentionally persists Home/Away, but do not
+        # force old cooldown/lockout flags into the saved settings file.
+        for runtime_key in (
+            "autoPendingMode",
+            "autoLockoutUntil",
+            "lastHeatRunAt",
+            "lastCoolRunAt",
+            "coolRelayWasOn",
+            "coolFanHoldUntil",
+        ):
+            if runtime_key not in migrated["thermostat"]:
+                thermostat.pop(runtime_key, None)
+        migrated["thermostat"] = thermostat
+
+    if isinstance(migrated.get("alarm"), dict):
+        migrated["alarm"] = {
+            **migrated["alarm"],
+            "disarmCode": str(migrated["alarm"].get("disarmCode") or "")[:8],
+        }
+
+    integrations = migrated.get("integrations")
+    if isinstance(integrations, dict) and isinstance(integrations.get("homeAssistant"), dict):
+        integrations["homeAssistant"] = _merge_missing_defaults(
+            DEFAULT_HOME_ASSISTANT_CONFIG,
+            integrations["homeAssistant"],
+        )
+        migrated["integrations"] = integrations
+
+    return migrated
+
+
+def _snapshot_settings_files() -> dict[str, str | None]:
+    """Capture settings files before a git reset/update can replace them."""
+    snapshots: dict[str, str | None] = {}
+    for key, path in (("thermostat", THERMOSTAT_STATE_FILE), ("panel", PANEL_CONFIG_FILE)):
+        try:
+            snapshots[key] = path.read_text(encoding="utf-8") if path.exists() else None
+        except OSError:
+            snapshots[key] = None
+    return snapshots
+
+
+def _restore_settings_files(snapshots: dict[str, str | None]) -> None:
+    """Restore settings captured before the updater reset the code folder."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    for key, path in (("thermostat", THERMOSTAT_STATE_FILE), ("panel", PANEL_CONFIG_FILE)):
+        content = snapshots.get(key)
+        if content is None:
+            continue
+        temp_path = path.with_suffix(path.suffix + ".restore.tmp")
+        temp_path.write_text(content, encoding="utf-8")
+        temp_path.replace(path)
+
+
 def _number(value, fallback: float, minimum: float | None = None, maximum: float | None = None) -> float:
     try:
         next_value = float(value)
@@ -214,9 +323,7 @@ def _write_thermostat_record(thermostat: dict) -> dict:
 
 
 def _normalize_panel_config(config: object) -> dict | None:
-    if not isinstance(config, dict):
-        return None
-    return _deepcopy_json(config)
+    return _migrate_panel_config(config)
 
 
 def _read_panel_config_record() -> dict:
@@ -514,6 +621,7 @@ def _fetch_update_payload() -> dict:
     if not (ROOT / ".git").exists():
         return {"ok": False, "error": "This thermostat folder is not connected to Git."}
 
+    settings_snapshot = _snapshot_settings_files()
     branch = _update_branch_name()
     before = _run_git_command(["git", "rev-parse", "--short=12", "HEAD"])
     if before.returncode != 0:
@@ -543,6 +651,7 @@ def _fetch_update_payload() -> dict:
     if reset.returncode != 0:
         return {"ok": False, "error": reset.stderr.strip() or reset.stdout.strip() or "Git reset failed."}
 
+    _restore_settings_files(settings_snapshot)
     _schedule_service_restart()
     return {
         "ok": True,
