@@ -12,6 +12,8 @@ import json
 import mimetypes
 import os
 import socket
+import subprocess
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -385,6 +387,119 @@ def _system_info_payload() -> dict:
         "ipAddress": _local_ip_address(),
         "host": _local_host_name(),
         "version": _read_version_value(),
+    }
+
+
+def _read_env_file(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return values
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key:
+            values[key] = value
+    return values
+
+
+def _git_ssh_command() -> str:
+    env_file = Path(os.environ.get("SMART_THERMOSTAT_UPDATE_ENV", "/etc/smart-thermostat/update-agent.env"))
+    values = _read_env_file(env_file)
+    key_path = (
+        os.environ.get("CLIMATE_CONTROLLER_DEPLOY_KEY_PATH")
+        or values.get("CLIMATE_CONTROLLER_DEPLOY_KEY_PATH")
+        or str(Path.home() / ".ssh" / "climate_controller_deploy_key")
+    )
+    return (
+        f"ssh -i {key_path} -o IdentitiesOnly=yes "
+        "-o StrictHostKeyChecking=accept-new -o HostName=ssh.github.com -p 443"
+    )
+
+
+def _update_branch_name() -> str:
+    env_file = Path(os.environ.get("SMART_THERMOSTAT_UPDATE_ENV", "/etc/smart-thermostat/update-agent.env"))
+    values = _read_env_file(env_file)
+    branch = os.environ.get("CLIMATE_CONTROLLER_BRANCH") or values.get("CLIMATE_CONTROLLER_BRANCH") or "Development"
+    branch = branch.strip() or "Development"
+    # This panel intentionally does not expose branch selection. Keep the endpoint
+    # locked to the configured/default Development branch.
+    return "Development" if branch.lower() != "development" else branch
+
+
+def _run_git_command(args: list[str]) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["GIT_SSH_COMMAND"] = _git_ssh_command()
+    return subprocess.run(
+        args,
+        cwd=str(ROOT),
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=90,
+        check=False,
+    )
+
+
+def _schedule_service_restart() -> None:
+    service_name = os.environ.get("SMART_THERMOSTAT_SERVICE", "smart-thermostat-web.service")
+
+    def _restart() -> None:
+        time.sleep(1.5)
+        subprocess.run(["sudo", "systemctl", "restart", service_name], check=False)
+
+    threading.Thread(target=_restart, daemon=True).start()
+
+
+def _fetch_update_payload() -> dict:
+    if not (ROOT / ".git").exists():
+        return {"ok": False, "error": "This thermostat folder is not connected to Git."}
+
+    branch = _update_branch_name()
+    before = _run_git_command(["git", "rev-parse", "--short=12", "HEAD"])
+    if before.returncode != 0:
+        return {"ok": False, "error": before.stderr.strip() or before.stdout.strip() or "Could not read current Git version."}
+    before_hash = before.stdout.strip()
+
+    fetch = _run_git_command(["git", "fetch", "origin", branch])
+    if fetch.returncode != 0:
+        return {"ok": False, "error": fetch.stderr.strip() or fetch.stdout.strip() or "Git fetch failed."}
+
+    remote = _run_git_command(["git", "rev-parse", "--short=12", f"origin/{branch}"])
+    if remote.returncode != 0:
+        return {"ok": False, "error": remote.stderr.strip() or remote.stdout.strip() or "Could not read remote Git version."}
+    remote_hash = remote.stdout.strip()
+
+    if before_hash == remote_hash:
+        return {
+            "ok": True,
+            "updated": False,
+            "branch": branch,
+            "version": _read_version_value(),
+            "commit": before_hash,
+            "message": f"Already up to date on {branch} at {before_hash}.",
+        }
+
+    reset = _run_git_command(["git", "reset", "--hard", f"origin/{branch}"])
+    if reset.returncode != 0:
+        return {"ok": False, "error": reset.stderr.strip() or reset.stdout.strip() or "Git reset failed."}
+
+    _schedule_service_restart()
+    return {
+        "ok": True,
+        "updated": True,
+        "branch": branch,
+        "version": _read_version_value(),
+        "from": before_hash,
+        "commit": remote_hash,
+        "message": f"Updated to {branch} at {remote_hash}. Restarting panel service…",
     }
 
 
@@ -1273,7 +1388,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action"}:
             self.send_error(404, "Not found")
             return
 
@@ -1287,6 +1402,10 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                     return _json(self, 400, {"ok": False, "error": "config must be an object"})
                 record = _write_panel_config_record(config_payload)
                 return _json(self, 200, {"ok": True, "version": record["version"], "updatedAt": record["updatedAt"], "config": record["config"]})
+
+            if path == "/api/system/fetch-update":
+                result = _fetch_update_payload()
+                return _json(self, 200 if result.get("ok") else 500, result)
 
             if path in {"/api/thermostat/status", "/api/thermostat/control"}:
                 return _json(self, 200, _handle_thermostat_update(payload))

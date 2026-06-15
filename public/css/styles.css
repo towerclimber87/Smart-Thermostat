@@ -4419,3 +4419,30 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
     width: 174px;
   }
 }
+
+/* 2026-06-15 local update button in thermostat info popup */
+.panel-info-update-row {
+  gap: 12px;
+}
+.fetch-update-btn {
+  width: 100%;
+  min-height: 54px;
+  margin-top: 2px;
+}
+.fetch-update-btn:disabled {
+  opacity: .68;
+  cursor: wait;
+}
+.fetch-update-status {
+  margin: 0;
+  color: rgba(190,210,232,.82);
+  font-size: .9rem;
+  font-weight: 800;
+  line-height: 1.35;
+}
+.fetch-update-status[data-level="success"] {
+  color: rgba(164, 255, 205, .95);
+}
+.fetch-update-status[data-level="error"] {
+  color: rgba(255, 170, 170, .96);
+}

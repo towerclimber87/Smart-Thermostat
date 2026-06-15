@@ -320,6 +320,8 @@ const elements = {
   thermostatInfoClose: document.getElementById("thermostatInfoClose"),
   unitIpValue: document.getElementById("unitIpValue"),
   unitVersionValue: document.getElementById("unitVersionValue"),
+  fetchUpdateButton: document.getElementById("fetchUpdateButton"),
+  fetchUpdateStatus: document.getElementById("fetchUpdateStatus"),
   dialMinLabel: document.getElementById("dialMinLabel"),
   dialMaxLabel: document.getElementById("dialMaxLabel"),
   settingsOverlay: document.getElementById("settingsOverlay"),
@@ -980,6 +982,44 @@ async function fetchSystemInfo() {
     console.warn("Unable to load system info", error);
   } finally {
     renderSystemInfo();
+  }
+}
+
+function setFetchUpdateStatus(message = "", level = "info") {
+  if (!elements.fetchUpdateStatus) return;
+  elements.fetchUpdateStatus.textContent = message;
+  elements.fetchUpdateStatus.dataset.level = level;
+}
+
+async function fetchPanelUpdate() {
+  if (!elements.fetchUpdateButton) return;
+  elements.fetchUpdateButton.disabled = true;
+  setFetchUpdateStatus("Checking Development…", "info");
+  try {
+    const response = await fetch(`/api/system/fetch-update?_=${Date.now()}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || `Update returned ${response.status}`);
+    }
+    const message = payload.message || (payload.updated ? "Update installed. Restarting…" : "Already up to date.");
+    setFetchUpdateStatus(message, payload.updated ? "success" : "info");
+    showToast(payload.updated ? "Update installed" : "Already up to date");
+    if (payload.version) {
+      state.systemInfo.version = payload.version;
+      renderSystemInfo();
+    }
+  } catch (error) {
+    const message = error.message || String(error);
+    setFetchUpdateStatus(message, "error");
+    showToast("Update failed");
+  } finally {
+    setTimeout(() => {
+      if (elements.fetchUpdateButton) elements.fetchUpdateButton.disabled = false;
+    }, 2000);
   }
 }
 
@@ -4647,6 +4687,7 @@ function bindEvents() {
   document.querySelectorAll("[data-close-settings]").forEach((el) => el.addEventListener("click", closeSettings));
   elements.thermostatInfoButton?.addEventListener("click", openThermostatInfo);
   elements.thermostatInfoClose?.addEventListener("click", closeThermostatInfo);
+  elements.fetchUpdateButton?.addEventListener("click", fetchPanelUpdate);
   document.querySelectorAll("[data-close-thermostat-info]").forEach((el) => el.addEventListener("click", closeThermostatInfo));
   elements.lightColorPickerClose?.addEventListener("click", closeLightColorPicker);
   document.querySelectorAll("[data-close-light-color]").forEach((el) => el.addEventListener("click", closeLightColorPicker));
