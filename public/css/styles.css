@@ -4695,6 +4695,11 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   z-index: 95;
 }
 
+.settings-code-overlay .alarm-keypad-status:empty {
+  display: none;
+}
+
 .settings-code-overlay .alarm-keypad-status[data-error="1"] {
+  display: block;
   color: #ffb8c4;
 }

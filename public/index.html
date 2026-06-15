@@ -385,14 +385,14 @@
       <aside class="alarm-keypad-sheet" role="dialog" aria-modal="true" aria-labelledby="settingsCodeTitle">
         <div class="alarm-keypad-head">
           <div>
-            <p class="eyebrow">Settings</p>
+            <p class="eyebrow">Access</p>
             <h2 id="settingsCodeTitle">Enter Code</h2>
           </div>
-          <button id="settingsCodeClose" class="icon-button close" aria-label="Close settings keypad">×</button>
+          <button id="settingsCodeClose" class="icon-button close" aria-label="Close access keypad">×</button>
         </div>
-        <div id="settingsCodeStatus" class="alarm-keypad-status">Enter the 4-digit settings code.</div>
-        <div id="settingsCodeDots" class="alarm-code-dots" aria-label="Entered settings code"></div>
-        <div id="settingsCodeGrid" class="alarm-keypad-grid" aria-label="Settings keypad">
+        <div id="settingsCodeStatus" class="alarm-keypad-status" aria-live="polite"></div>
+        <div id="settingsCodeDots" class="alarm-code-dots" aria-label="Entered access code"></div>
+        <div id="settingsCodeGrid" class="alarm-keypad-grid" aria-label="Access keypad">
           <button data-settings-key="1">1</button>
           <button data-settings-key="2">2</button>
           <button data-settings-key="3">3</button>
@@ -406,7 +406,6 @@
           <button data-settings-key="0">0</button>
           <button data-settings-key="back" class="alarm-key-muted">⌫</button>
         </div>
-        <button id="settingsUnlockButton" class="scene-btn alarm-disarm-button" type="button">Unlock Settings</button>
       </aside>
     </section>
 

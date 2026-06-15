@@ -218,6 +218,7 @@ const state = {
   pages: ["blinds", "audio", "thermostat", "lights", "room"],
   currentPage: "thermostat",
   settingsAccessCode: "",
+  settingsAccessTarget: "settings",
   thermostat: {
     name: "IHA Thermostat",
     currentTemp: 70,
@@ -379,7 +380,6 @@ const elements = {
   settingsCodeStatus: document.getElementById("settingsCodeStatus"),
   settingsCodeDots: document.getElementById("settingsCodeDots"),
   settingsCodeGrid: document.getElementById("settingsCodeGrid"),
-  settingsUnlockButton: document.getElementById("settingsUnlockButton"),
   tempMiniStatus: document.getElementById("tempMiniStatus"),
   headerCurrentTemp: document.getElementById("headerCurrentTemp"),
   headerSetTemp: document.getElementById("headerSetTemp"),
@@ -2186,21 +2186,19 @@ function renderSettingsCodePrompt() {
   elements.settingsCodeDots.innerHTML = Array.from({ length: 4 }, (_, index) =>
     `<span class="${index < code.length ? "filled" : ""}"></span>`
   ).join("");
-  if (elements.settingsCodeStatus && !elements.settingsCodeStatus.dataset.error) {
-    elements.settingsCodeStatus.textContent = "Enter the 4-digit settings code.";
-  }
-  elements.settingsUnlockButton?.toggleAttribute("disabled", code.length !== 4);
 }
 
-function openSettingsCodePrompt() {
-  if (!isSettingsAllowedByAlarm()) {
+function openSettingsCodePrompt(target = "settings") {
+  const accessTarget = target === "info" ? "info" : "settings";
+  if (accessTarget === "settings" && !isSettingsAllowedByAlarm()) {
     showToast("Disarm the alarm before opening settings");
     return;
   }
   state.settingsAccessCode = "";
+  state.settingsAccessTarget = accessTarget;
   if (elements.settingsCodeStatus) {
     elements.settingsCodeStatus.dataset.error = "";
-    elements.settingsCodeStatus.textContent = "Enter the 4-digit settings code.";
+    elements.settingsCodeStatus.textContent = "";
   }
   elements.settingsCodeOverlay?.classList.add("open");
   elements.settingsCodeOverlay?.setAttribute("aria-hidden", "false");
@@ -2211,15 +2209,20 @@ function closeSettingsCodePrompt() {
   state.settingsAccessCode = "";
   elements.settingsCodeOverlay?.classList.remove("open");
   elements.settingsCodeOverlay?.setAttribute("aria-hidden", "true");
-  if (elements.settingsCodeStatus) elements.settingsCodeStatus.dataset.error = "";
+  if (elements.settingsCodeStatus) {
+    elements.settingsCodeStatus.dataset.error = "";
+    elements.settingsCodeStatus.textContent = "";
+  }
   renderSettingsCodePrompt();
 }
 
 function verifySettingsCode() {
   if ((state.settingsAccessCode || "").length !== 4) return;
   if (state.settingsAccessCode === SETTINGS_ACCESS_CODE) {
+    const target = state.settingsAccessTarget || "settings";
     closeSettingsCodePrompt();
-    openSettings();
+    if (target === "info") openThermostatInfo();
+    else openSettings();
     return;
   }
   state.settingsAccessCode = "";
@@ -2237,7 +2240,7 @@ function handleSettingsCodeKey(value) {
   else if (/^\d$/.test(value) && current.length < 4) state.settingsAccessCode = current + value;
   if (elements.settingsCodeStatus) {
     elements.settingsCodeStatus.dataset.error = "";
-    elements.settingsCodeStatus.textContent = "Enter the 4-digit settings code.";
+    elements.settingsCodeStatus.textContent = "";
   }
   renderSettingsCodePrompt();
   if ((state.settingsAccessCode || "").length === 4) verifySettingsCode();
@@ -5005,12 +5008,11 @@ function bindEvents() {
     const button = event.target.closest("[data-settings-key]");
     if (button) handleSettingsCodeKey(button.dataset.settingsKey);
   });
-  elements.settingsUnlockButton?.addEventListener("click", verifySettingsCode);
-  elements.settingsButton.addEventListener("click", openSettingsCodePrompt);
+  elements.settingsButton.addEventListener("click", () => openSettingsCodePrompt("settings"));
   elements.settingsClose.addEventListener("click", closeSettings);
   elements.settingsDone.addEventListener("click", closeSettings);
   document.querySelectorAll("[data-close-settings]").forEach((el) => el.addEventListener("click", closeSettings));
-  elements.thermostatInfoButton?.addEventListener("click", openThermostatInfo);
+  elements.thermostatInfoButton?.addEventListener("click", () => openSettingsCodePrompt("info"));
   elements.thermostatInfoClose?.addEventListener("click", closeThermostatInfo);
   elements.fetchUpdateButton?.addEventListener("click", fetchPanelUpdate);
   elements.restartServerButton?.addEventListener("click", restartPanelServer);
