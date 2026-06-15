@@ -4929,3 +4929,78 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
 .room-control-card[data-room-control-domain="lock"].on .room-control-power-shell::after {
   background: linear-gradient(90deg, transparent, rgba(255,196,78,.92));
 }
+
+
+/* 2026-06-16 room control per-device access codes + garage lock visual */
+.room-control-entry-field {
+  gap: 8px;
+}
+.room-control-code-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  color: rgba(210,229,247,.72);
+  font-size: .64rem;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: .10em;
+}
+.room-control-code-label em {
+  color: rgba(77,238,255,.58);
+  font-size: .58rem;
+  font-style: normal;
+  letter-spacing: .08em;
+}
+.room-control-code-input {
+  -webkit-text-security: disc;
+}
+.room-control-code-overlay {
+  z-index: 96;
+}
+.room-control-code-overlay .alarm-keypad-status[data-error="1"] {
+  color: #ffb8c4;
+}
+.room-control-card[data-room-control-code="set"] .room-control-copy em[data-room-control-hint] {
+  color: rgba(255,196,78,.86);
+}
+.room-control-card[data-room-control-visual="garage-lock"].linked.off,
+.room-control-card[data-room-control-visual="door-lock"].linked.off {
+  border-color: rgba(255,85,105,.38);
+  background:
+    radial-gradient(circle at 26% 14%, rgba(255,85,105,.24), transparent 37%),
+    linear-gradient(145deg, rgba(255,85,105,.12), rgba(255,255,255,.030));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.14), 0 22px 58px rgba(0,0,0,.27), 0 0 34px rgba(255,85,105,.10);
+}
+.room-control-card[data-room-control-visual="garage-lock"].linked.off::after,
+.room-control-card[data-room-control-visual="door-lock"].linked.off::after {
+  background: linear-gradient(90deg, rgba(255,85,105,.96), rgba(255,196,78,.62));
+  opacity: 1;
+}
+.room-control-card[data-room-control-visual="garage-lock"].linked.off .room-control-state-pill,
+.room-control-card[data-room-control-visual="door-lock"].linked.off .room-control-state-pill {
+  background: rgba(255,85,105,.18);
+  color: #ffd9df;
+}
+.room-control-card[data-room-control-visual="garage-lock"].linked.off .room-control-power-ring,
+.room-control-card[data-room-control-visual="door-lock"].linked.off .room-control-power-ring {
+  background:
+    linear-gradient(135deg, rgba(255,85,105,.23), rgba(255,255,255,.045)),
+    radial-gradient(circle at 30% 22%, rgba(255,196,78,.16), transparent 48%);
+  border-color: rgba(255,85,105,.32);
+}
+.room-control-card[data-room-control-visual="garage-lock"].linked.off .room-control-power-icon,
+.room-control-card[data-room-control-visual="door-lock"].linked.off .room-control-power-icon {
+  color: #ffccd3;
+  filter: drop-shadow(0 0 14px rgba(255,85,105,.45));
+}
+.room-control-card[data-room-control-visual="garage-lock"].linked.off .room-control-power-shell::before,
+.room-control-card[data-room-control-visual="door-lock"].linked.off .room-control-power-shell::before {
+  border-color: rgba(255,85,105,.34);
+  box-shadow: inset 0 0 18px rgba(255,85,105,.12);
+}
+.room-control-card[data-room-control-visual="garage-lock"].linked.off .room-control-power-shell::after,
+.room-control-card[data-room-control-visual="door-lock"].linked.off .room-control-power-shell::after {
+  background: linear-gradient(90deg, transparent, rgba(255,85,105,.92));
+}

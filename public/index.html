@@ -625,7 +625,7 @@
             <div class="setup-actions-row">
               <button id="addRoomControlRoomButton" class="scene-btn room-open">Add Room</button>
             </div>
-            <p class="settings-hint room-control-ha-hint">Uses the saved Home Assistant URL/token. Long-press a Room control card to assign a switch or input_boolean.</p>
+            <p class="settings-hint room-control-ha-hint">Uses the saved Home Assistant URL/token. Long-press a Room control card to assign any Home Assistant entity. Optional default codes can protect locks, garage doors, buttons, and other open/run actions.</p>
             <div id="roomControlConfigList" class="room-config-list room-control-config-list"></div>
           </div>
         </div>
@@ -736,6 +736,36 @@
           <button id="alarmArmHomeButton" class="alarm-arm-option home" type="button">Arm Home</button>
           <button id="alarmArmCancelButton" class="alarm-arm-option cancel" type="button">Cancel</button>
           <button id="alarmArmAwayButton" class="alarm-arm-option away" type="button">Arm Away</button>
+        </div>
+      </aside>
+    </section>
+
+
+    <section id="roomControlCodeOverlay" class="settings-overlay alarm-keypad-overlay room-control-code-overlay" aria-hidden="true">
+      <div class="settings-backdrop" data-close-room-control-code></div>
+      <aside class="alarm-keypad-sheet" role="dialog" aria-modal="true" aria-labelledby="roomControlCodeTitle">
+        <div class="alarm-keypad-head">
+          <div>
+            <p class="eyebrow">Room Access</p>
+            <h2 id="roomControlCodeTitle">Unlock</h2>
+          </div>
+          <button id="roomControlCodeClose" class="icon-button close" aria-label="Close room code keypad">×</button>
+        </div>
+        <div id="roomControlCodeStatus" class="alarm-keypad-status">Enter default code.</div>
+        <div id="roomControlCodeDots" class="alarm-code-dots" aria-label="Entered room access code"></div>
+        <div id="roomControlCodeGrid" class="alarm-keypad-grid" aria-label="Room access keypad">
+          <button data-room-control-code-key="1">1</button>
+          <button data-room-control-code-key="2">2</button>
+          <button data-room-control-code-key="3">3</button>
+          <button data-room-control-code-key="4">4</button>
+          <button data-room-control-code-key="5">5</button>
+          <button data-room-control-code-key="6">6</button>
+          <button data-room-control-code-key="7">7</button>
+          <button data-room-control-code-key="8">8</button>
+          <button data-room-control-code-key="9">9</button>
+          <button data-room-control-code-key="clear" class="alarm-key-muted">Clear</button>
+          <button data-room-control-code-key="0">0</button>
+          <button data-room-control-code-key="back" class="alarm-key-muted">⌫</button>
         </div>
       </aside>
     </section>

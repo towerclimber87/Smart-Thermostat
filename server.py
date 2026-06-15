@@ -1230,7 +1230,7 @@ def _room_control_service_for_action(domain: str, action: str) -> tuple[str, str
     return (domain, service) if service else None
 
 
-def _call_room_control_service(ha_url: str, token: str, entity_id: str, action: str) -> dict:
+def _call_room_control_service(ha_url: str, token: str, entity_id: str, action: str, code: str | None = None) -> dict:
     entity_id = (entity_id or "").strip()
     domain = _room_control_domain(entity_id)
     action = (action or "toggle").strip().lower()
@@ -1244,7 +1244,11 @@ def _call_room_control_service(ha_url: str, token: str, entity_id: str, action: 
         return {"entityId": entity_id, "name": entity_id, "domain": domain, "state": "unknown", "actionApplied": False}
 
     service_domain, service = spec
-    _ha_json_request(ha_url, token, "POST", f"/api/services/{service_domain}/{service}", {"entity_id": entity_id})
+    service_payload = {"entity_id": entity_id}
+    code_value = str(code or "").strip()
+    if code_value and service_domain == "lock":
+        service_payload["code"] = code_value
+    _ha_json_request(ha_url, token, "POST", f"/api/services/{service_domain}/{service}", service_payload)
     try:
         item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
         if isinstance(item, dict):
@@ -1748,6 +1752,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                     payload.get("token", ""),
                     payload.get("entityId", ""),
                     payload.get("action", "toggle"),
+                    payload.get("code", ""),
                 )
                 return _json(self, 200, {"ok": True, "control": control})
 
