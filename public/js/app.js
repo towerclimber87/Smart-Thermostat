@@ -562,6 +562,16 @@ function renderRoomTabs() {
   });
 }
 
+function getBlindSlatTilt(position) {
+  const pct = clamp(Number(position), 0, 100);
+  // 0% = visually closed, 100% = tilted open. Keep it subtle so it feels like real wood blinds.
+  return Math.round(6 + (pct * 0.62));
+}
+
+function renderWoodSlats(count = 15) {
+  return Array.from({ length: count }, (_, index) => `<span class="wood-slat" style="--slat-index:${index}"></span>`).join("");
+}
+
 function renderBlinds() {
   const room = getActiveRoom();
   elements.blindRoomTitle.textContent = room.label;
@@ -572,21 +582,28 @@ function renderBlinds() {
   elements.blindCards.style.setProperty("--blind-columns", columns);
 
   room.blinds.forEach((blind) => {
+    const position = clamp(Number(blind.position), 0, 100);
     const card = document.createElement("div");
-    card.className = "blind-card";
+    card.className = "blind-card wood-blind-card";
     card.dataset.blindCard = blind.id;
     card.dataset.roomKey = state.blinds.room;
-    card.style.setProperty("--blind-open", `${blind.position}%`);
+    card.style.setProperty("--blind-open", `${position}%`);
+    card.style.setProperty("--slat-tilt", `${getBlindSlatTilt(position)}deg`);
+    card.style.setProperty("--slat-light-alpha", (0.10 + position * 0.0028).toFixed(3));
     card.innerHTML = `
       <div class="blind-top">
         <div>
           <div class="blind-name">${blind.name}</div>
         </div>
-        <div class="blind-percent">${blind.position}%</div>
+        <div class="blind-percent">${position}%</div>
       </div>
       <button class="blind-action primary" data-blind-id="${blind.id}" data-action="open">Open</button>
-      <div class="shade-stage" data-blind-stage="${blind.id}" role="slider" aria-label="${blind.name} position" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${blind.position}" tabindex="0">
-        <div class="blind-window" aria-hidden="true"></div>
+      <div class="shade-stage wood-shade-stage" data-blind-stage="${blind.id}" role="slider" aria-label="${blind.name} position" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${position}" tabindex="0">
+        <div class="blind-window wooden-window" aria-hidden="true">
+          <div class="window-glow"></div>
+          <div class="wood-slat-stack">${renderWoodSlats(15)}</div>
+          <div class="center-lift-cord"></div>
+        </div>
       </div>
       <button class="blind-action close-blind" data-blind-id="${blind.id}" data-action="close">Close</button>
     `;
@@ -603,6 +620,8 @@ function setBlindPosition(blindId, position) {
   const card = document.querySelector(`[data-blind-card="${blindId}"]`);
   if (!card) return;
   card.style.setProperty("--blind-open", `${blind.position}%`);
+  card.style.setProperty("--slat-tilt", `${getBlindSlatTilt(blind.position)}deg`);
+  card.style.setProperty("--slat-light-alpha", (0.10 + blind.position * 0.0028).toFixed(3));
   card.querySelector(".blind-percent").textContent = `${blind.position}%`;
   card.querySelector("[data-blind-stage]").setAttribute("aria-valuenow", String(blind.position));
   saveConfig();
