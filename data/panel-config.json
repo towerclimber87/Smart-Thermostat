@@ -8903,13 +8903,13 @@
           "min": 60
         }
       },
-      "mode": "cool",
+      "mode": "auto",
       "name": "Livingroom Test",
       "outdoorTemp": 40,
-      "targetTemp": 72
+      "targetTemp": 73
     },
     "version": 11
   },
-  "updatedAt": 1781547056,
-  "version": 499
+  "updatedAt": 1781548290,
+  "version": 607
 }
