@@ -5004,3 +5004,87 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
 .room-control-card[data-room-control-visual="door-lock"].linked.off .room-control-power-shell::after {
   background: linear-gradient(90deg, transparent, rgba(255,85,105,.92));
 }
+
+
+/* 2026-06-15 v3.6: Room setup uses the full settings sheet and scrolls cleanly. */
+.settings-sheet.full-setup.room-control-setup {
+  width: calc(100vw - clamp(26px, 2.4vw, 52px));
+  height: calc(100dvh - clamp(26px, 2.4vw, 52px));
+  padding: clamp(20px, 2.1vw, 34px);
+}
+.settings-sheet.room-control-setup .settings-view,
+.settings-sheet.room-control-setup .settings-subview {
+  min-height: 0;
+  height: 100%;
+}
+.settings-sheet.room-control-setup #roomControlSetupView {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.settings-sheet.room-control-setup .setup-actions-row {
+  grid-template-columns: minmax(260px, 1fr);
+  width: 100%;
+  margin-bottom: 12px;
+}
+.settings-sheet.room-control-setup .room-control-ha-hint {
+  flex: 0 0 auto;
+  max-width: none;
+  margin: 0 0 12px;
+  line-height: 1.35;
+}
+.settings-sheet.room-control-setup .room-control-config-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  max-height: none;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px clamp(8px, .9vw, 14px) 18px 0;
+  scrollbar-gutter: stable;
+}
+.settings-sheet.room-control-setup .room-control-config-card {
+  width: 100%;
+  min-width: 0;
+  padding: clamp(16px, 1.5vw, 24px);
+}
+.settings-sheet.room-control-setup .room-control-config-card .room-config-main {
+  grid-template-columns: minmax(280px, 1fr) minmax(112px, 156px) minmax(108px, 136px);
+  gap: clamp(12px, 1vw, 18px);
+}
+.settings-sheet.room-control-setup .room-control-name-grid {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: clamp(12px, 1vw, 18px);
+  align-items: stretch;
+}
+.settings-sheet.room-control-setup .room-control-name-grid .mini-field {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(255,255,255,.075);
+  border-radius: 18px;
+  background: rgba(0,0,0,.10);
+}
+.settings-sheet.room-control-setup .room-control-config-link {
+  min-height: 34px;
+}
+.settings-sheet.room-control-setup .settings-footer {
+  flex: 0 0 auto;
+  margin-top: 14px;
+}
+@media (min-width: 1450px) {
+  .settings-sheet.room-control-setup .room-control-name-grid {
+    grid-template-columns: repeat(4, minmax(250px, 1fr));
+  }
+}
+@media (max-width: 900px) {
+  .settings-sheet.full-setup.room-control-setup {
+    width: calc(100vw - 20px);
+    height: calc(100dvh - 20px);
+  }
+  .settings-sheet.room-control-setup .room-control-config-card .room-config-main,
+  .settings-sheet.room-control-setup .room-control-name-grid {
+    grid-template-columns: 1fr;
+  }
+}

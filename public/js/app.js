@@ -2276,7 +2276,7 @@ function handleSettingsCodeKey(value) {
 
 function hideAllSettingsViews() {
   [elements.thermostatSettingsView, elements.blindSettingsView, elements.audioSettingsView, elements.lightsSettingsView, elements.roomControlSettingsView].forEach((view) => { if (view) view.hidden = true; });
-  elements.settingsSheet.classList.remove("full-setup", "ha-focus", "thermostat-setup");
+  elements.settingsSheet.classList.remove("full-setup", "ha-focus", "thermostat-setup", "room-control-setup");
   elements.settingsFooter.hidden = false;
 }
 
@@ -2390,7 +2390,7 @@ function showLightsHaView() {
 
 function showRoomControlSetupView() {
   if (elements.roomControlSetupView) elements.roomControlSetupView.hidden = false;
-  elements.settingsSheet.classList.add("full-setup");
+  elements.settingsSheet.classList.add("full-setup", "room-control-setup");
   elements.settingsSheet.classList.remove("ha-focus");
   elements.settingsTitle.textContent = "Room Setup";
   elements.settingsEyebrow.textContent = "Room Control";
