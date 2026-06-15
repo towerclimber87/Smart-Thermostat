@@ -95,35 +95,51 @@
       </article>
 
       <article class="screen screen-audio" data-screen="audio" aria-label="Audio controls">
-        <div class="screen-grid audio-grid">
-          <section class="panel hero-panel audio-hero">
-            <div class="now-playing-card">
-              <div class="album-art" aria-hidden="true"><div class="record-core"></div></div>
-              <div class="track-info">
-                <p class="eyebrow">Sonos Placeholder</p>
-                <h2 id="trackTitle">Midnight Drive</h2>
-                <p id="trackArtist">Glass Skyline</p>
-                <div class="progress-bar"><span id="trackProgress"></span></div>
+        <section class="audio-stage panel">
+          <div class="audio-shell">
+            <div class="audio-main-card">
+              <div id="albumArt" class="audio-art" aria-hidden="true">
+                <div id="albumInitials" class="audio-art-initials">♪</div>
+              </div>
+              <div class="audio-now">
+                <p class="eyebrow">Now Playing</p>
+                <h2 id="trackTitle">Select Audio Device</h2>
+                <p id="trackArtist" class="audio-artist">Open settings to choose a media player.</p>
+                <p id="trackAlbum" class="audio-album"></p>
+                <div class="audio-progress-wrap" aria-hidden="true">
+                  <div class="progress-bar audio-progress"><span id="trackProgress"></span></div>
+                </div>
               </div>
             </div>
-            <div class="transport-controls">
-              <button id="prevTrack" class="transport" aria-label="Previous track">⏮</button>
-              <button id="playPause" class="transport primary" aria-label="Play or pause">▶</button>
-              <button id="nextTrack" class="transport" aria-label="Next track">⏭</button>
-            </div>
-          </section>
 
-          <section class="panel audio-mixer">
-            <div class="panel-heading compact vertical">
-              <p class="eyebrow">Audio Tuning</p>
-              <h3>Living Room</h3>
+            <div class="audio-side-card">
+              <div class="audio-device-head">
+                <div>
+                  <p class="eyebrow">Media Device</p>
+                  <h3 id="audioPlayerName">No device selected</h3>
+                </div>
+                <span id="audioDeviceState" class="audio-state-pill">Idle</span>
+              </div>
+
+              <div class="transport-controls media-transport">
+                <button id="prevTrack" class="transport" aria-label="Previous track">‹‹</button>
+                <button id="playPause" class="transport primary" aria-label="Play or pause">▶</button>
+                <button id="nextTrack" class="transport" aria-label="Next track">››</button>
+              </div>
+
+              <div class="audio-volume-card">
+                <label for="volumeSlider">Volume <strong><span id="volumeValue">42</span>%</strong></label>
+                <input id="volumeSlider" type="range" min="0" max="100" value="42" />
+              </div>
+
+              <div class="audio-tone-grid">
+                <div class="tone-control"><label for="gainSlider">Gain <strong id="gainValue">0</strong></label><input id="gainSlider" type="range" min="-10" max="10" value="0" /></div>
+                <div class="tone-control"><label for="bassSlider">Bass <strong id="bassValue">2</strong></label><input id="bassSlider" type="range" min="-10" max="10" value="2" /></div>
+                <div class="tone-control"><label for="trebleSlider">Treble <strong id="trebleValue">4</strong></label><input id="trebleSlider" type="range" min="-10" max="10" value="4" /></div>
+              </div>
             </div>
-            <div class="slider-row"><label for="volumeSlider">Volume <strong id="volumeValue">42</strong></label><input id="volumeSlider" type="range" min="0" max="100" value="42" /></div>
-            <div class="slider-row"><label for="gainSlider">Gain <strong id="gainValue">0</strong></label><input id="gainSlider" type="range" min="-10" max="10" value="0" /></div>
-            <div class="slider-row"><label for="bassSlider">Bass <strong id="bassValue">2</strong></label><input id="bassSlider" type="range" min="-10" max="10" value="2" /></div>
-            <div class="slider-row"><label for="trebleSlider">Treble <strong id="trebleValue">4</strong></label><input id="trebleSlider" type="range" min="-10" max="10" value="4" /></div>
-          </section>
-        </div>
+          </div>
+        </section>
       </article>
     </section>
 
@@ -226,21 +242,43 @@
         </div>
 
         <div id="audioSettingsView" class="settings-view" hidden>
-          <div class="setup-actions-row">
-            <button id="openAudioHaConfig" class="scene-btn secondary">Home Assistant Config</button>
+          <div id="audioSetupView" class="settings-subview audio-setup-subview">
+            <div class="setup-actions-row audio-setup-actions">
+              <button id="loadMediaPlayers" class="scene-btn room-open">Load Media Devices</button>
+              <button id="openAudioHaConfig" class="scene-btn secondary">Home Assistant Config</button>
+            </div>
+
+            <section class="audio-device-picker-card">
+              <div class="ha-entity-head">
+                <div>
+                  <p class="eyebrow">Media Players</p>
+                  <h3>Choose Device</h3>
+                </div>
+                <span id="mediaPlayerCount" class="entity-count-pill">0</span>
+              </div>
+              <div id="selectedMediaDeviceText" class="selected-device-line">No media player selected.</div>
+              <div id="mediaPlayerList" class="media-player-list"></div>
+            </section>
           </div>
-          <div id="audioHaView" class="settings-section" hidden>
-            <div class="form-grid">
-              <label class="form-field">Home Assistant URL
-                <input id="audioHaUrlInput" type="text" autocomplete="off" />
-              </label>
-              <label class="form-field">Long-Lived Access Token
-                <textarea id="audioHaTokenInput" rows="4"></textarea>
-              </label>
+
+          <div id="audioHaView" class="settings-subview ha-config-subview audio-ha-subview" hidden>
+            <div class="ha-focus-top">
+              <button id="backToAudioSetup" class="ghost-button">← Audio Setup</button>
             </div>
-            <div class="setup-actions-row compact-actions">
-              <button id="saveAudioHaConfig" class="scene-btn room-open">Save Config</button>
-            </div>
+            <section class="ha-connect-card audio-ha-card">
+              <div class="form-grid ha-form-grid">
+                <label class="form-field">Home Assistant URL
+                  <input id="audioHaUrlInput" type="text" autocomplete="off" spellcheck="false" />
+                </label>
+                <label class="form-field">Long-Lived Access Token
+                  <textarea id="audioHaTokenInput" rows="3" spellcheck="false"></textarea>
+                </label>
+              </div>
+              <div class="setup-actions-row compact-actions audio-ha-actions">
+                <button id="saveAudioHaConfig" class="scene-btn room-open">Save</button>
+                <button id="loadAudioMediaPlayers" class="scene-btn secondary">Load Devices</button>
+              </div>
+            </section>
           </div>
         </div>
 

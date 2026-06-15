@@ -187,6 +187,151 @@ def _ha_json_request(ha_url: str, token: str, method: str, path: str, payload: d
         return {"raw": raw.decode("utf-8", errors="replace")}
 
 
+def _normalize_media_player_item(ha_url: str, item: dict) -> dict:
+    attrs = item.get("attributes") or {}
+    entity_id = str(item.get("entity_id", ""))
+    picture = attrs.get("entity_picture") or ""
+    if picture and picture.startswith("/"):
+        picture = f"{_normalize_ha_url(ha_url)}{picture}"
+    return {
+        "entityId": entity_id,
+        "name": attrs.get("friendly_name") or entity_id,
+        "state": item.get("state") or "unknown",
+        "volumeLevel": attrs.get("volume_level"),
+        "isVolumeMuted": attrs.get("is_volume_muted"),
+        "mediaTitle": attrs.get("media_title") or "",
+        "mediaArtist": attrs.get("media_artist") or "",
+        "mediaAlbum": attrs.get("media_album_name") or attrs.get("media_album") or "",
+        "mediaPosition": attrs.get("media_position"),
+        "mediaDuration": attrs.get("media_duration"),
+        "source": attrs.get("source") or "",
+        "pictureUrl": picture,
+        "supportedFeatures": attrs.get("supported_features"),
+    }
+
+
+def _fetch_ha_media_players(ha_url: str, token: str) -> list[dict]:
+    ha_url = _normalize_ha_url(ha_url)
+    token = (token or "").strip()
+    if not token:
+        raise ValueError("Missing Home Assistant token")
+
+    req = request.Request(
+        f"{ha_url}/api/states",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "User-Agent": "SmartThermostatPanel/0.1",
+        },
+        method="GET",
+    )
+    try:
+        with request.urlopen(req, timeout=12) as resp:
+            raw = resp.read()
+    except error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")[:500]
+        raise RuntimeError(f"Home Assistant returned HTTP {exc.code}: {body}") from exc
+    except error.URLError as exc:
+        raise RuntimeError(f"Could not reach Home Assistant: {exc.reason}") from exc
+
+    states = json.loads(raw.decode("utf-8"))
+    players = []
+    for item in states:
+        entity_id = str(item.get("entity_id", ""))
+        if not entity_id.startswith("media_player."):
+            continue
+        players.append(_normalize_media_player_item(ha_url, item))
+    players.sort(key=lambda item: item["name"].lower())
+    return players
+
+
+def _fetch_ha_media_states_for_entities(ha_url: str, token: str, entity_ids: list[str]) -> list[dict]:
+    wanted = []
+    seen = set()
+    for raw in entity_ids or []:
+        entity_id = str(raw or "").strip()
+        if not entity_id.startswith("media_player.") or entity_id in seen:
+            continue
+        seen.add(entity_id)
+        wanted.append(entity_id)
+    if not wanted:
+        return []
+
+    ha_url = _normalize_ha_url(ha_url)
+    token = (token or "").strip()
+    if not token:
+        raise ValueError("Missing Home Assistant token")
+
+    req = request.Request(
+        f"{ha_url}/api/states",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "User-Agent": "SmartThermostatPanel/0.1",
+        },
+        method="GET",
+    )
+    try:
+        with request.urlopen(req, timeout=8) as resp:
+            raw = resp.read()
+    except error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")[:500]
+        raise RuntimeError(f"Home Assistant returned HTTP {exc.code}: {body}") from exc
+    except error.URLError as exc:
+        raise RuntimeError(f"Could not reach Home Assistant: {exc.reason}") from exc
+
+    states = json.loads(raw.decode("utf-8"))
+    wanted_set = set(wanted)
+    players = []
+    for item in states:
+        entity_id = str(item.get("entity_id", ""))
+        if entity_id not in wanted_set:
+            continue
+        players.append(_normalize_media_player_item(ha_url, item))
+    by_id = {item["entityId"]: item for item in players}
+    return [by_id[entity_id] for entity_id in wanted if entity_id in by_id]
+
+
+def _fetch_ha_media_state(ha_url: str, token: str, entity_id: str) -> dict:
+    entity_id = (entity_id or "").strip()
+    if not entity_id.startswith("media_player."):
+        raise ValueError("Entity must be a media_player.* entity")
+    item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
+    return _normalize_media_player_item(ha_url, item)
+
+
+def _call_media_service(ha_url: str, token: str, entity_id: str, action: str, value: int | float | None = None) -> dict:
+    entity_id = (entity_id or "").strip()
+    if not entity_id.startswith("media_player."):
+        raise ValueError("Entity must be a media_player.* entity")
+
+    service_by_action = {
+        "play_pause": "media_play_pause",
+        "play": "media_play",
+        "pause": "media_pause",
+        "previous": "media_previous_track",
+        "next": "media_next_track",
+        "volume": "volume_set",
+        "volume_up": "volume_up",
+        "volume_down": "volume_down",
+    }
+    service = service_by_action.get(action)
+    if not service:
+        raise ValueError("Unsupported media action")
+
+    payload = {"entity_id": entity_id}
+    if action == "volume":
+        if value is None:
+            raise ValueError("Missing volume value")
+        payload["volume_level"] = max(0, min(100, float(value))) / 100
+
+    _ha_json_request(ha_url, token, "POST", f"/api/services/media_player/{service}", payload)
+    try:
+        return _fetch_ha_media_state(ha_url, token, entity_id)
+    except Exception:
+        return {"entityId": entity_id, "name": entity_id, "state": action}
+
+
 def _fetch_ha_state(ha_url: str, token: str, entity_id: str) -> dict:
     entity_id = (entity_id or "").strip()
     if not entity_id.startswith("cover."):
@@ -259,7 +404,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states"}:
+        if path not in {"/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states"}:
             self.send_error(404, "Not found")
             return
 
@@ -278,6 +423,28 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                     payload.get("entityIds", []),
                 )
                 return _json(self, 200, {"ok": True, "covers": covers, "count": len(covers)})
+
+            if path == "/api/ha/media_players":
+                players = _fetch_ha_media_players(payload.get("url", ""), payload.get("token", ""))
+                return _json(self, 200, {"ok": True, "players": players, "count": len(players)})
+
+            if path == "/api/ha/media/states":
+                players = _fetch_ha_media_states_for_entities(
+                    payload.get("url", ""),
+                    payload.get("token", ""),
+                    payload.get("entityIds", []),
+                )
+                return _json(self, 200, {"ok": True, "players": players, "count": len(players)})
+
+            if path == "/api/ha/media/action":
+                state = _call_media_service(
+                    payload.get("url", ""),
+                    payload.get("token", ""),
+                    payload.get("entityId", ""),
+                    payload.get("action", ""),
+                    payload.get("value"),
+                )
+                return _json(self, 200, {"ok": True, "state": state})
 
             state = _call_cover_service(
                 payload.get("url", ""),

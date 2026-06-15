@@ -840,179 +840,289 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   .ha-config-layout .entity-list-preview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
-/* 2026-06-15 blind settings cleanup + wooden-blind visual pass */
-/* Author styles were overriding the hidden attribute on the Home Assistant subview. Keep it truly hidden until Home Assistant Config is selected. */
-.settings-view[hidden],
-.settings-subview[hidden],
+/* 2026-06-15 media-card and squared blind-slat pass */
+/* Keep the Home Assistant section fully hidden while Blind Setup is active. */
+#blindSetupView:not([hidden]) ~ #blindHaView,
 #blindHaView[hidden],
-#audioHaView[hidden] {
-  display: none !important;
-}
+#audioHaView[hidden] { display: none !important; }
 
-/* Blind setup should only show room setup until the HA config button is tapped. */
-.settings-sheet.full-setup:not(.ha-focus) .ha-config-subview,
-.settings-sheet.full-setup:not(.ha-focus) .ha-connect-card,
-.settings-sheet.full-setup:not(.ha-focus) .ha-entity-card {
-  display: none !important;
-}
-
-/* Make the HA screen touch-friendly without wasting the whole 10-inch panel on oversized buttons. */
-.settings-sheet.ha-focus .ha-action-grid {
-  grid-template-columns: repeat(4, minmax(110px, 1fr));
-  gap: 8px;
-}
-.settings-sheet.ha-focus .ha-action-grid .scene-btn {
-  min-height: 38px;
-  border-radius: 14px;
-  padding: 0 10px;
-  font-size: .76rem;
-  letter-spacing: -0.015em;
-}
-.settings-sheet.ha-focus .form-field input {
-  min-height: 44px;
-}
-.settings-sheet.ha-focus .form-field textarea {
-  min-height: 64px;
-}
-.settings-sheet.ha-focus .ha-connect-card {
-  grid-template-rows: auto auto auto minmax(95px, .55fr);
-  gap: 9px;
-}
-.settings-sheet.ha-focus .ha-status-line {
-  min-height: 34px;
-  padding: 8px 12px;
-  font-size: .86rem;
-}
-.settings-sheet.ha-focus .ha-log-row {
-  min-height: 30px;
-  padding: 6px 9px;
-}
-
-/* Wooden blind graphic */
-.wood-blind-card {
+/* Square off the blind face/slats and make the blind look more like real wood. */
+.shade-stage {
+  border-radius: 18px !important;
   background:
-    radial-gradient(circle at 50% 0%, rgba(77,238,255,.07), transparent 35%),
-    linear-gradient(180deg, rgba(255,255,255,.075), rgba(255,255,255,.026));
+    linear-gradient(180deg, rgba(16, 25, 38, .96), rgba(5, 11, 22, .98)) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.10), inset 0 0 0 10px rgba(3,8,17,.52), 0 18px 35px rgba(0,0,0,.22) !important;
 }
-.wood-shade-stage {
-  background:
-    linear-gradient(180deg, rgba(3, 9, 20, .92), rgba(10, 18, 33, .96));
-  border: 1px solid rgba(255,255,255,.11);
-  box-shadow:
-    inset 0 1px 0 rgba(255,255,255,.08),
-    inset 0 0 0 8px rgba(0,0,0,.14),
-    0 18px 44px rgba(0,0,0,.18);
-}
-.wooden-window {
-  inset: 10px;
-  border-radius: 20px;
+.blind-window {
+  inset: 16px !important;
+  border-radius: 4px !important;
   overflow: hidden;
   background:
-    radial-gradient(circle at 50% 42%, rgba(83, 164, 220, var(--slat-light-alpha, .24)), transparent 48%),
-    linear-gradient(180deg, rgba(4, 10, 21, .94), rgba(8, 16, 30, .97));
+    linear-gradient(to bottom,
+      rgba(3, 9, 18, .96) 0 calc(100% - var(--blind-open)),
+      rgba(142, 113, 88, .98) calc(100% - var(--blind-open)) 100%),
+    repeating-linear-gradient(to bottom,
+      #caa06d 0 7px,
+      #a57b51 7px 10px,
+      #6f5136 10px 13px,
+      #d8b07a 13px 15px),
+    linear-gradient(90deg, rgba(255,255,255,.20), transparent 24%, rgba(0,0,0,.24) 72%, rgba(255,255,255,.10));
   box-shadow:
-    inset 0 1px 0 rgba(255,255,255,.10),
-    inset 0 0 0 1px rgba(255,255,255,.045),
-    inset 0 -22px 36px rgba(0,0,0,.28);
+    inset 0 1px 0 rgba(255,255,255,.16),
+    inset 0 -1px 0 rgba(0,0,0,.45),
+    inset 0 0 0 2px rgba(255,255,255,.04) !important;
 }
-.window-glow {
-  position: absolute;
-  inset: 0;
-  background:
-    linear-gradient(180deg,
-      rgba(155, 190, 225, var(--slat-light-alpha, .24)) 0%,
-      rgba(77, 238, 255, calc(var(--slat-light-alpha, .24) * .55)) 46%,
-      rgba(155, 109, 255, calc(var(--slat-light-alpha, .24) * .62)) 100%);
-  opacity: .86;
+.blind-window::before {
+  height: 3px !important;
+  border-radius: 0 !important;
+  background: linear-gradient(90deg, rgba(90, 65, 43, .98), rgba(215, 174, 119, .98), rgba(92, 65, 43, .98)) !important;
+  box-shadow: 0 8px 22px rgba(0,0,0,.28), 0 0 18px rgba(215, 174, 119, .24) !important;
 }
-.wood-slat-stack {
-  position: absolute;
-  inset: 18px 14px;
-  display: grid;
-  grid-template-rows: repeat(15, 1fr);
-  gap: clamp(3px, .62vh, 7px);
-  perspective: 760px;
-  transform-style: preserve-3d;
-}
-.wood-slat {
-  position: relative;
-  border-radius: 999px;
-  transform: rotateX(var(--slat-tilt, 46deg));
-  transform-origin: 50% 50%;
-  background:
-    linear-gradient(180deg,
-      #e1c08a 0%,
-      #bc8750 43%,
-      #8f5c31 54%,
-      #d3a96f 100%);
-  box-shadow:
-    inset 0 1px 0 rgba(255,255,255,.38),
-    inset 0 -2px 3px rgba(74, 38, 14, .48),
-    0 4px 8px rgba(0,0,0,.34),
-    0 0 18px rgba(77,238,255, calc(var(--slat-light-alpha, .24) * .18));
-  min-height: 9px;
-  opacity: .96;
-}
-.wood-slat::before {
+.blind-window::after {
   content: "";
   position: absolute;
   inset: 0;
-  border-radius: inherit;
+  pointer-events: none;
   background:
-    repeating-linear-gradient(92deg,
-      rgba(85, 43, 19, .18) 0 6px,
-      rgba(255, 237, 191, .10) 6px 11px,
-      rgba(116, 61, 26, .12) 11px 20px);
-  mix-blend-mode: multiply;
-  opacity: .75;
+    repeating-linear-gradient(to bottom,
+      transparent 0 11px,
+      rgba(255,255,255,.14) 11px 12px,
+      rgba(0,0,0,.28) 12px 15px),
+    linear-gradient(110deg, rgba(255,255,255,.14), transparent 22%, rgba(0,0,0,.20) 68%, rgba(255,255,255,.08));
+  mix-blend-mode: screen;
+  opacity: .55;
 }
-.wood-slat::after {
-  content: "";
-  position: absolute;
-  left: 3%;
-  right: 3%;
-  top: 18%;
-  height: 18%;
-  border-radius: 999px;
-  background: rgba(255, 245, 210, .22);
-  filter: blur(.2px);
-}
-.center-lift-cord {
-  position: absolute;
-  left: 50%;
-  top: 18px;
-  bottom: 18px;
-  width: 2px;
-  transform: translateX(-50%);
-  border-radius: 999px;
-  background: linear-gradient(180deg, rgba(250,245,230,.40), rgba(211,185,140,.82), rgba(250,245,230,.34));
-  box-shadow: 0 0 10px rgba(255,235,190,.16);
-  opacity: .72;
-}
-.wooden-window::before,
-.wooden-window::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 7px;
-  background: linear-gradient(180deg, rgba(245,213,158,.42), rgba(124,70,31,.58));
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);
-  z-index: 2;
-}
-.wooden-window::before { left: 0; }
-.wooden-window::after { right: 0; }
 
-/* These were part of the old slider/shade visual and should never show on the wooden blind face. */
-.wood-blind-card .blind-handle,
-.wood-blind-card .blind-handle::after {
-  display: none !important;
+/* Full, modern audio media card */
+.screen-audio { padding-top: 8px; }
+.audio-stage {
+  height: 100%;
+  padding: clamp(20px, 2.4vw, 34px);
+  background:
+    radial-gradient(circle at 15% 18%, rgba(77,238,255,.14), transparent 28%),
+    radial-gradient(circle at 74% 72%, rgba(155,109,255,.18), transparent 34%),
+    linear-gradient(150deg, rgba(255,255,255,.09), rgba(255,255,255,.026)),
+    rgba(10,18,33,.72);
 }
-.wooden-window::before {
-  right: auto;
-  height: auto;
+.audio-shell {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(340px, .8fr);
+  gap: clamp(18px, 2.2vw, 30px);
+  align-items: stretch;
 }
-.wooden-window::after {
-  left: auto;
-  height: auto;
+.audio-main-card,
+.audio-side-card,
+.audio-device-picker-card {
+  min-height: 0;
+  border: 1px solid rgba(255,255,255,.11);
+  border-radius: 34px;
+  background: linear-gradient(145deg, rgba(255,255,255,.085), rgba(255,255,255,.028));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.12), 0 22px 60px rgba(0,0,0,.25);
+}
+.audio-main-card {
+  display: grid;
+  grid-template-columns: minmax(260px, .58fr) minmax(0, 1fr);
+  gap: clamp(22px, 3vw, 42px);
+  align-items: center;
+  padding: clamp(26px, 3.2vw, 48px);
+}
+.audio-art {
+  aspect-ratio: 1;
+  width: min(38vw, 420px);
+  max-width: 100%;
+  border-radius: 42px;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at 35% 25%, rgba(255,255,255,.22), transparent 28%),
+    linear-gradient(135deg, rgba(77,238,255,.84), rgba(69,168,255,.62) 46%, rgba(155,109,255,.78));
+  background-size: cover;
+  background-position: center;
+  overflow: hidden;
+  position: relative;
+  box-shadow: 0 30px 70px rgba(0,0,0,.38), inset 0 1px 0 rgba(255,255,255,.22);
+}
+.audio-art::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent, rgba(0,0,0,.24));
+  pointer-events: none;
+}
+.audio-art.has-image .audio-art-initials { opacity: 0; }
+.audio-art-initials {
+  font-size: clamp(5rem, 12vw, 11rem);
+  font-weight: 1000;
+  line-height: 1;
+  color: rgba(2,10,19,.72);
+  text-shadow: 0 1px 0 rgba(255,255,255,.35);
+}
+.audio-now { min-width: 0; }
+.audio-now h2 {
+  margin-top: 6px;
+  font-size: clamp(2.5rem, 5.8vw, 6.7rem);
+  letter-spacing: -.085em;
+  line-height: .92;
+  max-width: 9ch;
+  overflow-wrap: anywhere;
+}
+.audio-artist {
+  margin-top: clamp(10px, 1.2vw, 16px);
+  color: rgba(226,238,252,.84);
+  font-size: clamp(1.3rem, 2.1vw, 2.2rem);
+  font-weight: 900;
+  letter-spacing: -.035em;
+}
+.audio-album {
+  min-height: 1.5em;
+  margin-top: 6px;
+  color: rgba(181,203,226,.72);
+  font-size: clamp(.95rem, 1.15vw, 1.2rem);
+  font-weight: 800;
+}
+.audio-progress-wrap { margin-top: clamp(22px, 3vw, 42px); }
+.progress-bar.audio-progress {
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.09);
+  overflow: hidden;
+}
+.progress-bar.audio-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--cyan), var(--blue), var(--purple));
+  box-shadow: 0 0 20px rgba(77,238,255,.26);
+}
+.audio-side-card {
+  padding: clamp(22px, 2.4vw, 34px);
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0,1fr);
+  gap: clamp(16px, 1.8vw, 24px);
+}
+.audio-device-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.audio-device-head h3 {
+  margin-top: 4px;
+  font-size: clamp(1.55rem, 2.2vw, 2.35rem);
+  max-width: 13ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.audio-state-pill {
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,.075);
+  border: 1px solid rgba(255,255,255,.11);
+  color: rgba(232,244,255,.78);
+  font-weight: 950;
+  text-transform: capitalize;
+}
+.audio-state-pill.playing { background: rgba(99,241,173,.13); border-color: rgba(99,241,173,.25); color: #dcfff0; }
+.media-transport { justify-content: center; gap: 16px; }
+.media-transport .transport { width: clamp(72px, 6.4vw, 92px); height: clamp(72px, 6.4vw, 92px); border-radius: 50%; font-size: clamp(1.3rem, 2vw, 1.8rem); }
+.media-transport .transport.primary { width: clamp(92px, 8vw, 116px); height: clamp(92px, 8vw, 116px); }
+.audio-volume-card {
+  border-radius: 26px;
+  padding: 18px;
+  background: rgba(0,0,0,.16);
+  border: 1px solid rgba(255,255,255,.09);
+}
+.audio-volume-card label,
+.tone-control label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  color: rgba(213,229,245,.80);
+  font-weight: 950;
+}
+.audio-volume-card input,
+.tone-control input { width: 100%; margin-top: 14px; }
+.audio-tone-grid {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  align-content: end;
+}
+.tone-control {
+  border-radius: 20px;
+  padding: 14px 16px;
+  background: rgba(255,255,255,.048);
+  border: 1px solid rgba(255,255,255,.08);
+}
+.audio-setup-subview {
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 16px;
+}
+.audio-setup-actions { margin-bottom: 0; }
+.audio-device-picker-card {
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 12px;
+  padding: clamp(16px, 1.6vw, 24px);
+}
+.selected-device-line {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  border-radius: 16px;
+  padding: 0 14px;
+  background: rgba(0,0,0,.18);
+  color: rgba(221,236,250,.78);
+  font-weight: 850;
+}
+.media-player-list {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+  padding-right: 4px;
+}
+.media-player-row {
+  min-height: 88px;
+  border-radius: 20px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.055);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  text-align: left;
+  padding: 14px 16px;
+  font-weight: 900;
+}
+.media-player-row.active {
+  background: linear-gradient(135deg, rgba(77,238,255,.20), rgba(155,109,255,.14));
+  border-color: rgba(77,238,255,.32);
+}
+.media-player-row strong,
+.media-player-row span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.media-player-row span { color: rgba(193,213,234,.68); font-size: .82rem; margin-top: 4px; }
+.media-player-state { color: rgba(77,238,255,.88); font-size: .8rem; text-transform: capitalize; }
+.audio-ha-subview { height: 100%; min-height: 0; grid-template-rows: auto minmax(0, .7fr); }
+.audio-ha-card { max-width: 860px; align-self: start; }
+.audio-ha-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: none; }
+@media (max-width: 1200px) {
+  .audio-shell { grid-template-columns: 1fr; overflow: auto; }
+  .audio-main-card { grid-template-columns: 220px minmax(0, 1fr); }
+  .audio-art { width: 220px; }
+  .audio-side-card { grid-template-rows: auto auto auto auto; }
 }
