@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "blinds": {
     "room": "living",
     "rooms": {
@@ -83,6 +83,62 @@
         "mediaPlayers": [],
         "numbers": [],
         "switches": []
+      },
+      "lightAvailableEntities": []
+    }
+  },
+  "lights": {
+    "room": "living",
+    "rooms": {
+      "living": {
+        "label": "Living Room",
+        "lights": [
+          {
+            "id": "ll-1",
+            "name": "Main Lights",
+            "brightness": 85,
+            "on": true,
+            "haEntityId": "",
+            "haName": ""
+          },
+          {
+            "id": "ll-2",
+            "name": "Accent Lights",
+            "brightness": 45,
+            "on": true,
+            "haEntityId": "",
+            "haName": ""
+          },
+          {
+            "id": "ll-3",
+            "name": "Lamp",
+            "brightness": 65,
+            "on": true,
+            "haEntityId": "",
+            "haName": ""
+          }
+        ]
+      },
+      "kitchen": {
+        "label": "Kitchen",
+        "lights": [
+          {
+            "id": "kl-1",
+            "name": "Ceiling",
+            "brightness": 80,
+            "on": true,
+            "haEntityId": "",
+            "haName": ""
+          },
+          {
+            "id": "kl-2",
+            "name": "Island",
+            "brightness": 55,
+            "on": true,
+            "haEntityId": "",
+            "haName": ""
+          }
+        ]
       }
     }
   }

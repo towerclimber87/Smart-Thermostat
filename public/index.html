@@ -28,6 +28,7 @@
         <button class="nav-pill" data-goto="blinds">Blinds</button>
         <button class="nav-pill active" data-goto="thermostat">Thermostat</button>
         <button class="nav-pill" data-goto="audio">Audio</button>
+        <button class="nav-pill" data-goto="lights">Lights</button>
       </nav>
       <div class="status-cluster">
         <div id="clock" class="clock">--:--</div>
@@ -43,11 +44,11 @@
               <p class="eyebrow">Shade Control</p>
               <h2 id="blindRoomTitle">Living Room</h2>
             </div>
+            <div id="roomTabs" class="room-tabs top-room-tabs" role="tablist" aria-label="Blind rooms"></div>
           </div>
 
-          <div class="blind-command-row">
-            <div id="roomTabs" class="room-tabs" role="tablist" aria-label="Blind rooms"></div>
-            <div class="room-actions">
+          <div class="blind-command-row centered-actions">
+            <div class="room-actions centered-room-actions">
               <button class="scene-btn room-open" data-blind-action="open-room">Open Room</button>
               <button class="scene-btn room-close" data-blind-action="close-room">Close Room</button>
             </div>
@@ -264,6 +265,27 @@
           </div>
         </section>
       </article>
+
+      <article class="screen screen-lights" data-screen="lights" aria-label="Lights controls">
+        <section class="lights-stage panel">
+          <div class="lights-head-row">
+            <div class="panel-heading vertical">
+              <p class="eyebrow">Light Control</p>
+              <h2 id="lightRoomTitle">Living Room</h2>
+            </div>
+            <div id="lightRoomTabs" class="room-tabs top-room-tabs light-room-tabs" role="tablist" aria-label="Light rooms"></div>
+          </div>
+
+          <div class="lights-summary-row">
+            <div class="light-room-status">
+              <span class="light-glow-dot" aria-hidden="true"></span>
+              <strong id="lightRoomSummary">0 lights</strong>
+            </div>
+          </div>
+
+          <div id="lightCards" class="light-cards"></div>
+        </section>
+      </article>
     </section>
 
     <section id="settingsOverlay" class="settings-overlay" aria-hidden="true">
@@ -428,6 +450,36 @@
               </div>
               <div class="setup-actions-row compact-actions audio-ha-actions single-action">
                 <button id="saveAudioHaConfig" class="scene-btn room-open">Save</button>
+              </div>
+            </section>
+          </div>
+        </div>
+
+
+        <div id="lightsSettingsView" class="settings-view" hidden>
+          <div id="lightsSetupView" class="settings-subview lights-setup-subview">
+            <div class="setup-actions-row">
+              <button id="addLightRoomButton" class="scene-btn room-open">Add Room</button>
+              <button id="openLightHaConfig" class="scene-btn secondary">Home Assistant Config</button>
+            </div>
+            <div id="lightRoomConfigList" class="room-config-list light-room-config-list"></div>
+          </div>
+
+          <div id="lightsHaView" class="settings-subview ha-config-subview lights-ha-subview" hidden>
+            <div class="ha-focus-top">
+              <button id="backToLightsSetup" class="ghost-button">← Lights Setup</button>
+            </div>
+            <section class="ha-connect-card lights-ha-card">
+              <div class="form-grid ha-form-grid">
+                <label class="form-field">Home Assistant URL
+                  <input id="lightHaUrlInput" type="text" autocomplete="off" spellcheck="false" />
+                </label>
+                <label class="form-field">Long-Lived Access Token
+                  <textarea id="lightHaTokenInput" rows="3" spellcheck="false"></textarea>
+                </label>
+              </div>
+              <div class="setup-actions-row compact-actions audio-ha-actions single-action">
+                <button id="saveLightHaConfig" class="scene-btn room-open">Save</button>
               </div>
             </section>
           </div>

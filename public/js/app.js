@@ -7,6 +7,8 @@ const HA_SYNC_INTERVAL_MS = 3000;
 const HA_SYNC_AFTER_COMMAND_DELAYS = [900, 2400, 5200];
 const HA_AUDIO_SYNC_INTERVAL_MS = 3000;
 const HA_AUDIO_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
+const HA_LIGHT_SYNC_INTERVAL_MS = 3000;
+const HA_LIGHT_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
 const INACTIVE_PAGE_SYNC_INTERVAL_MS = 5 * 60 * 1000;
 const HA_ALARM_SYNC_INTERVAL_MS = 3000;
 const HA_ALARM_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
@@ -19,6 +21,9 @@ let haSyncLastError = "";
 let haAudioSyncInFlight = false;
 let haAudioControlSyncInFlight = false;
 let haAudioSyncLastError = "";
+let haLightSyncInFlight = false;
+let haLightSyncLastError = "";
+let lightCommandInFlight = false;
 let haAlarmSyncInFlight = false;
 let haAlarmSyncLastError = "";
 let localThermostatSyncInFlight = false;
@@ -29,6 +34,7 @@ let lastLocalThermostatPushAt = 0;
 let haAudioSyncTick = 0;
 let lastInactiveBlindSyncAt = Date.now();
 let lastInactiveAudioSyncAt = Date.now();
+let lastInactiveLightSyncAt = Date.now();
 let lastInactiveAlarmSyncAt = Date.now();
 let audioMediaActionInFlight = false;
 let audioVolumeDebounce = null;
@@ -45,6 +51,7 @@ const AUTO_CHANGEOVER_MINUTES = 120;
 const FAN_SEQUENCE = ["off", "on", "auto"];
 let lastBlindUserInteractionAt = 0;
 let lastAudioUserInteractionAt = 0;
+let lastLightUserInteractionAt = 0;
 let audioSliderActive = { name: "", until: 0 };
 let audioVolumeHoldUntil = 0;
 let audioToneHoldUntil = { gain: 0, bass: 0, treble: 0 };
@@ -78,6 +85,27 @@ const defaultBlindConfig = {
   },
 };
 
+const defaultLightConfig = {
+  room: "living",
+  rooms: {
+    living: {
+      label: "Living Room",
+      lights: [
+        { id: "ll-1", name: "Main Lights", brightness: 85, on: true, haEntityId: "", haName: "" },
+        { id: "ll-2", name: "Accent Lights", brightness: 45, on: true, haEntityId: "", haName: "" },
+        { id: "ll-3", name: "Lamp", brightness: 65, on: true, haEntityId: "", haName: "" },
+      ],
+    },
+    kitchen: {
+      label: "Kitchen",
+      lights: [
+        { id: "kl-1", name: "Ceiling", brightness: 80, on: true, haEntityId: "", haName: "" },
+        { id: "kl-2", name: "Island", brightness: 55, on: true, haEntityId: "", haName: "" },
+      ],
+    },
+  },
+};
+
 const defaultIntegrations = {
   homeAssistant: {
     url: "",
@@ -89,11 +117,12 @@ const defaultIntegrations = {
     audioAvailableEntities: { mediaPlayers: [], numbers: [], switches: [] },
     alarmEntity: null,
     alarmAvailableEntities: [],
+    lightAvailableEntities: [],
   },
 };
 
 const state = {
-  pages: ["blinds", "thermostat", "audio"],
+  pages: ["blinds", "thermostat", "audio", "lights"],
   currentPage: "thermostat",
   thermostat: {
     name: "IHA Thermostat",
@@ -161,8 +190,10 @@ const state = {
     tracks: [],
   },
   blinds: JSON.parse(JSON.stringify(defaultBlindConfig)),
+  lights: JSON.parse(JSON.stringify(defaultLightConfig)),
   integrations: JSON.parse(JSON.stringify(defaultIntegrations)),
   entityPicker: { roomKey: null, blindId: null },
+  lightEntityPicker: { roomKey: null, lightId: null },
   audioEntityPicker: { kind: null, domain: null, entities: [], search: "" },
   diagnostics: { haLogs: [] },
 };
@@ -237,17 +268,27 @@ const elements = {
   thermostatSettingsView: document.getElementById("thermostatSettingsView"),
   blindSettingsView: document.getElementById("blindSettingsView"),
   audioSettingsView: document.getElementById("audioSettingsView"),
+  lightsSettingsView: document.getElementById("lightsSettingsView"),
   blindSetupView: document.getElementById("blindSetupView"),
   blindHaView: document.getElementById("blindHaView"),
   audioHaView: document.getElementById("audioHaView"),
+  lightsSetupView: document.getElementById("lightsSetupView"),
+  lightsHaView: document.getElementById("lightsHaView"),
   roomTabs: document.getElementById("roomTabs"),
   roomConfigList: document.getElementById("roomConfigList"),
   blindCards: document.getElementById("blindCards"),
   blindRoomTitle: document.getElementById("blindRoomTitle"),
+  lightRoomTabs: document.getElementById("lightRoomTabs"),
+  lightRoomConfigList: document.getElementById("lightRoomConfigList"),
+  lightCards: document.getElementById("lightCards"),
+  lightRoomTitle: document.getElementById("lightRoomTitle"),
+  lightRoomSummary: document.getElementById("lightRoomSummary"),
   haUrlInput: document.getElementById("haUrlInput"),
   haTokenInput: document.getElementById("haTokenInput"),
   audioHaUrlInput: document.getElementById("audioHaUrlInput"),
   audioHaTokenInput: document.getElementById("audioHaTokenInput"),
+  lightHaUrlInput: document.getElementById("lightHaUrlInput"),
+  lightHaTokenInput: document.getElementById("lightHaTokenInput"),
   haCoverList: document.getElementById("haCoverList"),
   haEntityCount: document.getElementById("haEntityCount"),
   haStatusLine: document.getElementById("haStatusLine"),
@@ -370,18 +411,22 @@ function clearHaLog() {
 }
 
 function readHaFieldsFromScreen(context = "blinds") {
-  const urlInput = context === "audio" ? elements.audioHaUrlInput : elements.haUrlInput;
-  const tokenInput = context === "audio" ? elements.audioHaTokenInput : elements.haTokenInput;
-  if (urlInput) state.integrations.homeAssistant.url = urlInput.value.trim();
-  if (tokenInput) state.integrations.homeAssistant.token = tokenInput.value.trim();
+  const fieldMap = {
+    audio: { url: elements.audioHaUrlInput, token: elements.audioHaTokenInput },
+    lights: { url: elements.lightHaUrlInput, token: elements.lightHaTokenInput },
+    blinds: { url: elements.haUrlInput, token: elements.haTokenInput },
+  };
+  const fields = fieldMap[context] || fieldMap.blinds;
+  if (fields.url) state.integrations.homeAssistant.url = fields.url.value.trim();
+  if (fields.token) state.integrations.homeAssistant.token = fields.token.value.trim();
 }
 
 
-function slugify(value) {
+function slugify(value, rooms = state.blinds.rooms) {
   const base = String(value || "room").toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "room";
   let key = base;
   let index = 2;
-  while (state.blinds.rooms[key]) {
+  while (rooms[key]) {
     key = `${base}-${index}`;
     index += 1;
   }
@@ -405,6 +450,30 @@ function getActiveRoom() {
   return state.blinds.rooms[state.blinds.room];
 }
 
+function getLightRoomKeys() {
+  return Object.keys(state.lights.rooms || {});
+}
+
+function getActiveLightRoom() {
+  const keys = getLightRoomKeys();
+  if (!keys.length) {
+    state.lights = JSON.parse(JSON.stringify(defaultLightConfig));
+    return state.lights.rooms[state.lights.room];
+  }
+  if (!state.lights.rooms[state.lights.room]) state.lights.room = keys[0];
+  return state.lights.rooms[state.lights.room];
+}
+
+function serializeLightsConfig() {
+  const copy = clone(state.lights || defaultLightConfig);
+  Object.values(copy.rooms || {}).forEach((room) => {
+    (room.lights || []).forEach((light) => {
+      delete light.localHoldUntil;
+    });
+  });
+  return copy;
+}
+
 function buildSavedConfig() {
   const thermostatToSave = {
     name: state.thermostat.name || "IHA Thermostat",
@@ -425,12 +494,13 @@ function buildSavedConfig() {
     limits: state.thermostat.limits,
   };
   return {
-    version: 7,
+    version: 8,
     thermostat: thermostatToSave,
     alarm: {
       disarmCode: String(state.alarm.disarmCode || "").replace(/\D/g, "").slice(0, 8),
     },
     blinds: state.blinds,
+    lights: serializeLightsConfig(),
     integrations: state.integrations,
   };
 }
@@ -476,6 +546,21 @@ function loadSavedConfig() {
       if (savedCode) state.alarm.disarmCode = savedCode;
     }
     if (saved?.blinds?.rooms) state.blinds = saved.blinds;
+    if (saved?.lights?.rooms) {
+      state.lights = { ...clone(defaultLightConfig), ...saved.lights, rooms: saved.lights.rooms };
+      Object.values(state.lights.rooms || {}).forEach((room) => {
+        room.lights = Array.isArray(room.lights) && room.lights.length ? room.lights : [createLight(state.lights.room || "room", 1)];
+        room.lights.forEach((light, index) => {
+          light.id = light.id || `light-${Date.now().toString(36)}-${index + 1}`;
+          light.name = light.name || `Light ${index + 1}`;
+          light.brightness = clamp(Number(light.brightness ?? 80), 0, 100);
+          light.on = light.on !== false && light.brightness > 0;
+          light.haEntityId = light.haEntityId || "";
+          light.haName = light.haName || "";
+        });
+      });
+      getActiveLightRoom();
+    }
     if (saved?.integrations?.homeAssistant) {
       state.integrations.homeAssistant = {
         ...clone(defaultIntegrations.homeAssistant),
@@ -643,6 +728,7 @@ function markPageInactiveSyncBaseline(pageName) {
   const now = Date.now();
   if (pageName === "blinds") lastInactiveBlindSyncAt = now;
   if (pageName === "audio") lastInactiveAudioSyncAt = now;
+  if (pageName === "lights") lastInactiveLightSyncAt = now;
   if (pageName === "thermostat") lastInactiveAlarmSyncAt = now;
 }
 
@@ -653,11 +739,13 @@ function gotoPage(pageName) {
   if (previousPage !== pageName) markPageInactiveSyncBaseline(previousPage);
   elements.app.dataset.page = pageName;
   const index = state.pages.indexOf(pageName);
-  elements.screenTrack.style.transform = `translateX(-${index * 33.3333}%)`;
+  const pageWidth = 100 / state.pages.length;
+  elements.screenTrack.style.transform = `translateX(-${index * pageWidth}%)`;
   document.querySelectorAll(".nav-pill").forEach((button) => button.classList.toggle("active", button.dataset.goto === pageName));
   if (elements.tempMiniStatus) elements.tempMiniStatus.hidden = pageName === "thermostat";
   if (pageName === "blinds") pollHomeAssistantLinkedCovers({ force: true });
   if (pageName === "audio") pollHomeAssistantMediaPlayer({ force: true, controls: true });
+  if (pageName === "lights") pollHomeAssistantLights({ force: true });
 }
 
 function goRelative(direction) {
@@ -1463,7 +1551,7 @@ function adjustAutoSetting(kind, delta) {
 }
 
 function hideAllSettingsViews() {
-  [elements.thermostatSettingsView, elements.blindSettingsView, elements.audioSettingsView].forEach((view) => { view.hidden = true; });
+  [elements.thermostatSettingsView, elements.blindSettingsView, elements.audioSettingsView, elements.lightsSettingsView].forEach((view) => { if (view) view.hidden = true; });
   elements.settingsSheet.classList.remove("full-setup", "ha-focus", "thermostat-setup");
   elements.settingsFooter.hidden = false;
 }
@@ -1483,6 +1571,9 @@ function openSettings() {
   } else if (state.currentPage === "audio") {
     elements.audioSettingsView.hidden = false;
     showAudioSetupView();
+  } else if (state.currentPage === "lights") {
+    elements.lightsSettingsView.hidden = false;
+    showLightsSetupView();
   } else {
     elements.settingsTitle.textContent = "Comfort Setup";
     elements.settingsEyebrow.textContent = "Panel Settings";
@@ -1547,15 +1638,37 @@ function showAudioHaView() {
   renderHaFields("audio");
 }
 
-function renderHaFields(context) {
+function showLightsSetupView() {
+  if (elements.lightsSetupView) elements.lightsSetupView.hidden = false;
+  if (elements.lightsHaView) elements.lightsHaView.hidden = true;
+  elements.settingsSheet.classList.add("full-setup");
+  elements.settingsSheet.classList.remove("ha-focus");
+  elements.settingsTitle.textContent = "Lights Setup";
+  elements.settingsEyebrow.textContent = "Light Setup";
+  elements.settingsFooter.hidden = false;
+  renderLightConfigList();
+}
+
+function showLightsHaView() {
+  if (elements.lightsSetupView) elements.lightsSetupView.hidden = true;
+  if (elements.lightsHaView) elements.lightsHaView.hidden = false;
+  elements.settingsSheet.classList.add("full-setup", "ha-focus");
+  elements.settingsTitle.textContent = "Home Assistant Config";
+  elements.settingsEyebrow.textContent = "Lights";
+  elements.settingsFooter.hidden = true;
+  renderHaFields("lights");
+}
+
+function renderHaFields(context = "blinds") {
   const ha = state.integrations.homeAssistant;
-  if (context === "audio") {
-    elements.audioHaUrlInput.value = ha.url || "";
-    elements.audioHaTokenInput.value = ha.token || "";
-  } else {
-    elements.haUrlInput.value = ha.url || "";
-    elements.haTokenInput.value = ha.token || "";
-  }
+  const fieldMap = {
+    audio: { url: elements.audioHaUrlInput, token: elements.audioHaTokenInput },
+    lights: { url: elements.lightHaUrlInput, token: elements.lightHaTokenInput },
+    blinds: { url: elements.haUrlInput, token: elements.haTokenInput },
+  };
+  const fields = fieldMap[context] || fieldMap.blinds;
+  if (fields.url) fields.url.value = ha.url || "";
+  if (fields.token) fields.token.value = ha.token || "";
 }
 
 function saveHaFields(context, options = {}) {
@@ -2287,6 +2400,7 @@ function applyBlindVisualVars(card, position) {
   card.style.setProperty("--blind-slat-angle", `${angle}deg`);
   card.style.setProperty("--blind-light", (0.16 + openRatio * 0.48).toFixed(3));
   card.style.setProperty("--blind-shadow", (0.72 - openRatio * 0.42).toFixed(3));
+  card.style.setProperty("--blind-slat-height", `${(2.2 + (1 - openRatio) * 11).toFixed(1)}px`);
 }
 
 function renderBlinds() {
@@ -2304,7 +2418,8 @@ function renderBlinds() {
     card.dataset.blindCard = blind.id;
     card.dataset.roomKey = state.blinds.room;
     applyBlindVisualVars(card, blind.position);
-    const slats = Array.from({ length: 18 }, (_, index) => `<span class="blind-slat" style="--slat-index:${index}"></span>`).join("");
+    const slatCount = 26;
+    const slats = Array.from({ length: slatCount }, (_, index) => `<span class="blind-slat" style="--slat-index:${index}; --slat-top:${4 + (index * (92 / (slatCount - 1)))}%"></span>`).join("");
     card.innerHTML = `
       <div class="blind-top">
         <div>
@@ -2457,6 +2572,374 @@ function renderRoomConfigList() {
     `;
     elements.roomConfigList.appendChild(card);
   });
+}
+
+function createLight(roomKey, index) {
+  return {
+    id: `${roomKey}-light-${Date.now().toString(36)}-${index}`,
+    name: `Light ${index}`,
+    brightness: 80,
+    on: true,
+    haEntityId: "",
+    haName: "",
+  };
+}
+
+function setRoomLightCount(roomKey, count) {
+  const room = state.lights.rooms[roomKey];
+  if (!room) return;
+  const target = clamp(Number(count), 1, 12);
+  while (room.lights.length < target) room.lights.push(createLight(roomKey, room.lights.length + 1));
+  while (room.lights.length > target) room.lights.pop();
+  room.lights.forEach((light, index) => {
+    if (!light.name) light.name = `Light ${index + 1}`;
+    light.brightness = clamp(Number(light.brightness ?? 80), 0, 100);
+    light.on = light.on !== false && light.brightness > 0;
+  });
+  saveConfig();
+  renderLightConfigList();
+  renderLights();
+}
+
+function addLightRoom() {
+  const roomNumber = getLightRoomKeys().length + 1;
+  const label = `New Room ${roomNumber}`;
+  const key = slugify(label, state.lights.rooms);
+  state.lights.rooms[key] = {
+    label,
+    lights: [createLight(key, 1)],
+  };
+  state.lights.room = key;
+  saveConfig({ toast: true });
+  renderLightConfigList();
+  renderLights();
+}
+
+function deleteLightRoom(roomKey) {
+  const keys = getLightRoomKeys();
+  if (keys.length <= 1) {
+    showToast("At least one room is required");
+    return;
+  }
+  delete state.lights.rooms[roomKey];
+  if (state.lights.room === roomKey) state.lights.room = getLightRoomKeys()[0];
+  saveConfig({ toast: true });
+  renderLightConfigList();
+  renderLights();
+}
+
+function renameLightRoom(roomKey, label) {
+  const room = state.lights.rooms[roomKey];
+  if (!room) return;
+  room.label = label.trim() || "Room";
+  saveConfig();
+  renderLights();
+}
+
+function renameLight(roomKey, lightId, label) {
+  const room = state.lights.rooms[roomKey];
+  const light = room?.lights.find((item) => item.id === lightId);
+  if (!light) return;
+  light.name = label.trim() || "Light";
+  saveConfig();
+  renderLights();
+}
+
+function renderLightConfigList() {
+  if (!elements.lightRoomConfigList) return;
+  elements.lightRoomConfigList.innerHTML = "";
+  getLightRoomKeys().forEach((key) => {
+    const room = state.lights.rooms[key];
+    const card = document.createElement("div");
+    card.className = "room-config-card light-config-card";
+    card.dataset.lightRoomConfig = key;
+    const countOptions = Array.from({ length: 12 }, (_, idx) => idx + 1)
+      .map((count) => `<option value="${count}" ${room.lights.length === count ? "selected" : ""}>${count}</option>`)
+      .join("");
+    const lightInputs = room.lights.map((light, index) => `
+      <label class="mini-field">Light ${index + 1}
+        <input type="text" value="${escapeHtml(light.name)}" data-light-name-input data-room-key="${escapeHtml(key)}" data-light-id="${escapeHtml(light.id)}" />
+      </label>
+    `).join("");
+    card.innerHTML = `
+      <div class="room-config-main">
+        <label class="form-field compact-field">Room Name
+          <input type="text" value="${escapeHtml(room.label)}" data-light-room-name-input data-room-key="${escapeHtml(key)}" />
+        </label>
+        <label class="form-field compact-field">Lights
+          <select data-light-room-count-select data-room-key="${escapeHtml(key)}">${countOptions}</select>
+        </label>
+        <button class="danger-button" data-delete-light-room="${escapeHtml(key)}">Delete</button>
+      </div>
+      <div class="blind-name-grid light-name-grid">${lightInputs}</div>
+    `;
+    elements.lightRoomConfigList.appendChild(card);
+  });
+}
+
+function renderLightRoomTabs() {
+  if (!elements.lightRoomTabs) return;
+  elements.lightRoomTabs.innerHTML = "";
+  getLightRoomKeys().forEach((key) => {
+    const room = state.lights.rooms[key];
+    const tab = document.createElement("button");
+    tab.className = "room-tab";
+    tab.dataset.lightRoom = key;
+    tab.textContent = room.label;
+    tab.classList.toggle("active", key === state.lights.room);
+    elements.lightRoomTabs.appendChild(tab);
+  });
+}
+
+function findLightInActiveRoom(lightId) {
+  const room = getActiveLightRoom();
+  return room.lights.find((item) => item.id === lightId) || null;
+}
+
+function updateLightCard(light) {
+  const card = document.querySelector(`[data-light-card="${light.id}"]`);
+  if (!card) return;
+  const brightness = clamp(Number(light.brightness || 0), 0, 100);
+  const on = light.on !== false && brightness > 0;
+  card.classList.toggle("off", !on);
+  card.classList.toggle("linked", Boolean(light.haEntityId));
+  card.style.setProperty("--light-level", `${brightness}%`);
+  card.style.setProperty("--light-glow", (on ? 0.18 + brightness / 125 : 0.08).toFixed(3));
+  const slider = card.querySelector("[data-light-slider]");
+  if (slider && document.activeElement !== slider) slider.value = String(brightness);
+  setRangeVisual(slider);
+  const value = card.querySelector("[data-light-value]");
+  if (value) value.textContent = `${Math.round(brightness)}%`;
+  const toggle = card.querySelector("[data-light-toggle]");
+  if (toggle) {
+    toggle.textContent = on ? "On" : "Off";
+    toggle.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+  const entity = card.querySelector("[data-light-entity]");
+  if (entity) entity.textContent = light.haEntityId ? (light.haName || light.haEntityId) : "Hold to assign";
+}
+
+function renderLights() {
+  const room = getActiveLightRoom();
+  if (elements.lightRoomTitle) elements.lightRoomTitle.textContent = room.label;
+  renderLightRoomTabs();
+  if (!elements.lightCards) return;
+  elements.lightCards.innerHTML = "";
+  const lights = room.lights || [];
+  const activeCount = lights.filter((light) => light.on !== false && Number(light.brightness || 0) > 0).length;
+  if (elements.lightRoomSummary) {
+    const label = `${activeCount} of ${lights.length} light${lights.length === 1 ? "" : "s"} on`;
+    elements.lightRoomSummary.textContent = label;
+  }
+  elements.lightCards.style.setProperty("--light-columns", clamp(lights.length, 1, 4));
+  lights.forEach((light) => {
+    light.brightness = clamp(Number(light.brightness ?? 80), 0, 100);
+    light.on = light.on !== false && light.brightness > 0;
+    const card = document.createElement("div");
+    card.className = "light-card";
+    card.dataset.lightCard = light.id;
+    card.dataset.roomKey = state.lights.room;
+    const linkedText = light.haEntityId ? (light.haName || light.haEntityId) : "Hold to assign";
+    card.innerHTML = `
+      <div class="light-card-top">
+        <div class="light-title-block">
+          <strong title="${escapeHtml(light.name)}">${escapeHtml(light.name)}</strong>
+          <span data-light-entity>${escapeHtml(linkedText)}</span>
+        </div>
+        <button class="light-toggle" data-light-toggle data-light-id="${escapeHtml(light.id)}" type="button">On</button>
+      </div>
+      <div class="light-vertical-body">
+        <div class="light-icon-wrap" aria-hidden="true">
+          <span class="light-bulb-icon"></span>
+        </div>
+        <label class="light-slider-rail" for="lightSlider-${escapeHtml(light.id)}">
+          <span class="sr-only">${escapeHtml(light.name)} brightness</span>
+          <input id="lightSlider-${escapeHtml(light.id)}" class="light-slider light-slider-vertical" data-light-slider data-light-id="${escapeHtml(light.id)}" type="range" min="0" max="100" step="1" value="${Math.round(light.brightness)}" aria-label="${escapeHtml(light.name)} brightness" />
+        </label>
+        <div class="light-value-stack">
+          <strong data-light-value>${Math.round(light.brightness)}%</strong>
+          <span>Brightness</span>
+        </div>
+      </div>
+    `;
+    elements.lightCards.appendChild(card);
+    updateLightCard(light);
+  });
+}
+
+function setLightBrightness(lightId, brightness, options = {}) {
+  lastLightUserInteractionAt = Date.now();
+  const light = findLightInActiveRoom(lightId);
+  if (!light) return;
+  light.brightness = clamp(Number(brightness), 0, 100);
+  light.on = light.brightness > 0;
+  light.localHoldUntil = Date.now() + 1800;
+  updateLightCard(light);
+  saveConfig();
+  if (options.send) sendLightToHomeAssistant(light, light.on ? "on" : "off", light.brightness);
+}
+
+function toggleLight(lightId) {
+  const light = findLightInActiveRoom(lightId);
+  if (!light) return;
+  const nextOn = !(light.on !== false && Number(light.brightness || 0) > 0);
+  light.on = nextOn;
+  if (nextOn && Number(light.brightness || 0) <= 0) light.brightness = clamp(Number(light.lastBrightness || 80), 1, 100);
+  if (!nextOn) {
+    light.lastBrightness = clamp(Number(light.brightness || light.lastBrightness || 80), 1, 100);
+    light.brightness = 0;
+  }
+  light.localHoldUntil = Date.now() + 1800;
+  updateLightCard(light);
+  saveConfig();
+  sendLightToHomeAssistant(light, nextOn ? "on" : "off", light.brightness);
+}
+
+function normalizeLightEntity(entity, fallback = {}) {
+  const brightness = entity?.brightnessPct ?? entity?.brightness ?? fallback.brightness ?? 0;
+  const pct = clamp(Math.round(Number(brightness)), 0, 100);
+  const on = String(entity?.state || "").toLowerCase() === "on" && pct > 0;
+  return {
+    entityId: entity?.entityId || fallback.haEntityId || "",
+    name: entity?.name || fallback.haName || entity?.entityId || "",
+    state: entity?.state || (on ? "on" : "off"),
+    brightness: pct,
+    on,
+  };
+}
+
+function applyEntityStateToLight(light, entity) {
+  if (!light || !entity) return false;
+  if (Date.now() < Number(light.localHoldUntil || 0)) return false;
+  const normalized = normalizeLightEntity(entity, light);
+  let changed = false;
+  if (normalized.name && light.haName !== normalized.name) { light.haName = normalized.name; changed = true; }
+  if (normalized.name && light.name === light.haEntityId) { light.name = normalized.name; changed = true; }
+  if (light.brightness !== normalized.brightness) { light.brightness = normalized.brightness; changed = true; }
+  if (light.on !== normalized.on) { light.on = normalized.on; changed = true; }
+  return changed;
+}
+
+function syncLinkedLightsFromEntities(entities = [], options = {}) {
+  if (!entities.length) return false;
+  let changed = false;
+  Object.values(state.lights.rooms || {}).forEach((room) => {
+    (room.lights || []).forEach((light) => {
+      if (!light.haEntityId) return;
+      const entity = entities.find((item) => item.entityId === light.haEntityId);
+      if (!entity) return;
+      changed = applyEntityStateToLight(light, entity) || changed;
+    });
+  });
+  if (changed && !options.skipSave) saveConfig();
+  return changed;
+}
+
+function getLinkedLightEntityIds() {
+  const ids = [];
+  Object.values(state.lights.rooms || {}).forEach((room) => {
+    (room.lights || []).forEach((light) => {
+      if (light.haEntityId && !ids.includes(light.haEntityId)) ids.push(light.haEntityId);
+    });
+  });
+  return ids;
+}
+
+async function fetchLinkedLightStatesViaLocalBackend(entityIds) {
+  const ha = state.integrations.homeAssistant;
+  const baseUrl = getHaBaseUrl();
+  if (!baseUrl || !ha.token || !entityIds.length) return [];
+  const payload = await fetchJsonWithTimeout("/api/ha/light/states", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: baseUrl, token: ha.token, entityIds }),
+  });
+  return payload.lights || [];
+}
+
+function scheduleLightSync() {
+  HA_LIGHT_SYNC_AFTER_COMMAND_DELAYS.forEach((delay) => {
+    window.setTimeout(() => pollHomeAssistantLights({ force: true }), delay);
+  });
+}
+
+async function pollHomeAssistantLights(options = {}) {
+  const linkedEntityIds = getLinkedLightEntityIds();
+  if (!linkedEntityIds.length) return;
+  if (!options.force && document.visibilityState === "hidden") return;
+  const now = Date.now();
+  if (!options.force && state.currentPage !== "lights") {
+    if (now - lastInactiveLightSyncAt < INACTIVE_PAGE_SYNC_INTERVAL_MS) return;
+    lastInactiveLightSyncAt = now;
+  }
+  if (!options.force && state.currentPage === "lights" && now - lastLightUserInteractionAt < 1200) return;
+  if (haLightSyncInFlight || lightCommandInFlight) return;
+
+  haLightSyncInFlight = true;
+  try {
+    const lights = await fetchLinkedLightStatesViaLocalBackend(linkedEntityIds);
+    const changed = syncLinkedLightsFromEntities(lights);
+    if (changed) renderLights();
+    if (haLightSyncLastError) haLightSyncLastError = "";
+  } catch (error) {
+    const message = error.message || String(error);
+    if (message !== haLightSyncLastError) {
+      haLightSyncLastError = message;
+      addHaLog("warn", "Live light sync paused", message);
+    }
+  } finally {
+    haLightSyncInFlight = false;
+  }
+}
+
+async function sendLightToHomeAssistant(light, action = "on", brightness = light?.brightness) {
+  if (!light?.haEntityId) return null;
+  const ha = state.integrations.homeAssistant;
+  const baseUrl = getHaBaseUrl();
+  if (!baseUrl || !ha.token) return null;
+  lightCommandInFlight = true;
+  try {
+    const payload = await fetchJsonWithTimeout("/api/ha/light/action", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: baseUrl, token: ha.token, entityId: light.haEntityId, action, brightness }),
+    });
+    if (payload.light) {
+      applyEntityStateToLight(light, payload.light);
+      saveConfig();
+      renderLights();
+    }
+    scheduleLightSync();
+    return payload.light || null;
+  } catch (error) {
+    addHaLog("error", "Light command failed", error.message || String(error));
+    showToast("Light command failed");
+    return null;
+  } finally {
+    lightCommandInFlight = false;
+  }
+}
+
+function openLightEntityPicker(roomKey, lightId) {
+  state.lightEntityPicker = { roomKey, lightId };
+  openAudioEntityPicker("light");
+}
+
+function assignEntityToLight(entity) {
+  const { roomKey, lightId } = state.lightEntityPicker;
+  const room = state.lights.rooms[roomKey];
+  const light = room?.lights.find((item) => item.id === lightId);
+  if (!light || !entity) return;
+  light.haEntityId = entity.entityId || "";
+  light.haName = entity.name || entity.entityId || "";
+  if (entity.name) light.name = entity.name;
+  applyEntityStateToLight(light, entity);
+  state.lightEntityPicker = { roomKey: null, lightId: null };
+  closeAudioEntityPicker();
+  saveConfig({ toast: true });
+  renderLightConfigList();
+  renderLights();
+  pollHomeAssistantLights({ force: true });
 }
 
 function getHaBaseUrl() {
@@ -2913,11 +3396,54 @@ function bindBlindInteractions() {
   elements.blindCards.addEventListener("pointercancel", finishShadeDrag);
 }
 
+function bindLightInteractions() {
+  if (!elements.lightCards) return;
+  let timer = null;
+  let press = null;
+
+  const cancel = () => {
+    clearTimeout(timer);
+    timer = null;
+    press = null;
+  };
+
+  elements.lightCards.addEventListener("pointerdown", (event) => {
+    if (event.button !== undefined && event.button !== 0) return;
+    if (event.target.closest("[data-light-toggle]")) return;
+    const card = event.target.closest("[data-light-card]");
+    if (!card) return;
+    press = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      roomKey: card.dataset.roomKey,
+      lightId: card.dataset.lightCard,
+    };
+    timer = window.setTimeout(() => {
+      const pending = press;
+      cancel();
+      if (pending) openLightEntityPicker(pending.roomKey, pending.lightId);
+    }, 900);
+  });
+
+  elements.lightCards.addEventListener("pointermove", (event) => {
+    if (!press || press.pointerId !== event.pointerId) return;
+    const dx = Math.abs(event.clientX - press.x);
+    const dy = Math.abs(event.clientY - press.y);
+    if (dx > 12 || dy > 12) cancel();
+  });
+
+  ["pointerup", "pointercancel", "pointerleave"].forEach((name) => {
+    elements.lightCards.addEventListener(name, cancel);
+  });
+}
+
 function getAudioPickerMeta(kind) {
   if (kind === "media") return { domain: "media_player", title: "Choose Media Device", help: "Select the media_player this card should control." };
   if (["gain", "bass", "treble"].includes(kind)) return { domain: "number", title: `Assign ${titleCase(kind)}`, help: "Select the Home Assistant number entry for this control." };
   if (["subwoofer", "surround", "projector"].includes(kind)) return { domain: "switch", title: `Assign ${titleCase(kind)}`, help: "Select the Home Assistant switch entry for this button." };
   if (kind === "alarm") return { domain: "alarm_control_panel", title: "Assign Alarm", help: "Select the Home Assistant alarm_control_panel entry for this thermostat page." };
+  if (kind === "light") return { domain: "light", title: "Assign Light", help: "Select the Home Assistant light entry for this slider." };
   return { domain: "", title: "Assign Entity", help: "Select the Home Assistant entity for this control." };
 }
 
@@ -2956,10 +3482,12 @@ async function openAudioEntityPicker(kind) {
   if (kind === "alarm") alarmPickerOpenedAt = Date.now();
   const meta = getAudioPickerMeta(kind);
   if (!meta.domain) return;
-  if (kind !== "alarm") readHaFieldsFromScreen("audio");
+  if (kind === "light") readHaFieldsFromScreen("lights");
+  else if (kind !== "alarm") readHaFieldsFromScreen("audio");
   if (!getHaBaseUrl() || !state.integrations.homeAssistant.token) {
-    showToast(kind === "alarm" ? "Add Home Assistant config from Blinds or Audio settings first" : "Add Home Assistant config first");
-    if (kind !== "alarm") { openSettings(); showAudioHaView(); }
+    showToast(kind === "alarm" ? "Add Home Assistant config from Blinds, Audio, or Lights settings first" : "Add Home Assistant config first");
+    if (kind === "light") { openSettings(); showLightsHaView(); }
+    else if (kind !== "alarm") { openSettings(); showAudioHaView(); }
     return;
   }
   state.audioEntityPicker = { kind, domain: meta.domain, entities: [], search: "" };
@@ -2979,6 +3507,7 @@ async function openAudioEntityPicker(kind) {
     if (meta.domain === "number") ha.audioAvailableEntities.numbers = entities;
     if (meta.domain === "switch") ha.audioAvailableEntities.switches = entities;
     if (meta.domain === "alarm_control_panel") ha.alarmAvailableEntities = entities;
+    if (meta.domain === "light") ha.lightAvailableEntities = entities;
     renderAudioEntityPicker();
   } catch (error) {
     addHaLog("error", "Audio entity load failed", error.message || String(error));
@@ -3032,6 +3561,10 @@ function selectAudioEntity(entityId) {
     saveConfig({ toast: true });
     renderAlarmWidget();
     pollHomeAssistantAlarm({ force: true });
+    return;
+  }
+  if (kind === "light") {
+    assignEntityToLight(entity);
   }
 }
 
@@ -3104,6 +3637,10 @@ function bindEvents() {
   document.getElementById("openAudioHaConfig").addEventListener("click", showAudioHaView);
   elements.backToAudioSetup?.addEventListener("click", showAudioSetupView);
   document.getElementById("saveAudioHaConfig").addEventListener("click", () => { saveHaFields("audio"); showAudioSetupView(); });
+  document.getElementById("addLightRoomButton")?.addEventListener("click", addLightRoom);
+  document.getElementById("openLightHaConfig")?.addEventListener("click", showLightsHaView);
+  document.getElementById("backToLightsSetup")?.addEventListener("click", showLightsSetupView);
+  document.getElementById("saveLightHaConfig")?.addEventListener("click", () => { saveHaFields("lights"); showLightsSetupView(); });
   elements.loadMediaPlayers?.addEventListener("click", () => loadMediaPlayersFromHomeAssistant());
   elements.loadAudioMediaPlayers?.addEventListener("click", () => loadMediaPlayersFromHomeAssistant());
   elements.mediaPlayerList?.addEventListener("click", (event) => {
@@ -3131,6 +3668,21 @@ function bindEvents() {
   elements.roomConfigList.addEventListener("click", (event) => {
     const deleteButton = event.target.closest("[data-delete-room]");
     if (deleteButton) deleteRoom(deleteButton.dataset.deleteRoom);
+  });
+
+  elements.lightRoomConfigList?.addEventListener("input", (event) => {
+    const roomNameInput = event.target.closest("[data-light-room-name-input]");
+    const lightNameInput = event.target.closest("[data-light-name-input]");
+    if (roomNameInput) renameLightRoom(roomNameInput.dataset.roomKey, roomNameInput.value);
+    if (lightNameInput) renameLight(lightNameInput.dataset.roomKey, lightNameInput.dataset.lightId, lightNameInput.value);
+  });
+  elements.lightRoomConfigList?.addEventListener("change", (event) => {
+    const countSelect = event.target.closest("[data-light-room-count-select]");
+    if (countSelect) setRoomLightCount(countSelect.dataset.roomKey, countSelect.value);
+  });
+  elements.lightRoomConfigList?.addEventListener("click", (event) => {
+    const deleteButton = event.target.closest("[data-delete-light-room]");
+    if (deleteButton) deleteLightRoom(deleteButton.dataset.deleteLightRoom);
   });
 
   document.querySelectorAll("[data-away-adjust]").forEach((button) => button.addEventListener("click", () => {
@@ -3219,11 +3771,34 @@ function bindEvents() {
     saveConfig();
     renderBlinds();
   });
+  elements.lightRoomTabs?.addEventListener("click", (event) => {
+    const tab = event.target.closest("[data-light-room]");
+    if (!tab) return;
+    state.lights.room = tab.dataset.lightRoom;
+    saveConfig();
+    renderLights();
+    pollHomeAssistantLights({ force: true });
+  });
   document.querySelectorAll("[data-blind-action]").forEach((button) => button.addEventListener("click", () => applyBlindAction(button.dataset.blindAction)));
   elements.blindCards.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-blind-id]");
     if (!button) return;
     applyBlindAction(button.dataset.action, button.dataset.blindId);
+  });
+  elements.lightCards?.addEventListener("click", (event) => {
+    const toggle = event.target.closest("[data-light-toggle]");
+    if (!toggle) return;
+    toggleLight(toggle.dataset.lightId);
+  });
+  elements.lightCards?.addEventListener("input", (event) => {
+    const slider = event.target.closest("[data-light-slider]");
+    if (!slider) return;
+    setLightBrightness(slider.dataset.lightId, slider.value);
+  });
+  elements.lightCards?.addEventListener("change", (event) => {
+    const slider = event.target.closest("[data-light-slider]");
+    if (!slider) return;
+    setLightBrightness(slider.dataset.lightId, slider.value, { send: true });
   });
 
   elements.entityPickerClose.addEventListener("click", closeEntityPicker);
@@ -3239,6 +3814,7 @@ function bindEvents() {
   bindSwipeNavigation();
   bindThermostatDial();
   bindBlindInteractions();
+  bindLightInteractions();
   window.addEventListener("keydown", (event) => {
     const alarmKeypadOpen = elements.alarmKeypadOverlay?.classList.contains("open");
     if (alarmKeypadOpen) {
@@ -3280,6 +3856,7 @@ function init() {
   renderAlarmWidget();
   renderAudio();
   renderBlinds();
+  renderLights();
   gotoPage("thermostat");
   setInterval(updateClock, 1000);
   setInterval(() => {
@@ -3291,6 +3868,7 @@ function init() {
   setInterval(mockTrackProgress, 1200);
   setInterval(() => pollHomeAssistantLinkedCovers(), HA_SYNC_INTERVAL_MS);
   setInterval(() => pollHomeAssistantMediaPlayer(), HA_AUDIO_SYNC_INTERVAL_MS);
+  setInterval(() => pollHomeAssistantLights(), HA_LIGHT_SYNC_INTERVAL_MS);
   setInterval(() => pollHomeAssistantAlarm(), HA_ALARM_SYNC_INTERVAL_MS);
   pollHomeAssistantAlarm({ force: true });
 }

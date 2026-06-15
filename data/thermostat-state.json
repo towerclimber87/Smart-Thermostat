@@ -1,6 +1,6 @@
 {
   "thermostat": {
-    "autoActiveMode": "cool",
+    "autoActiveMode": "heat",
     "autoChangeoverLockoutMinutes": 120.0,
     "autoCoolOutdoorTarget": 70.0,
     "autoHeatOutdoorTarget": 65.0,
@@ -32,11 +32,11 @@
         "min": 60
       }
     },
-    "mode": "heat",
+    "mode": "cool",
     "name": "Livingroom Test",
     "outdoorTemp": 40.0,
     "targetTemp": 72.0
   },
-  "updatedAt": 1781498406,
+  "updatedAt": 1781538236,
   "version": 1
 }

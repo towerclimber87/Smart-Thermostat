@@ -577,6 +577,8 @@ def _normalize_generic_entity(item: dict) -> dict:
         payload["domain"] = domain
     if domain == "alarm_control_panel":
         payload.update(_normalize_alarm_control_item(item))
+    if domain == "light":
+        payload.update(_normalize_light_item(item))
     if domain == "media_player":
         attrs = item.get("attributes") or {}
         payload.update({
@@ -707,6 +709,88 @@ def _call_switch_service(ha_url: str, token: str, entity_id: str, action: str) -
 
 
 
+
+
+def _normalize_light_item(item: dict) -> dict:
+    attrs = item.get("attributes") or {}
+    entity_id = str(item.get("entity_id", ""))
+    raw_brightness = attrs.get("brightness")
+    try:
+        brightness_pct = int(round((float(raw_brightness) / 255.0) * 100)) if raw_brightness is not None else 0
+    except (TypeError, ValueError):
+        brightness_pct = 0
+    brightness_pct = max(0, min(100, brightness_pct))
+    state = item.get("state") or "unknown"
+    if str(state).lower() != "on":
+        brightness_pct = 0
+    return {
+        "entityId": entity_id,
+        "domain": "light",
+        "name": attrs.get("friendly_name") or entity_id,
+        "state": state,
+        "brightnessPct": brightness_pct,
+        "supportedColorModes": attrs.get("supported_color_modes") or [],
+        "colorMode": attrs.get("color_mode") or "",
+    }
+
+
+def _fetch_ha_light_state(ha_url: str, token: str, entity_id: str) -> dict:
+    entity_id = (entity_id or "").strip()
+    if not entity_id.startswith("light."):
+        raise ValueError("Entity must be a light.* entity")
+    item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
+    return _normalize_light_item(item)
+
+
+def _fetch_ha_light_states_for_entities(ha_url: str, token: str, entity_ids: list[str]) -> list[dict]:
+    wanted = []
+    seen = set()
+    for raw in entity_ids or []:
+        entity_id = str(raw or "").strip()
+        if not entity_id.startswith("light.") or entity_id in seen:
+            continue
+        seen.add(entity_id)
+        wanted.append(entity_id)
+    return [_fetch_ha_light_state(ha_url, token, entity_id) for entity_id in wanted]
+
+
+def _call_light_service(ha_url: str, token: str, entity_id: str, action: str, brightness: int | float | None = None) -> dict:
+    entity_id = (entity_id or "").strip()
+    if not entity_id.startswith("light."):
+        raise ValueError("Entity must be a light.* entity")
+    action = (action or "on").strip().lower()
+    if action not in {"on", "off", "toggle", "brightness"}:
+        raise ValueError("Unsupported light action")
+
+    if action == "off":
+        _ha_json_request(ha_url, token, "POST", "/api/services/light/turn_off", {"entity_id": entity_id})
+    elif action == "toggle":
+        _ha_json_request(ha_url, token, "POST", "/api/services/light/toggle", {"entity_id": entity_id})
+    else:
+        payload = {"entity_id": entity_id}
+        if brightness is not None:
+            try:
+                payload["brightness_pct"] = max(0, min(100, int(round(float(brightness)))))
+            except (TypeError, ValueError):
+                pass
+        _ha_json_request(ha_url, token, "POST", "/api/services/light/turn_on", payload)
+
+    try:
+        return _fetch_ha_light_state(ha_url, token, entity_id)
+    except Exception:
+        fallback_brightness = 0
+        if action != "off":
+            try:
+                fallback_brightness = max(0, min(100, int(round(float(brightness if brightness is not None else 100)))))
+            except (TypeError, ValueError):
+                fallback_brightness = 100
+        return {
+            "entityId": entity_id,
+            "domain": "light",
+            "name": entity_id,
+            "state": "off" if action == "off" else "on",
+            "brightnessPct": fallback_brightness,
+        }
 
 def _normalize_number_control(item: dict, kind: str | None = None) -> dict:
     attrs = item.get("attributes") or {}
@@ -954,7 +1038,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/thermostat/status", "/api/thermostat/control", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action"}:
+        if path not in {"/api/thermostat/status", "/api/thermostat/control", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/light/states", "/api/ha/light/action"}:
             self.send_error(404, "Not found")
             return
 
@@ -994,6 +1078,24 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                     payload.get("code", ""),
                 )
                 return _json(self, 200, {"ok": True, "alarm": alarm})
+
+            if path == "/api/ha/light/states":
+                lights = _fetch_ha_light_states_for_entities(
+                    payload.get("url", ""),
+                    payload.get("token", ""),
+                    payload.get("entityIds", []),
+                )
+                return _json(self, 200, {"ok": True, "lights": lights, "count": len(lights)})
+
+            if path == "/api/ha/light/action":
+                light = _call_light_service(
+                    payload.get("url", ""),
+                    payload.get("token", ""),
+                    payload.get("entityId", ""),
+                    payload.get("action", "on"),
+                    payload.get("brightness"),
+                )
+                return _json(self, 200, {"ok": True, "light": light})
 
             if path == "/api/ha/cover/states":
                 covers = _fetch_ha_cover_states_for_entities(
