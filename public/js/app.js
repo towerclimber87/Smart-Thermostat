@@ -35,6 +35,33 @@ const LIGHT_COLOR_PRESETS = [
 const ALARM_AUTO_SUBMIT_LENGTH = 4;
 const SETTINGS_ACCESS_CODE = "3762";
 const ALARM_ARM_AWAY_DELAY_SECONDS = 60;
+const ROOM_CONTROL_PICKER_DOMAINS = [
+  "switch",
+  "input_boolean",
+  "light",
+  "fan",
+  "cover",
+  "lock",
+  "button",
+  "input_button",
+  "binary_sensor",
+  "sensor",
+  "number",
+  "input_number",
+  "select",
+  "input_select",
+  "scene",
+  "script",
+  "automation",
+  "media_player",
+  "climate",
+  "humidifier",
+  "vacuum",
+  "person",
+  "device_tracker",
+];
+const ROOM_CONTROL_READ_ONLY_DOMAINS = new Set(["binary_sensor", "sensor", "number", "input_number", "select", "input_select", "person", "device_tracker", "climate"]);
+const ROOM_CONTROL_MOMENTARY_DOMAINS = new Set(["button", "input_button", "scene", "script"]);
 let haSyncInFlight = false;
 let haSyncLastError = "";
 let haAudioSyncInFlight = false;
@@ -150,8 +177,8 @@ const defaultRoomControlConfig = {
     living: {
       label: "Living Room",
       controls: [
-        { id: "lr-control-1", name: "Entry 1", on: false, haEntityId: "", haName: "", domain: "switch" },
-        { id: "lr-control-2", name: "Entry 2", on: false, haEntityId: "", haName: "", domain: "input_boolean" },
+        { id: "lr-control-1", name: "Entry 1", on: false, haEntityId: "", haName: "", domain: "switch", deviceClass: "", state: "off", currentPosition: null, supportedFeatures: 0, unitOfMeasurement: "", icon: "" },
+        { id: "lr-control-2", name: "Entry 2", on: false, haEntityId: "", haName: "", domain: "input_boolean", deviceClass: "", state: "off", currentPosition: null, supportedFeatures: 0, unitOfMeasurement: "", icon: "" },
       ],
     },
   },
@@ -782,16 +809,9 @@ function applySavedConfig(saved = {}) {
   }
   if (saved?.roomControl?.rooms) {
     state.roomControl = { ...clone(defaultRoomControlConfig), ...saved.roomControl, rooms: saved.roomControl.rooms };
-    Object.values(state.roomControl.rooms || {}).forEach((room) => {
-      room.controls = Array.isArray(room.controls) && room.controls.length ? room.controls : [createRoomControl(state.roomControl.room || "room", 1)];
-      room.controls.forEach((control, index) => {
-        control.id = control.id || `room-control-${Date.now().toString(36)}-${index + 1}`;
-        control.name = control.name || `Entry ${index + 1}`;
-        control.on = Boolean(control.on);
-        control.haEntityId = control.haEntityId || "";
-        control.haName = control.haName || "";
-        control.domain = control.domain === "input_boolean" ? "input_boolean" : "switch";
-      });
+    Object.entries(state.roomControl.rooms || {}).forEach(([roomKey, room]) => {
+      room.controls = Array.isArray(room.controls) && room.controls.length ? room.controls : [createRoomControl(roomKey || state.roomControl.room || "room", 1)];
+      room.controls.forEach((control, index) => normalizeRoomControlRecord(control, roomKey || state.roomControl.room || "room", index + 1));
     });
     getActiveRoomControlRoom();
   }
@@ -3868,6 +3888,32 @@ function assignEntityToLight(entity) {
 }
 
 
+function normalizeRoomControlDomain(value, fallback = "switch") {
+  const domain = String(value || "").trim().toLowerCase();
+  return domain || fallback;
+}
+
+function normalizeRoomControlDeviceClass(value) {
+  return String(value || "").trim().toLowerCase().replace(/\s+/g, "_");
+}
+
+function normalizeRoomControlRecord(control, roomKey = "room", index = 1) {
+  if (!control || typeof control !== "object") return createRoomControl(roomKey, index);
+  control.id = control.id || `${roomKey}-control-${Date.now().toString(36)}-${index}`;
+  control.name = control.name || `Entry ${index}`;
+  control.haEntityId = control.haEntityId || "";
+  control.haName = control.haName || "";
+  control.domain = normalizeRoomControlDomain(control.domain || String(control.haEntityId || "").split(".", 1)[0], "switch");
+  control.deviceClass = normalizeRoomControlDeviceClass(control.deviceClass || control.device_class || "");
+  control.state = String(control.state ?? (control.on ? "on" : "off")).toLowerCase();
+  control.on = Boolean(control.on);
+  control.currentPosition = control.currentPosition ?? control.current_position ?? null;
+  control.supportedFeatures = Number(control.supportedFeatures ?? control.supported_features ?? 0) || 0;
+  control.unitOfMeasurement = control.unitOfMeasurement || control.unit_of_measurement || "";
+  control.icon = control.icon || "";
+  return control;
+}
+
 function createRoomControl(roomKey, index) {
   return {
     id: `${roomKey}-control-${Date.now().toString(36)}-${index}`,
@@ -3876,6 +3922,12 @@ function createRoomControl(roomKey, index) {
     haEntityId: "",
     haName: "",
     domain: "switch",
+    deviceClass: "",
+    state: "off",
+    currentPosition: null,
+    supportedFeatures: 0,
+    unitOfMeasurement: "",
+    icon: "",
   };
 }
 
@@ -3886,14 +3938,7 @@ function setRoomControlCount(roomKey, count) {
   room.controls = Array.isArray(room.controls) ? room.controls : [];
   while (room.controls.length < target) room.controls.push(createRoomControl(roomKey, room.controls.length + 1));
   while (room.controls.length > target) room.controls.pop();
-  room.controls.forEach((control, index) => {
-    control.id = control.id || `${roomKey}-control-${Date.now().toString(36)}-${index + 1}`;
-    control.name = control.name || `Entry ${index + 1}`;
-    control.on = Boolean(control.on);
-    control.haEntityId = control.haEntityId || "";
-    control.haName = control.haName || "";
-    control.domain = control.domain === "input_boolean" ? "input_boolean" : "switch";
-  });
+  room.controls.forEach((control, index) => normalizeRoomControlRecord(control, roomKey, index + 1));
   saveConfig();
   renderRoomControlConfigList();
   renderRoomControls();
@@ -3949,17 +3994,24 @@ function renderRoomControlConfigList() {
   getRoomControlKeys().forEach((key) => {
     const room = state.roomControl.rooms[key];
     room.controls = Array.isArray(room.controls) && room.controls.length ? room.controls : [createRoomControl(key, 1)];
+    room.controls.forEach((control, index) => normalizeRoomControlRecord(control, key, index + 1));
     const card = document.createElement("div");
     card.className = "room-config-card room-control-config-card";
     card.dataset.roomControlConfig = key;
     const countOptions = Array.from({ length: 16 }, (_, idx) => idx + 1)
       .map((count) => `<option value="${count}" ${room.controls.length === count ? "selected" : ""}>${count}</option>`)
       .join("");
-    const controlInputs = room.controls.map((control, index) => `
-      <label class="mini-field">Entry ${index + 1}
-        <input type="text" value="${escapeHtml(control.name)}" data-room-control-name-input data-room-key="${escapeHtml(key)}" data-room-control-id="${escapeHtml(control.id)}" />
-      </label>
-    `).join("");
+    const controlInputs = room.controls.map((control, index) => {
+      const linkedMeta = control.haEntityId
+        ? `<small class="room-control-config-link">${escapeHtml(roomControlTypeLabel(control))} · ${escapeHtml(control.haEntityId)}</small>`
+        : `<small class="room-control-config-link muted">Hold the room card to assign any HA entity</small>`;
+      return `
+        <label class="mini-field">Entry ${index + 1}
+          <input type="text" value="${escapeHtml(control.name)}" data-room-control-name-input data-room-key="${escapeHtml(key)}" data-room-control-id="${escapeHtml(control.id)}" />
+          ${linkedMeta}
+        </label>
+      `;
+    }).join("");
     card.innerHTML = `
       <div class="room-config-main">
         <label class="form-field compact-field">Room Name
@@ -3999,19 +4051,68 @@ function roomControlDisplayName(control) {
   return String(control?.haName || control?.name || "Entry").trim() || "Entry";
 }
 
+function prettifyRoomControlName(value) {
+  return String(value || "")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function roomControlTypeLabel(control) {
+  const domain = normalizeRoomControlDomain(control?.domain, "entity");
+  const deviceClass = normalizeRoomControlDeviceClass(control?.deviceClass);
+  const base = prettifyRoomControlName(domain);
+  return deviceClass ? `${base} · ${prettifyRoomControlName(deviceClass)}` : base;
+}
+
+function isRoomControlUnavailableState(value) {
+  return ["unavailable", "unknown", "none", "null"].includes(String(value ?? "").trim().toLowerCase());
+}
+
 function isRoomControlOn(value) {
-  return ["on", "true", "open", "enabled", "active"].includes(String(value ?? "").toLowerCase());
+  return ["on", "true", "open", "opening", "unlocked", "home", "playing", "active", "detected", "problem", "wet", "running", "cleaning"].includes(String(value ?? "").toLowerCase());
+}
+
+function roomControlCurrentPosition(entity, fallback = null) {
+  const raw = entity?.currentPosition ?? entity?.current_position ?? fallback;
+  if (raw === null || raw === undefined || raw === "") return null;
+  const num = Number(raw);
+  return Number.isFinite(num) ? clamp(Math.round(num), 0, 100) : null;
+}
+
+function roomControlOnFromState(domain, deviceClass, stateText, currentPosition = null) {
+  const stateValue = String(stateText || "").toLowerCase();
+  if (isRoomControlUnavailableState(stateValue)) return false;
+  if (domain === "cover") {
+    if (["open", "opening"].includes(stateValue)) return true;
+    if (["closed", "closing"].includes(stateValue)) return false;
+    if (currentPosition !== null) return Number(currentPosition) > 0;
+    return false;
+  }
+  if (domain === "lock") return ["unlocked", "open", "opening"].includes(stateValue);
+  if (domain === "media_player") return ["playing", "on"].includes(stateValue);
+  if (domain === "vacuum") return !["docked", "idle", "off"].includes(stateValue);
+  if (domain === "binary_sensor") return stateValue === "on";
+  if (domain === "sensor" || domain === "number" || domain === "input_number" || domain === "select" || domain === "input_select" || domain === "person" || domain === "device_tracker" || domain === "climate") return false;
+  return isRoomControlOn(stateValue);
 }
 
 function normalizeRoomControlEntity(entity, fallback = {}) {
-  const domain = entity?.domain || String(entity?.entityId || fallback.haEntityId || "").split(".", 1)[0] || fallback.domain || "switch";
-  const stateText = String(entity?.state ?? (fallback.on ? "on" : "off")).toLowerCase();
+  const entityId = entity?.entityId || fallback.haEntityId || "";
+  const domain = normalizeRoomControlDomain(entity?.domain || String(entityId).split(".", 1)[0] || fallback.domain, "switch");
+  const deviceClass = normalizeRoomControlDeviceClass(entity?.deviceClass ?? fallback.deviceClass ?? "");
+  const stateText = String(entity?.state ?? fallback.state ?? (fallback.on ? "on" : "off")).toLowerCase();
+  const currentPosition = roomControlCurrentPosition(entity, fallback.currentPosition ?? null);
   return {
-    entityId: entity?.entityId || fallback.haEntityId || "",
-    domain: domain === "input_boolean" ? "input_boolean" : "switch",
-    name: entity?.name || fallback.haName || entity?.entityId || fallback.name || "Entry",
+    entityId,
+    domain,
+    deviceClass,
+    name: entity?.name || fallback.haName || entityId || fallback.name || "Entry",
     state: stateText,
-    on: isRoomControlOn(stateText),
+    on: roomControlOnFromState(domain, deviceClass, stateText, currentPosition),
+    currentPosition,
+    supportedFeatures: Number(entity?.supportedFeatures ?? fallback.supportedFeatures ?? 0) || 0,
+    unitOfMeasurement: entity?.unitOfMeasurement || fallback.unitOfMeasurement || "",
+    icon: entity?.icon || fallback.icon || "",
   };
 }
 
@@ -4021,10 +4122,163 @@ function applyEntityStateToRoomControl(control, entity) {
   const normalized = normalizeRoomControlEntity(entity, control);
   let changed = false;
   if (normalized.name && control.haName !== normalized.name) { control.haName = normalized.name; changed = true; }
-  if (normalized.name && control.name === control.haEntityId) { control.name = normalized.name; changed = true; }
+  if (normalized.name && (!control.name || control.name === control.haEntityId || /^Entry\s+\d+$/i.test(control.name))) { control.name = normalized.name; changed = true; }
+  if (control.state !== normalized.state) { control.state = normalized.state; changed = true; }
   if (control.on !== normalized.on) { control.on = normalized.on; changed = true; }
   if (control.domain !== normalized.domain) { control.domain = normalized.domain; changed = true; }
+  if ((control.deviceClass || "") !== normalized.deviceClass) { control.deviceClass = normalized.deviceClass; changed = true; }
+  if ((control.currentPosition ?? null) !== (normalized.currentPosition ?? null)) { control.currentPosition = normalized.currentPosition; changed = true; }
+  if (Number(control.supportedFeatures || 0) !== normalized.supportedFeatures) { control.supportedFeatures = normalized.supportedFeatures; changed = true; }
+  if ((control.unitOfMeasurement || "") !== normalized.unitOfMeasurement) { control.unitOfMeasurement = normalized.unitOfMeasurement; changed = true; }
+  if ((control.icon || "") !== normalized.icon) { control.icon = normalized.icon; changed = true; }
   return changed;
+}
+
+function roomControlIsMomentary(control) {
+  return ROOM_CONTROL_MOMENTARY_DOMAINS.has(normalizeRoomControlDomain(control?.domain));
+}
+
+function roomControlIsStatusOnly(control) {
+  const domain = normalizeRoomControlDomain(control?.domain);
+  return ROOM_CONTROL_READ_ONLY_DOMAINS.has(domain) || normalizeRoomControlDomain(control?.domain) === "binary_sensor";
+}
+
+function roomControlActionForState(control, desiredOn = null) {
+  if (!control?.haEntityId) return "";
+  const domain = normalizeRoomControlDomain(control.domain);
+  const currentOn = Boolean(control.on);
+  const wantOn = desiredOn === null ? !currentOn : Boolean(desiredOn);
+  if (roomControlIsStatusOnly(control)) return "";
+  if (domain === "cover") return wantOn ? "open" : "close";
+  if (domain === "lock") return wantOn ? "unlock" : "lock";
+  if (domain === "button" || domain === "input_button") return "press";
+  if (domain === "scene" || domain === "script") return "run";
+  if (domain === "media_player") return desiredOn === null ? "play_pause" : (wantOn ? "on" : "off");
+  if (domain === "vacuum") return wantOn ? "start" : "return_to_base";
+  return wantOn ? "on" : "off";
+}
+
+function roomControlOptimisticOn(control, action) {
+  const domain = normalizeRoomControlDomain(control?.domain);
+  if (["on", "open", "unlock", "start"].includes(action)) return true;
+  if (["off", "close", "lock", "return_to_base"].includes(action)) return false;
+  if (action === "press" || action === "run" || action === "play_pause") return true;
+  if (domain === "cover" && action === "stop") return Boolean(control?.on);
+  return !Boolean(control?.on);
+}
+
+function roomControlStateLabel(control) {
+  if (!control?.haEntityId) return "Hold to assign";
+  const domain = normalizeRoomControlDomain(control.domain);
+  const deviceClass = normalizeRoomControlDeviceClass(control.deviceClass);
+  const rawState = String(control.state || (control.on ? "on" : "off")).toLowerCase();
+  if (isRoomControlUnavailableState(rawState)) return prettifyRoomControlName(rawState);
+  if (domain === "cover") {
+    const base = prettifyRoomControlName(rawState || (control.on ? "open" : "closed"));
+    return control.currentPosition !== null && control.currentPosition !== undefined ? `${base} · ${control.currentPosition}%` : base;
+  }
+  if (domain === "lock") return control.on ? "Unlocked" : "Locked";
+  if (domain === "light" || domain === "switch" || domain === "input_boolean" || domain === "fan" || domain === "automation" || domain === "humidifier") return control.on ? "On" : "Off";
+  if (domain === "button" || domain === "input_button") return "Press";
+  if (domain === "scene") return "Scene";
+  if (domain === "script") return rawState === "on" ? "Running" : "Run";
+  if (domain === "binary_sensor") {
+    const on = rawState === "on";
+    const map = {
+      battery: ["Low", "OK"],
+      battery_charging: ["Charging", "Not Charging"],
+      cold: ["Cold", "Normal"],
+      connectivity: ["Connected", "Disconnected"],
+      door: ["Open", "Closed"],
+      garage_door: ["Open", "Closed"],
+      gate: ["Open", "Closed"],
+      window: ["Open", "Closed"],
+      opening: ["Open", "Closed"],
+      lock: ["Unlocked", "Locked"],
+      moisture: ["Wet", "Dry"],
+      motion: ["Motion", "Clear"],
+      occupancy: ["Occupied", "Clear"],
+      presence: ["Present", "Away"],
+      problem: ["Problem", "OK"],
+      safety: ["Unsafe", "Safe"],
+      smoke: ["Smoke", "Clear"],
+      gas: ["Gas", "Clear"],
+      sound: ["Sound", "Quiet"],
+      vibration: ["Vibration", "Still"],
+      power: ["On", "Off"],
+      light: ["Light", "Dark"],
+    };
+    const pair = map[deviceClass] || ["On", "Off"];
+    return on ? pair[0] : pair[1];
+  }
+  if (domain === "sensor" || domain === "number" || domain === "input_number") return `${control.state ?? ""}${control.unitOfMeasurement ? ` ${control.unitOfMeasurement}` : ""}`.trim() || "Status";
+  if (domain === "person" || domain === "device_tracker") return prettifyRoomControlName(rawState || "Status");
+  if (domain === "media_player") return prettifyRoomControlName(rawState || "Media");
+  if (domain === "climate") return prettifyRoomControlName(rawState || "Climate");
+  return prettifyRoomControlName(rawState || (control.on ? "on" : "off"));
+}
+
+function roomControlAriaAction(control) {
+  const action = roomControlActionForState(control);
+  if (!action) return `View ${roomControlDisplayName(control)}`;
+  const label = {
+    on: "Turn on",
+    off: "Turn off",
+    open: "Open",
+    close: "Close",
+    lock: "Lock",
+    unlock: "Unlock",
+    press: "Press",
+    run: "Run",
+    play_pause: "Play or pause",
+    start: "Start",
+    return_to_base: "Return",
+  }[action] || "Toggle";
+  return `${label} ${roomControlDisplayName(control)}`;
+}
+
+function roomControlIconSvg(control) {
+  const domain = normalizeRoomControlDomain(control?.domain, "switch");
+  const deviceClass = normalizeRoomControlDeviceClass(control?.deviceClass);
+  const open = Boolean(control?.on);
+  const key = domain === "cover" ? (deviceClass || "cover") : domain === "binary_sensor" ? (deviceClass || "binary_sensor") : domain;
+  if (["door", "garage_door", "gate", "opening"].includes(key)) {
+    return `<svg class="room-control-svg door-svg" viewBox="0 0 80 80" focusable="false" aria-hidden="true"><path d="M24 67V14h32v53" fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="round"/><path d="M31 65V19l23 6v41z" fill="currentColor" opacity="${open ? ".44" : ".20"}"/><circle cx="48" cy="44" r="2.8" fill="currentColor"/></svg>`;
+  }
+  if (["window", "shutter", "blind", "shade", "awning", "curtain", "damper", "cover"].includes(key)) {
+    return `<svg class="room-control-svg cover-svg" viewBox="0 0 80 80" focusable="false" aria-hidden="true"><rect x="17" y="14" width="46" height="52" rx="5" fill="none" stroke="currentColor" stroke-width="5"/><path d="M40 16v48M19 40h42" stroke="currentColor" stroke-width="4" opacity=".72"/><path d="M23 25h34M23 32h34M23 48h34M23 55h34" stroke="currentColor" stroke-width="3" opacity=".46"/></svg>`;
+  }
+  if (domain === "light" || deviceClass === "light") {
+    return `<svg class="room-control-svg light-svg" viewBox="0 0 80 80" focusable="false" aria-hidden="true"><path d="M28 36a12 12 0 1 1 24 0c0 5-3 8-6 12-2 2-2 4-2 6h-8c0-2-.4-4-2-6-3-4-6-7-6-12z" fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="round"/><path d="M34 61h12M35 68h10" stroke="currentColor" stroke-width="5" stroke-linecap="round"/></svg>`;
+  }
+  if (domain === "fan") {
+    return `<svg class="room-control-svg fan-svg" viewBox="0 0 80 80" focusable="false" aria-hidden="true"><circle cx="40" cy="40" r="6" fill="currentColor"/><path d="M42 34c8-17 25-10 18 3-5 9-14 5-18 3M34 39c-19-2-20-20-5-20 10 0 10 10 5 20M42 46c11 15-3 26-12 14-6-8 2-15 12-14" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  }
+  if (domain === "lock" || deviceClass === "lock") {
+    return `<svg class="room-control-svg lock-svg" viewBox="0 0 80 80" focusable="false" aria-hidden="true"><rect x="22" y="36" width="36" height="28" rx="6" fill="none" stroke="currentColor" stroke-width="5"/><path d="M30 36V27a10 10 0 0 1 ${open ? "18 -7" : "20 0"}v9" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round"/><circle cx="40" cy="49" r="3" fill="currentColor"/></svg>`;
+  }
+  if (["motion", "occupancy", "presence"].includes(deviceClass)) {
+    return `<svg class="room-control-svg motion-svg" viewBox="0 0 80 80" focusable="false" aria-hidden="true"><circle cx="30" cy="25" r="7" fill="currentColor"/><path d="M31 34l12 8-6 9 9 13M29 35l-7 13M43 42l10-7" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><path d="M55 22c6 4 10 10 10 18s-4 14-10 18" fill="none" stroke="currentColor" stroke-width="4" opacity=".55" stroke-linecap="round"/></svg>`;
+  }
+  if (["moisture", "gas", "smoke", "safety", "problem"].includes(deviceClass)) {
+    return `<svg class="room-control-svg alert-svg" viewBox="0 0 80 80" focusable="false" aria-hidden="true"><path d="M40 12l30 54H10z" fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="round"/><path d="M40 29v17" stroke="currentColor" stroke-width="6" stroke-linecap="round"/><circle cx="40" cy="56" r="3" fill="currentColor"/></svg>`;
+  }
+  if (domain === "button" || domain === "input_button") {
+    return `<svg class="room-control-svg button-svg" viewBox="0 0 80 80" focusable="false" aria-hidden="true"><circle cx="40" cy="40" r="25" fill="none" stroke="currentColor" stroke-width="5"/><circle cx="40" cy="40" r="13" fill="currentColor" opacity=".28"/></svg>`;
+  }
+  if (domain === "scene" || domain === "script") {
+    return `<svg class="room-control-svg scene-svg" viewBox="0 0 80 80" focusable="false" aria-hidden="true"><path d="M31 22l27 18-27 18z" fill="currentColor" opacity=".7"/><path d="M21 18v44M62 18v44" stroke="currentColor" stroke-width="5" stroke-linecap="round" opacity=".55"/></svg>`;
+  }
+  if (domain === "media_player") {
+    return `<svg class="room-control-svg media-svg" viewBox="0 0 80 80" focusable="false" aria-hidden="true"><path d="M20 32h12l16-13v42L32 48H20z" fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="round"/><path d="M56 30c4 3 6 6 6 10s-2 8-6 10" stroke="currentColor" stroke-width="5" fill="none" stroke-linecap="round"/></svg>`;
+  }
+  if (domain === "sensor" || domain === "number" || domain === "input_number" || domain === "climate") {
+    return `<svg class="room-control-svg sensor-svg" viewBox="0 0 80 80" focusable="false" aria-hidden="true"><path d="M18 52a25 25 0 1 1 44 0" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round"/><path d="M40 47l15-15" stroke="currentColor" stroke-width="5" stroke-linecap="round"/><circle cx="40" cy="52" r="5" fill="currentColor"/></svg>`;
+  }
+  if (domain === "vacuum") {
+    return `<svg class="room-control-svg vacuum-svg" viewBox="0 0 80 80" focusable="false" aria-hidden="true"><rect x="18" y="23" width="44" height="34" rx="17" fill="none" stroke="currentColor" stroke-width="5"/><circle cx="33" cy="40" r="5" fill="currentColor"/><path d="M51 56l8 9" stroke="currentColor" stroke-width="5" stroke-linecap="round"/></svg>`;
+  }
+  return `<svg class="room-control-svg power-svg" viewBox="0 0 80 80" focusable="false" aria-hidden="true"><path class="power-line" d="M40 14v25"></path><path class="power-arc" d="M25.6 27.8a23 23 0 1 0 28.8 0"></path></svg>`;
 }
 
 function updateRoomControlCard(control) {
@@ -4033,25 +4287,38 @@ function updateRoomControlCard(control) {
   const on = Boolean(control.on);
   const linked = Boolean(control.haEntityId);
   const displayName = roomControlDisplayName(control);
+  const statusOnly = linked && roomControlIsStatusOnly(control);
+  const momentary = linked && roomControlIsMomentary(control);
+  const unavailable = linked && isRoomControlUnavailableState(control.state);
   card.classList.toggle("on", on);
   card.classList.toggle("off", !on);
   card.classList.toggle("linked", linked);
   card.classList.toggle("unlinked", !linked);
-  card.dataset.roomControlDomain = control.domain || "switch";
+  card.classList.toggle("status-only", statusOnly);
+  card.classList.toggle("momentary", momentary);
+  card.classList.toggle("unavailable", unavailable);
+  card.dataset.roomControlDomain = normalizeRoomControlDomain(control.domain || "switch");
+  card.dataset.roomControlDeviceClass = normalizeRoomControlDeviceClass(control.deviceClass || "");
   const title = card.querySelector("[data-room-control-title]");
   if (title) {
     title.textContent = displayName;
     title.setAttribute("title", displayName);
   }
-  const state = card.querySelector("[data-room-control-state]");
-  if (state) state.textContent = linked ? (on ? "On" : "Off") : "Hold to assign";
-  const domain = card.querySelector("[data-room-control-domain]");
-  if (domain) domain.textContent = linked ? (control.domain === "input_boolean" ? "Input Boolean" : "Switch") : "Unassigned";
-  const button = card.querySelector("[data-room-control-toggle]");
-  if (button) {
-    button.setAttribute("aria-label", `${on ? "Turn off" : "Turn on"} ${displayName}`);
-    button.setAttribute("aria-pressed", on ? "true" : "false");
+  const stateEl = card.querySelector("[data-room-control-state]");
+  if (stateEl) stateEl.textContent = linked ? roomControlStateLabel(control) : "Hold to assign";
+  const domainEl = card.querySelector("[data-room-control-domain]");
+  if (domainEl) domainEl.textContent = linked ? roomControlTypeLabel(control) : "Unassigned";
+  const icon = card.querySelector("[data-room-control-icon]");
+  if (icon) icon.innerHTML = roomControlIconSvg(control);
+  const hint = card.querySelector("[data-room-control-hint]");
+  if (hint) {
+    if (!linked) hint.textContent = "Hold to assign";
+    else if (statusOnly) hint.textContent = "Status only";
+    else if (momentary) hint.textContent = "Tap to run";
+    else hint.textContent = roomControlActionForState(control) || "Tap";
   }
+  card.setAttribute("aria-label", roomControlAriaAction(control));
+  card.setAttribute("aria-pressed", on ? "true" : "false");
 }
 
 function renderRoomControls() {
@@ -4062,9 +4329,8 @@ function renderRoomControls() {
   elements.roomControlCards.innerHTML = "";
   const controls = Array.isArray(room.controls) ? room.controls : [];
   elements.roomControlCards.style.setProperty("--room-control-columns", clamp(controls.length, 1, 4));
-  controls.forEach((control) => {
-    control.on = Boolean(control.on);
-    control.domain = control.domain === "input_boolean" ? "input_boolean" : "switch";
+  controls.forEach((control, index) => {
+    normalizeRoomControlRecord(control, state.roomControl.room, index + 1);
     const card = document.createElement("button");
     card.className = "room-control-card";
     card.type = "button";
@@ -4078,18 +4344,14 @@ function renderRoomControls() {
       <span class="room-control-card-top">
         <span class="room-control-power-shell" aria-hidden="true">
           <span class="room-control-power-ring"></span>
-          <span class="room-control-power-icon">
-            <svg viewBox="0 0 80 80" focusable="false">
-              <path class="power-line" d="M40 14v25"></path>
-              <path class="power-arc" d="M25.6 27.8a23 23 0 1 0 28.8 0"></path>
-            </svg>
-          </span>
+          <span class="room-control-power-icon" data-room-control-icon>${roomControlIconSvg(control)}</span>
         </span>
-        <em class="room-control-state-pill" data-room-control-state>${control.haEntityId ? (control.on ? "On" : "Off") : "Hold to assign"}</em>
+        <em class="room-control-state-pill" data-room-control-state>${control.haEntityId ? escapeHtml(roomControlStateLabel(control)) : "Hold to assign"}</em>
       </span>
       <span class="room-control-copy">
         <strong data-room-control-title title="${safeName}">${safeName}</strong>
-        <small data-room-control-domain>${control.haEntityId ? (control.domain === "input_boolean" ? "Input Boolean" : "Switch") : "Unassigned"}</small>
+        <small data-room-control-domain>${control.haEntityId ? escapeHtml(roomControlTypeLabel(control)) : "Unassigned"}</small>
+        <em data-room-control-hint>${control.haEntityId ? escapeHtml(roomControlActionForState(control) || (roomControlIsStatusOnly(control) ? "Status only" : "Tap")) : "Hold to assign"}</em>
       </span>
       <span class="sr-only">${safeControlId}</span>
     `;
@@ -4098,10 +4360,12 @@ function renderRoomControls() {
   });
 }
 
-function setRoomControlPowerState(control, on) {
+function setRoomControlPowerState(control, on, action = "") {
   if (!control) return;
-  control.on = Boolean(on);
-  control.localHoldUntil = Date.now() + 1800;
+  if (roomControlIsStatusOnly(control)) return;
+  control.on = action ? roomControlOptimisticOn(control, action) : Boolean(on);
+  control.state = control.on ? (normalizeRoomControlDomain(control.domain) === "cover" ? "open" : "on") : (normalizeRoomControlDomain(control.domain) === "cover" ? "closed" : "off");
+  control.localHoldUntil = Date.now() + (roomControlIsMomentary(control) ? 900 : 1800);
 }
 
 async function applyRoomControlAction(action) {
@@ -4110,23 +4374,34 @@ async function applyRoomControlAction(action) {
   if (!controls.length) return;
   const turnOn = String(action || "").includes("on");
   lastRoomControlUserInteractionAt = Date.now();
-  controls.forEach((control) => setRoomControlPowerState(control, turnOn));
+  const targets = controls
+    .filter((control) => control.haEntityId)
+    .map((control) => ({ control, haAction: roomControlActionForState(control, turnOn) }))
+    .filter((item) => item.haAction);
+  targets.forEach(({ control, haAction }) => setRoomControlPowerState(control, turnOn, haAction));
   saveConfig();
   renderRoomControls();
-  const linkedTargets = controls.filter((control) => control.haEntityId);
-  if (!linkedTargets.length) return;
-  await Promise.all(linkedTargets.map((control) => sendRoomControlToHomeAssistant(control, turnOn ? "on" : "off")));
+  if (!targets.length) return;
+  await Promise.all(targets.map(({ control, haAction }) => sendRoomControlToHomeAssistant(control, haAction)));
 }
 
 function toggleRoomControl(controlId) {
   const control = findRoomControlInActiveRoom(controlId);
   if (!control) return;
-  const nextOn = !Boolean(control.on);
+  if (!control.haEntityId) {
+    showToast("Hold the card to assign a Home Assistant entity");
+    return;
+  }
+  const action = roomControlActionForState(control);
+  if (!action) {
+    showToast(`${roomControlDisplayName(control)} is status only`);
+    return;
+  }
   lastRoomControlUserInteractionAt = Date.now();
-  setRoomControlPowerState(control, nextOn);
+  setRoomControlPowerState(control, roomControlOptimisticOn(control, action), action);
   updateRoomControlCard(control);
   saveConfig();
-  sendRoomControlToHomeAssistant(control, nextOn ? "on" : "off");
+  sendRoomControlToHomeAssistant(control, action);
 }
 
 function syncLinkedRoomControlsFromEntities(entities = [], options = {}) {
@@ -4203,6 +4478,7 @@ async function pollHomeAssistantRoomControls(options = {}) {
 
 async function sendRoomControlToHomeAssistant(control, action = "toggle") {
   if (!control?.haEntityId) return null;
+  if (!action) return null;
   const ha = state.integrations.homeAssistant;
   const baseUrl = getHaBaseUrl();
   if (!baseUrl || !ha.token) return null;
@@ -4214,6 +4490,7 @@ async function sendRoomControlToHomeAssistant(control, action = "toggle") {
       body: JSON.stringify({ url: baseUrl, token: ha.token, entityId: control.haEntityId, action }),
     }, 9000);
     if (payload.control) {
+      delete control.localHoldUntil;
       applyEntityStateToRoomControl(control, payload.control);
       saveConfig();
       renderRoomControls();
@@ -4241,7 +4518,11 @@ function assignEntityToRoomControl(entity) {
   if (!control || !entity) return;
   control.haEntityId = entity.entityId || "";
   control.haName = entity.name || entity.entityId || "";
-  control.domain = entity.domain === "input_boolean" ? "input_boolean" : "switch";
+  control.domain = normalizeRoomControlDomain(entity.domain || String(entity.entityId || "").split(".", 1)[0], "switch");
+  control.deviceClass = normalizeRoomControlDeviceClass(entity.deviceClass || "");
+  control.supportedFeatures = Number(entity.supportedFeatures || 0) || 0;
+  control.unitOfMeasurement = entity.unitOfMeasurement || "";
+  control.icon = entity.icon || "";
   if (entity.name) control.name = entity.name;
   applyEntityStateToRoomControl(control, entity);
   state.roomControlEntityPicker = { roomKey: null, controlId: null };
@@ -4792,7 +5073,13 @@ function getAudioPickerMeta(kind) {
   if (["subwoofer", "surround", "projector"].includes(kind)) return { domain: "switch", title: `Assign ${titleCase(kind)}`, help: "Select the Home Assistant switch entry for this button." };
   if (kind === "alarm") return { domain: "alarm_control_panel", title: "Assign Alarm", help: "Select the Home Assistant alarm_control_panel entry for this thermostat page." };
   if (kind === "door") return { domain: "binary_sensor", title: "Assign Door Sensor", help: "Select the Home Assistant binary_sensor that reports this door open or closed." };
-  if (kind === "roomControl") return { domain: "switch", domains: ["switch", "input_boolean"], title: "Assign Room Control", help: "Select a Home Assistant switch or input_boolean for this room button." };
+  if (kind === "roomControl") return {
+    domain: "entity",
+    domains: ROOM_CONTROL_PICKER_DOMAINS,
+    allDomains: true,
+    title: "Assign Room Device",
+    help: "Select any useful Home Assistant entity. The card will choose the icon, status, and action from its domain and device class."
+  };
   if (kind === "light") return { domain: "light", title: "Assign Light", help: "Select the Home Assistant light entry for this slider." };
   return { domain: "", title: "Assign Entity", help: "Select the Home Assistant entity for this control." };
 }
@@ -4800,7 +5087,7 @@ function getAudioPickerMeta(kind) {
 function scoreEntityForSearch(entity, search) {
   const q = String(search || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
   if (!q) return 1;
-  const hay = `${entity.name || ""} ${entity.entityId || ""}`.toLowerCase();
+  const hay = `${entity.name || ""} ${entity.entityId || ""} ${entity.domain || ""} ${entity.deviceClass || ""} ${entity.state || ""}`.toLowerCase();
   const compact = hay.replace(/[^a-z0-9]+/g, "");
   if (compact.includes(q)) return 10;
   const words = q.match(/[a-z0-9]+/g) || [];
@@ -4816,7 +5103,13 @@ function renderAudioEntityPicker() {
   if (elements.audioEntityPickerHelp) elements.audioEntityPickerHelp.textContent = getAudioPickerMeta(picker.kind).help;
   elements.audioEntityPickerList.innerHTML = entities.length ? entities.map((entity) => {
     const stateText = entity.state !== undefined && entity.state !== null ? String(entity.state) : "";
-    const valueText = entity.domain === "number" && entity.value !== null && entity.value !== undefined ? `Value ${formatControlValue(entity.value)}` : stateText;
+    let valueText = entity.domain === "number" && entity.value !== null && entity.value !== undefined ? `Value ${formatControlValue(entity.value)}` : stateText;
+    if (picker.kind === "roomControl") {
+      const domainLabel = prettifyRoomControlName(entity.domain || "entity");
+      const classLabel = entity.deviceClass ? ` · ${prettifyRoomControlName(entity.deviceClass)}` : "";
+      const stateLabel = stateText ? ` · ${prettifyRoomControlName(stateText)}` : "";
+      valueText = `${domainLabel}${classLabel}${stateLabel}`;
+    }
     return `
       <button class="audio-entity-row" data-audio-entity-id="${escapeHtml(entity.entityId)}">
         <strong>${escapeHtml(entity.name || entity.entityId)}</strong>
@@ -4850,7 +5143,7 @@ async function openAudioEntityPicker(kind) {
   }
   renderAudioEntityPicker();
   try {
-    const domains = Array.isArray(meta.domains) && meta.domains.length ? meta.domains : [meta.domain];
+    const domains = meta.allDomains ? [] : (Array.isArray(meta.domains) && meta.domains.length ? meta.domains : [meta.domain]);
     const entities = await fetchHaEntitiesViaLocalBackend(domains);
     state.audioEntityPicker.entities = entities;
     const ha = state.integrations.homeAssistant;
@@ -4864,7 +5157,7 @@ async function openAudioEntityPicker(kind) {
     if (kind === "roomControl") ha.roomAvailableEntities = entities;
     renderAudioEntityPicker();
   } catch (error) {
-    addHaLog("error", "Audio entity load failed", error.message || String(error));
+    addHaLog("error", kind === "roomControl" ? "Room entity load failed" : "Audio entity load failed", error.message || String(error));
     showToast("Could not load Home Assistant entities");
   }
 }

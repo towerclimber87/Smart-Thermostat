@@ -4703,3 +4703,95 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   display: block;
   color: #ffb8c4;
 }
+
+/* 2026-06-15 generic HA room devices: domain/device-class icons + status-only cards */
+.room-control-power-icon .room-control-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: visible;
+}
+.room-control-power-icon .room-control-svg path,
+.room-control-power-icon .room-control-svg rect,
+.room-control-power-icon .room-control-svg circle,
+.room-control-power-icon .room-control-svg line {
+  vector-effect: non-scaling-stroke;
+}
+.room-control-card.status-only {
+  cursor: default;
+  border-color: rgba(77,238,255,.20);
+  background:
+    radial-gradient(circle at 26% 14%, rgba(77,238,255,.16), transparent 36%),
+    linear-gradient(145deg, rgba(255,255,255,.080), rgba(255,255,255,.026));
+}
+.room-control-card.status-only .room-control-power-ring {
+  background: linear-gradient(145deg, rgba(77,238,255,.16), rgba(255,255,255,.045));
+  border-color: rgba(77,238,255,.22);
+}
+.room-control-card.status-only .room-control-power-icon {
+  color: rgba(166,239,255,.86);
+}
+.room-control-card.status-only.on .room-control-state-pill,
+.room-control-card[data-room-control-domain="cover"].on .room-control-state-pill,
+.room-control-card[data-room-control-domain="lock"].on .room-control-state-pill {
+  background: rgba(255,196,78,.16);
+  color: #fff1c8;
+}
+.room-control-card[data-room-control-domain="cover"].linked.on,
+.room-control-card[data-room-control-domain="lock"].linked.on {
+  border-color: rgba(255,196,78,.34);
+  background:
+    radial-gradient(circle at 26% 14%, rgba(255,196,78,.22), transparent 36%),
+    linear-gradient(145deg, rgba(255,196,78,.11), rgba(255,255,255,.030));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.15), 0 22px 58px rgba(0,0,0,.26), 0 0 34px rgba(255,196,78,.10);
+}
+.room-control-card[data-room-control-domain="cover"].linked.on::after,
+.room-control-card[data-room-control-domain="lock"].linked.on::after {
+  background: linear-gradient(90deg, rgba(255,196,78,.96), rgba(77,238,255,.70));
+  opacity: 1;
+}
+.room-control-card[data-room-control-domain="cover"].on .room-control-power-ring,
+.room-control-card[data-room-control-domain="lock"].on .room-control-power-ring {
+  background: linear-gradient(145deg, rgba(255,196,78,.23), rgba(255,255,255,.05));
+  border-color: rgba(255,196,78,.27);
+}
+.room-control-card[data-room-control-domain="cover"].on .room-control-power-icon,
+.room-control-card[data-room-control-domain="lock"].on .room-control-power-icon {
+  color: #ffe1a3;
+  filter: drop-shadow(0 0 14px rgba(255,196,78,.50));
+}
+.room-control-card.momentary .room-control-state-pill {
+  background: rgba(77,238,255,.14);
+  color: #d8fbff;
+}
+.room-control-card.unavailable {
+  opacity: .56;
+  filter: grayscale(.25);
+}
+.room-control-card.unavailable .room-control-state-pill {
+  background: rgba(255,255,255,.08);
+  color: rgba(225,235,245,.62);
+}
+.room-control-copy em[data-room-control-hint] {
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  color: rgba(77,238,255,.72);
+  justify-content: flex-start;
+  letter-spacing: .10em;
+  font-size: .66rem;
+}
+.room-control-card.status-only .room-control-copy em[data-room-control-hint] {
+  color: rgba(166,239,255,.62);
+}
+.room-control-config-link {
+  display: block;
+  margin-top: 6px;
+  color: rgba(178,200,222,.66);
+  font-size: .68rem;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+.room-control-config-link.muted {
+  color: rgba(178,200,222,.44);
+}

@@ -952,16 +952,25 @@ def _normalize_generic_entity(item: dict) -> dict:
         "name": attrs.get("friendly_name") or entity_id,
         "state": item.get("state") or "unknown",
         "deviceClass": attrs.get("device_class") or "",
+        "icon": attrs.get("icon") or "",
+        "supportedFeatures": attrs.get("supported_features"),
+        "unitOfMeasurement": attrs.get("unit_of_measurement") or "",
+        "currentPosition": attrs.get("current_position"),
+        "isClosed": attrs.get("is_closed"),
+        "lastChanged": item.get("last_changed"),
+        "lastUpdated": item.get("last_updated"),
     }
-    if domain == "number":
-        payload.update(_normalize_number_control(item))
-        payload["domain"] = domain
+    if domain in {"number", "input_number"}:
+        try:
+            payload.update(_normalize_number_control(item))
+            payload["domain"] = domain
+        except Exception:
+            pass
     if domain == "alarm_control_panel":
         payload.update(_normalize_alarm_control_item(item))
     if domain == "light":
         payload.update(_normalize_light_item(item))
     if domain == "media_player":
-        attrs = item.get("attributes") or {}
         payload.update({
             "volumeLevel": attrs.get("volume_level"),
             "source": attrs.get("source") or "",
@@ -1118,8 +1127,8 @@ def _call_switch_service(ha_url: str, token: str, entity_id: str, action: str) -
 def _room_control_domain(entity_id: str) -> str:
     entity_id = (entity_id or "").strip()
     domain = entity_id.split(".", 1)[0] if "." in entity_id else ""
-    if domain not in {"switch", "input_boolean"}:
-        raise ValueError("Entity must be a switch.* or input_boolean.* entity")
+    if not domain or not entity_id or "." not in entity_id:
+        raise ValueError("Entity ID must include a Home Assistant domain, for example switch.kitchen")
     return domain
 
 
@@ -1137,37 +1146,127 @@ def _fetch_ha_room_control_states_for_entities(ha_url: str, token: str, entity_i
         seen.add(entity_id)
         wanted.append(entity_id)
 
-    if not wanted:
-        return []
-
-    states = _ha_json_request(ha_url, token, "GET", "/api/states")
-    if not isinstance(states, list):
-        return []
-    wanted_set = set(wanted)
-    controls = []
-    for item in states:
-        entity_id = str(item.get("entity_id", ""))
-        if entity_id not in wanted_set:
+    controls: list[dict] = []
+    for entity_id in wanted:
+        try:
+            item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
+            if isinstance(item, dict):
+                controls.append(_normalize_generic_entity(item))
+        except Exception:
             continue
-        controls.append(_normalize_generic_entity(item))
-    controls.sort(key=lambda item: wanted.index(item.get("entityId")) if item.get("entityId") in wanted else 9999)
     return controls
+
+
+def _room_control_service_for_action(domain: str, action: str) -> tuple[str, str] | None:
+    domain = (domain or "").strip().lower()
+    action = (action or "toggle").strip().lower()
+
+    turn_domains = {
+        "switch", "input_boolean", "light", "fan", "automation", "humidifier",
+        "remote", "siren", "water_heater", "climate",
+    }
+    read_only_domains = {
+        "binary_sensor", "sensor", "number", "input_number", "select", "input_select",
+        "person", "device_tracker", "sun", "weather", "calendar", "alarm_control_panel",
+    }
+
+    if domain in read_only_domains:
+        return None
+
+    if domain in turn_domains:
+        service = {"on": "turn_on", "off": "turn_off", "toggle": "toggle"}.get(action)
+        if service:
+            return domain, service
+        return None
+
+    if domain == "cover":
+        service = {
+            "open": "open_cover",
+            "on": "open_cover",
+            "close": "close_cover",
+            "off": "close_cover",
+            "stop": "stop_cover",
+            "toggle": "toggle",
+        }.get(action)
+        return (domain, service) if service else None
+
+    if domain == "lock":
+        service = {
+            "lock": "lock",
+            "off": "lock",
+            "unlock": "unlock",
+            "on": "unlock",
+            "open": "open",
+        }.get(action)
+        return (domain, service) if service else None
+
+    if domain in {"button", "input_button"}:
+        return domain, "press"
+
+    if domain in {"scene", "script"}:
+        return domain, "turn_on"
+
+    if domain == "media_player":
+        service = {
+            "play_pause": "media_play_pause",
+            "toggle": "media_play_pause",
+            "on": "turn_on",
+            "off": "turn_off",
+        }.get(action)
+        return (domain, service) if service else None
+
+    if domain == "vacuum":
+        service = {
+            "start": "start",
+            "on": "start",
+            "return_to_base": "return_to_base",
+            "off": "return_to_base",
+            "stop": "stop",
+        }.get(action)
+        return (domain, service) if service else None
+
+    # Best effort for HA domains that expose the common turn_on/turn_off pair.
+    service = {"on": "turn_on", "off": "turn_off", "toggle": "toggle", "run": "turn_on", "press": "press"}.get(action)
+    return (domain, service) if service else None
 
 
 def _call_room_control_service(ha_url: str, token: str, entity_id: str, action: str) -> dict:
     entity_id = (entity_id or "").strip()
     domain = _room_control_domain(entity_id)
     action = (action or "toggle").strip().lower()
-    service = {"on": "turn_on", "off": "turn_off", "toggle": "toggle"}.get(action)
-    if not service:
-        raise ValueError("Unsupported room control action")
+    spec = _room_control_service_for_action(domain, action)
+    if spec is None:
+        item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
+        if isinstance(item, dict):
+            control = _normalize_generic_entity(item)
+            control["actionApplied"] = False
+            return control
+        return {"entityId": entity_id, "name": entity_id, "domain": domain, "state": "unknown", "actionApplied": False}
 
-    _ha_json_request(ha_url, token, "POST", f"/api/services/{domain}/{service}", {"entity_id": entity_id})
+    service_domain, service = spec
+    _ha_json_request(ha_url, token, "POST", f"/api/services/{service_domain}/{service}", {"entity_id": entity_id})
     try:
         item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
-        return _normalize_generic_entity(item)
+        if isinstance(item, dict):
+            control = _normalize_generic_entity(item)
+            control["actionApplied"] = True
+            return control
     except Exception:
-        return {"entityId": entity_id, "name": entity_id, "domain": domain, "state": "off" if action == "off" else "on"}
+        pass
+
+    optimistic = {
+        "on": "on",
+        "open": "open",
+        "unlock": "unlocked",
+        "lock": "locked",
+        "off": "off",
+        "close": "closed",
+        "press": "on",
+        "run": "on",
+        "start": "cleaning",
+        "return_to_base": "returning",
+    }.get(action, "on")
+    return {"entityId": entity_id, "name": entity_id, "domain": domain, "state": optimistic, "actionApplied": True}
 
 
 
