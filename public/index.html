@@ -72,6 +72,60 @@
                 <div id="albumInitials" class="audio-art-initials">♪</div>
               </div>
               <div class="audio-now">
+                <div class="audio-preset-grid" aria-label="Audio presets">
+                  <button class="audio-preset-button movie" data-audio-preset="movie" type="button" aria-label="Apply movie mode audio preset">
+                    <span class="preset-icon" aria-hidden="true">
+                      <svg viewBox="0 0 64 64" focusable="false">
+                        <circle cx="24" cy="24" r="16"></circle>
+                        <circle cx="24" cy="24" r="5"></circle>
+                        <circle cx="24" cy="10" r="3"></circle>
+                        <circle cx="38" cy="24" r="3"></circle>
+                        <circle cx="24" cy="38" r="3"></circle>
+                        <circle cx="10" cy="24" r="3"></circle>
+                        <path d="M36 36l18 11V25L36 36z"></path>
+                        <path d="M8 54h46"></path>
+                      </svg>
+                    </span>
+                    <strong>Movie Mode</strong>
+                  </button>
+                  <button class="audio-preset-button show" data-audio-preset="show" type="button" aria-label="Apply show mode audio preset">
+                    <span class="preset-icon" aria-hidden="true">
+                      <svg viewBox="0 0 64 64" focusable="false">
+                        <path d="M14 48c8-8 28-8 36 0"></path>
+                        <path d="M18 40c7-5 21-5 28 0"></path>
+                        <path d="M23 31c4-3 14-3 18 0"></path>
+                        <rect x="24" y="8" width="16" height="22" rx="8"></rect>
+                        <path d="M32 30v14"></path>
+                        <path d="M22 54h20"></path>
+                      </svg>
+                    </span>
+                    <strong>Show Mode</strong>
+                  </button>
+                  <button class="audio-preset-button volume40" data-audio-preset="volume40" type="button" aria-label="Apply 40 percent volume audio preset">
+                    <span class="preset-icon" aria-hidden="true">
+                      <svg viewBox="0 0 64 64" focusable="false">
+                        <path d="M10 39H22L38 51V13L22 25H10z"></path>
+                        <path d="M45 24c3 4 3 12 0 16"></path>
+                        <path d="M51 17c7 8 7 22 0 30"></path>
+                        <text x="32" y="39">40</text>
+                      </svg>
+                    </span>
+                    <strong>40% Volume</strong>
+                  </button>
+                  <button class="audio-preset-button max" data-audio-preset="max" type="button" aria-label="Apply maximum audio preset">
+                    <span class="preset-icon" aria-hidden="true">
+                      <svg viewBox="0 0 64 64" focusable="false">
+                        <path d="M10 40H22L39 53V11L22 24H10z"></path>
+                        <path d="M47 20c5 6 5 18 0 24"></path>
+                        <path d="M54 13c9 11 9 27 0 38"></path>
+                        <path d="M18 10l5 8"></path>
+                        <path d="M30 6l2 10"></path>
+                        <path d="M43 9l-4 9"></path>
+                      </svg>
+                    </span>
+                    <strong>Max</strong>
+                  </button>
+                </div>
                 <p class="eyebrow">Now Playing</p>
                 <h2 id="trackTitle">Select Audio Device</h2>
                 <p id="trackArtist" class="audio-artist">Open settings to choose a media player.</p>

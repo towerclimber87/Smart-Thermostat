@@ -63,6 +63,7 @@ let lastInactiveRoomSyncAt = Date.now();
 let lastInactiveAlarmSyncAt = Date.now();
 let lastInactiveDoorSyncAt = Date.now();
 let audioMediaActionInFlight = false;
+let audioPresetInFlight = false;
 let audioVolumeDebounce = null;
 let audioToneDebounces = { gain: null, bass: null, treble: null };
 let audioTrackCommandLock = null;
@@ -170,6 +171,45 @@ const defaultIntegrations = {
     doorAvailableEntities: [],
     lightAvailableEntities: [],
     roomAvailableEntities: [],
+  },
+};
+
+const AUDIO_PRESETS = {
+  movie: {
+    label: "Movie Mode",
+    volume: 65,
+    gain: "max",
+    bass: "max",
+    treble: 8,
+    subwoofer: true,
+    surround: true,
+  },
+  show: {
+    label: "Show Mode",
+    volume: 65,
+    gain: 0,
+    bass: 0,
+    treble: 8,
+    subwoofer: false,
+    surround: true,
+  },
+  volume40: {
+    label: "40% Volume",
+    volume: 40,
+    gain: "max",
+    bass: "max",
+    treble: 8,
+    subwoofer: true,
+    surround: true,
+  },
+  max: {
+    label: "Max",
+    volume: 100,
+    gain: "max",
+    bass: "max",
+    treble: 8,
+    subwoofer: true,
+    surround: true,
   },
 };
 
@@ -2369,6 +2409,21 @@ function isSwitchOn(control) {
   return String(control?.state || "").toLowerCase() === "on";
 }
 
+function getAudioToneLimit(kind, bound, fallback) {
+  const control = getAudioToneControl(kind);
+  const number = Number(control?.[bound]);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function clampAudioTonePresetValue(kind, value) {
+  const min = getAudioToneLimit(kind, "min", -10);
+  const max = getAudioToneLimit(kind, "max", 10);
+  if (value === "max") return max;
+  if (value === "min") return min;
+  const numeric = Number(value);
+  return clamp(Number.isFinite(numeric) ? numeric : 0, min, max);
+}
+
 function normalizeAudioControlValue(control, fallback = 0) {
   const raw = control?.value ?? control?.state;
   const number = Number(raw);
@@ -2550,6 +2605,10 @@ function renderAudio() {
     if (!isAudioSliderUserLocked(name)) slider.value = a[name];
     setRangeVisual(slider);
     if (value) value.textContent = name === "volume" ? Math.round(Number(a[name] || 0)) : formatControlValue(a[name]);
+  });
+  document.querySelectorAll("[data-audio-preset]").forEach((button) => {
+    button.disabled = audioPresetInFlight;
+    button.classList.toggle("busy", audioPresetInFlight);
   });
   renderAudioFeatureControls();
 }
@@ -2753,6 +2812,90 @@ async function sendAudioSwitchAction(kind) {
   } finally {
     audioMediaActionInFlight = false;
     renderAudio();
+  }
+}
+
+async function setAudioSwitchState(kind, shouldTurnOn) {
+  const control = getAudioSwitchControl(kind);
+  state.audio[kind] = Boolean(shouldTurnOn);
+  if (!control?.entityId) {
+    saveConfig();
+    return null;
+  }
+  const ha = state.integrations.homeAssistant;
+  const baseUrl = getHaBaseUrl();
+  if (!baseUrl || !ha.token) throw new Error("Missing Home Assistant config");
+  const payload = await fetchJsonWithTimeout("/api/ha/audio/switch/action", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: baseUrl, token: ha.token, entityId: control.entityId, action: shouldTurnOn ? "on" : "off" }),
+  }, 10000);
+  if (payload.control) {
+    payload.control.state = shouldTurnOn ? "on" : "off";
+    getAudioToneControls()[kind] = payload.control;
+  }
+  state.audio[kind] = Boolean(shouldTurnOn);
+  return payload.control || null;
+}
+
+async function applyAudioPreset(presetKey) {
+  const preset = AUDIO_PRESETS[presetKey];
+  if (!preset) return;
+  if (!state.integrations.homeAssistant.selectedMediaPlayerId) {
+    showToast("Select an audio device first");
+    return;
+  }
+  if (audioPresetInFlight || audioMediaActionInFlight) {
+    showToast("Audio command in progress…");
+    return;
+  }
+
+  const toneValues = {
+    gain: clampAudioTonePresetValue("gain", preset.gain),
+    bass: clampAudioTonePresetValue("bass", preset.bass),
+    treble: clampAudioTonePresetValue("treble", preset.treble),
+  };
+  const volume = clamp(Number(preset.volume), 0, 100);
+
+  audioPresetInFlight = true;
+  audioMediaActionInFlight = true;
+  lastAudioUserInteractionAt = Date.now();
+  audioVolumeHoldUntil = Date.now() + AUDIO_VOLUME_SETTLE_MS;
+  ["gain", "bass", "treble"].forEach((kind) => { audioToneHoldUntil[kind] = Date.now() + AUDIO_TONE_SETTLE_MS; });
+
+  state.audio.volume = volume;
+  Object.assign(state.audio, toneValues, {
+    subwoofer: Boolean(preset.subwoofer),
+    surround: Boolean(preset.surround),
+  });
+  renderAudio();
+
+  try {
+    const mediaState = await callMediaActionViaLocalBackend("volume", volume);
+    if (mediaState?.entityId) {
+      mediaState.volumeLevel = volume / 100;
+      upsertMediaPlayerEntity(mediaState);
+      applyMediaEntityState(mediaState);
+      state.audio.volume = volume;
+    }
+
+    const commands = [
+      ...["gain", "bass", "treble"].map((kind) => sendAudioToneAction(kind, toneValues[kind])),
+      setAudioSwitchState("subwoofer", preset.subwoofer),
+      setAudioSwitchState("surround", preset.surround),
+    ];
+    await Promise.all(commands);
+    saveConfig();
+    showToast(`${preset.label} applied`);
+    scheduleAudioSync();
+  } catch (error) {
+    addHaLog("error", `${preset.label} preset failed`, error.message || String(error));
+    showToast(`${preset.label} preset failed`);
+  } finally {
+    audioPresetInFlight = false;
+    audioMediaActionInFlight = false;
+    renderAudio();
+    renderMediaPlayerList();
   }
 }
 
@@ -4892,6 +5035,9 @@ function bindEvents() {
   document.getElementById("prevTrack").addEventListener("click", () => changeTrack(-1));
   document.getElementById("nextTrack").addEventListener("click", () => changeTrack(1));
   elements.playPause.addEventListener("click", togglePlayback);
+  document.querySelectorAll("[data-audio-preset]").forEach((button) => {
+    button.addEventListener("click", () => applyAudioPreset(button.dataset.audioPreset));
+  });
   bindLongPress(document.querySelector(".audio-side-card"), () => openAudioEntityPicker("media"));
   document.querySelectorAll("[data-audio-picker]").forEach((control) => {
     const kind = control.dataset.audioPicker;

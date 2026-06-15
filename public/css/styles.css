@@ -646,6 +646,7 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
 .entity-picker-help { margin: 14px 0; color: rgba(218,232,248,.72); font-weight: 800; }
 .empty-state { color: rgba(218,232,248,.70); font-weight: 850; }
 
+
 @media (max-width: 1280px) {
   .blind-cards.blind-columns { gap: 12px; }
   .blind-action { min-height: 44px; }
@@ -1026,7 +1027,111 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   color: rgba(2,10,19,.72);
   text-shadow: 0 1px 0 rgba(255,255,255,.35);
 }
-.audio-now { min-width: 0; }
+.audio-now {
+  min-width: 0;
+  align-self: start;
+  display: grid;
+  align-content: start;
+}
+.audio-preset-grid {
+  width: min(100%, 620px);
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: clamp(8px, 1vw, 12px);
+  margin-bottom: clamp(16px, 2.2vw, 28px);
+}
+.audio-preset-button {
+  min-height: clamp(76px, 7.4vw, 104px);
+  border: 1px solid rgba(255,255,255,.13);
+  border-radius: 24px;
+  padding: clamp(10px, 1vw, 14px) clamp(8px, .9vw, 12px);
+  background:
+    radial-gradient(circle at 32% 0%, rgba(77,238,255,.18), transparent 44%),
+    linear-gradient(145deg, rgba(255,255,255,.09), rgba(255,255,255,.028));
+  color: rgba(243,249,255,.94);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.13), 0 18px 42px rgba(0,0,0,.22);
+  cursor: pointer;
+  touch-action: manipulation;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 7px;
+  position: relative;
+  overflow: hidden;
+}
+.audio-preset-button::before {
+  content: "";
+  position: absolute;
+  inset: -40% -20%;
+  background: linear-gradient(115deg, transparent 20%, rgba(255,255,255,.16) 46%, transparent 70%);
+  transform: translateX(-72%) rotate(8deg);
+  opacity: 0;
+  transition: transform .38s ease, opacity .38s ease;
+  pointer-events: none;
+}
+.audio-preset-button:hover::before,
+.audio-preset-button:focus-visible::before {
+  opacity: 1;
+  transform: translateX(72%) rotate(8deg);
+}
+.audio-preset-button:hover,
+.audio-preset-button:focus-visible {
+  border-color: rgba(77,238,255,.34);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.20), 0 22px 52px rgba(0,0,0,.26), 0 0 30px rgba(77,238,255,.12);
+  outline: none;
+}
+.audio-preset-button:active { transform: translateY(1px) scale(.99); }
+.audio-preset-button:disabled {
+  opacity: .58;
+  cursor: progress;
+}
+.audio-preset-button.movie { background: radial-gradient(circle at 32% 0%, rgba(255,210,98,.22), transparent 44%), linear-gradient(145deg, rgba(255,255,255,.09), rgba(255,255,255,.028)); }
+.audio-preset-button.show { background: radial-gradient(circle at 32% 0%, rgba(155,109,255,.24), transparent 44%), linear-gradient(145deg, rgba(255,255,255,.09), rgba(255,255,255,.028)); }
+.audio-preset-button.volume40 { background: radial-gradient(circle at 32% 0%, rgba(77,238,255,.22), transparent 44%), linear-gradient(145deg, rgba(255,255,255,.09), rgba(255,255,255,.028)); }
+.audio-preset-button.max { background: radial-gradient(circle at 32% 0%, rgba(255,117,95,.26), transparent 44%), linear-gradient(145deg, rgba(255,255,255,.09), rgba(255,255,255,.028)); }
+.audio-preset-button .preset-icon {
+  width: clamp(28px, 2.8vw, 40px);
+  height: clamp(28px, 2.8vw, 40px);
+  display: grid;
+  place-items: center;
+  color: var(--cyan);
+  filter: drop-shadow(0 0 12px rgba(77,238,255,.18));
+}
+.audio-preset-button.movie .preset-icon { color: #ffd978; }
+.audio-preset-button.show .preset-icon { color: #c7a7ff; }
+.audio-preset-button.max .preset-icon { color: #ff9c86; }
+.audio-preset-button svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.audio-preset-button svg text {
+  fill: currentColor;
+  stroke: none;
+  font-size: 16px;
+  font-weight: 1000;
+  text-anchor: middle;
+  dominant-baseline: middle;
+}
+.audio-preset-button strong {
+  font-size: clamp(.68rem, .85vw, .86rem);
+  line-height: 1.05;
+  text-align: center;
+  letter-spacing: -.02em;
+}
+@media (max-width: 1180px) {
+  .audio-preset-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .audio-preset-button { min-height: 72px; }
+}
+@media (max-width: 720px) {
+  .audio-preset-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .audio-preset-button strong { font-size: .74rem; }
+}
+
 .audio-now h2 {
   margin-top: 6px;
   font-size: clamp(2.5rem, 5.8vw, 6.7rem);
