@@ -663,6 +663,7 @@ def _normalize_generic_entity(item: dict) -> dict:
         "domain": domain,
         "name": attrs.get("friendly_name") or entity_id,
         "state": item.get("state") or "unknown",
+        "deviceClass": attrs.get("device_class") or "",
     }
     if domain == "number":
         payload.update(_normalize_number_control(item))
@@ -705,6 +706,32 @@ def _normalize_alarm_control_item(item: dict) -> dict:
         "lastTriggered": attrs.get("last_triggered"),
         "supportedFeatures": attrs.get("supported_features"),
     }
+
+
+def _normalize_binary_sensor_item(item: dict) -> dict:
+    payload = _normalize_generic_entity(item)
+    payload["domain"] = "binary_sensor"
+    return payload
+
+
+def _fetch_ha_binary_sensor_state(ha_url: str, token: str, entity_id: str) -> dict:
+    entity_id = (entity_id or "").strip()
+    if not entity_id.startswith("binary_sensor."):
+        raise ValueError("Entity must be a binary_sensor.* entity")
+    item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
+    return _normalize_binary_sensor_item(item)
+
+
+def _fetch_ha_binary_sensor_states_for_entities(ha_url: str, token: str, entity_ids: list[str]) -> list[dict]:
+    wanted = []
+    seen = set()
+    for raw in entity_ids or []:
+        entity_id = str(raw or "").strip()
+        if not entity_id.startswith("binary_sensor.") or entity_id in seen:
+            continue
+        seen.add(entity_id)
+        wanted.append(entity_id)
+    return [_fetch_ha_binary_sensor_state(ha_url, token, entity_id) for entity_id in wanted]
 
 
 def _fetch_ha_alarm_state(ha_url: str, token: str, entity_id: str) -> dict:
@@ -1184,7 +1211,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/light/states", "/api/ha/light/action"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action"}:
             self.send_error(404, "Not found")
             return
 
@@ -1231,6 +1258,14 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                     payload.get("code", ""),
                 )
                 return _json(self, 200, {"ok": True, "alarm": alarm})
+
+            if path == "/api/ha/binary_sensor/states":
+                sensors = _fetch_ha_binary_sensor_states_for_entities(
+                    payload.get("url", ""),
+                    payload.get("token", ""),
+                    payload.get("entityIds", []),
+                )
+                return _json(self, 200, {"ok": True, "sensors": sensors, "count": len(sensors)})
 
             if path == "/api/ha/light/states":
                 lights = _fetch_ha_light_states_for_entities(

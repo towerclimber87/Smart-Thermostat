@@ -13,6 +13,7 @@ const HA_LIGHT_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
 const INACTIVE_PAGE_SYNC_INTERVAL_MS = 5 * 60 * 1000;
 const HA_ALARM_SYNC_INTERVAL_MS = 3000;
 const HA_ALARM_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
+const HA_DOOR_SYNC_INTERVAL_MS = 3000;
 const LOCAL_THERMOSTAT_SYNC_INTERVAL_MS = 1000;
 const LOCAL_THERMOSTAT_PUSH_DEBOUNCE_MS = 300;
 const LIGHT_COLOR_PRESETS = [
@@ -41,6 +42,8 @@ let haLightSyncLastError = "";
 let lightCommandInFlight = false;
 let haAlarmSyncInFlight = false;
 let haAlarmSyncLastError = "";
+let haDoorSyncInFlight = false;
+let haDoorSyncLastError = "";
 let localThermostatSyncInFlight = false;
 let localThermostatPushTimer = null;
 let localThermostatPushInFlight = false;
@@ -51,6 +54,7 @@ let lastInactiveBlindSyncAt = Date.now();
 let lastInactiveAudioSyncAt = Date.now();
 let lastInactiveLightSyncAt = Date.now();
 let lastInactiveAlarmSyncAt = Date.now();
+let lastInactiveDoorSyncAt = Date.now();
 let audioMediaActionInFlight = false;
 let audioVolumeDebounce = null;
 let audioToneDebounces = { gain: null, bass: null, treble: null };
@@ -72,7 +76,9 @@ let audioVolumeHoldUntil = 0;
 let audioToneHoldUntil = { gain: 0, bass: 0, treble: 0 };
 let audioPickerOpenedAt = 0;
 let alarmPickerOpenedAt = 0;
+let doorPickerOpenedAt = 0;
 let lastAlarmUserInteractionAt = 0;
+let lastDoorUserInteractionAt = 0;
 let setpointPreviewUntil = 0;
 let setpointPreviewTimeout = null;
 let alarmArmAwayTimer = null;
@@ -138,6 +144,8 @@ const defaultIntegrations = {
     audioAvailableEntities: { mediaPlayers: [], numbers: [], switches: [] },
     alarmEntity: null,
     alarmAvailableEntities: [],
+    doorEntity: null,
+    doorAvailableEntities: [],
     lightAvailableEntities: [],
   },
 };
@@ -184,6 +192,12 @@ const state = {
     arming: false,
     armMode: "",
     armAwayCountdown: 0,
+  },
+  door: {
+    entityId: "",
+    name: "Door",
+    state: "unassigned",
+    deviceClass: "door",
   },
   audio: {
     playing: false,
@@ -256,6 +270,9 @@ const elements = {
   alarmWidget: document.getElementById("alarmWidget"),
   alarmWidgetTitle: document.getElementById("alarmWidgetTitle"),
   alarmWidgetState: document.getElementById("alarmWidgetState"),
+  doorWidget: document.getElementById("doorWidget"),
+  doorWidgetTitle: document.getElementById("doorWidgetTitle"),
+  doorWidgetState: document.getElementById("doorWidgetState"),
   alarmKeypadOverlay: document.getElementById("alarmKeypadOverlay"),
   alarmKeypadClose: document.getElementById("alarmKeypadClose"),
   alarmKeypadTitle: document.getElementById("alarmKeypadTitle"),
@@ -570,7 +587,7 @@ function buildSavedConfig() {
     limits: state.thermostat.limits,
   };
   return {
-    version: 9,
+    version: 10,
     thermostat: thermostatToSave,
     alarm: {
       disarmCode: String(state.alarm.disarmCode || "").replace(/\D/g, "").slice(0, 8),
@@ -923,7 +940,10 @@ function markPageInactiveSyncBaseline(pageName) {
   if (pageName === "blinds") lastInactiveBlindSyncAt = now;
   if (pageName === "audio") lastInactiveAudioSyncAt = now;
   if (pageName === "lights") lastInactiveLightSyncAt = now;
-  if (pageName === "thermostat") lastInactiveAlarmSyncAt = now;
+  if (pageName === "thermostat") {
+    lastInactiveAlarmSyncAt = now;
+    lastInactiveDoorSyncAt = now;
+  }
 }
 
 function gotoPage(pageName) {
@@ -940,6 +960,10 @@ function gotoPage(pageName) {
   if (pageName === "blinds") pollHomeAssistantLinkedCovers({ force: true });
   if (pageName === "audio") pollHomeAssistantMediaPlayer({ force: true, controls: true });
   if (pageName === "lights") pollHomeAssistantLights({ force: true });
+  if (pageName === "thermostat") {
+    pollHomeAssistantAlarm({ force: true });
+    pollHomeAssistantDoor({ force: true });
+  }
 }
 
 function goRelative(direction) {
@@ -1257,6 +1281,8 @@ function renderThermostat() {
   if (elements.alarmDisarmCodeInput && document.activeElement !== elements.alarmDisarmCodeInput) {
     elements.alarmDisarmCodeInput.value = state.alarm.disarmCode || "";
   }
+  renderDoorWidget();
+  renderAlarmWidget();
 }
 
 
@@ -1381,6 +1407,139 @@ function renderAlarmWidget() {
     ? `Alarm ${normalizeAlarmStateText(alarmState)}. Press to ${isAlarmDisarmed(alarmState) ? "arm" : "disarm"}. Hold to assign.`
     : "Alarm not assigned. Hold to assign Home Assistant alarm.");
   updateSettingsAccess();
+}
+
+function getDoorConfig() {
+  const ha = state.integrations.homeAssistant;
+  if (!Object.prototype.hasOwnProperty.call(ha, "doorEntity")) ha.doorEntity = null;
+  return ha.doorEntity || null;
+}
+
+function applyDoorEntityState(entity = {}) {
+  const config = getDoorConfig();
+  state.door.entityId = entity.entityId || config?.entityId || "";
+  state.door.name = entity.name || config?.name || state.door.entityId || "Door";
+  state.door.state = entity.state || config?.state || (state.door.entityId ? "unknown" : "unassigned");
+  state.door.deviceClass = entity.deviceClass || config?.deviceClass || state.door.deviceClass || "door";
+  if (state.integrations.homeAssistant.doorEntity && entity.entityId) {
+    state.integrations.homeAssistant.doorEntity = {
+      ...state.integrations.homeAssistant.doorEntity,
+      ...entity,
+      entityId: entity.entityId,
+      name: entity.name || entity.entityId,
+      deviceClass: entity.deviceClass || state.door.deviceClass || "door",
+    };
+  }
+}
+
+function syncDoorFromConfig() {
+  const config = getDoorConfig();
+  if (!config?.entityId) {
+    state.door.entityId = "";
+    state.door.name = "Door";
+    state.door.state = "unassigned";
+    state.door.deviceClass = "door";
+    return;
+  }
+  applyDoorEntityState(config);
+}
+
+function normalizeDoorStateText(value) {
+  const raw = String(value || "unknown").toLowerCase();
+  if (["on", "open", "opened", "opening", "detected"].includes(raw)) return "Open";
+  if (["off", "closed", "closing", "clear"].includes(raw)) return "Closed";
+  if (["unavailable", "unknown"].includes(raw)) return "Unknown";
+  return titleCase(raw.replace(/_/g, " "));
+}
+
+function isDoorOpen(value = state.door.state) {
+  return ["on", "open", "opened", "opening", "detected"].includes(String(value || "").toLowerCase());
+}
+
+function isDoorClosed(value = state.door.state) {
+  return ["off", "closed", "closing", "clear"].includes(String(value || "").toLowerCase());
+}
+
+function renderDoorWidget() {
+  if (!elements.doorWidget) return;
+  const config = getDoorConfig();
+  if (!config?.entityId && !state.door.entityId) syncDoorFromConfig();
+  const linked = Boolean(state.door.entityId || config?.entityId);
+  const doorState = linked ? (state.door.state || config?.state || "unknown") : "unassigned";
+  const open = linked && isDoorOpen(doorState);
+  const closed = linked && isDoorClosed(doorState);
+  const unknown = linked && !open && !closed;
+
+  elements.doorWidget.classList.toggle("linked", linked);
+  elements.doorWidget.classList.toggle("unlinked", !linked);
+  elements.doorWidget.classList.toggle("open", open);
+  elements.doorWidget.classList.toggle("closed", closed);
+  elements.doorWidget.classList.toggle("unknown", unknown);
+  if (elements.doorWidgetTitle) elements.doorWidgetTitle.textContent = linked ? (state.door.name || config?.name || "Door") : "Door";
+  if (elements.doorWidgetState) elements.doorWidgetState.textContent = linked ? normalizeDoorStateText(doorState) : "Tap to assign";
+  elements.doorWidget.setAttribute("aria-label", linked
+    ? `Door ${normalizeDoorStateText(doorState)}. Hold to assign a different Home Assistant binary sensor.`
+    : "Door not assigned. Tap or hold to assign Home Assistant binary sensor.");
+}
+
+async function fetchDoorStatesViaLocalBackend(entityIds) {
+  const ha = state.integrations.homeAssistant;
+  const baseUrl = getHaBaseUrl();
+  if (!baseUrl || !ha.token) throw new Error("Missing Home Assistant URL or token");
+  const payload = await fetchJsonWithTimeout("/api/ha/binary_sensor/states", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: baseUrl, token: ha.token, entityIds }),
+  }, 9000);
+  return payload.sensors || [];
+}
+
+function scheduleDoorSync() {
+  HA_ALARM_SYNC_AFTER_COMMAND_DELAYS.forEach((delay) => {
+    window.setTimeout(() => pollHomeAssistantDoor({ force: true }), delay);
+  });
+}
+
+async function pollHomeAssistantDoor(options = {}) {
+  const config = getDoorConfig();
+  const entityId = state.door.entityId || config?.entityId || "";
+  if (!entityId) return;
+  if (!options.force && document.visibilityState === "hidden") return;
+  const now = Date.now();
+  if (!options.force && state.currentPage !== "thermostat") {
+    if (now - lastInactiveDoorSyncAt < INACTIVE_PAGE_SYNC_INTERVAL_MS) return;
+    lastInactiveDoorSyncAt = now;
+  }
+  if (!options.force && state.currentPage === "thermostat" && now - lastDoorUserInteractionAt < 1200) return;
+  if (haDoorSyncInFlight) return;
+
+  haDoorSyncInFlight = true;
+  try {
+    const sensors = await fetchDoorStatesViaLocalBackend([entityId]);
+    if (sensors[0]) {
+      applyDoorEntityState(sensors[0]);
+      saveConfig();
+    }
+    renderDoorWidget();
+    if (haDoorSyncLastError) haDoorSyncLastError = "";
+  } catch (error) {
+    const message = error.message || String(error);
+    if (message !== haDoorSyncLastError) {
+      haDoorSyncLastError = message;
+      addHaLog("warn", "Live door sync paused", message);
+    }
+  } finally {
+    haDoorSyncInFlight = false;
+  }
+}
+
+function openDoorPanel() {
+  if (!state.door.entityId && getDoorConfig()?.entityId) syncDoorFromConfig();
+  if (!state.door.entityId) {
+    openAudioEntityPicker("door");
+    return;
+  }
+  showToast(`Door ${normalizeDoorStateText(state.door.state)}`);
 }
 
 async function fetchAlarmStatesViaLocalBackend(entityIds) {
@@ -3786,6 +3945,7 @@ function getAudioPickerMeta(kind) {
   if (["gain", "bass", "treble"].includes(kind)) return { domain: "number", title: `Assign ${titleCase(kind)}`, help: "Select the Home Assistant number entry for this control." };
   if (["subwoofer", "surround", "projector"].includes(kind)) return { domain: "switch", title: `Assign ${titleCase(kind)}`, help: "Select the Home Assistant switch entry for this button." };
   if (kind === "alarm") return { domain: "alarm_control_panel", title: "Assign Alarm", help: "Select the Home Assistant alarm_control_panel entry for this thermostat page." };
+  if (kind === "door") return { domain: "binary_sensor", title: "Assign Door Sensor", help: "Select the Home Assistant binary_sensor that reports this door open or closed." };
   if (kind === "light") return { domain: "light", title: "Assign Light", help: "Select the Home Assistant light entry for this slider." };
   return { domain: "", title: "Assign Entity", help: "Select the Home Assistant entity for this control." };
 }
@@ -3823,14 +3983,15 @@ function renderAudioEntityPicker() {
 async function openAudioEntityPicker(kind) {
   audioPickerOpenedAt = Date.now();
   if (kind === "alarm") alarmPickerOpenedAt = Date.now();
+  if (kind === "door") doorPickerOpenedAt = Date.now();
   const meta = getAudioPickerMeta(kind);
   if (!meta.domain) return;
   if (kind === "light") readHaFieldsFromScreen("lights");
-  else if (kind !== "alarm") readHaFieldsFromScreen("audio");
+  else if (!["alarm", "door"].includes(kind)) readHaFieldsFromScreen("audio");
   if (!getHaBaseUrl() || !state.integrations.homeAssistant.token) {
-    showToast(kind === "alarm" ? "Add Home Assistant config from Blinds, Audio, or Lights settings first" : "Add Home Assistant config first");
+    showToast(["alarm", "door"].includes(kind) ? "Add Home Assistant config from Blinds, Audio, or Lights settings first" : "Add Home Assistant config first");
     if (kind === "light") { openSettings(); showLightsHaView(); }
-    else if (kind !== "alarm") { openSettings(); showAudioHaView(); }
+    else if (!["alarm", "door"].includes(kind)) { openSettings(); showAudioHaView(); }
     return;
   }
   state.audioEntityPicker = { kind, domain: meta.domain, entities: [], search: "" };
@@ -3850,6 +4011,7 @@ async function openAudioEntityPicker(kind) {
     if (meta.domain === "number") ha.audioAvailableEntities.numbers = entities;
     if (meta.domain === "switch") ha.audioAvailableEntities.switches = entities;
     if (meta.domain === "alarm_control_panel") ha.alarmAvailableEntities = entities;
+    if (meta.domain === "binary_sensor") ha.doorAvailableEntities = entities;
     if (meta.domain === "light") ha.lightAvailableEntities = entities;
     renderAudioEntityPicker();
   } catch (error) {
@@ -3906,6 +4068,15 @@ function selectAudioEntity(entityId) {
     pollHomeAssistantAlarm({ force: true });
     return;
   }
+  if (kind === "door") {
+    state.integrations.homeAssistant.doorEntity = { ...entity };
+    applyDoorEntityState(entity);
+    closeAudioEntityPicker();
+    saveConfig({ toast: true });
+    renderDoorWidget();
+    scheduleDoorSync();
+    return;
+  }
   if (kind === "light") {
     assignEntityToLight(entity);
   }
@@ -3941,6 +4112,16 @@ function bindEvents() {
   elements.fanChip?.addEventListener("click", cycleFanMode);
   elements.virtualTempSlider?.addEventListener("input", (event) => setVirtualCurrentTemp(event.target.value));
   elements.outdoorTempSlider?.addEventListener("input", (event) => setVirtualOutdoorTemp(event.target.value));
+  elements.doorWidget?.addEventListener("click", () => {
+    if (Date.now() - doorPickerOpenedAt < 900) return;
+    lastDoorUserInteractionAt = Date.now();
+    openDoorPanel();
+  });
+  bindLongPress(elements.doorWidget, (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    openAudioEntityPicker("door");
+  }, { delay: 1200, allowInteractive: true });
   elements.alarmWidget?.addEventListener("click", () => {
     if (Date.now() - alarmPickerOpenedAt < 900) return;
     openAlarmPanel();
@@ -4211,10 +4392,12 @@ async function init() {
   await loadSavedConfig();
   state.thermostat.away = false;
   syncAlarmFromConfig();
+  syncDoorFromConfig();
   bindEvents();
   updateClock();
   renderThermostat();
   fetchLocalThermostatStatus({ force: true });
+  renderDoorWidget();
   renderAlarmWidget();
   renderAudio();
   renderBlinds();
@@ -4232,7 +4415,9 @@ async function init() {
   setInterval(() => pollHomeAssistantMediaPlayer(), HA_AUDIO_SYNC_INTERVAL_MS);
   setInterval(() => pollHomeAssistantLights(), HA_LIGHT_SYNC_INTERVAL_MS);
   setInterval(() => pollHomeAssistantAlarm(), HA_ALARM_SYNC_INTERVAL_MS);
+  setInterval(() => pollHomeAssistantDoor(), HA_DOOR_SYNC_INTERVAL_MS);
   pollHomeAssistantAlarm({ force: true });
+  pollHomeAssistantDoor({ force: true });
 }
 
 init().catch((error) => {

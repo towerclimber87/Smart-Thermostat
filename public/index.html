@@ -119,6 +119,21 @@
             </div>
           </aside>
 
+          <button id="doorWidget" class="door-control-widget unlinked" type="button" aria-label="Door status. Tap or hold to assign Home Assistant binary sensor.">
+            <span class="door-alert-ring" aria-hidden="true"></span>
+            <span class="door-icon" aria-hidden="true">
+              <svg viewBox="0 0 74 74" focusable="false">
+                <path class="door-frame" d="M18 66V9h34v57"></path>
+                <path class="door-panel" d="M27 62V16l25-6v58l-25-6Z"></path>
+                <circle class="door-knob" cx="45" cy="38" r="2.6"></circle>
+              </svg>
+            </span>
+            <span class="door-copy">
+              <strong id="doorWidgetTitle">Door</strong>
+              <em id="doorWidgetState">Tap to assign</em>
+            </span>
+          </button>
+
           <button id="alarmWidget" class="alarm-control-widget unlinked" type="button" aria-label="Alarm status. Hold to assign Home Assistant alarm.">
             <span class="alarm-orbit" aria-hidden="true"></span>
             <span class="alarm-shield" aria-hidden="true">

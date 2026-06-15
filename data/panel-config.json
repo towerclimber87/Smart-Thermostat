@@ -2713,10 +2713,2052 @@
             "supportedFeatures": 15
           }
         ],
+        "doorAvailableEntities": [
+          {
+            "deviceClass": "opening",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.rack_door",
+            "name": "19-Rack-Light Rack Door",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.alarm_is_on",
+            "name": "Alarm Is On",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.alarm_is_on_home",
+            "name": "Alarm Is On Home",
+            "state": "off"
+          },
+          {
+            "deviceClass": "door",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.inside_door_all_status",
+            "name": "All Inside Doors",
+            "state": "on"
+          },
+          {
+            "deviceClass": "problem",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.armed_away_status",
+            "name": "Armed Away Status",
+            "state": "off"
+          },
+          {
+            "deviceClass": "problem",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.armed_home_status",
+            "name": "Armed Home Status",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.back_door_animal_detected",
+            "name": "Back Door Animal detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.back_door_baby_cry_detected",
+            "name": "Back Door Baby cry detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "carbon_monoxide",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.back_door_co_alarm_detected",
+            "name": "Back Door CO alarm detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.g5_turret_ultra_is_dark_5",
+            "name": "Back Door Is dark",
+            "state": "off"
+          },
+          {
+            "deviceClass": "motion",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.g5_turret_ultra_motion_5",
+            "name": "Back Door Motion",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.back_door_person_detected",
+            "name": "Back Door Person detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.back_door_smoke_alarm_detected",
+            "name": "Back Door Smoke alarm detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.back_door_speaking_detected",
+            "name": "Back Door Speaking detected",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.back_door_vehicle_detected",
+            "name": "Back Door Vehicle detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.backyard_animal_detected",
+            "name": "Backyard Animal detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.backyard_baby_cry_detected",
+            "name": "Backyard Baby cry detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "carbon_monoxide",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.backyard_co_alarm_detected",
+            "name": "Backyard CO alarm detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.g5_turret_ultra_is_dark_6",
+            "name": "Backyard Is dark",
+            "state": "off"
+          },
+          {
+            "deviceClass": "motion",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.g5_turret_ultra_motion_6",
+            "name": "Backyard Motion",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.backyard_person_detected",
+            "name": "Backyard Person detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.backyard_smoke_alarm_detected",
+            "name": "Backyard Smoke alarm detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.backyard_speaking_detected",
+            "name": "Backyard Speaking detected",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.backyard_vehicle_detected",
+            "name": "Backyard Vehicle detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.bathroom_mirror_apple_tv_keyboard_focus",
+            "name": "Bathroom Mirror Apple TV Keyboard focus",
+            "state": "off"
+          },
+          {
+            "deviceClass": "safety",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.bed_motion_intrusion_location_provided",
+            "name": "Bed Motion Intrusion (location provided)",
+            "state": "on"
+          },
+          {
+            "deviceClass": "tamper",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.bed_motion_tampering_product_cover_removed",
+            "name": "Bed Motion Tampering, product cover removed",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.bed_motion",
+            "name": "Bed Motion: Any",
+            "state": "off"
+          },
+          {
+            "deviceClass": "battery",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.bed_motion_low_battery_level_5",
+            "name": "Bed Motion: Low battery level",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.bed_occupancy",
+            "name": "Bed-Scale bed_occupancy",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.bedroom_apple_tv_keyboard_focus",
+            "name": "Bedroom Apple TV Keyboard focus",
+            "state": "off"
+          },
+          {
+            "deviceClass": "tamper",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.bedroom_closet_motion_tampering_product_cover_removed",
+            "name": "Bedroom Closet Motion Tampering, product cover removed",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.bedroom_closet_motion",
+            "name": "Bedroom Closet Motion: Any",
+            "state": "off"
+          },
+          {
+            "deviceClass": "battery",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.bedroom_closet_motion_low_battery_level_3",
+            "name": "Bedroom Closet Motion: Low battery level",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.bedroom_hallway_motion_sensor_state_unknown_0x82",
+            "name": "Bedroom Hallway Motion Sensor state (unknown (0x82))",
+            "state": "off"
+          },
+          {
+            "deviceClass": "tamper",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.bedroom_hallway_motion_tampering_product_cover_removed",
+            "name": "Bedroom Hallway Motion Tampering, product cover removed",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.bedroom_hallway_motion",
+            "name": "Bedroom Hallway Motion: Any",
+            "state": "off"
+          },
+          {
+            "deviceClass": "battery",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.bedroom_hallway_motion_low_battery_level",
+            "name": "Bedroom Hallway Motion: Low battery level",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.bedroom_lock",
+            "name": "Bedroom Lock",
+            "state": "off"
+          },
+          {
+            "deviceClass": "window",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.bedroomo_window_status",
+            "name": "Bedroom Windows",
+            "state": "off"
+          },
+          {
+            "deviceClass": "problem",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.bedroom_zone",
+            "name": "Bedroom Zone",
+            "state": "off"
+          },
+          {
+            "deviceClass": "door",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.door_open_closed_2",
+            "name": "Bedroom-Door Door (Open/Closed)",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.end_stop_end",
+            "name": "Bedroom-Door End Stop End",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.end_stop_start",
+            "name": "Bedroom-Door End Stop Start",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.external_trigger",
+            "name": "Bedroom-Door External Trigger",
+            "state": "off"
+          },
+          {
+            "deviceClass": "motion",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.motion_sensor_2",
+            "name": "Bedroom-Door Motion Sensor",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.remote_pressed",
+            "name": "Bedroom-Door Remote Pressed",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.coffee_button",
+            "name": "Coffee-Pot Coffee button",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.coffee_status",
+            "name": "Coffee-Pot Coffee Status",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.iphone_focus",
+            "name": "David Phone iPhone Focus",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.doors",
+            "name": "Doors",
+            "state": "off"
+          },
+          {
+            "deviceClass": "motion",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.motion_sensor",
+            "name": "Final-Touch-Screen Motion Sensor",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.feeder",
+            "name": "Fish-Tank-Feeder Feeder",
+            "state": "off"
+          },
+          {
+            "deviceClass": "tamper",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.front_door_motion_tampering_product_cover_removed",
+            "name": "Front Door Motion Tampering, product cover removed",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.front_door_motion",
+            "name": "Front Door Motion: Any",
+            "state": "off"
+          },
+          {
+            "deviceClass": "battery",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.front_door_motion_low_battery_level_4",
+            "name": "Front Door Motion: Low battery level",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.front_yard_north_animal_detected",
+            "name": "Front Yard North Animal detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.front_yard_north_baby_cry_detected",
+            "name": "Front Yard North Baby cry detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "carbon_monoxide",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.front_yard_north_co_alarm_detected",
+            "name": "Front Yard North CO alarm detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.front_yard_north_is_dark",
+            "name": "Front Yard North Is dark",
+            "state": "off"
+          },
+          {
+            "deviceClass": "motion",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.front_yard_north_motion",
+            "name": "Front Yard North Motion",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.front_yard_north_person_detected",
+            "name": "Front Yard North Person detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.front_yard_north_smoke_alarm_detected",
+            "name": "Front Yard North Smoke alarm detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.front_yard_north_speaking_detected",
+            "name": "Front Yard North Speaking detected",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.front_yard_north_vehicle_detected",
+            "name": "Front Yard North Vehicle detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.front_yard_south_animal_detected",
+            "name": "Front yard South Animal detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.front_yard_south_baby_cry_detected",
+            "name": "Front yard South Baby cry detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "carbon_monoxide",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.front_yard_south_co_alarm_detected",
+            "name": "Front yard South CO alarm detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.g5_turret_ultra_is_dark",
+            "name": "Front yard South Is dark",
+            "state": "off"
+          },
+          {
+            "deviceClass": "motion",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.g5_turret_ultra_motion",
+            "name": "Front yard South Motion",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.front_yard_south_person_detected",
+            "name": "Front yard South Person detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.front_yard_south_smoke_alarm_detected",
+            "name": "Front yard South Smoke alarm detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.front_yard_south_speaking_detected",
+            "name": "Front yard South Speaking detected",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.front_yard_south_vehicle_detected",
+            "name": "Front yard South Vehicle detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "window",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.garage_status",
+            "name": "Garage",
+            "state": "off"
+          },
+          {
+            "deviceClass": "window",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.garage_status_2",
+            "name": "Garage",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.garage_bay_animal_detected",
+            "name": "Garage Bay Animal detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.garage_bay_baby_cry_detected",
+            "name": "Garage Bay Baby cry detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "carbon_monoxide",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.garage_bay_co_alarm_detected",
+            "name": "Garage Bay CO alarm detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.g5_turret_ultra_is_dark_4",
+            "name": "Garage Bay Is dark",
+            "state": "on"
+          },
+          {
+            "deviceClass": "motion",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.g5_turret_ultra_motion_4",
+            "name": "Garage Bay Motion",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.garage_bay_person_detected",
+            "name": "Garage Bay Person detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.garage_bay_smoke_alarm_detected",
+            "name": "Garage Bay Smoke alarm detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.garage_bay_speaking_detected",
+            "name": "Garage Bay Speaking detected",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.garage_bay_vehicle_detected",
+            "name": "Garage Bay Vehicle detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "connectivity",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.tp_link_smart_dimmer_8fa7_cloud_connection",
+            "name": "Garage light Cloud connection",
+            "state": "off"
+          },
+          {
+            "deviceClass": "connectivity",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.tp_link_smart_dimmer_7609_cloud_connection",
+            "name": "Guest hallway Cloud connection",
+            "state": "off"
+          },
+          {
+            "deviceClass": "motion",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.nursery_motion_sensor_1",
+            "name": "Guest-Room-Motion-1 Nursery Motion Sensor 1",
+            "state": "off"
+          },
+          {
+            "deviceClass": "motion",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.nursery_motion_sensor_2",
+            "name": "Guest-Room-Motion-2 Nursery Motion Sensor 2",
+            "state": "off"
+          },
+          {
+            "deviceClass": "connectivity",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.nursery_temp_2",
+            "name": "Guest-Room-Motion-2 Nursery Temp 2",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.guest_temp_controller_touch_down",
+            "name": "Guest-Temp-Controller touch down",
+            "state": "off"
+          },
+          {
+            "deviceClass": "connectivity",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.house_climate_control",
+            "name": "House-Climate-Control House Climate Control",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.drive_way",
+            "name": "House-Rack-1 Drive Way",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_10",
+            "name": "House-Rack-1 GPIO 10",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_11",
+            "name": "House-Rack-1 GPIO 11",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_12",
+            "name": "House-Rack-1 GPIO 12",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_14",
+            "name": "House-Rack-1 GPIO 14",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_15",
+            "name": "House-Rack-1 GPIO 15",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_16",
+            "name": "House-Rack-1 GPIO 16",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_17",
+            "name": "House-Rack-1 GPIO 17",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_18",
+            "name": "House-Rack-1 GPIO 18",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_19",
+            "name": "House-Rack-1 GPIO 19",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_20",
+            "name": "House-Rack-1 GPIO 20",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_21",
+            "name": "House-Rack-1 GPIO 21",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_22",
+            "name": "House-Rack-1 GPIO 22",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_23",
+            "name": "House-Rack-1 GPIO 23",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_24",
+            "name": "House-Rack-1 GPIO 24",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_25",
+            "name": "House-Rack-1 GPIO 25",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_26",
+            "name": "House-Rack-1 GPIO 26",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_27",
+            "name": "House-Rack-1 GPIO 27",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_28",
+            "name": "House-Rack-1 GPIO 28",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_29",
+            "name": "House-Rack-1 GPIO 29",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_30",
+            "name": "House-Rack-1 GPIO 30",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_31",
+            "name": "House-Rack-1 GPIO 31",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_32",
+            "name": "House-Rack-1 GPIO 32",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_33",
+            "name": "House-Rack-1 GPIO 33",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_34",
+            "name": "House-Rack-1 GPIO 34",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_35",
+            "name": "House-Rack-1 GPIO 35",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_36",
+            "name": "House-Rack-1 GPIO 36",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_37",
+            "name": "House-Rack-1 GPIO 37",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_38",
+            "name": "House-Rack-1 GPIO 38",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_39",
+            "name": "House-Rack-1 GPIO 39",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_4",
+            "name": "House-Rack-1 GPIO 4",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_40",
+            "name": "House-Rack-1 GPIO 40",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_41",
+            "name": "House-Rack-1 GPIO 41",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_42",
+            "name": "House-Rack-1 GPIO 42",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_43",
+            "name": "House-Rack-1 GPIO 43",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_44",
+            "name": "House-Rack-1 GPIO 44",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_45",
+            "name": "House-Rack-1 GPIO 45",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_46",
+            "name": "House-Rack-1 GPIO 46",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_47",
+            "name": "House-Rack-1 GPIO 47",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_48",
+            "name": "House-Rack-1 GPIO 48",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_49",
+            "name": "House-Rack-1 GPIO 49",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_5",
+            "name": "House-Rack-1 GPIO 5",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_50",
+            "name": "House-Rack-1 GPIO 50",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_51",
+            "name": "House-Rack-1 GPIO 51",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_52",
+            "name": "House-Rack-1 GPIO 52",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_53",
+            "name": "House-Rack-1 GPIO 53",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_54",
+            "name": "House-Rack-1 GPIO 54",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_55",
+            "name": "House-Rack-1 GPIO 55",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_56",
+            "name": "House-Rack-1 GPIO 56",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_57",
+            "name": "House-Rack-1 GPIO 57",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_58",
+            "name": "House-Rack-1 GPIO 58",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_59",
+            "name": "House-Rack-1 GPIO 59",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_6",
+            "name": "House-Rack-1 GPIO 6",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_60",
+            "name": "House-Rack-1 GPIO 60",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_62",
+            "name": "House-Rack-1 GPIO 62",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_63",
+            "name": "House-Rack-1 GPIO 63",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_64",
+            "name": "House-Rack-1 GPIO 64",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_7",
+            "name": "House-Rack-1 GPIO 7",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_8",
+            "name": "House-Rack-1 GPIO 8",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.gpio_9",
+            "name": "House-Rack-1 GPIO 9",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.office_door",
+            "name": "House-Rack-1 Office Door",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.office_knob_inside",
+            "name": "House-Rack-1 Office Knob Inside",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.office_knob_outside",
+            "name": "House-Rack-1 Office Knob Outside",
+            "state": "off"
+          },
+          {
+            "deviceClass": "connectivity",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.status",
+            "name": "House-Rack-1 status",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.c_20_port_2_pin_1",
+            "name": "House-System-3 (C) (20) Port 2 Pin 1",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.c_20_port_4_pin_1",
+            "name": "House-System-3 (C) (20) Port 4 Pin 1",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.c_20_port_4_pin_2",
+            "name": "House-System-3 (C) (20) Port 4 Pin 2",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.c_20_port_4_pin_3",
+            "name": "House-System-3 (C) (20) Port 4 Pin 3",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.c_20_port_4_pin_4",
+            "name": "House-System-3 (C) (20) Port 4 Pin 4",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.c_21_port_3_pin_3",
+            "name": "House-System-3 (C) (21) Port 3 Pin 3",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.c_21_port_3_pin_4",
+            "name": "House-System-3 (C) (21) Port 3 Pin 4",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.c_22_port_2_pin_4",
+            "name": "House-System-3 (C) (22) Port 2 Pin 4",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.c_22_port_3_pin_4",
+            "name": "House-System-3 (C) (22) Port 3 Pin 4",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.back_entry_door",
+            "name": "House-System-3 Back Entry Door",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.back_screen_door",
+            "name": "House-System-3 Back Screen Door",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.bedroom_door",
+            "name": "House-System-3 Bedroom Door",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.bedroom_window_1",
+            "name": "House-System-3 Bedroom Window 1",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.bedroom_window_2",
+            "name": "House-System-3 Bedroom Window 2",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.bedroom_window_3",
+            "name": "House-System-3 Bedroom Window 3",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.bedroom_window_4",
+            "name": "House-System-3 Bedroom Window 4",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.fire_place_motion",
+            "name": "House-System-3 Fire Place Motion",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.front_entry_door",
+            "name": "House-System-3 Front Entry Door",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.front_screen_door",
+            "name": "House-System-3 Front Screen Door",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.garage_bay_door",
+            "name": "House-System-3 Garage Bay Door",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.garage_entry_door",
+            "name": "House-System-3 Garage Entry Door",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.garage_motion",
+            "name": "House-System-3 Garage Motion",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.guest_bathroom_door",
+            "name": "House-System-3 Guest Bathroom Door",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.guest_bathroom_window",
+            "name": "House-System-3 Guest Bathroom Window",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.guest_door",
+            "name": "House-System-3 Guest Door",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.guest_hallway_motion",
+            "name": "House-System-3 Guest Hallway Motion",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.guest_window",
+            "name": "House-System-3 Guest Window",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.kitchen_motion",
+            "name": "House-System-3 Kitchen Motion",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.kitchen_window_1",
+            "name": "House-System-3 Kitchen Window 1",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.kitchen_window_2",
+            "name": "House-System-3 Kitchen Window 2",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.kitchen_window_3",
+            "name": "House-System-3 Kitchen Window 3",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.livingroom_closet",
+            "name": "House-System-3 Livingroom Closet",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.livingroom_motion",
+            "name": "House-System-3 Livingroom Motion",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.livingroom_window_1",
+            "name": "House-System-3 Livingroom Window 1",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.livingroom_window_2",
+            "name": "House-System-3 Livingroom Window 2",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.livingroom_window_3",
+            "name": "House-System-3 Livingroom Window 3",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.livingroom_window_4",
+            "name": "House-System-3 Livingroom Window 4",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.office_window_1",
+            "name": "House-System-3 Office Window 1",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.office_window_2",
+            "name": "House-System-3 Office Window 2",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.office_window_3",
+            "name": "House-System-3 Office Window 3",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.office_window_4",
+            "name": "House-System-3 Office Window 4",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.pantry_motion",
+            "name": "House-System-3 Pantry Motion",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.shower_water",
+            "name": "House-System-3 Shower Water",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.teadmill_motion",
+            "name": "House-System-3 Teadmill Motion",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.smoke_and_carbon_monoxide_alarm_idle",
+            "name": "idle",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.smoke_and_carbon_monoxide_alarm_idle_2",
+            "name": "idle",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "door",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.inside_door_status",
+            "name": "Inside Doors",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.david_morris_work_ipad_focus",
+            "name": "IOTL David Morris Work IPad Focus",
+            "state": "off"
+          },
+          {
+            "deviceClass": "connectivity",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.keypad_bedroom_door_status",
+            "name": "Keypad-Bedroom-Door Keypad Bedroom Door Status",
+            "state": "on"
+          },
+          {
+            "deviceClass": "connectivity",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.keypad_front_door_status",
+            "name": "Keypad-Frontdoor Keypad Front Door Status",
+            "state": "on"
+          },
+          {
+            "deviceClass": "connectivity",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.keypad_garage_door_status",
+            "name": "Keypad-Garage Keypad Garage Door Status",
+            "state": "on"
+          },
+          {
+            "deviceClass": "connectivity",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.keypad_garage_bay_status",
+            "name": "Keypad-Garage-Bay Keypad Garage Bay Status",
+            "state": "on"
+          },
+          {
+            "deviceClass": "connectivity",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.keypad_office_door_status",
+            "name": "Keypad-Office Keypad Office Door Status",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.kitchen_animal_detected",
+            "name": "Kitchen Animal detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.kitchen_baby_cry_detected",
+            "name": "Kitchen Baby cry detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.kitchen_blinds",
+            "name": "Kitchen Blinds",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.bedroom_blinds_1",
+            "name": "Kitchen Blinds",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.bedroom_blinds_2",
+            "name": "Kitchen Blinds",
+            "state": "on"
+          },
+          {
+            "deviceClass": "carbon_monoxide",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.kitchen_co_alarm_detected",
+            "name": "Kitchen CO alarm detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.g5_turret_ultra_is_dark_2",
+            "name": "Kitchen Is dark",
+            "state": "off"
+          },
+          {
+            "deviceClass": "connectivity",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.tp_link_smart_dimmer_c7cc_cloud_connection",
+            "name": "Kitchen light Cloud connection",
+            "state": "off"
+          },
+          {
+            "deviceClass": "motion",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.g5_turret_ultra_motion_2",
+            "name": "Kitchen Motion",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.kitchen_person_detected",
+            "name": "Kitchen Person detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.kitchen_smoke_alarm_detected",
+            "name": "Kitchen Smoke alarm detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.kitchen_speaking_detected",
+            "name": "Kitchen Speaking detected",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.kitchen_vehicle_detected",
+            "name": "Kitchen Vehicle detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "window",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.kitchen_window_status",
+            "name": "Kitchen Windows",
+            "state": "off"
+          },
+          {
+            "deviceClass": "window",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.1_2",
+            "name": "Kitchen-Robby-Blinds 1",
+            "state": "on"
+          },
+          {
+            "deviceClass": "window",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.2_2",
+            "name": "Kitchen-Robby-Blinds 2",
+            "state": "on"
+          },
+          {
+            "deviceClass": "window",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.3_2",
+            "name": "Kitchen-Robby-Blinds 3",
+            "state": "on"
+          },
+          {
+            "deviceClass": "window",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.4_2",
+            "name": "Kitchen-Robby-Blinds 4",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.button_1_2",
+            "name": "Kitchen-Robby-Blinds Button 1",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.button_2_2",
+            "name": "Kitchen-Robby-Blinds Button 2",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.button_3",
+            "name": "Kitchen-Robby-Blinds Button 3",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.button_4",
+            "name": "Kitchen-Robby-Blinds Button 4",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.sonoff_2",
+            "name": "Little-Tv sonoff_2",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.living_room_apple_tv_keyboard_focus",
+            "name": "Living room Apple TV Keyboard focus",
+            "state": "off"
+          },
+          {
+            "deviceClass": "connectivity",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.tp_link_smart_dimmer_a167_cloud_connection",
+            "name": "Living room light Cloud connection",
+            "state": "off"
+          },
+          {
+            "deviceClass": "problem",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.living_space_zone",
+            "name": "Living Space Zone",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.livingroom_animal_detected",
+            "name": "Livingroom Animal detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.livingroom_baby_cry_detected",
+            "name": "Livingroom Baby cry detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "carbon_monoxide",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.livingroom_co_alarm_detected",
+            "name": "Livingroom CO alarm detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.g5_turret_ultra_is_dark_3",
+            "name": "Livingroom Is dark",
+            "state": "off"
+          },
+          {
+            "deviceClass": "motion",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.g5_turret_ultra_motion_3",
+            "name": "Livingroom Motion",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.livingroom_person_detected",
+            "name": "Livingroom Person detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.livingroom_smoke_alarm_detected",
+            "name": "Livingroom Smoke alarm detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.livingroom_sonos_microphone",
+            "name": "Livingroom Sonos Microphone",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.livingroom_speaking_detected",
+            "name": "Livingroom Speaking detected",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.livingroom_vehicle_detected",
+            "name": "Livingroom Vehicle detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "window",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.livingroom_window_status",
+            "name": "Livingroom Windows",
+            "state": "off"
+          },
+          {
+            "deviceClass": "window",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.1",
+            "name": "Livingroom-Blinds 1",
+            "state": "on"
+          },
+          {
+            "deviceClass": "window",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.2",
+            "name": "Livingroom-Blinds 2",
+            "state": "on"
+          },
+          {
+            "deviceClass": "window",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.3",
+            "name": "Livingroom-Blinds 3",
+            "state": "on"
+          },
+          {
+            "deviceClass": "window",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.4",
+            "name": "Livingroom-Blinds 4",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.button_1_3",
+            "name": "Livingroom-Blinds Button 1",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.button_2_3",
+            "name": "Livingroom-Blinds Button 2",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.motor_stop",
+            "name": "Livingroom-Gun-Art Motor Stop",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.mirror_touch_left_1",
+            "name": "Mirror Touch Left 1",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.mirror_touch_left_2",
+            "name": "Mirror Touch Left 2",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.mirror_touch_right_1",
+            "name": "Mirror Touch Right 1",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.mirror_touch_right_2",
+            "name": "Mirror Touch Right 2",
+            "state": "unknown"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.morris_focus",
+            "name": "Morris Focus",
+            "state": "off"
+          },
+          {
+            "deviceClass": "connectivity",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.night_stand_drawer_night_stand_drawer_status",
+            "name": "Night-Stand-Drawer Night Stand Drawer Status",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.north_blinds",
+            "name": "North Blinds",
+            "state": "on"
+          },
+          {
+            "deviceClass": "problem",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.nursery_zone",
+            "name": "Nursery Zone",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.office_apple_tv_keyboard_focus",
+            "name": "Office Apple TV Keyboard focus",
+            "state": "off"
+          },
+          {
+            "deviceClass": "connectivity",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.tp_link_smart_dimmer_c4a9_cloud_connection",
+            "name": "Office light Cloud connection",
+            "state": "off"
+          },
+          {
+            "deviceClass": "tamper",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.z_wave_pir_motion_sensor_home_security_tampering_product_cover_removed",
+            "name": "Office Motion Tampering, product cover removed",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.office_motion",
+            "name": "Office Motion: Any",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.n_c_main",
+            "name": "Office-Door N_C Main",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.n_c_second",
+            "name": "Office-Door N_C Second",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.n_o_main",
+            "name": "Office-Door N_O Main",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.n_o_second",
+            "name": "Office-Door N_O Second",
+            "state": "off"
+          },
+          {
+            "deviceClass": "door",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.outside_door_status",
+            "name": "Ouside Doors",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.touch_sensor",
+            "name": "Printer-Lamp-1 Touch Sensor",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.touch_sensor_2",
+            "name": "Printer-Lamp-2 Touch Sensor",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "connectivity",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.remote_ui",
+            "name": "Remote UI",
+            "state": "on"
+          },
+          {
+            "deviceClass": "connectivity",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.shower_fan_cloud_connection",
+            "name": "Shower Fan Cloud connection",
+            "state": "off"
+          },
+          {
+            "deviceClass": "problem",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.shower_fan_overheated",
+            "name": "Shower Fan Overheated",
+            "state": "off"
+          },
+          {
+            "deviceClass": "motion",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.shower_motion_motion",
+            "name": "Shower Motion",
+            "state": "off"
+          },
+          {
+            "deviceClass": "battery",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.smoke_alarm_kitchen_low_battery_level",
+            "name": "Smoke Alarm Kitchen Low battery level",
+            "state": "unavailable"
+          },
+          {
+            "deviceClass": "smoke",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.smoke_alarm_kitchen_smoke_detected",
+            "name": "Smoke Alarm Kitchen Smoke detected",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.smoke_and_carbon_monoxide_alarm_smoke_alarm_test",
+            "name": "Smoke and Carbon Monoxide Alarm Smoke alarm test",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.sonos_sournd",
+            "name": "Sonos Sourround",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.sonso_bass",
+            "name": "Sonos Sub",
+            "state": "on"
+          },
+          {
+            "deviceClass": "heat",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.stove_status",
+            "name": "Stove-Status Stove Status",
+            "state": "off"
+          },
+          {
+            "deviceClass": "problem",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.udm_se_morris_ssd_1",
+            "name": "UDM SE-Morris HDD 1",
+            "state": "off"
+          },
+          {
+            "deviceClass": "connectivity",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.unifi_dream_machine_wan_status",
+            "name": "UniFi Dream Machine WAN status",
+            "state": "on"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.washer",
+            "name": "Washer",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.west_blinds",
+            "name": "west Blinds",
+            "state": "on"
+          },
+          {
+            "deviceClass": "connectivity",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.keypad_safe",
+            "name": "Wiegand-Reader-Safe Keypad Safe",
+            "state": "on"
+          },
+          {
+            "deviceClass": "window",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.window_status",
+            "name": "Windows",
+            "state": "off"
+          },
+          {
+            "deviceClass": "",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.workday_sensor",
+            "name": "Workday Sensor",
+            "state": "on"
+          },
+          {
+            "deviceClass": "problem",
+            "domain": "binary_sensor",
+            "entityId": "binary_sensor.zone_status",
+            "name": "Zone Status",
+            "state": "off"
+          }
+        ],
+        "doorEntity": {
+          "deviceClass": "door",
+          "domain": "binary_sensor",
+          "entityId": "binary_sensor.inside_door_status",
+          "name": "Inside Doors",
+          "state": "off"
+        },
         "lightAvailableEntities": [
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": true,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.rack_light",
             "name": "19-Rack-Light Rack Light",
@@ -2727,7 +4769,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.5_port_switch_led",
             "name": "5 Port Switch LED",
@@ -2738,7 +4783,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "onoff",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.ac_lite_bedroom_wifi_led",
             "name": "AC Lite-Bedroom Wifi LED",
@@ -2749,7 +4797,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.ac_lite_garage_wifi_led",
             "name": "AC Lite-Garage Wifi LED",
@@ -2760,7 +4811,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.back_light",
             "name": "Back Light",
@@ -2771,7 +4825,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.back_light_basic",
             "name": "Back Light Basic",
@@ -2782,7 +4839,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.back_yard_light",
             "name": "Back Yard Light",
@@ -2793,7 +4853,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": true,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.bed_light",
             "name": "Bed Light",
@@ -2804,7 +4867,10 @@
           },
           {
             "brightnessPct": 100,
+            "colorHex": "#ffd76f",
             "colorMode": "brightness",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.bed_motion_basic",
             "name": "Bed Motion Basic",
@@ -2815,7 +4881,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.bedrom_lights",
             "name": "Bedrom Lights",
@@ -2826,7 +4895,10 @@
           },
           {
             "brightnessPct": 100,
+            "colorHex": "#ffa8ec",
             "colorMode": "rgb",
+            "colorSupported": true,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.bedroom_artwork",
             "name": "Bedroom Artwork",
@@ -2837,7 +4909,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.bedroom_closet_light",
             "name": "Bedroom Closet Light",
@@ -2848,7 +4923,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.bedroom_hallway_light",
             "name": "Bedroom Hallway Light",
@@ -2859,7 +4937,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.bedroom_light_one",
             "name": "Bedroom Light One",
@@ -2870,7 +4951,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.bedroom_light_three",
             "name": "Bedroom Light Three",
@@ -2881,7 +4965,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.bedroom_light_three_basic",
             "name": "Bedroom Light Three Basic",
@@ -2892,7 +4979,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.bedroom_light_two",
             "name": "Bedroom Light Two",
@@ -2903,7 +4993,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.bedroom_lights",
             "name": "Bedroom Lights",
@@ -2914,7 +5007,10 @@
           },
           {
             "brightnessPct": 50,
+            "colorHex": "#0000ff",
             "colorMode": "rgb",
+            "colorSupported": true,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.bookshelf_lights_all_bookshelves",
             "name": "Bookshelf Lights All Bookshelves",
@@ -2925,7 +5021,10 @@
           },
           {
             "brightnessPct": 100,
+            "colorHex": "#0000ff",
             "colorMode": "rgb",
+            "colorSupported": true,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.bookshelf_lights_bookshelf_1",
             "name": "Bookshelf Lights Bookshelf 1",
@@ -2936,7 +5035,10 @@
           },
           {
             "brightnessPct": 100,
+            "colorHex": "#0000ff",
             "colorMode": "rgb",
+            "colorSupported": true,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.bookshelf_lights_bookshelf_2",
             "name": "Bookshelf Lights Bookshelf 2",
@@ -2947,7 +5049,10 @@
           },
           {
             "brightnessPct": 100,
+            "colorHex": "#0000ff",
             "colorMode": "rgb",
+            "colorSupported": true,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.bookshelf_lights_bookshelf_3",
             "name": "Bookshelf Lights Bookshelf 3",
@@ -2958,7 +5063,10 @@
           },
           {
             "brightnessPct": 100,
+            "colorHex": "#0000ff",
             "colorMode": "rgb",
+            "colorSupported": true,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.bookshelf_lights_bookshelf_4",
             "name": "Bookshelf Lights Bookshelf 4",
@@ -2969,7 +5077,10 @@
           },
           {
             "brightnessPct": 100,
+            "colorHex": "#0000ff",
             "colorMode": "rgb",
+            "colorSupported": true,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.bookshelf_lights_bookshelf_5",
             "name": "Bookshelf Lights Bookshelf 5",
@@ -2980,7 +5091,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.porch_light_1",
             "name": "Christmas-Light-Main-Power Christmas Light Main Power",
@@ -2991,7 +5105,10 @@
           },
           {
             "brightnessPct": 50,
+            "colorHex": "#0000ff",
             "colorMode": "rgb",
+            "colorSupported": true,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.coffee_light",
             "name": "Desk-Coffee-And-Lights Coffee Light",
@@ -3002,7 +5119,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": true,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.light_3",
             "name": "Final-Touch-Screen Light",
@@ -3013,7 +5133,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.floor_lights",
             "name": "Floor Lights",
@@ -3024,7 +5147,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.garage_light",
             "name": "Garage Light",
@@ -3035,7 +5161,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.guest_bathroom_light",
             "name": "Guest Bathroom Light",
@@ -3046,7 +5175,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.guest_hallway_light",
             "name": "Guest Hallway Light",
@@ -3057,7 +5189,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": true,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.nursery_light_1",
             "name": "Guest-Room-Motion-1 nursery light 1",
@@ -3068,7 +5203,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": true,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.nursery_light_2",
             "name": "Guest-Room-Motion-2 nursery light 2",
@@ -3078,8 +5216,11 @@
             ]
           },
           {
-            "brightnessPct": 40,
+            "brightnessPct": 100,
+            "colorHex": "#ffd76f",
             "colorMode": "brightness",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.guestroom_light",
             "name": "Guestroom Light",
@@ -3090,7 +5231,10 @@
           },
           {
             "brightnessPct": 55,
+            "colorHex": "#00ff00",
             "colorMode": "rgb",
+            "colorSupported": true,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.status_led_rgb",
             "name": "House-Rack-1 Status LED RGB",
@@ -3101,7 +5245,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.kitchen_light",
             "name": "Kitchen Light",
@@ -3112,7 +5259,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": true,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.light_block_kids",
             "name": "Light-Block Kids",
@@ -3123,7 +5273,10 @@
           },
           {
             "brightnessPct": 100,
+            "colorHex": "#ffd76f",
             "colorMode": "brightness",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.livingroom_light",
             "name": "Livingroom Light",
@@ -3134,7 +5287,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": true,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.mirror_light_1",
             "name": "Mirror Light 1",
@@ -3145,7 +5301,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": true,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.mirror_light_2",
             "name": "Mirror Light 2",
@@ -3156,7 +5315,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": true,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.mirror_neopixel_light",
             "name": "Mirror NeoPixel Light",
@@ -3167,7 +5329,10 @@
           },
           {
             "brightnessPct": 100,
+            "colorHex": "#ffd76f",
             "colorMode": "brightness",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.office_light",
             "name": "Office Light",
@@ -3178,7 +5343,10 @@
           },
           {
             "brightnessPct": 100,
+            "colorHex": "#ffd76f",
             "colorMode": "brightness",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.office_motion_basic",
             "name": "Office Motion Basic",
@@ -3189,7 +5357,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": true,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.office_bench_light",
             "name": "Office-Bench-Light Office Bench Light",
@@ -3200,7 +5371,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": true,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.office_bench_light_left",
             "name": "Office-Bench-Light Office Bench Light Left",
@@ -3211,7 +5385,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": true,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.office_bench_light_middle",
             "name": "Office-Bench-Light Office Bench Light Middle",
@@ -3222,7 +5399,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": true,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.office_bench_light_right",
             "name": "Office-Bench-Light Office Bench Light Right",
@@ -3233,7 +5413,10 @@
           },
           {
             "brightnessPct": 100,
+            "colorHex": "#ffd76f",
             "colorMode": "brightness",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.office_button_controller",
             "name": "Office-Button-Controller office-button-controller",
@@ -3244,7 +5427,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.outside_light",
             "name": "Outside Light",
@@ -3255,7 +5441,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.outside_light_basic",
             "name": "Outside Light Basic",
@@ -3266,7 +5455,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.pantry_light",
             "name": "Pantry Light",
@@ -3277,7 +5469,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.shower_light",
             "name": "Shower Light",
@@ -3287,19 +5482,25 @@
             ]
           },
           {
-            "brightnessPct": 80,
-            "colorMode": "rgb",
+            "brightnessPct": 0,
+            "colorHex": "#ffd76f",
+            "colorMode": "",
+            "colorSupported": true,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.tv_light",
-            "name": "Tv-Light TV Light",
-            "state": "on",
+            "name": "TV Light",
+            "state": "off",
             "supportedColorModes": [
               "rgb"
             ]
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.u7_lite_livingroom_wifi_led",
             "name": "U7 Lite Livingroom Wifi LED",
@@ -3310,7 +5511,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "onoff",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.washer_on_off",
             "name": "Washer on_off",
@@ -3321,10 +5525,13 @@
           },
           {
             "brightnessPct": 100,
+            "colorHex": "#ffffff",
             "colorMode": "rgb",
+            "colorSupported": true,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.wine_light",
-            "name": "Wine-Light Wine Light",
+            "name": "Wine Light",
             "state": "on",
             "supportedColorModes": [
               "rgb"
@@ -3332,7 +5539,10 @@
           },
           {
             "brightnessPct": 0,
+            "colorHex": "#ffd76f",
             "colorMode": "",
+            "colorSupported": false,
+            "deviceClass": "",
             "domain": "light",
             "entityId": "light.yard_light",
             "name": "Yard Light",
@@ -3698,7 +5908,7 @@
           }
         ],
         "selectedMediaPlayerId": "media_player.livingroom_sonos",
-        "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJhNGM1NTk3OTY4NmU0MTA3ODRiMTM3YzY0MzExOTVhMyIsImlhdCI6MTc4MTUzNzc0NSwiZXhwIjoyMDk2ODk3NzQ1fQ.UKGZjZDlTFOIt3AUajLFjQlC4I5SQDkIrFYf7zxBGBQ",
+        "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIxMzJhMzM2ZjMxNmM0YWRmODE2NDQxNTkwNDgwNzIxZSIsImlhdCI6MTc4MTU0NTI1MSwiZXhwIjoyMDk2OTA1MjUxfQ.dDAeuZM1BRON10g7qbzLkUKZgNR8u8Xw1-Dw6HX_UTY",
         "url": "http://192.168.1.135:8123/"
       }
     },
@@ -3709,7 +5919,7 @@
           "label": "Living Room",
           "lights": [
             {
-              "brightness": 0,
+              "brightness": 100,
               "color": "#ffd76f",
               "colorSupported": false,
               "haEntityId": "light.livingroom_light",
@@ -3717,7 +5927,7 @@
               "id": "ll-1",
               "lastBrightness": 100,
               "name": "Livingroom Light",
-              "on": false
+              "on": true
             },
             {
               "brightness": 0,
@@ -3742,37 +5952,117 @@
               "on": false
             },
             {
-              "brightness": 0,
-              "color": "#ffd76f",
-              "colorSupported": false,
-              "haEntityId": "",
-              "haName": "",
+              "brightness": 100,
+              "color": "#ffffff",
+              "colorSupported": true,
+              "haEntityId": "light.wine_light",
+              "haName": "Wine Light",
               "id": "living-light-mqfdjfqu-4",
               "lastBrightness": 80,
-              "name": "Light 4",
-              "on": false
+              "name": "Wine Light",
+              "on": true
             },
             {
               "brightness": 0,
               "color": "#ffd76f",
               "colorSupported": false,
-              "haEntityId": "",
-              "haName": "",
+              "haEntityId": "light.guest_hallway_light",
+              "haName": "Guest Hallway Light",
               "id": "living-light-mqfdjfqu-5",
               "lastBrightness": 80,
-              "name": "Light 5",
+              "name": "Guest Hallway Light",
               "on": false
             },
             {
-              "brightness": 0,
+              "brightness": 50,
+              "color": "#0000ff",
+              "colorSupported": true,
+              "haEntityId": "light.bookshelf_lights_all_bookshelves",
+              "haName": "Bookshelf Lights All Bookshelves",
+              "id": "living-light-mqfi184k-6",
+              "name": "Bookshelf Lights All Bookshelves",
+              "on": true
+            }
+          ]
+        },
+        "new-room-2": {
+          "label": "Office",
+          "lights": [
+            {
+              "brightness": 100,
+              "color": "#ffd76f",
+              "colorSupported": false,
+              "haEntityId": "light.office_light",
+              "haName": "Office Light",
+              "id": "new-room-2-light-mqfhwtsw-1",
+              "lastBrightness": 100,
+              "name": "Office Light",
+              "on": true
+            }
+          ]
+        },
+        "new-room-3": {
+          "label": "Bedroom",
+          "lights": [
+            {
+              "brightness": 80,
               "color": "#ffd76f",
               "colorSupported": false,
               "haEntityId": "",
               "haName": "",
-              "id": "living-light-mqfdjfqu-6",
-              "lastBrightness": 80,
+              "id": "new-room-3-light-mqfhxeqg-1",
+              "name": "Light 1",
+              "on": true
+            },
+            {
+              "brightness": 80,
+              "color": "#ffd76f",
+              "colorSupported": false,
+              "haEntityId": "",
+              "haName": "",
+              "id": "new-room-3-light-mqfhxmgd-2",
+              "name": "Light 2",
+              "on": true
+            },
+            {
+              "brightness": 80,
+              "color": "#ffd76f",
+              "colorSupported": false,
+              "haEntityId": "",
+              "haName": "",
+              "id": "new-room-3-light-mqfhxmgd-3",
+              "name": "Light 3",
+              "on": true
+            },
+            {
+              "brightness": 80,
+              "color": "#ffd76f",
+              "colorSupported": false,
+              "haEntityId": "",
+              "haName": "",
+              "id": "new-room-3-light-mqfhxmgd-4",
+              "name": "Light 4",
+              "on": true
+            },
+            {
+              "brightness": 80,
+              "color": "#ffd76f",
+              "colorSupported": false,
+              "haEntityId": "",
+              "haName": "",
+              "id": "new-room-3-light-mqfhxmgd-5",
+              "name": "Light 5",
+              "on": true
+            },
+            {
+              "brightness": 80,
+              "color": "#ffd76f",
+              "colorSupported": false,
+              "haEntityId": "",
+              "haName": "",
+              "id": "new-room-3-light-mqfhxmgd-6",
               "name": "Light 6",
-              "on": false
+              "on": true
             }
           ]
         }
@@ -3789,7 +6079,7 @@
       "currentTemp": 71,
       "fan": "auto",
       "humidity": 45,
-      "lastComfortTarget": 72,
+      "lastComfortTarget": 68,
       "limits": {
         "auto": {
           "max": 80,
@@ -3807,10 +6097,10 @@
       "mode": "cool",
       "name": "Livingroom Test",
       "outdoorTemp": 40,
-      "targetTemp": 72
+      "targetTemp": 68
     },
-    "version": 9
+    "version": 10
   },
-  "updatedAt": 1781543943,
-  "version": 51
+  "updatedAt": 1781545630,
+  "version": 259
 }
