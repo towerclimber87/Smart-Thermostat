@@ -151,7 +151,7 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
 .dial-range.max { right: 22%; }
 .mode-deck {
   position: relative; z-index: 2; width: min(450px, 56vw); margin: 0 auto 22px; padding: 8px; border-radius: 999px;
-  background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.03)); border: 1px solid rgba(255,255,255,.11); display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+  background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.03)); border: 1px solid rgba(255,255,255,.11); display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
 }
 .mode-button { min-height: 62px; border-radius: 999px; background: transparent; color: rgba(225,235,248,.66); font-weight: 950; font-size: 1.08rem; }
 .mode-button.home-state, .app-shell.away-active .mode-button.away.active { background: linear-gradient(135deg, #e9ddff, #b986ff); color: #1a0d2b; }
@@ -2185,4 +2185,92 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   .thermostat-bottom-row .bottom-chip { display: none; }
   .thermostat-bottom-row .mode-deck { width: 100%; }
   .away-home-card { width: min(520px, 86vw); min-height: 250px; }
+}
+
+
+/* 2026-06-15 auto thermostat mode and outdoor sensor pass */
+.mode-deck {
+  grid-template-columns: repeat(4, 1fr) !important;
+  width: min(540px, 64vw);
+}
+.thermostat-bottom-row {
+  grid-template-columns: minmax(154px, 220px) minmax(430px, 540px) minmax(154px, 220px);
+}
+.mode-button.active[data-mode="auto"],
+.app-shell.auto-mode .mode-button.active[data-mode="auto"] {
+  background: linear-gradient(135deg, #53f0ff, #b986ff);
+  color: #061024;
+}
+.mode-badge.auto {
+  background: rgba(173,127,255,.16);
+  border-color: rgba(173,127,255,.34);
+}
+.thermo-dial.auto:not(.heat) {
+  background: conic-gradient(from 225deg, rgba(83,240,255,.94) 0 var(--angle), rgba(185,134,255,.18) var(--angle) 270deg, rgba(255,255,255,0) 270deg 360deg);
+}
+.thermo-dial.auto.heat {
+  background: conic-gradient(from 225deg, rgba(255,114,96,.96) 0 var(--angle), rgba(185,134,255,.16) var(--angle) 270deg, rgba(255,255,255,0) 270deg 360deg);
+}
+.temp-mini-pill.set.auto {
+  background: rgba(173,127,255,.15);
+  border-color: rgba(173,127,255,.25);
+}
+.outdoor-temp-row {
+  margin-top: 8px;
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.055);
+  border: 1px solid rgba(255,255,255,.08);
+  color: rgba(211,226,242,.76);
+  font-size: .78rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.outdoor-temp-row strong {
+  color: #ffffff;
+  font-size: .9rem;
+  letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums;
+}
+.outdoor-temp-slider { accent-color: var(--purple); }
+.virtual-thermostat-panel {
+  width: clamp(204px, 15vw, 288px);
+}
+.auto-settings-grid .setpoint-card.readout .setpoint-controls {
+  justify-content: flex-end;
+}
+.lockout-readout strong {
+  min-width: 82px;
+  text-align: right;
+  font-size: .98rem;
+}
+#autoProfileValue {
+  max-width: 18ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (max-width: 1200px) {
+  .thermostat-bottom-row {
+    grid-template-columns: minmax(144px, 188px) minmax(390px, 1fr) minmax(144px, 188px);
+  }
+  .mode-deck { width: 100%; }
+}
+@media (max-width: 900px) {
+  .virtual-thermostat-panel {
+    grid-template-columns: 1fr;
+  }
+  .virtual-section + .virtual-section {
+    padding-top: 10px;
+    border-top: 1px solid rgba(255,255,255,.08);
+  }
+  .thermostat-bottom-row {
+    grid-template-columns: 1fr;
+  }
 }

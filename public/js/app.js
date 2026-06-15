@@ -24,6 +24,7 @@ const AUDIO_SLIDER_RELEASE_MS = 900;
 const AUDIO_VOLUME_SETTLE_MS = 1800;
 const AUDIO_TONE_SETTLE_MS = 1500;
 const SETPOINT_PREVIEW_MS = 2000;
+const AUTO_CHANGEOVER_MINUTES = 120;
 const FAN_SEQUENCE = ["off", "on", "auto"];
 let lastBlindUserInteractionAt = 0;
 let lastAudioUserInteractionAt = 0;
@@ -82,9 +83,19 @@ const state = {
     awayHeat: 55,
     awayCool: 85,
     humidity: 45,
+    outdoorTemp: 78,
+    autoOutdoorTarget: 70,
+    autoOutdoorDifferential: 3,
+    autoChangeoverLockoutMinutes: AUTO_CHANGEOVER_MINUTES,
+    autoActiveMode: "cool",
+    autoPendingMode: "",
+    autoLockoutUntil: 0,
+    lastHeatRunAt: 0,
+    lastCoolRunAt: 0,
     limits: {
       cool: { min: 65, max: 80 },
       heat: { min: 60, max: 78 },
+      auto: { min: 60, max: 80 },
     },
   },
   audio: {
@@ -145,6 +156,13 @@ const elements = {
   relayCool: document.getElementById("relayCool"),
   virtualTempSlider: document.getElementById("virtualTempSlider"),
   virtualTempValue: document.getElementById("virtualTempValue"),
+  outdoorTempSlider: document.getElementById("outdoorTempSlider"),
+  outdoorTempValue: document.getElementById("outdoorTempValue"),
+  outdoorTempDialValue: document.getElementById("outdoorTempDialValue"),
+  autoOutdoorTargetValue: document.getElementById("autoOutdoorTargetValue"),
+  autoOutdoorDifferentialValue: document.getElementById("autoOutdoorDifferentialValue"),
+  autoLockoutValue: document.getElementById("autoLockoutValue"),
+  autoProfileValue: document.getElementById("autoProfileValue"),
   dialMinLabel: document.getElementById("dialMinLabel"),
   dialMaxLabel: document.getElementById("dialMaxLabel"),
   settingsOverlay: document.getElementById("settingsOverlay"),
@@ -331,8 +349,25 @@ function getActiveRoom() {
 }
 
 function buildSavedConfig() {
+  const thermostatToSave = {
+    currentTemp: state.thermostat.currentTemp,
+    targetTemp: state.thermostat.targetTemp,
+    lastComfortTarget: state.thermostat.lastComfortTarget,
+    mode: state.thermostat.mode,
+    fan: state.thermostat.fan,
+    awayHeat: state.thermostat.awayHeat,
+    awayCool: state.thermostat.awayCool,
+    humidity: state.thermostat.humidity,
+    outdoorTemp: state.thermostat.outdoorTemp,
+    autoOutdoorTarget: state.thermostat.autoOutdoorTarget,
+    autoOutdoorDifferential: state.thermostat.autoOutdoorDifferential,
+    autoChangeoverLockoutMinutes: state.thermostat.autoChangeoverLockoutMinutes,
+    autoActiveMode: state.thermostat.autoActiveMode,
+    limits: state.thermostat.limits,
+  };
   return {
-    version: 4,
+    version: 5,
+    thermostat: thermostatToSave,
     blinds: state.blinds,
     integrations: state.integrations,
   };
@@ -343,6 +378,22 @@ function loadSavedConfig() {
     const raw = localStorage.getItem(CONFIG_STORAGE_KEY);
     if (!raw) return;
     const saved = JSON.parse(raw);
+    if (saved?.thermostat) {
+      const defaults = clone(state.thermostat);
+      state.thermostat = {
+        ...defaults,
+        ...saved.thermostat,
+        limits: {
+          ...defaults.limits,
+          ...(saved.thermostat.limits || {}),
+        },
+        away: false,
+        autoPendingMode: "",
+        autoLockoutUntil: 0,
+        lastHeatRunAt: 0,
+        lastCoolRunAt: 0,
+      };
+    }
     if (saved?.blinds?.rooms) state.blinds = saved.blinds;
     if (saved?.integrations?.homeAssistant) {
       state.integrations.homeAssistant = {
@@ -384,13 +435,66 @@ function goRelative(direction) {
   gotoPage(state.pages[clamp(currentIndex + direction, 0, state.pages.length - 1)]);
 }
 
+function getAutoLockoutMs() {
+  const minutes = Math.max(AUTO_CHANGEOVER_MINUTES, Number(state.thermostat.autoChangeoverLockoutMinutes) || AUTO_CHANGEOVER_MINUTES);
+  return minutes * 60 * 1000;
+}
+
+function formatLockoutTime(ms) {
+  if (ms <= 0) return "Ready";
+  const minutes = Math.ceil(ms / 60000);
+  if (minutes >= 60) {
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    return mins ? `${hours}h ${mins}m` : `${hours}h`;
+  }
+  return `${minutes}m`;
+}
+
+function getAutoControlMode(now = Date.now()) {
+  const t = state.thermostat;
+  const target = Number(t.autoOutdoorTarget) || 70;
+  const differential = Math.max(1, Number(t.autoOutdoorDifferential) || 1);
+  let active = ["heat", "cool"].includes(t.autoActiveMode) ? t.autoActiveMode : "";
+  if (!active) active = Number(t.outdoorTemp) >= target ? "cool" : "heat";
+
+  let desired = active;
+  if (active === "cool" && Number(t.outdoorTemp) <= target - differential) desired = "heat";
+  if (active === "heat" && Number(t.outdoorTemp) >= target + differential) desired = "cool";
+
+  if (desired !== active) {
+    const lastOppositeRunAt = desired === "heat" ? Number(t.lastCoolRunAt || 0) : Number(t.lastHeatRunAt || 0);
+    const lockoutMs = getAutoLockoutMs();
+    if (lastOppositeRunAt && now - lastOppositeRunAt < lockoutMs) {
+      t.autoPendingMode = desired;
+      t.autoLockoutUntil = lastOppositeRunAt + lockoutMs;
+      return active;
+    }
+    active = desired;
+    t.autoPendingMode = "";
+    t.autoLockoutUntil = 0;
+  } else if (t.autoLockoutUntil && now >= t.autoLockoutUntil) {
+    t.autoPendingMode = "";
+    t.autoLockoutUntil = 0;
+  }
+
+  t.autoActiveMode = active;
+  return active;
+}
+
+function getEffectiveControlMode(now = Date.now()) {
+  const t = state.thermostat;
+  return t.mode === "auto" ? getAutoControlMode(now) : t.mode;
+}
+
 function getModeLimits() {
   const t = state.thermostat;
-  const limits = t.limits[t.mode];
+  const limits = t.limits[t.mode] || t.limits.auto || t.limits.cool;
   const range = { min: limits.min, max: limits.max };
   if (t.away) {
-    if (t.mode === "cool") range.max = Math.max(range.max, t.awayCool);
-    if (t.mode === "heat") range.min = Math.min(range.min, t.awayHeat);
+    const safetyMode = getEffectiveControlMode();
+    if (safetyMode === "cool") range.max = Math.max(range.max, t.awayCool);
+    if (safetyMode === "heat") range.min = Math.min(range.min, t.awayHeat);
   }
   return range;
 }
@@ -432,7 +536,8 @@ function pointerToTemp(clientX, clientY) {
 
 function applyAwayTarget() {
   const t = state.thermostat;
-  t.targetTemp = t.mode === "heat" ? t.awayHeat : t.awayCool;
+  const safetyMode = getEffectiveControlMode();
+  t.targetTemp = safetyMode === "heat" ? t.awayHeat : t.awayCool;
 }
 
 function isSetpointPreviewActive() {
@@ -464,6 +569,7 @@ function cycleFanMode() {
   const next = FAN_SEQUENCE[(currentIndex + 1) % FAN_SEQUENCE.length] || "auto";
   t.fan = next;
   renderThermostat();
+  saveConfig();
   showToast(`Fan ${titleCase(next)}`);
 }
 
@@ -487,12 +593,26 @@ function setVirtualCurrentTemp(temp) {
   renderThermostat();
 }
 
-function getThermostatOutputs() {
+function setVirtualOutdoorTemp(temp) {
+  const next = clamp(Number(temp), 40, 100);
+  state.thermostat.outdoorTemp = next;
+  if (state.thermostat.mode === "auto") getAutoControlMode();
+  if (state.thermostat.away) applyAwayTarget();
+  renderThermostat();
+}
+
+function getThermostatOutputs(options = {}) {
   const t = state.thermostat;
-  const heat = t.mode === "heat" && t.currentTemp < t.targetTemp;
-  const cool = t.mode === "cool" && t.currentTemp > t.targetTemp;
+  const now = Date.now();
+  const controlMode = getEffectiveControlMode(now);
+  const heat = controlMode === "heat" && t.currentTemp < t.targetTemp;
+  const cool = controlMode === "cool" && t.currentTemp > t.targetTemp;
   const fan = t.fan === "on" || (t.fan === "auto" && (heat || cool));
-  return { fan, heat, cool };
+  if (options.recordRuntime && t.mode === "auto") {
+    if (heat) t.lastHeatRunAt = now;
+    if (cool) t.lastCoolRunAt = now;
+  }
+  return { fan, heat, cool, controlMode };
 }
 
 function renderRelayStatus(element, isOn) {
@@ -508,6 +628,10 @@ function renderThermostat() {
   const showingSetpoint = isSetpointPreviewActive();
   const currentRounded = Math.round(t.currentTemp);
   const targetRounded = Math.round(t.targetTemp);
+  const outdoorRounded = Math.round(t.outdoorTemp);
+  const outputs = getThermostatOutputs({ recordRuntime: true });
+  const controlMode = outputs.controlMode;
+  const now = Date.now();
 
   elements.currentTemp.textContent = showingSetpoint ? targetRounded : currentRounded;
   elements.targetTemp.textContent = showingSetpoint ? currentRounded : targetRounded;
@@ -517,9 +641,13 @@ function renderThermostat() {
   if (elements.headerSetTemp) elements.headerSetTemp.textContent = `${targetRounded}°`;
   if (elements.virtualTempValue) elements.virtualTempValue.textContent = `${currentRounded}°`;
   if (elements.virtualTempSlider && document.activeElement !== elements.virtualTempSlider) elements.virtualTempSlider.value = String(clamp(currentRounded, 65, 75));
+  if (elements.outdoorTempValue) elements.outdoorTempValue.textContent = `${outdoorRounded}°`;
+  if (elements.outdoorTempDialValue) elements.outdoorTempDialValue.textContent = String(outdoorRounded);
+  if (elements.outdoorTempSlider && document.activeElement !== elements.outdoorTempSlider) elements.outdoorTempSlider.value = String(clamp(outdoorRounded, 40, 100));
   if (elements.headerSetPill) {
-    elements.headerSetPill.classList.toggle("heat", t.mode === "heat" && !t.away);
-    elements.headerSetPill.classList.toggle("cool", t.mode === "cool" && !t.away);
+    elements.headerSetPill.classList.toggle("heat", controlMode === "heat" && !t.away);
+    elements.headerSetPill.classList.toggle("cool", controlMode === "cool" && !t.away);
+    elements.headerSetPill.classList.toggle("auto", t.mode === "auto" && !t.away);
     elements.headerSetPill.classList.toggle("away", t.away);
   }
   elements.humidityValue.textContent = `${Math.round(t.humidity)}%`;
@@ -530,26 +658,46 @@ function renderThermostat() {
   document.getElementById("coolMaxValue").textContent = t.limits.cool.max;
   document.getElementById("heatMinValue").textContent = t.limits.heat.min;
   document.getElementById("heatMaxValue").textContent = t.limits.heat.max;
+  if (elements.autoOutdoorTargetValue) elements.autoOutdoorTargetValue.textContent = Math.round(t.autoOutdoorTarget);
+  if (elements.autoOutdoorDifferentialValue) elements.autoOutdoorDifferentialValue.textContent = Math.round(t.autoOutdoorDifferential);
+  if (elements.autoLockoutValue) elements.autoLockoutValue.textContent = `${Math.round(Math.max(AUTO_CHANGEOVER_MINUTES, t.autoChangeoverLockoutMinutes) / 60)} hr`;
+  if (elements.autoProfileValue) {
+    const remaining = Math.max(0, Number(t.autoLockoutUntil || 0) - now);
+    const profileText = t.autoPendingMode && remaining > 0
+      ? `${titleCase(controlMode)} • ${titleCase(t.autoPendingMode)} locked ${formatLockoutTime(remaining)}`
+      : titleCase(controlMode);
+    elements.autoProfileValue.textContent = profileText;
+  }
   elements.dialMinLabel.textContent = `${min}°`;
   elements.dialMaxLabel.textContent = `${max}°`;
 
   setDialVisual(t.targetTemp);
-  elements.thermoDial.classList.toggle("heat", t.mode === "heat");
+  elements.thermoDial.classList.toggle("heat", controlMode === "heat");
+  elements.thermoDial.classList.toggle("auto", t.mode === "auto");
   elements.thermoDial.classList.toggle("setpoint-preview", showingSetpoint);
   elements.app.classList.toggle("away-active", t.away);
-  elements.app.classList.toggle("heat-mode", t.mode === "heat" && !t.away);
-  elements.app.classList.toggle("cool-mode", t.mode === "cool" && !t.away);
+  elements.app.classList.toggle("heat-mode", controlMode === "heat" && !t.away);
+  elements.app.classList.toggle("cool-mode", controlMode === "cool" && !t.away);
+  elements.app.classList.toggle("auto-mode", t.mode === "auto" && !t.away);
 
-  const outputs = getThermostatOutputs();
   renderRelayStatus(elements.relayFan, outputs.fan);
   renderRelayStatus(elements.relayHeat, outputs.heat);
   renderRelayStatus(elements.relayCool, outputs.cool);
 
   const action = outputs.cool ? "Cooling" : outputs.heat ? "Heating" : outputs.fan ? "Fan On" : "Idle";
-  elements.runtimeState.textContent = t.away ? `Away • ${action}` : action;
+  const lockoutRemaining = Math.max(0, Number(t.autoLockoutUntil || 0) - now);
+  if (t.away) {
+    elements.runtimeState.textContent = `Away • ${action}`;
+  } else if (t.mode === "auto" && t.autoPendingMode && lockoutRemaining > 0) {
+    elements.runtimeState.textContent = `Auto • ${action} • ${titleCase(t.autoPendingMode)} locked ${formatLockoutTime(lockoutRemaining)}`;
+  } else if (t.mode === "auto") {
+    elements.runtimeState.textContent = `Auto • ${titleCase(controlMode)} • ${action}`;
+  } else {
+    elements.runtimeState.textContent = action;
+  }
 
-  elements.modeBadge.textContent = t.away ? `${titleCase(t.mode)} Safety` : `${titleCase(t.mode)} Target`;
-  elements.modeBadge.className = `mode-badge ${t.mode}`;
+  elements.modeBadge.textContent = t.away ? `${titleCase(controlMode)} Safety` : t.mode === "auto" ? `Auto • ${titleCase(controlMode)}` : `${titleCase(t.mode)} Target`;
+  elements.modeBadge.className = `mode-badge ${t.mode === "auto" ? `${controlMode} auto` : t.mode}`;
   elements.awayToggle.classList.toggle("active", t.away);
   elements.awayToggle.classList.toggle("home-state", t.away);
   elements.awayToggle.textContent = t.away ? "Home" : "Away";
@@ -568,7 +716,9 @@ function renderThermostat() {
 
 function setMode(mode) {
   const t = state.thermostat;
+  if (!["cool", "heat", "auto"].includes(mode)) return;
   t.mode = mode;
+  if (mode === "auto") getAutoControlMode();
   if (t.away) {
     applyAwayTarget();
   } else {
@@ -577,6 +727,7 @@ function setMode(mode) {
     t.lastComfortTarget = clamp(t.lastComfortTarget, min, max);
   }
   renderThermostat();
+  saveConfig();
   showToast(`${titleCase(mode)} mode selected`);
 }
 
@@ -617,6 +768,15 @@ function adjustLimit(mode, bound, delta) {
   renderThermostat();
 }
 
+function adjustAutoSetting(kind, delta) {
+  const t = state.thermostat;
+  if (kind === "target") t.autoOutdoorTarget = clamp(Math.round(t.autoOutdoorTarget + delta), 40, 90);
+  if (kind === "differential") t.autoOutdoorDifferential = clamp(Math.round(t.autoOutdoorDifferential + delta), 1, 12);
+  if (t.mode === "auto") getAutoControlMode();
+  if (t.away) applyAwayTarget();
+  renderThermostat();
+}
+
 function hideAllSettingsViews() {
   [elements.thermostatSettingsView, elements.blindSettingsView, elements.audioSettingsView].forEach((view) => { view.hidden = true; });
   elements.settingsSheet.classList.remove("full-setup", "ha-focus");
@@ -644,6 +804,7 @@ function openSettings() {
 }
 
 function closeSettings() {
+  if (state.currentPage === "thermostat" && elements.thermostatSettingsView && !elements.thermostatSettingsView.hidden) saveConfig();
   elements.settingsOverlay.classList.remove("open");
   elements.settingsOverlay.setAttribute("aria-hidden", "true");
 }
@@ -2190,6 +2351,7 @@ function bindEvents() {
   elements.awayHomeButton?.addEventListener("click", setHomeMode);
   elements.fanChip?.addEventListener("click", cycleFanMode);
   elements.virtualTempSlider?.addEventListener("input", (event) => setVirtualCurrentTemp(event.target.value));
+  elements.outdoorTempSlider?.addEventListener("input", (event) => setVirtualOutdoorTemp(event.target.value));
 
   elements.settingsButton.addEventListener("click", openSettings);
   elements.settingsClose.addEventListener("click", closeSettings);
@@ -2241,6 +2403,10 @@ function bindEvents() {
   document.querySelectorAll("[data-limit-adjust]").forEach((button) => button.addEventListener("click", () => {
     const [mode, bound, delta] = button.dataset.limitAdjust.split(":");
     adjustLimit(mode, bound, Number(delta));
+  }));
+  document.querySelectorAll("[data-auto-adjust]").forEach((button) => button.addEventListener("click", () => {
+    const [kind, delta] = button.dataset.autoAdjust.split(":");
+    adjustAutoSetting(kind, Number(delta));
   }));
   document.querySelectorAll(".mode-button[data-mode]").forEach((button) => button.addEventListener("click", () => setMode(button.dataset.mode)));
   document.querySelectorAll(".segment[data-fan]").forEach((button) => button.addEventListener("click", () => { state.thermostat.fan = button.dataset.fan; renderThermostat(); }));
@@ -2370,6 +2536,9 @@ function init() {
   renderBlinds();
   gotoPage("thermostat");
   setInterval(updateClock, 1000);
+  setInterval(() => {
+    if (state.currentPage === "thermostat") renderThermostat();
+  }, 60000);
   // The virtual temperature slider is now the temporary sensor input.
   // setInterval(mockSensorDrift, 4500);
   setInterval(mockTrackProgress, 1200);

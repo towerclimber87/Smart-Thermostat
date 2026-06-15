@@ -100,6 +100,18 @@
                 <span>75°</span>
               </div>
             </div>
+
+            <div class="virtual-section virtual-sensor-section outdoor-sensor-section">
+              <label class="virtual-sensor-label" for="outdoorTempSlider">
+                <span>Outdoor Temp</span>
+                <strong id="outdoorTempValue">78°</strong>
+              </label>
+              <input id="outdoorTempSlider" class="virtual-temp-slider outdoor-temp-slider" type="range" min="40" max="100" step="1" value="78" aria-label="Set virtual outdoor temperature" />
+              <div class="virtual-temp-range" aria-hidden="true">
+                <span>40°</span>
+                <span>100°</span>
+              </div>
+            </div>
           </aside>
 
           <div class="thermostat-focus">
@@ -112,6 +124,7 @@
                 <p id="primaryTempLabel" class="current-label">Current</p>
                 <div class="current-temp"><span id="currentTemp">70</span><small>°F</small></div>
                 <div id="secondaryTempRow" class="target-row"><span id="secondaryTempLabel">Set to</span> <strong><span id="targetTemp">70</span>°</strong></div>
+                <div class="outdoor-temp-row">Outdoor <strong><span id="outdoorTempDialValue">78</span>°</strong></div>
                 <div id="modeBadge" class="mode-badge cool">Cool Target</div>
               </div>
               <div id="dialMinLabel" class="dial-range min">65°</div>
@@ -130,6 +143,7 @@
             <div class="mode-deck" aria-label="Thermostat mode controls">
               <button class="mode-button active" data-mode="cool">Cool</button>
               <button class="mode-button" data-mode="heat">Heat</button>
+              <button class="mode-button" data-mode="auto">Auto</button>
               <button id="awayToggle" class="mode-button away">Away</button>
             </div>
 
@@ -270,6 +284,16 @@
                 <div class="setpoint-card"><span>Low Limit</span><div class="setpoint-controls"><button data-limit-adjust="heat:min:-1">−</button><strong><span id="heatMinValue">60</span>°</strong><button data-limit-adjust="heat:min:1">+</button></div></div>
                 <div class="setpoint-card"><span>High Limit</span><div class="setpoint-controls"><button data-limit-adjust="heat:max:-1">−</button><strong><span id="heatMaxValue">78</span>°</strong><button data-limit-adjust="heat:max:1">+</button></div></div>
               </div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div><h3>Auto Mode</h3></div>
+            <div class="settings-grid two-col auto-settings-grid">
+              <div class="setpoint-card"><span>Outdoor Target</span><div class="setpoint-controls"><button data-auto-adjust="target:-1">−</button><strong><span id="autoOutdoorTargetValue">70</span>°</strong><button data-auto-adjust="target:1">+</button></div></div>
+              <div class="setpoint-card"><span>Swing Differential</span><div class="setpoint-controls"><button data-auto-adjust="differential:-1">−</button><strong><span id="autoOutdoorDifferentialValue">3</span>°</strong><button data-auto-adjust="differential:1">+</button></div></div>
+              <div class="setpoint-card readout"><span>Changeover Lockout</span><div class="setpoint-controls lockout-readout"><strong id="autoLockoutValue">2 hr</strong></div></div>
+              <div class="setpoint-card readout"><span>Auto Profile</span><div class="setpoint-controls lockout-readout"><strong id="autoProfileValue">Cool</strong></div></div>
             </div>
           </div>
 
