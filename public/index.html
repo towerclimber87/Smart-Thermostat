@@ -39,6 +39,7 @@
         </span>
         <span id="thermostatPanelLockLabel">Unlocked</span>
       </button>
+      <button id="changeoverBypassButton" class="changeover-bypass-button" type="button" hidden aria-hidden="true" aria-label="Bypass equipment changeover delay">Bypass</button>
       <nav class="top-nav" aria-label="Screen navigation">
         <button class="nav-pill" data-goto="blinds">Blinds</button>
         <button class="nav-pill" data-goto="audio">Audio</button>
@@ -433,10 +434,18 @@
 
         <div id="thermostatSettingsView" class="settings-view">
           <div class="settings-section">
-            <div><h3>Away Safety</h3></div>
+            <div><h3>Safety Range</h3></div>
             <div class="settings-grid two-col">
-              <div class="setpoint-card"><span>Heat Safety</span><div class="setpoint-controls"><button data-away-adjust="heat:-1">−</button><strong><span id="awayHeatValue">55</span>°</strong><button data-away-adjust="heat:1">+</button></div></div>
-              <div class="setpoint-card"><span>Cool Safety</span><div class="setpoint-controls"><button data-away-adjust="cool:-1">−</button><strong><span id="awayCoolValue">85</span>°</strong><button data-away-adjust="cool:1">+</button></div></div>
+              <div class="setpoint-card"><span>Low Safety</span><div class="setpoint-controls"><button data-safety-adjust="low:-1">−</button><strong><span id="safetyLowValue">55</span>°</strong><button data-safety-adjust="low:1">+</button></div></div>
+              <div class="setpoint-card"><span>High Safety</span><div class="setpoint-controls"><button data-safety-adjust="high:-1">−</button><strong><span id="safetyHighValue">85</span>°</strong><button data-safety-adjust="high:1">+</button></div></div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div><h3>Away Temps</h3></div>
+            <div class="settings-grid two-col">
+              <div class="setpoint-card"><span>Heat Away</span><div class="setpoint-controls"><button data-away-adjust="heat:-1">−</button><strong><span id="awayHeatValue">55</span>°</strong><button data-away-adjust="heat:1">+</button></div></div>
+              <div class="setpoint-card"><span>Cool Away</span><div class="setpoint-controls"><button data-away-adjust="cool:-1">−</button><strong><span id="awayCoolValue">85</span>°</strong><button data-away-adjust="cool:1">+</button></div></div>
             </div>
           </div>
 
@@ -460,6 +469,7 @@
             <div><h3>Auto Mode</h3></div>
             <div class="settings-grid two-col auto-settings-grid">
               <div class="setpoint-card"><span>Cool Target</span><div class="setpoint-controls"><button data-auto-adjust="coolTarget:-1">−</button><strong><span id="autoCoolOutdoorTargetValue">70</span>°</strong><button data-auto-adjust="coolTarget:1">+</button></div></div>
+              <div class="setpoint-card"><span>Heat Target</span><div class="setpoint-controls"><button data-auto-adjust="heatTarget:-1">−</button><strong><span id="autoHeatOutdoorTargetValue">65</span>°</strong><button data-auto-adjust="heatTarget:1">+</button></div></div>
               <div class="setpoint-card readout"><span>Changeover Lockout</span><div class="setpoint-controls lockout-readout"><strong id="autoLockoutValue">2 hr</strong></div></div>
             </div>
           </div>

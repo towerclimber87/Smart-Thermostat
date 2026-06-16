@@ -28,6 +28,7 @@ THERMOSTAT_STATE_FILE = DATA_DIR / "thermostat-state.json"
 PANEL_CONFIG_FILE = DATA_DIR / "panel-config.json"
 APP_STARTED_AT = time.time()
 HA_STATES_CACHE_TTL_SECONDS = float(os.environ.get("SMART_THERMOSTAT_HA_STATES_CACHE_TTL_SECONDS", "1.0"))
+MANUAL_CHANGEOVER_LOCKOUT_MINUTES = 10
 _HA_STATES_CACHE_LOCK = threading.Lock()
 _HA_STATES_CACHE: dict[tuple[str, str], tuple[float, list[dict]]] = {}
 
@@ -53,11 +54,14 @@ DEFAULT_THERMOSTAT = {
     "away": False,
     "awayHeat": 55,
     "awayCool": 85,
+    "safetyLow": 55,
+    "safetyHigh": 85,
     "humidity": 45,
     "outdoorTemp": 78,
     "autoCoolOutdoorTarget": 70,
     "autoHeatOutdoorTarget": 65,
     "autoChangeoverLockoutMinutes": 120,
+    "manualChangeoverLockoutMinutes": MANUAL_CHANGEOVER_LOCKOUT_MINUTES,
     "coolFanRemainOnMinutes": 2,
     "heatLocked": False,
     "coolLocked": False,
@@ -65,8 +69,12 @@ DEFAULT_THERMOSTAT = {
     "autoActiveMode": "cool",
     "autoPendingMode": "",
     "autoLockoutUntil": 0,
+    "manualPendingMode": "",
+    "manualLockoutUntil": 0,
     "lastHeatRunAt": 0,
     "lastCoolRunAt": 0,
+    "equipmentLastHeatRunAt": 0,
+    "equipmentLastCoolRunAt": 0,
     "coolRelayWasOn": False,
     "coolFanHoldUntil": 0,
     "limits": {
@@ -138,8 +146,11 @@ def _migrate_panel_config(config: object) -> dict | None:
         for runtime_key in (
             "autoPendingMode",
             "autoLockoutUntil",
+            "manualLockoutUntil",
             "lastHeatRunAt",
             "lastCoolRunAt",
+            "equipmentLastHeatRunAt",
+            "equipmentLastCoolRunAt",
             "coolRelayWasOn",
             "coolFanHoldUntil",
         ):
@@ -335,15 +346,21 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             ("lastComfortTarget", base["lastComfortTarget"], 45, 95),
             ("awayHeat", base["awayHeat"], 45, 72),
             ("awayCool", base["awayCool"], 72, 95),
+            ("safetyLow", base.get("safetyLow", base.get("awayHeat", 55)), 45, 93),
+            ("safetyHigh", base.get("safetyHigh", base.get("awayCool", 85)), 47, 95),
             ("humidity", base["humidity"], 0, 100),
             ("outdoorTemp", base["outdoorTemp"], -40, 130),
             ("autoCoolOutdoorTarget", base["autoCoolOutdoorTarget"], 41, 100),
             ("autoHeatOutdoorTarget", base["autoHeatOutdoorTarget"], 40, 99),
             ("autoChangeoverLockoutMinutes", base["autoChangeoverLockoutMinutes"], 120, 720),
+            ("manualChangeoverLockoutMinutes", base.get("manualChangeoverLockoutMinutes", MANUAL_CHANGEOVER_LOCKOUT_MINUTES), 1, 60),
             ("coolFanRemainOnMinutes", base["coolFanRemainOnMinutes"], 0, 10),
             ("autoLockoutUntil", base["autoLockoutUntil"], 0, None),
+            ("manualLockoutUntil", base.get("manualLockoutUntil", 0), 0, None),
             ("lastHeatRunAt", base["lastHeatRunAt"], 0, None),
             ("lastCoolRunAt", base["lastCoolRunAt"], 0, None),
+            ("equipmentLastHeatRunAt", base.get("equipmentLastHeatRunAt", 0), 0, None),
+            ("equipmentLastCoolRunAt", base.get("equipmentLastCoolRunAt", 0), 0, None),
             ("coolFanHoldUntil", base["coolFanHoldUntil"], 0, None),
         ):
             if key in source:
@@ -361,6 +378,9 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
         if "autoPendingMode" in source:
             pending = str(source.get("autoPendingMode") or "").strip().lower()
             base["autoPendingMode"] = pending if pending in {"", "heat", "cool"} else ""
+        if "manualPendingMode" in source:
+            pending = str(source.get("manualPendingMode") or "").strip().lower()
+            base["manualPendingMode"] = pending if pending in {"", "heat", "cool"} else ""
         if "coolRelayWasOn" in source:
             base["coolRelayWasOn"] = bool(source.get("coolRelayWasOn"))
 
@@ -372,6 +392,8 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             high = _intish(update.get("max", current.get("max")), current.get("max"), low + 2, 95)
             base["limits"][mode] = {"min": min(low, high - 2), "max": high}
 
+    base["safetyLow"] = int(max(45, min(93, round(_number(base.get("safetyLow"), base.get("awayHeat", 55), 45, 93)))))
+    base["safetyHigh"] = int(max(base["safetyLow"] + 2, min(95, round(_number(base.get("safetyHigh"), base.get("awayCool", 85), 47, 95)))))
     base["autoHeatOutdoorTarget"] = min(base["autoHeatOutdoorTarget"], base["autoCoolOutdoorTarget"] - 1)
     base["mode"] = _allowed_mode_for_locks(base["mode"], base, base["mode"])
     if base.get("autoActiveMode") == "heat" and base.get("heatLocked"):
@@ -382,10 +404,18 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
         base["autoPendingMode"] = ""
     if base.get("autoPendingMode") == "cool" and base.get("coolLocked"):
         base["autoPendingMode"] = ""
+    if base.get("manualPendingMode") == "heat" and base.get("heatLocked"):
+        base["manualPendingMode"] = ""
+        base["manualLockoutUntil"] = 0
+    if base.get("manualPendingMode") == "cool" and base.get("coolLocked"):
+        base["manualPendingMode"] = ""
+        base["manualLockoutUntil"] = 0
     if base.get("heatLocked") and base.get("coolLocked"):
         base["autoActiveMode"] = ""
         base["autoPendingMode"] = ""
         base["autoLockoutUntil"] = 0
+        base["manualPendingMode"] = ""
+        base["manualLockoutUntil"] = 0
         base["coolFanHoldUntil"] = 0
         base["coolRelayWasOn"] = False
     mode_limits = base["limits"].get(base["mode"], {"min": 45, "max": 95})
@@ -481,12 +511,46 @@ def _thermostat_outputs(thermostat: dict) -> dict:
         active_mode = "locked"
     current = _number(thermostat.get("currentTemp"), 70)
     target = _number(thermostat.get("targetTemp"), 70)
+    safety_low = _number(thermostat.get("safetyLow"), thermostat.get("awayHeat", 55), 45, 93)
+    safety_high = _number(thermostat.get("safetyHigh"), thermostat.get("awayCool", 85), safety_low + 2, 95)
+    safety_mode = ""
+    if current < safety_low and not thermostat.get("heatLocked"):
+        safety_mode = "heat"
+    elif current > safety_high and not thermostat.get("coolLocked"):
+        safety_mode = "cool"
+    if safety_mode:
+        active_mode = safety_mode
+        target = safety_low if safety_mode == "heat" else safety_high
     heat = (not thermostat.get("heatLocked")) and active_mode == "heat" and current < target
     cool = (not thermostat.get("coolLocked")) and active_mode == "cool" and current > target
-    fan = bool(cool or thermostat.get("fan") == "on")
+    pending_mode = ""
+    manual_lockout_until = 0
+    now_ms = int(time.time() * 1000)
+    if not safety_mode and mode != "auto" and (heat or cool):
+        pending_mode = "heat" if heat else "cool"
+        last_key = "equipmentLastCoolRunAt" if pending_mode == "heat" else "equipmentLastHeatRunAt"
+        last_opposite_run_at = _number(thermostat.get(last_key), 0, 0)
+        lockout_minutes = _number(thermostat.get("manualChangeoverLockoutMinutes"), MANUAL_CHANGEOVER_LOCKOUT_MINUTES, 1, 60)
+        until = last_opposite_run_at + lockout_minutes * 60000
+        if last_opposite_run_at and until > now_ms:
+            heat = False
+            cool = False
+            active_mode = "lockout"
+            manual_lockout_until = until
+    cooling_fan_hold = (not cool) and _number(thermostat.get("coolFanHoldUntil"), 0, 0) > now_ms
+    fan = bool(cool or cooling_fan_hold or thermostat.get("fan") == "on")
     action = "heating" if heat else "cooling" if cool else "fan" if fan else "idle"
-    return {"fan": fan, "heat": heat, "cool": cool, "hvacAction": action, "controlMode": active_mode}
-
+    return {
+        "fan": fan,
+        "heat": heat,
+        "cool": cool,
+        "coolingFanHold": cooling_fan_hold,
+        "hvacAction": action,
+        "controlMode": active_mode,
+        "safetyMode": safety_mode,
+        "pendingMode": pending_mode,
+        "manualLockoutUntil": manual_lockout_until,
+    }
 
 def _thermostat_status_payload() -> dict:
     record = _read_thermostat_record()
@@ -513,6 +577,7 @@ def _thermostat_status_payload() -> dict:
         "hvac_modes": _available_hvac_modes(thermostat),
         "hvacModes": _available_hvac_modes(thermostat),
         "outdoor_temperature": thermostat["outdoorTemp"],
+        "safetyMode": outputs.get("safetyMode", ""),
         "relays": {"fan": outputs["fan"], "heat": outputs["heat"], "cool": outputs["cool"]},
     }
     payload = {
@@ -550,6 +615,7 @@ def _thermostat_status_payload() -> dict:
         "humidity": thermostat["humidity"],
         "outdoorTemp": thermostat["outdoorTemp"],
         "outdoor_temperature": thermostat["outdoorTemp"],
+        "safetyMode": outputs.get("safetyMode", ""),
         "relays": {"fan": outputs["fan"], "heat": outputs["heat"], "cool": outputs["cool"]},
         "relayFan": outputs["fan"],
         "relayHeat": outputs["heat"],
