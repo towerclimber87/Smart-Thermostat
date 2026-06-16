@@ -5187,3 +5187,205 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
 .screen-room .room-control-cards {
   grid-template-columns: repeat(var(--room-control-columns, 6), minmax(0, 1fr));
 }
+
+/* 2026-06-16 thermostat presence automation + heat/cool lockouts */
+.mode-deck {
+  grid-template-columns: repeat(var(--mode-count, 4), minmax(0, 1fr)) !important;
+}
+.mode-button[hidden] {
+  display: none !important;
+}
+.mode-badge.locked {
+  background: rgba(255, 190, 96, .16);
+  border-color: rgba(255, 190, 96, .34);
+  color: rgba(255, 232, 195, .96);
+}
+.relay-pill.locked {
+  border-color: rgba(255, 190, 96, .22);
+  background: rgba(255, 190, 96, .07);
+}
+.relay-pill.locked i {
+  background: rgba(255, 190, 96, .86);
+  box-shadow: 0 0 16px rgba(255, 190, 96, .32);
+}
+.relay-pill.locked em {
+  color: rgba(255, 226, 184, .94);
+}
+.settings-sheet.thermostat-setup .thermostat-presence-section {
+  align-content: start;
+}
+.thermostat-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.mini-add-person-button {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(77,238,255,.26);
+  background: linear-gradient(135deg, rgba(77,238,255,.22), rgba(72,168,255,.12));
+  color: rgba(235,252,255,.96);
+  font-size: .78rem;
+  font-weight: 950;
+  white-space: nowrap;
+}
+.thermostat-people-list {
+  display: grid;
+  gap: 6px;
+  min-height: 34px;
+}
+.thermostat-empty-people {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  border-radius: 12px;
+  border: 1px dashed rgba(255,255,255,.12);
+  color: rgba(204,219,236,.64);
+  font-size: .75rem;
+  font-weight: 850;
+  line-height: 1.18;
+}
+.thermostat-person-pill {
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 32px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.052);
+}
+.thermostat-person-pill.home {
+  border-color: rgba(99,241,173,.24);
+  background: rgba(99,241,173,.075);
+}
+.thermostat-person-pill.away {
+  border-color: rgba(255,190,96,.22);
+  background: rgba(255,190,96,.065);
+}
+.thermostat-person-pill.unknown {
+  border-color: rgba(255,255,255,.10);
+  background: rgba(255,255,255,.04);
+}
+.thermostat-person-pill strong,
+.thermostat-person-pill span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thermostat-person-pill strong {
+  color: rgba(248,252,255,.94);
+  font-size: .84rem;
+  line-height: 1.05;
+}
+.thermostat-person-pill span {
+  margin-top: 2px;
+  color: rgba(196,213,232,.58);
+  font-size: .66rem;
+  font-weight: 800;
+}
+.thermostat-person-pill em {
+  min-width: 62px;
+  justify-self: end;
+  font-style: normal;
+  color: rgba(230,241,253,.84);
+  font-size: .74rem;
+  font-weight: 950;
+  text-align: right;
+}
+.thermostat-person-pill button {
+  width: 30px;
+  height: 30px;
+  min-height: 30px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.07);
+  color: rgba(239,248,255,.80);
+  font-size: 1.05rem;
+  font-weight: 950;
+  line-height: 1;
+}
+.thermostat-lock-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.thermostat-lock-toggle {
+  min-height: 40px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.11);
+  background: rgba(255,255,255,.07);
+  color: rgba(226,238,250,.82);
+  font-size: .82rem;
+  font-weight: 950;
+}
+.thermostat-lock-toggle.active {
+  border-color: rgba(255,190,96,.38);
+  background: linear-gradient(135deg, rgba(255,190,96,.28), rgba(255,122,94,.16));
+  color: rgba(255,238,213,.98);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.14), 0 12px 26px rgba(255,138,95,.12);
+}
+
+/* 2026-06-16 compact thermostat info popup */
+.panel-info-sheet {
+  width: min(92vw, 500px);
+  max-height: min(88vh, 640px);
+  border-radius: 24px;
+  padding: clamp(12px, 1.35vw, 18px);
+}
+.panel-info-sheet .settings-header.compact-picker-header {
+  margin-bottom: 8px;
+}
+.panel-info-sheet .settings-header h2 {
+  font-size: clamp(1.45rem, 2.4vw, 2.15rem);
+  line-height: .94;
+}
+.panel-info-grid {
+  gap: 8px;
+  margin-top: 8px;
+}
+.panel-info-row {
+  gap: 4px;
+  padding: 11px 12px;
+  border-radius: 16px;
+}
+.panel-info-row span {
+  font-size: .62rem;
+  letter-spacing: .11em;
+}
+.panel-info-row strong {
+  font-size: clamp(.98rem, 1.55vw, 1.35rem);
+  line-height: 1.08;
+}
+.panel-info-actions {
+  gap: 8px;
+  margin-top: 0;
+}
+.fetch-update-btn,
+.restart-server-btn {
+  min-height: 44px;
+  border-radius: 14px;
+}
+.fetch-update-status {
+  font-size: .8rem;
+  line-height: 1.2;
+}
+
+@media (max-height: 650px) {
+  .panel-info-sheet {
+    width: min(92vw, 470px);
+    padding: 10px;
+  }
+  .panel-info-row {
+    padding: 9px 10px;
+  }
+  .fetch-update-btn,
+  .restart-server-btn {
+    min-height: 40px;
+  }
+}

@@ -59,6 +59,9 @@ DEFAULT_THERMOSTAT = {
     "autoHeatOutdoorTarget": 65,
     "autoChangeoverLockoutMinutes": 120,
     "coolFanRemainOnMinutes": 2,
+    "heatLocked": False,
+    "coolLocked": False,
+    "people": [],
     "autoActiveMode": "cool",
     "autoPendingMode": "",
     "autoLockoutUntil": 0,
@@ -95,6 +98,7 @@ DEFAULT_HOME_ASSISTANT_CONFIG = {
     "doorAvailableEntities": [],
     "lightAvailableEntities": [],
     "roomAvailableEntities": [],
+    "personAvailableEntities": [],
 }
 
 
@@ -218,6 +222,75 @@ def _normalize_fan(value: object, fallback: str = "auto") -> str:
     return fan if fan in {"off", "on", "auto"} else fallback
 
 
+
+
+def _boolish(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value or "").strip().lower()
+    return text in {"1", "true", "yes", "on", "enabled"}
+
+
+def _normalize_person_entries(value: object) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    people: list[dict] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        entity_id = str(item.get("entityId") or item.get("entity_id") or "").strip()
+        if not entity_id or entity_id in seen:
+            continue
+        seen.add(entity_id)
+        domain = entity_id.split(".", 1)[0] if "." in entity_id else "person"
+        people.append({
+            "entityId": entity_id,
+            "domain": domain,
+            "name": str(item.get("name") or item.get("friendly_name") or entity_id).strip()[:120] or entity_id,
+            "state": str(item.get("state") or "unknown").strip() or "unknown",
+            "lastChanged": item.get("lastChanged") or item.get("last_changed") or "",
+            "lastUpdated": item.get("lastUpdated") or item.get("last_updated") or "",
+        })
+    return people
+
+
+def _allowed_mode_for_locks(mode: str, thermostat: dict, fallback: str = "cool") -> str:
+    requested = _normalize_mode(mode, fallback)
+    cool_available = not bool(thermostat.get("coolLocked"))
+    heat_available = not bool(thermostat.get("heatLocked"))
+    if requested == "cool" and cool_available:
+        return "cool"
+    if requested == "heat" and heat_available:
+        return "heat"
+    if requested == "auto" and (cool_available or heat_available):
+        return "auto"
+    fallback_mode = _normalize_mode(fallback, "cool")
+    if fallback_mode == "cool" and cool_available:
+        return "cool"
+    if fallback_mode == "heat" and heat_available:
+        return "heat"
+    if fallback_mode == "auto" and (cool_available or heat_available):
+        return "auto"
+    if cool_available:
+        return "cool"
+    if heat_available:
+        return "heat"
+    return "auto"
+
+
+def _available_hvac_modes(thermostat: dict) -> list[str]:
+    modes: list[str] = []
+    if not bool(thermostat.get("coolLocked")):
+        modes.append("cool")
+    if not bool(thermostat.get("heatLocked")):
+        modes.append("heat")
+    if modes:
+        modes.append("heat_cool")
+    return modes
+
 def _deepcopy_json(value: object) -> object:
     return json.loads(json.dumps(value))
 
@@ -248,6 +321,13 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             base["away"] = bool(source.get("away"))
         elif preset is not None:
             base["away"] = str(preset).strip().lower() == "away"
+
+        if "heatLocked" in source:
+            base["heatLocked"] = _boolish(source.get("heatLocked"))
+        if "coolLocked" in source:
+            base["coolLocked"] = _boolish(source.get("coolLocked"))
+        if "people" in source:
+            base["people"] = _normalize_person_entries(source.get("people"))
 
         for key, fallback, minimum, maximum in (
             ("currentTemp", base["currentTemp"], -40, 130),
@@ -293,6 +373,21 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             base["limits"][mode] = {"min": min(low, high - 2), "max": high}
 
     base["autoHeatOutdoorTarget"] = min(base["autoHeatOutdoorTarget"], base["autoCoolOutdoorTarget"] - 1)
+    base["mode"] = _allowed_mode_for_locks(base["mode"], base, base["mode"])
+    if base.get("autoActiveMode") == "heat" and base.get("heatLocked"):
+        base["autoActiveMode"] = "cool" if not base.get("coolLocked") else ""
+    if base.get("autoActiveMode") == "cool" and base.get("coolLocked"):
+        base["autoActiveMode"] = "heat" if not base.get("heatLocked") else ""
+    if base.get("autoPendingMode") == "heat" and base.get("heatLocked"):
+        base["autoPendingMode"] = ""
+    if base.get("autoPendingMode") == "cool" and base.get("coolLocked"):
+        base["autoPendingMode"] = ""
+    if base.get("heatLocked") and base.get("coolLocked"):
+        base["autoActiveMode"] = ""
+        base["autoPendingMode"] = ""
+        base["autoLockoutUntil"] = 0
+        base["coolFanHoldUntil"] = 0
+        base["coolRelayWasOn"] = False
     mode_limits = base["limits"].get(base["mode"], {"min": 45, "max": 95})
     if not base["away"]:
         base["targetTemp"] = _number(base["targetTemp"], 70, mode_limits.get("min"), mode_limits.get("max"))
@@ -375,13 +470,19 @@ def _panel_config_payload() -> dict:
 
 
 def _thermostat_outputs(thermostat: dict) -> dict:
-    mode = _normalize_mode(thermostat.get("mode"), "cool")
+    mode = _allowed_mode_for_locks(_normalize_mode(thermostat.get("mode"), "cool"), thermostat, "cool")
     active_mode = thermostat.get("autoActiveMode") if mode == "auto" else mode
     active_mode = _normalize_mode(active_mode, "cool")
+    if active_mode == "heat" and thermostat.get("heatLocked"):
+        active_mode = "cool" if not thermostat.get("coolLocked") else "locked"
+    if active_mode == "cool" and thermostat.get("coolLocked"):
+        active_mode = "heat" if not thermostat.get("heatLocked") else "locked"
+    if thermostat.get("heatLocked") and thermostat.get("coolLocked"):
+        active_mode = "locked"
     current = _number(thermostat.get("currentTemp"), 70)
     target = _number(thermostat.get("targetTemp"), 70)
-    heat = active_mode == "heat" and current < target
-    cool = active_mode == "cool" and current > target
+    heat = (not thermostat.get("heatLocked")) and active_mode == "heat" and current < target
+    cool = (not thermostat.get("coolLocked")) and active_mode == "cool" and current > target
     fan = bool(cool or thermostat.get("fan") == "on")
     action = "heating" if heat else "cooling" if cool else "fan" if fan else "idle"
     return {"fan": fan, "heat": heat, "cool": cool, "hvacAction": action, "controlMode": active_mode}
@@ -406,6 +507,11 @@ def _thermostat_status_payload() -> dict:
         "fanMode": thermostat["fan"],
         "preset_mode": preset_mode,
         "presetMode": preset_mode,
+        "heatLocked": bool(thermostat.get("heatLocked")),
+        "coolLocked": bool(thermostat.get("coolLocked")),
+        "people": thermostat.get("people") or [],
+        "hvac_modes": _available_hvac_modes(thermostat),
+        "hvacModes": _available_hvac_modes(thermostat),
         "outdoor_temperature": thermostat["outdoorTemp"],
         "relays": {"fan": outputs["fan"], "heat": outputs["heat"], "cool": outputs["cool"]},
     }
@@ -436,6 +542,11 @@ def _thermostat_status_payload() -> dict:
         "preset_mode": preset_mode,
         "presetMode": preset_mode,
         "away": thermostat.get("away"),
+        "heatLocked": bool(thermostat.get("heatLocked")),
+        "coolLocked": bool(thermostat.get("coolLocked")),
+        "people": thermostat.get("people") or [],
+        "hvac_modes": _available_hvac_modes(thermostat),
+        "hvacModes": _available_hvac_modes(thermostat),
         "humidity": thermostat["humidity"],
         "outdoorTemp": thermostat["outdoorTemp"],
         "outdoor_temperature": thermostat["outdoorTemp"],

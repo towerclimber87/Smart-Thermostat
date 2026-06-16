@@ -471,12 +471,20 @@
             </div>
           </div>
 
-          <div class="settings-section">
-            <div><h3>Fan</h3></div>
+          <div class="settings-section thermostat-presence-section">
+            <div class="thermostat-section-head">
+              <h3>Fan</h3>
+              <button id="addThermostatPersonButton" class="mini-add-person-button" type="button" aria-label="Add Home Assistant person">+ Person</button>
+            </div>
             <div class="segmented fan-segments" role="group" aria-label="Fan mode">
               <button class="segment" data-fan="off">Off</button>
               <button class="segment" data-fan="on">On</button>
               <button class="segment active" data-fan="auto">Auto</button>
+            </div>
+            <div id="thermostatPeopleList" class="thermostat-people-list" aria-live="polite"></div>
+            <div class="thermostat-lock-grid" aria-label="Equipment lockouts">
+              <button id="coolLockToggle" class="thermostat-lock-toggle" type="button" aria-pressed="false">Cool Lock</button>
+              <button id="heatLockToggle" class="thermostat-lock-toggle" type="button" aria-pressed="false">Heat Lock</button>
             </div>
           </div>
 

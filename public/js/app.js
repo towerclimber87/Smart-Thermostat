@@ -16,6 +16,7 @@ const INACTIVE_PAGE_SYNC_INTERVAL_MS = 5 * 60 * 1000;
 const HA_ALARM_SYNC_INTERVAL_MS = 5000;
 const HA_ALARM_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
 const HA_DOOR_SYNC_INTERVAL_MS = 5000;
+const HA_PRESENCE_SYNC_INTERVAL_MS = 5000;
 const LOCAL_THERMOSTAT_SYNC_INTERVAL_MS = 1000;
 const LOCAL_THERMOSTAT_PUSH_DEBOUNCE_MS = 300;
 const LIGHT_COLOR_PRESETS = [
@@ -80,6 +81,8 @@ let haAlarmSyncInFlight = false;
 let haAlarmSyncLastError = "";
 let haDoorSyncInFlight = false;
 let haDoorSyncLastError = "";
+let haPresenceSyncInFlight = false;
+let haPresenceSyncLastError = "";
 let localThermostatSyncInFlight = false;
 let localThermostatPushTimer = null;
 let localThermostatPushInFlight = false;
@@ -201,6 +204,7 @@ const defaultIntegrations = {
     doorAvailableEntities: [],
     lightAvailableEntities: [],
     roomAvailableEntities: [],
+    personAvailableEntities: [],
   },
 };
 
@@ -265,6 +269,9 @@ const state = {
     autoHeatOutdoorTarget: 65,
     autoChangeoverLockoutMinutes: AUTO_CHANGEOVER_MINUTES,
     coolFanRemainOnMinutes: 2,
+    heatLocked: false,
+    coolLocked: false,
+    people: [],
     autoActiveMode: "cool",
     autoPendingMode: "",
     autoLockoutUntil: 0,
@@ -393,6 +400,10 @@ const elements = {
   saveAlarmCodeButton: document.getElementById("saveAlarmCodeButton"),
   thermostatNameInput: document.getElementById("thermostatNameInput"),
   saveThermostatNameButton: document.getElementById("saveThermostatNameButton"),
+  addThermostatPersonButton: document.getElementById("addThermostatPersonButton"),
+  thermostatPeopleList: document.getElementById("thermostatPeopleList"),
+  heatLockToggle: document.getElementById("heatLockToggle"),
+  coolLockToggle: document.getElementById("coolLockToggle"),
   thermostatInfoButton: document.getElementById("thermostatInfoButton"),
   thermostatInfoOverlay: document.getElementById("thermostatInfoOverlay"),
   thermostatInfoClose: document.getElementById("thermostatInfoClose"),
@@ -751,11 +762,14 @@ function buildSavedConfig() {
     autoHeatOutdoorTarget: state.thermostat.autoHeatOutdoorTarget,
     autoChangeoverLockoutMinutes: state.thermostat.autoChangeoverLockoutMinutes,
     coolFanRemainOnMinutes: state.thermostat.coolFanRemainOnMinutes,
+    heatLocked: Boolean(state.thermostat.heatLocked),
+    coolLocked: Boolean(state.thermostat.coolLocked),
+    people: normalizeThermostatPeople(state.thermostat.people),
     autoActiveMode: state.thermostat.autoActiveMode,
     limits: state.thermostat.limits,
   };
   return {
-    version: 13,
+    version: 14,
     panelLock: { locked: Boolean(state.panelLock?.locked) },
     thermostat: thermostatToSave,
     alarm: {
@@ -790,6 +804,9 @@ function applySavedConfig(saved = {}) {
       coolFanRemainOnMinutes: Number.isFinite(Number(savedThermostat.coolFanRemainOnMinutes))
         ? Number(savedThermostat.coolFanRemainOnMinutes)
         : defaults.coolFanRemainOnMinutes,
+      heatLocked: Boolean(savedThermostat.heatLocked),
+      coolLocked: Boolean(savedThermostat.coolLocked),
+      people: normalizeThermostatPeople(savedThermostat.people || defaults.people),
       limits: {
         ...defaults.limits,
         ...(savedThermostat.limits || {}),
@@ -803,6 +820,7 @@ function applySavedConfig(saved = {}) {
       coolFanHoldUntil: 0,
     };
     state.thermostat.autoHeatOutdoorTarget = Math.min(state.thermostat.autoHeatOutdoorTarget, state.thermostat.autoCoolOutdoorTarget - 1);
+    normalizeThermostatModeForLocks();
   }
   if (saved?.alarm) {
     const savedCode = String(saved.alarm.disarmCode || "").replace(/\D/g, "").slice(0, 8);
@@ -938,6 +956,11 @@ function localThermostatPayload() {
       away: Boolean(state.thermostat.away),
       preset_mode: state.thermostat.away ? "away" : "home",
       presetMode: state.thermostat.away ? "away" : "home",
+      heatLocked: Boolean(state.thermostat.heatLocked),
+      coolLocked: Boolean(state.thermostat.coolLocked),
+      people: normalizeThermostatPeople(state.thermostat.people),
+      hvac_modes: getAvailableHvacModes(),
+      hvacModes: getAvailableHvacModes(),
       relays: { fan: outputs.fan, heat: outputs.heat, cool: outputs.cool },
       hvacAction: outputs.cool ? "cooling" : outputs.heat ? "heating" : outputs.coolingFanHold || outputs.fan ? "fan" : "idle",
     },
@@ -968,6 +991,14 @@ function applyLocalThermostatState(remote = {}) {
     changed = true;
   };
 
+  const setBoolean = (key) => {
+    if (source[key] === undefined || source[key] === null) return;
+    const next = Boolean(source[key]);
+    if (Boolean(t[key]) === next) return;
+    t[key] = next;
+    changed = true;
+  };
+
   const beforeName = t.name;
   setString("name");
   if (t.name !== beforeName) state.systemInfo.thermostatName = getThermostatName();
@@ -982,12 +1013,22 @@ function applyLocalThermostatState(remote = {}) {
   setNumber("autoHeatOutdoorTarget", 40, 99);
   setNumber("autoChangeoverLockoutMinutes", AUTO_CHANGEOVER_MINUTES, 720);
   setNumber("coolFanRemainOnMinutes", 0, 10);
+  setBoolean("heatLocked");
+  setBoolean("coolLocked");
+  if (Array.isArray(source.people)) {
+    const nextPeople = normalizeThermostatPeople(source.people);
+    if (JSON.stringify(normalizeThermostatPeople(t.people)) !== JSON.stringify(nextPeople)) {
+      t.people = nextPeople;
+      changed = true;
+    }
+  }
 
   const incomingMode = source.hvac_mode || source.hvacMode || source.mode;
   if (incomingMode !== undefined) {
     const modeMap = { heat_cool: "auto", auto: "auto", cool: "cool", heat: "heat" };
     const next = modeMap[String(incomingMode).toLowerCase()] || "";
-    if (next && t.mode !== next) { t.mode = next; changed = true; }
+    const unlocked = getAllowedThermostatMode(next, t.mode);
+    if (unlocked && t.mode !== unlocked) { t.mode = unlocked; changed = true; }
   }
 
   const incomingFan = source.fan_mode || source.fanMode || source.fan;
@@ -1018,6 +1059,7 @@ function applyLocalThermostatState(remote = {}) {
   }
 
   t.autoHeatOutdoorTarget = Math.min(t.autoHeatOutdoorTarget, t.autoCoolOutdoorTarget - 1);
+  if (normalizeThermostatModeForLocks()) changed = true;
   if (t.away) applyAwayTarget();
   if (!t.away) {
     const { min, max } = getModeLimits();
@@ -1291,12 +1333,254 @@ function gotoPage(pageName, options = {}) {
   if (pageName === "thermostat") {
     pollHomeAssistantAlarm({ force: true });
     pollHomeAssistantDoor({ force: true });
+    pollHomeAssistantThermostatPeople({ force: true });
   }
 }
 
 function goRelative(direction) {
   const currentIndex = state.pages.indexOf(state.currentPage);
   gotoPage(state.pages[clamp(currentIndex + direction, 0, state.pages.length - 1)]);
+}
+
+
+function isThermostatModeLocked(mode) {
+  const t = state.thermostat;
+  if (mode === "heat") return Boolean(t.heatLocked);
+  if (mode === "cool") return Boolean(t.coolLocked);
+  return false;
+}
+
+function getAvailableHvacModes() {
+  const modes = [];
+  if (!state.thermostat.coolLocked) modes.push("cool");
+  if (!state.thermostat.heatLocked) modes.push("heat");
+  if (modes.length) modes.push("heat_cool");
+  return modes;
+}
+
+function getAllowedThermostatMode(mode, fallback = state.thermostat.mode) {
+  const requested = String(mode || "").toLowerCase() === "heat_cool" ? "auto" : String(mode || "").toLowerCase();
+  const valid = ["cool", "heat", "auto"].includes(requested) ? requested : fallback;
+  const coolAvailable = !state.thermostat.coolLocked;
+  const heatAvailable = !state.thermostat.heatLocked;
+  if (valid === "cool" && coolAvailable) return "cool";
+  if (valid === "heat" && heatAvailable) return "heat";
+  if (valid === "auto" && (coolAvailable || heatAvailable)) return "auto";
+  if (fallback && fallback !== valid) {
+    const fallbackMode = String(fallback).toLowerCase() === "heat_cool" ? "auto" : String(fallback).toLowerCase();
+    if (fallbackMode === "cool" && coolAvailable) return "cool";
+    if (fallbackMode === "heat" && heatAvailable) return "heat";
+    if (fallbackMode === "auto" && (coolAvailable || heatAvailable)) return "auto";
+  }
+  if (coolAvailable) return "cool";
+  if (heatAvailable) return "heat";
+  return "auto";
+}
+
+function normalizeThermostatModeForLocks() {
+  const t = state.thermostat;
+  const beforeMode = t.mode;
+  const beforeAuto = t.autoActiveMode;
+  t.mode = getAllowedThermostatMode(t.mode, t.mode);
+  if (t.autoActiveMode === "heat" && t.heatLocked) t.autoActiveMode = !t.coolLocked ? "cool" : "";
+  if (t.autoActiveMode === "cool" && t.coolLocked) t.autoActiveMode = !t.heatLocked ? "heat" : "";
+  if (t.autoPendingMode === "heat" && t.heatLocked) t.autoPendingMode = "";
+  if (t.autoPendingMode === "cool" && t.coolLocked) t.autoPendingMode = "";
+  if (t.heatLocked && t.coolLocked) {
+    t.autoActiveMode = "";
+    t.autoPendingMode = "";
+    t.autoLockoutUntil = 0;
+    t.coolFanHoldUntil = 0;
+    t.coolRelayWasOn = false;
+  }
+  return beforeMode !== t.mode || beforeAuto !== t.autoActiveMode;
+}
+
+function normalizeThermostatPersonEntry(entry = {}) {
+  const entityId = String(entry.entityId || entry.entity_id || "").trim();
+  if (!entityId) return null;
+  const domain = entityId.includes(".") ? entityId.split(".", 1)[0] : "person";
+  return {
+    entityId,
+    domain,
+    name: String(entry.name || entry.friendly_name || entityId).trim() || entityId,
+    state: String(entry.state || "unknown").trim() || "unknown",
+    lastChanged: entry.lastChanged || entry.last_changed || "",
+    lastUpdated: entry.lastUpdated || entry.last_updated || "",
+  };
+}
+
+function normalizeThermostatPeople(people = []) {
+  const seen = new Set();
+  return (Array.isArray(people) ? people : [])
+    .map(normalizeThermostatPersonEntry)
+    .filter(Boolean)
+    .filter((entry) => {
+      if (seen.has(entry.entityId)) return false;
+      seen.add(entry.entityId);
+      return true;
+    });
+}
+
+function getThermostatPeople() {
+  state.thermostat.people = normalizeThermostatPeople(state.thermostat.people);
+  return state.thermostat.people;
+}
+
+function isPersonHomeState(value) {
+  return String(value || "").trim().toLowerCase() === "home";
+}
+
+function isKnownPresenceState(value) {
+  const stateValue = String(value || "").trim().toLowerCase();
+  return Boolean(stateValue) && !["unknown", "unavailable", "none", "null"].includes(stateValue);
+}
+
+function formatPresenceState(value) {
+  const stateValue = String(value || "unknown").trim().toLowerCase();
+  if (stateValue === "home") return "Home";
+  if (stateValue === "not_home") return "Away";
+  if (stateValue === "unknown" || stateValue === "unavailable") return "Unknown";
+  return titleCase(stateValue.replace(/_/g, " "));
+}
+
+function renderThermostatPeople() {
+  const people = getThermostatPeople();
+  if (elements.thermostatPeopleList) {
+    elements.thermostatPeopleList.innerHTML = people.length ? people.map((person) => {
+      const home = isPersonHomeState(person.state);
+      const known = isKnownPresenceState(person.state);
+      return `
+        <div class="thermostat-person-pill ${home ? "home" : known ? "away" : "unknown"}" data-thermostat-person-id="${escapeHtml(person.entityId)}">
+          <div>
+            <strong>${escapeHtml(person.name || person.entityId)}</strong>
+            <span>${escapeHtml(person.entityId)}</span>
+          </div>
+          <em>${escapeHtml(formatPresenceState(person.state))}</em>
+          <button type="button" data-remove-thermostat-person="${escapeHtml(person.entityId)}" aria-label="Remove ${escapeHtml(person.name || person.entityId)}">×</button>
+        </div>
+      `;
+    }).join("") : `<div class="thermostat-empty-people">No people assigned. Tap + Person to add Home Assistant person entries.</div>`;
+  }
+  if (elements.heatLockToggle) {
+    elements.heatLockToggle.classList.toggle("active", Boolean(state.thermostat.heatLocked));
+    elements.heatLockToggle.setAttribute("aria-pressed", state.thermostat.heatLocked ? "true" : "false");
+  }
+  if (elements.coolLockToggle) {
+    elements.coolLockToggle.classList.toggle("active", Boolean(state.thermostat.coolLocked));
+    elements.coolLockToggle.setAttribute("aria-pressed", state.thermostat.coolLocked ? "true" : "false");
+  }
+}
+
+function applyThermostatPresenceAutomation(options = {}) {
+  const people = getThermostatPeople();
+  if (!people.length) return false;
+  const anyHome = people.some((person) => isPersonHomeState(person.state));
+  const allKnown = people.every((person) => isKnownPresenceState(person.state));
+  const allAway = allKnown && !anyHome;
+  const t = state.thermostat;
+  let changed = false;
+  if (allAway && !t.away) {
+    t.away = true;
+    t.lastComfortTarget = t.targetTemp;
+    t.awaySource = "presence";
+    applyAwayTarget();
+    changed = true;
+    if (options.toast !== false) showToast("Everyone away • Away mode active");
+  } else if (anyHome && t.away) {
+    t.away = false;
+    t.awaySource = "presence";
+    const { min, max } = getModeLimits();
+    t.targetTemp = clamp(t.lastComfortTarget, min, max);
+    changed = true;
+    if (options.toast !== false) showToast("Person home • Home mode restored");
+  }
+  if (changed) {
+    renderThermostat();
+    saveConfig();
+  }
+  return changed;
+}
+
+function upsertThermostatPerson(entity = {}) {
+  const normalized = normalizeThermostatPersonEntry(entity);
+  if (!normalized) return;
+  const people = getThermostatPeople();
+  const index = people.findIndex((person) => person.entityId === normalized.entityId);
+  if (index >= 0) people[index] = { ...people[index], ...normalized };
+  else people.push(normalized);
+  state.thermostat.people = people;
+  closeAudioEntityPicker();
+  renderThermostatPeople();
+  saveConfig({ toast: true });
+  pollHomeAssistantThermostatPeople({ force: true });
+}
+
+function removeThermostatPerson(entityId) {
+  const before = getThermostatPeople().length;
+  state.thermostat.people = getThermostatPeople().filter((person) => person.entityId !== entityId);
+  if (state.thermostat.people.length !== before) {
+    renderThermostatPeople();
+    saveConfig({ toast: true });
+    showToast("Person removed");
+  }
+}
+
+function toggleThermostatEquipmentLock(kind) {
+  const t = state.thermostat;
+  if (kind === "heat") t.heatLocked = !t.heatLocked;
+  if (kind === "cool") t.coolLocked = !t.coolLocked;
+  normalizeThermostatModeForLocks();
+  if (t.away) applyAwayTarget();
+  renderThermostat();
+  saveConfig({ toast: true });
+  showToast(`${titleCase(kind)} lock ${t[`${kind}Locked`] ? "enabled" : "disabled"}`);
+}
+
+async function fetchThermostatPersonStatesViaLocalBackend(entityIds) {
+  const ha = state.integrations.homeAssistant;
+  const baseUrl = getHaBaseUrl();
+  if (!baseUrl || !ha.token) throw new Error("Missing Home Assistant URL or token");
+  const payload = await fetchJsonWithTimeout("/api/ha/room/states", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: baseUrl, token: ha.token, entityIds }),
+  }, 9000);
+  return payload.controls || [];
+}
+
+async function pollHomeAssistantThermostatPeople(options = {}) {
+  const people = getThermostatPeople();
+  if (!people.length) return;
+  if (!options.force && document.visibilityState === "hidden") return;
+  if (haPresenceSyncInFlight) return;
+  haPresenceSyncInFlight = true;
+  try {
+    const updates = await fetchThermostatPersonStatesViaLocalBackend(people.map((person) => person.entityId));
+    const byId = new Map((updates || []).map((entity) => [entity.entityId, entity]));
+    let changed = false;
+    state.thermostat.people = people.map((person) => {
+      const update = byId.get(person.entityId);
+      if (!update) return person;
+      const merged = normalizeThermostatPersonEntry({ ...person, ...update }) || person;
+      if (JSON.stringify(merged) !== JSON.stringify(person)) changed = true;
+      return merged;
+    });
+    if (changed) {
+      renderThermostatPeople();
+      saveConfig({ sync: false });
+    }
+    applyThermostatPresenceAutomation({ toast: true });
+    if (haPresenceSyncLastError) haPresenceSyncLastError = "";
+  } catch (error) {
+    const message = error.message || String(error);
+    if (message !== haPresenceSyncLastError) {
+      haPresenceSyncLastError = message;
+      addHaLog("warn", "Live presence sync paused", message);
+    }
+  } finally {
+    haPresenceSyncInFlight = false;
+  }
 }
 
 function getAutoLockoutMs() {
@@ -1317,15 +1601,30 @@ function formatLockoutTime(ms) {
 
 function getAutoControlMode(now = Date.now()) {
   const t = state.thermostat;
+  const coolAvailable = !t.coolLocked;
+  const heatAvailable = !t.heatLocked;
+  if (!coolAvailable && !heatAvailable) {
+    t.autoActiveMode = "";
+    t.autoPendingMode = "";
+    t.autoLockoutUntil = 0;
+    return "locked";
+  }
   const coolTarget = Number(t.autoCoolOutdoorTarget) || 70;
   const heatTarget = Math.min(Number(t.autoHeatOutdoorTarget) || 65, coolTarget - 1);
   const outdoor = Number(t.outdoorTemp);
   let active = ["heat", "cool"].includes(t.autoActiveMode) ? t.autoActiveMode : "";
+  if (active === "heat" && !heatAvailable) active = "";
+  if (active === "cool" && !coolAvailable) active = "";
 
   let desired = active;
-  if (outdoor >= coolTarget) desired = "cool";
-  else if (outdoor <= heatTarget) desired = "heat";
-  else if (!desired) desired = outdoor >= ((coolTarget + heatTarget) / 2) ? "cool" : "heat";
+  if (outdoor >= coolTarget) desired = coolAvailable ? "cool" : "heat";
+  else if (outdoor <= heatTarget) desired = heatAvailable ? "heat" : "cool";
+  else if (!desired) desired = outdoor >= ((coolTarget + heatTarget) / 2)
+    ? (coolAvailable ? "cool" : "heat")
+    : (heatAvailable ? "heat" : "cool");
+  if (desired === "heat" && !heatAvailable) desired = coolAvailable ? "cool" : "locked";
+  if (desired === "cool" && !coolAvailable) desired = heatAvailable ? "heat" : "locked";
+  if (desired === "locked") return "locked";
 
   if (!active) active = desired;
 
@@ -1351,12 +1650,16 @@ function getAutoControlMode(now = Date.now()) {
 
 function getEffectiveControlMode(now = Date.now()) {
   const t = state.thermostat;
-  return t.mode === "auto" ? getAutoControlMode(now) : t.mode;
+  const mode = t.mode === "auto" ? getAutoControlMode(now) : t.mode;
+  if (mode === "heat" && t.heatLocked) return !t.coolLocked ? "cool" : "locked";
+  if (mode === "cool" && t.coolLocked) return !t.heatLocked ? "heat" : "locked";
+  return mode;
 }
 
 function getModeLimits() {
   const t = state.thermostat;
-  const limits = t.limits[t.mode] || t.limits.auto || t.limits.cool;
+  const modeForLimits = t.mode === "auto" ? (getEffectiveControlMode() === "locked" ? "auto" : getEffectiveControlMode()) : t.mode;
+  const limits = t.limits[modeForLimits] || t.limits.auto || t.limits.cool;
   const range = { min: limits.min, max: limits.max };
   if (t.away) {
     const safetyMode = getEffectiveControlMode();
@@ -1404,7 +1707,9 @@ function pointerToTemp(clientX, clientY) {
 function applyAwayTarget() {
   const t = state.thermostat;
   const safetyMode = getEffectiveControlMode();
-  t.targetTemp = safetyMode === "heat" ? t.awayHeat : t.awayCool;
+  if (safetyMode === "heat") t.targetTemp = t.awayHeat;
+  else if (safetyMode === "cool") t.targetTemp = t.awayCool;
+  else t.targetTemp = clamp(t.lastComfortTarget || t.targetTemp, ABS_MIN, ABS_MAX);
 }
 
 function isSetpointPreviewActive() {
@@ -1424,6 +1729,7 @@ function setHomeMode() {
   const t = state.thermostat;
   if (!t.away) return;
   t.away = false;
+  t.awaySource = "";
   const { min, max } = getModeLimits();
   t.targetTemp = clamp(t.lastComfortTarget, min, max);
   renderThermostat();
@@ -1460,6 +1766,7 @@ function setTargetTemp(temp, options = {}) {
   if (options.preview) holdSetpointPreview();
   if (t.away && !options.keepAway) {
     t.away = false;
+    t.awaySource = "";
     showToast("Returned home");
   }
   const { min, max } = getModeLimits();
@@ -1490,8 +1797,8 @@ function getThermostatOutputs(options = {}) {
   const t = state.thermostat;
   const now = Date.now();
   const controlMode = getEffectiveControlMode(now);
-  const heat = controlMode === "heat" && t.currentTemp < t.targetTemp;
-  const cool = controlMode === "cool" && t.currentTemp > t.targetTemp;
+  const heat = !t.heatLocked && controlMode === "heat" && t.currentTemp < t.targetTemp;
+  const cool = !t.coolLocked && controlMode === "cool" && t.currentTemp > t.targetTemp;
 
   if (options.recordRuntime) {
     if (cool && t.fan === "off") t.fan = "auto";
@@ -1518,6 +1825,13 @@ function renderRelayStatus(element, isOn) {
   if (status) status.textContent = isOn ? "On" : "Off";
 }
 
+function renderRelayLockStatus(element, locked) {
+  if (!element) return;
+  element.classList.toggle("locked", Boolean(locked));
+  const status = element.querySelector("em");
+  if (status && locked) status.textContent = "Locked";
+}
+
 
 function renderTemperatureAtmosphere(currentTemp) {
   const temp = Number(currentTemp);
@@ -1540,6 +1854,7 @@ function renderTemperatureAtmosphere(currentTemp) {
 
 function renderThermostat() {
   const t = state.thermostat;
+  normalizeThermostatModeForLocks();
   const { min, max } = getModeLimits();
   const showingSetpoint = isSetpointPreviewActive();
   const currentRounded = Math.round(t.currentTemp);
@@ -1596,8 +1911,10 @@ function renderThermostat() {
   renderRelayStatus(elements.relayFan, outputs.fan);
   renderRelayStatus(elements.relayHeat, outputs.heat);
   renderRelayStatus(elements.relayCool, outputs.cool);
+  renderRelayLockStatus(elements.relayHeat, Boolean(t.heatLocked));
+  renderRelayLockStatus(elements.relayCool, Boolean(t.coolLocked));
 
-  const action = outputs.cool ? "Cooling" : outputs.heat ? "Heating" : outputs.coolingFanHold ? "Fan Cooldown" : outputs.fan ? "Fan On" : "Idle";
+  const action = outputs.cool ? "Cooling" : outputs.heat ? "Heating" : outputs.coolingFanHold ? "Fan Cooldown" : outputs.fan ? "Fan On" : (t.heatLocked && t.coolLocked ? "Heat/Cool Locked" : "Idle");
   const lockoutRemaining = Math.max(0, Number(t.autoLockoutUntil || 0) - now);
   if (t.away) {
     elements.runtimeState.textContent = `Away • ${action}`;
@@ -1610,8 +1927,9 @@ function renderThermostat() {
   }
 
   if (elements.modeBadge) {
-    elements.modeBadge.textContent = t.away ? `${titleCase(controlMode)} Safety` : t.mode === "auto" ? `Auto ${titleCase(controlMode)}` : `${titleCase(t.mode)} Target`;
-    elements.modeBadge.className = `mode-badge ${t.mode === "auto" ? `${controlMode} auto` : t.mode}`;
+    const lockedLabel = t.heatLocked && t.coolLocked ? "Locked" : controlMode === "locked" ? "Locked" : "";
+    elements.modeBadge.textContent = lockedLabel || (t.away ? `${titleCase(controlMode)} Safety` : t.mode === "auto" ? `Auto ${titleCase(controlMode)}` : `${titleCase(t.mode)} Target`);
+    elements.modeBadge.className = `mode-badge ${lockedLabel ? "locked" : t.mode === "auto" ? `${controlMode} auto` : t.mode}`;
   }
   elements.awayToggle.classList.toggle("active", t.away);
   elements.awayToggle.classList.toggle("home-state", t.away);
@@ -1621,9 +1939,16 @@ function renderThermostat() {
     elements.awayModeOverlay.setAttribute("aria-hidden", t.away ? "false" : "true");
   }
 
+  const visibleModeButtons = [];
   document.querySelectorAll(".mode-button[data-mode]").forEach((button) => {
-    button.classList.toggle("active", button.dataset.mode === t.mode);
+    const mode = button.dataset.mode;
+    const hiddenByLock = mode === "heat" ? t.heatLocked : mode === "cool" ? t.coolLocked : mode === "auto" ? t.heatLocked && t.coolLocked : false;
+    button.hidden = hiddenByLock;
+    button.disabled = hiddenByLock;
+    button.classList.toggle("active", button.dataset.mode === t.mode && !hiddenByLock);
+    if (!hiddenByLock) visibleModeButtons.push(button);
   });
+  document.querySelectorAll(".mode-deck").forEach((deck) => deck.style.setProperty("--mode-count", String(Math.max(1, visibleModeButtons.length + 1))));
   document.querySelectorAll(".segment[data-fan]").forEach((button) => {
     button.classList.toggle("active", button.dataset.fan === t.fan);
     const forcedCooling = isCoolingFanForced(outputs) && button.dataset.fan === "off";
@@ -1636,6 +1961,9 @@ function renderThermostat() {
   if (elements.thermostatNameInput && document.activeElement !== elements.thermostatNameInput) {
     elements.thermostatNameInput.value = getThermostatName();
   }
+  elements.app.classList.toggle("heat-locked", Boolean(t.heatLocked));
+  elements.app.classList.toggle("cool-locked", Boolean(t.coolLocked));
+  renderThermostatPeople();
   renderDoorWidget();
   renderAlarmWidget();
 }
@@ -2208,8 +2536,13 @@ async function sendAlarmArm(action) {
 function setMode(mode) {
   const t = state.thermostat;
   if (!["cool", "heat", "auto"].includes(mode)) return;
-  t.mode = mode;
-  if (mode === "auto") getAutoControlMode();
+  if (isThermostatModeLocked(mode) || (mode === "auto" && t.heatLocked && t.coolLocked)) {
+    showToast(`${titleCase(mode)} is locked out`);
+    renderThermostat();
+    return;
+  }
+  t.mode = getAllowedThermostatMode(mode, t.mode);
+  if (t.mode === "auto") getAutoControlMode();
   if (t.away) {
     applyAwayTarget();
   } else {
@@ -2219,7 +2552,7 @@ function setMode(mode) {
   }
   renderThermostat();
   saveConfig();
-  showToast(`${titleCase(mode)} mode selected`);
+  showToast(`${titleCase(t.mode)} mode selected`);
 }
 
 function adjustSetpoint(delta) {
@@ -2233,6 +2566,7 @@ function toggleAway() {
     return;
   }
   t.away = true;
+  t.awaySource = "manual";
   t.lastComfortTarget = t.targetTemp;
   applyAwayTarget();
   renderThermostat();
@@ -2390,6 +2724,7 @@ function openSettings() {
     elements.thermostatSettingsView.hidden = false;
     if (elements.alarmDisarmCodeInput) elements.alarmDisarmCodeInput.value = getSavedAlarmCode();
     if (elements.thermostatNameInput) elements.thermostatNameInput.value = getThermostatName();
+    renderThermostatPeople();
   }
   elements.settingsOverlay.classList.add("open");
   elements.settingsOverlay.setAttribute("aria-hidden", "false");
@@ -5413,6 +5748,7 @@ function getAudioPickerMeta(kind) {
     excludeDomains: ROOM_CONTROL_EXCLUDED_DOMAINS,
     help: "Select any useful Home Assistant entity. Automations are hidden, and the card will choose the icon, status, and action from its domain and device class."
   };
+  if (kind === "thermostatPerson") return { domain: "person", title: "Add Person", help: "Select the Home Assistant person entry that should control Home/Away mode." };
   if (kind === "light") return { domain: "light", title: "Assign Light", help: "Select the Home Assistant light entry for this slider." };
   return { domain: "", title: "Assign Entity", help: "Select the Home Assistant entity for this control." };
 }
@@ -5462,11 +5798,11 @@ async function openAudioEntityPicker(kind) {
   const meta = getAudioPickerMeta(kind);
   if (!meta.domain) return;
   if (kind === "light") readHaFieldsFromScreen("lights");
-  else if (!["alarm", "door", "roomControl"].includes(kind)) readHaFieldsFromScreen("audio");
+  else if (!["alarm", "door", "roomControl", "thermostatPerson"].includes(kind)) readHaFieldsFromScreen("audio");
   if (!getHaBaseUrl() || !state.integrations.homeAssistant.token) {
-    showToast(["alarm", "door", "roomControl"].includes(kind) ? "Add Home Assistant config from Blinds, Audio, or Lights settings first" : "Add Home Assistant config first");
+    showToast(["alarm", "door", "roomControl", "thermostatPerson"].includes(kind) ? "Add Home Assistant config from Blinds, Audio, or Lights settings first" : "Add Home Assistant config first");
     if (kind === "light") { openSettings(); showLightsHaView(); }
-    else if (!["alarm", "door", "roomControl"].includes(kind)) { openSettings(); showAudioHaView(); }
+    else if (!["alarm", "door", "roomControl", "thermostatPerson"].includes(kind)) { openSettings(); showAudioHaView(); }
     return;
   }
   state.audioEntityPicker = { kind, domain: meta.domain, entities: [], search: "" };
@@ -5490,6 +5826,7 @@ async function openAudioEntityPicker(kind) {
     if (meta.domain === "alarm_control_panel") ha.alarmAvailableEntities = entities;
     if (meta.domain === "binary_sensor") ha.doorAvailableEntities = entities;
     if (meta.domain === "light") ha.lightAvailableEntities = entities;
+    if (meta.domain === "person") ha.personAvailableEntities = entities;
     if (kind === "roomControl") ha.roomAvailableEntities = entities;
     renderAudioEntityPicker();
   } catch (error) {
@@ -5553,6 +5890,10 @@ function selectAudioEntity(entityId) {
     saveConfig({ toast: true });
     renderDoorWidget();
     scheduleDoorSync();
+    return;
+  }
+  if (kind === "thermostatPerson") {
+    upsertThermostatPerson(entity);
     return;
   }
   if (kind === "roomControl") {
@@ -5752,6 +6093,13 @@ function bindEvents() {
     const [kind, delta] = button.dataset.autoAdjust.split(":");
     adjustAutoSetting(kind, Number(delta));
   }));
+  elements.addThermostatPersonButton?.addEventListener("click", () => openAudioEntityPicker("thermostatPerson"));
+  elements.heatLockToggle?.addEventListener("click", () => toggleThermostatEquipmentLock("heat"));
+  elements.coolLockToggle?.addEventListener("click", () => toggleThermostatEquipmentLock("cool"));
+  elements.thermostatPeopleList?.addEventListener("click", (event) => {
+    const removeButton = event.target.closest("[data-remove-thermostat-person]");
+    if (removeButton) removeThermostatPerson(removeButton.dataset.removeThermostatPerson);
+  });
   document.querySelectorAll(".mode-button[data-mode]").forEach((button) => button.addEventListener("click", () => setMode(button.dataset.mode)));
   document.querySelectorAll(".segment[data-fan]").forEach((button) => button.addEventListener("click", () => setFanMode(button.dataset.fan)));
 
@@ -5959,6 +6307,7 @@ async function init() {
   bindEvents();
   updateClock();
   renderThermostat();
+  renderThermostatPeople();
   renderPanelLock();
   fetchLocalThermostatStatus({ force: true });
   renderDoorWidget();
@@ -5982,8 +6331,10 @@ async function init() {
   setInterval(() => pollHomeAssistantRoomControls(), HA_ROOM_SYNC_INTERVAL_MS);
   setInterval(() => pollHomeAssistantAlarm(), HA_ALARM_SYNC_INTERVAL_MS);
   setInterval(() => pollHomeAssistantDoor(), HA_DOOR_SYNC_INTERVAL_MS);
+  setInterval(() => pollHomeAssistantThermostatPeople(), HA_PRESENCE_SYNC_INTERVAL_MS);
   pollHomeAssistantAlarm({ force: true });
   pollHomeAssistantDoor({ force: true });
+  pollHomeAssistantThermostatPeople({ force: true });
 }
 
 init().catch((error) => {
