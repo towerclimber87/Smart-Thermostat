@@ -65,7 +65,7 @@ const ROOM_CONTROL_PICKER_DOMAINS = [
 const ROOM_CONTROL_READ_ONLY_DOMAINS = new Set(["binary_sensor", "sensor", "number", "input_number", "select", "input_select", "person", "device_tracker", "climate"]);
 const ROOM_CONTROL_MOMENTARY_DOMAINS = new Set(["button", "input_button", "scene", "script"]);
 const ROOM_CONTROL_EXCLUDED_DOMAINS = new Set(["automation"]);
-const PANEL_THEMES = ["regular", "star-trek"];
+const PANEL_THEMES = ["regular", "star-trek", "christmas"];
 let haSyncInFlight = false;
 let haSyncLastError = "";
 let haAudioSyncInFlight = false;
@@ -731,11 +731,15 @@ function getActiveRoomControlRoom() {
 function normalizePanelTheme(value) {
   const candidate = String(value || "").trim().toLowerCase();
   if (["star-trek", "startrek", "star_trek", "star trek", "trek"].includes(candidate)) return "star-trek";
+  if (["christmas", "xmas", "holiday", "holidays", "festive"].includes(candidate)) return "christmas";
   return "regular";
 }
 
 function getPanelThemeMetaColor(theme = state.theme) {
-  return normalizePanelTheme(theme) === "star-trek" ? "#6d5b49" : "#050812";
+  const normalized = normalizePanelTheme(theme);
+  if (normalized === "star-trek") return "#6d5b49";
+  if (normalized === "christmas") return "#143b2f";
+  return "#050812";
 }
 
 function renderPanelThemePicker() {
@@ -758,7 +762,10 @@ function applyPanelTheme(theme, options = {}) {
   if (themeMeta) themeMeta.setAttribute("content", getPanelThemeMetaColor(nextTheme));
   renderPanelThemePicker();
   if (changed && options.save !== false) saveConfig({ toast: false });
-  if (changed && options.toast) showToast(nextTheme === "star-trek" ? "Theme set to Star Trek" : "Theme set to Regular");
+  if (changed && options.toast) {
+    const themeLabel = nextTheme === "star-trek" ? "Star Trek" : nextTheme === "christmas" ? "Christmas" : "Regular";
+    showToast(`Theme set to ${themeLabel}`);
+  }
   return changed;
 }
 

@@ -7014,3 +7014,414 @@ body[data-theme="star-trek"] {
     min-width: 136px;
   }
 }
+
+
+/* 2026-06-16 compact comfort setup cards + Christmas theme */
+.settings-sheet.thermostat-setup .thermostat-people-list {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.settings-sheet.thermostat-setup .thermostat-empty-people {
+  grid-column: 1 / -1;
+}
+
+.settings-sheet.thermostat-setup .thermostat-person-pill {
+  min-height: 84px;
+  grid-template-columns: minmax(0, 1fr) 28px;
+  grid-template-areas:
+    "name remove"
+    "entity remove"
+    "status status";
+  align-items: start;
+  gap: 4px 8px;
+  padding: 10px;
+  border-radius: 16px;
+}
+
+.settings-sheet.thermostat-setup .thermostat-person-pill strong {
+  grid-area: name;
+  font-size: .92rem;
+}
+
+.settings-sheet.thermostat-setup .thermostat-person-pill span {
+  grid-area: entity;
+  margin-top: 0;
+  font-size: .7rem;
+}
+
+.settings-sheet.thermostat-setup .thermostat-person-pill em {
+  grid-area: status;
+  justify-self: start;
+  min-width: 0;
+  margin-top: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  text-align: left;
+  font-size: .7rem;
+  letter-spacing: .04em;
+  background: rgba(255,255,255,.08);
+}
+
+.settings-sheet.thermostat-setup .thermostat-person-pill.home em {
+  background: rgba(99,241,173,.14);
+  color: rgba(225,255,238,.96);
+}
+
+.settings-sheet.thermostat-setup .thermostat-person-pill.away em {
+  background: rgba(255,190,96,.14);
+  color: rgba(255,239,213,.96);
+}
+
+.settings-sheet.thermostat-setup .thermostat-person-pill button {
+  grid-area: remove;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  align-self: start;
+}
+
+.settings-sheet.thermostat-setup .thermostat-theme-section .theme-choice-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.settings-sheet.thermostat-setup .thermostat-theme-section .theme-choice-btn {
+  position: relative;
+  overflow: hidden;
+  min-height: 68px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  gap: 4px;
+}
+
+.settings-sheet.thermostat-setup .thermostat-theme-section .theme-choice-btn strong {
+  font-size: .95rem;
+}
+
+.settings-sheet.thermostat-setup .thermostat-theme-section .theme-choice-btn span {
+  font-size: .76rem;
+  line-height: 1.2;
+}
+
+.settings-sheet.thermostat-setup .theme-choice-btn[data-theme-choice="christmas"] {
+  background:
+    radial-gradient(circle at 80% 18%, rgba(255,255,255,.18), transparent 18%),
+    linear-gradient(135deg, rgba(35,99,63,.88), rgba(19,50,35,.96));
+  border-color: rgba(120, 214, 154, .28);
+}
+
+.settings-sheet.thermostat-setup .theme-choice-btn[data-theme-choice="christmas"]::after {
+  content: "🎄 🎄";
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  font-size: 1.05rem;
+  opacity: .9;
+  letter-spacing: .04em;
+}
+
+.theme-choice-btn.active[data-theme-choice="christmas"] {
+  color: #0c160f;
+  background: linear-gradient(135deg, #9be7b2, #4bcf7f);
+  border-color: rgba(184,255,208,.52);
+  box-shadow: 0 14px 34px rgba(52, 179, 96, .24), inset 0 1px 0 rgba(255,255,255,.42);
+}
+
+.theme-choice-btn.active[data-theme-choice="christmas"] span {
+  color: rgba(12, 22, 15, .8);
+}
+
+html[data-theme="christmas"],
+body[data-theme="christmas"] {
+  background:
+    radial-gradient(circle at 50% 8%, rgba(255,255,255,.08), transparent 20%),
+    linear-gradient(180deg, #0e2018 0%, #07110d 100%);
+}
+
+.app-shell[data-theme="christmas"] {
+  --xmas-green: #2d7c4d;
+  --xmas-green-bright: #56d17d;
+  --xmas-red: #c83b4e;
+  --xmas-red-deep: #8e2435;
+  --xmas-gold: #f0c86a;
+  --xmas-ice: #ddf6ff;
+  color: #eff9ef;
+  background:
+    radial-gradient(circle at 50% -10%, rgba(255,255,255,.10), transparent 28%),
+    linear-gradient(90deg, rgba(14,44,29,.95) 0 1.25%, transparent 1.25% 98.75%, rgba(14,44,29,.95) 98.75%),
+    linear-gradient(180deg, #18422f 0%, #0b1d15 100%);
+}
+
+.app-shell[data-theme="christmas"]::before {
+  inset: clamp(7px, .9vw, 13px);
+  border-radius: clamp(25px, 2.5vw, 40px);
+  background:
+    linear-gradient(135deg, rgba(55,126,79,.95), rgba(17,48,34,.98));
+  border: 1px solid rgba(222, 255, 228, .22);
+  box-shadow:
+    0 30px 80px rgba(0,0,0,.56),
+    inset 0 1px 0 rgba(255,255,255,.14),
+    inset 0 0 0 clamp(8px, .8vw, 13px) rgba(8, 23, 16, .42);
+}
+
+.app-shell[data-theme="christmas"]::after {
+  inset: clamp(23px, 2vw, 34px);
+  border-radius: clamp(20px, 2vw, 32px);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(255,255,255,.05), transparent 30%),
+    linear-gradient(90deg, rgba(7,16,12,.52) 0 6.2%, transparent 6.2% 93.8%, rgba(7,16,12,.52) 93.8%),
+    linear-gradient(180deg, #10241a 0%, #050a08 100%);
+  border: 1px solid rgba(212, 239, 219, .16);
+  box-shadow:
+    inset 0 0 0 2px rgba(4,9,6,.92),
+    inset 0 -38px 60px rgba(0,0,0,.45);
+}
+
+.app-shell[data-theme="christmas"] .ambient {
+  display: none !important;
+}
+
+.app-shell[data-theme="christmas"] .screen-track::before {
+  content: "";
+  position: absolute;
+  left: clamp(34px, 3vw, 60px);
+  right: clamp(34px, 3vw, 60px);
+  bottom: clamp(10px, 1vw, 18px);
+  height: clamp(52px, 5vw, 82px);
+  z-index: 1;
+  pointer-events: none;
+  border-radius: 14px 14px 0 0;
+  background:
+    repeating-linear-gradient(90deg, rgba(154,30,48,.96) 0 18px, rgba(154,30,48,.96) 18px 30px, rgba(32,107,61,.96) 30px 48px, rgba(32,107,61,.96) 48px 60px),
+    linear-gradient(180deg, rgba(255,255,255,.06), rgba(0,0,0,.14));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.10), 0 -12px 26px rgba(0,0,0,.16);
+  opacity: .55;
+}
+
+.app-shell[data-theme="christmas"] .screen-track::after {
+  content: "❄  ✦  ❄";
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: clamp(28px, 2.6vw, 48px);
+  z-index: 2;
+  color: rgba(239, 249, 255, .72);
+  font-size: clamp(1rem, 1.1vw, 1.3rem);
+  letter-spacing: .7em;
+  pointer-events: none;
+}
+
+.app-shell[data-theme="christmas"] .top-nav {
+  border-radius: 13px;
+  padding: 4px;
+  gap: 4px;
+  background: linear-gradient(180deg, #102219 0%, #0b120f 100%);
+  border: 1px solid rgba(116, 213, 149, .20);
+  box-shadow: 0 10px 22px rgba(0,0,0,.34), inset 0 1px 0 rgba(255,255,255,.06);
+}
+
+.app-shell[data-theme="christmas"] .nav-pill,
+.app-shell[data-theme="christmas"] .clock,
+.app-shell[data-theme="christmas"] .icon-button,
+.app-shell[data-theme="christmas"] .panel-info-button,
+.app-shell[data-theme="christmas"] .mode-button,
+.app-shell[data-theme="christmas"] .segment,
+.app-shell[data-theme="christmas"] .scene-btn,
+.app-shell[data-theme="christmas"] .blind-action,
+.app-shell[data-theme="christmas"] .room-tab,
+.app-shell[data-theme="christmas"] .transport,
+.app-shell[data-theme="christmas"] .temp-step,
+.app-shell[data-theme="christmas"] .panel-lock-button,
+.app-shell[data-theme="christmas"] .theme-choice-btn {
+  border-radius: 9px;
+  background: linear-gradient(180deg, rgba(26,53,39,.98), rgba(11,20,15,.98));
+  border: 1px solid rgba(112, 208, 145, .22);
+  color: #ecfaef;
+  text-shadow: 0 1px 0 rgba(0,0,0,.5);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 8px 16px rgba(0,0,0,.22);
+}
+
+.app-shell[data-theme="christmas"] .nav-pill.active,
+.app-shell[data-theme="christmas"] .mode-button.active,
+.app-shell[data-theme="christmas"] .segment.active,
+.app-shell[data-theme="christmas"] .theme-choice-btn.active[data-theme-choice="christmas"] {
+  background: linear-gradient(180deg, #d64c5d 0%, #9f2f40 100%);
+  border-color: rgba(255, 206, 120, .52);
+  color: #fff7e8;
+  box-shadow: 0 0 18px rgba(205, 54, 78, .24), inset 0 1px 0 rgba(255,255,255,.14);
+}
+
+.app-shell[data-theme="christmas"] .clock {
+  color: var(--xmas-gold);
+  font-weight: 950;
+}
+
+.app-shell[data-theme="christmas"] .panel-info-button {
+  color: #08221b;
+  background: linear-gradient(180deg, #dff6ff, #79c7dc);
+}
+
+.app-shell[data-theme="christmas"] .panel,
+.app-shell[data-theme="christmas"] .audio-main-card,
+.app-shell[data-theme="christmas"] .audio-side-card,
+.app-shell[data-theme="christmas"] .blind-card,
+.app-shell[data-theme="christmas"] .light-card,
+.app-shell[data-theme="christmas"] .room-card,
+.app-shell[data-theme="christmas"] .room-control-card,
+.app-shell[data-theme="christmas"] .settings-sheet,
+.app-shell[data-theme="christmas"] .panel-info-sheet,
+.app-shell[data-theme="christmas"] .light-color-sheet,
+.app-shell[data-theme="christmas"] .alarm-keypad-sheet,
+.app-shell[data-theme="christmas"] .alarm-arm-sheet {
+  background: linear-gradient(180deg, rgba(16,39,28,.98), rgba(6,11,8,.99));
+  border: 1px solid rgba(127, 223, 159, .16);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.05), 0 14px 32px rgba(0,0,0,.30);
+}
+
+.app-shell[data-theme="christmas"] .settings-sheet {
+  outline: 8px solid rgba(28, 72, 49, .76);
+  border-radius: 22px;
+}
+
+.app-shell[data-theme="christmas"] .eyebrow,
+.app-shell[data-theme="christmas"] .settings-hint,
+.app-shell[data-theme="christmas"] .muted,
+.app-shell[data-theme="christmas"] .audio-artist,
+.app-shell[data-theme="christmas"] .audio-album {
+  color: rgba(218, 239, 223, .72);
+}
+
+.app-shell[data-theme="christmas"] .screen h1,
+.app-shell[data-theme="christmas"] .screen h2,
+.app-shell[data-theme="christmas"] .screen h3,
+.app-shell[data-theme="christmas"] .settings-header h2,
+.app-shell[data-theme="christmas"] .audio-track-title,
+.app-shell[data-theme="christmas"] .blind-name,
+.app-shell[data-theme="christmas"] .light-name,
+.app-shell[data-theme="christmas"] .room-card-title,
+.app-shell[data-theme="christmas"] .settings-section h3 {
+  color: #f2faf2;
+}
+
+.app-shell[data-theme="christmas"] .dial-shell {
+  box-shadow: 0 0 0 10px rgba(26, 61, 40, .82), 0 22px 48px rgba(0,0,0,.34);
+}
+
+.app-shell[data-theme="christmas"] .dial-ring {
+  background:
+    conic-gradient(from 180deg,
+      rgba(255,255,255,.10) 0deg 18deg,
+      rgba(84,209,123,.88) 18deg 36deg,
+      rgba(255,255,255,.10) 36deg 54deg,
+      rgba(208,70,94,.88) 54deg 72deg,
+      rgba(255,255,255,.10) 72deg 90deg,
+      rgba(240,200,106,.9) 90deg 108deg,
+      rgba(255,255,255,.10) 108deg 126deg,
+      rgba(84,209,123,.88) 126deg 144deg,
+      rgba(255,255,255,.10) 144deg 162deg,
+      rgba(208,70,94,.88) 162deg 180deg,
+      rgba(255,255,255,.10) 180deg 198deg,
+      rgba(240,200,106,.9) 198deg 216deg,
+      rgba(255,255,255,.10) 216deg 234deg,
+      rgba(84,209,123,.88) 234deg 252deg,
+      rgba(255,255,255,.10) 252deg 270deg,
+      rgba(208,70,94,.88) 270deg 288deg,
+      rgba(255,255,255,.10) 288deg 306deg,
+      rgba(240,200,106,.9) 306deg 324deg,
+      rgba(255,255,255,.10) 324deg 342deg,
+      rgba(84,209,123,.88) 342deg 360deg);
+}
+
+.app-shell[data-theme="christmas"] .dial-ring::after {
+  box-shadow: inset 0 0 28px rgba(76, 194, 112, .22), inset 0 0 0 1px rgba(255,255,255,.08);
+}
+
+.app-shell[data-theme="christmas"] .dial-inner .target-row {
+  color: #e7fff0;
+}
+
+.app-shell[data-theme="christmas"] .dial-inner .target-value,
+.app-shell[data-theme="christmas"] .dial-inner .current-value {
+  color: #ffffff;
+  text-shadow: 0 0 20px rgba(114, 239, 164, .18);
+}
+
+.app-shell[data-theme="christmas"] .thermostat-stage::before,
+.app-shell[data-theme="christmas"] .thermostat-stage::after {
+  position: absolute;
+  bottom: clamp(108px, 12vh, 160px);
+  z-index: 2;
+  pointer-events: none;
+  font-size: clamp(2.6rem, 4vw, 4.5rem);
+  opacity: .92;
+  filter: drop-shadow(0 8px 18px rgba(0,0,0,.28));
+}
+
+.app-shell[data-theme="christmas"] .thermostat-stage::before {
+  content: "🎄";
+  left: clamp(72px, 8vw, 130px);
+}
+
+.app-shell[data-theme="christmas"] .thermostat-stage::after {
+  content: "🎄";
+  right: clamp(72px, 8vw, 130px);
+}
+
+.app-shell[data-theme="christmas"] .thermostat-person-pill,
+.app-shell[data-theme="christmas"] .setpoint-card,
+.app-shell[data-theme="christmas"] .limit-group,
+.app-shell[data-theme="christmas"] .panel-info-row,
+.app-shell[data-theme="christmas"] .alarm-code-card,
+.app-shell[data-theme="christmas"] .thermostat-name-card,
+.app-shell[data-theme="christmas"] .theme-choice-grid {
+  background: rgba(255,255,255,.03);
+  border-color: rgba(127, 223, 159, .14);
+}
+
+.app-shell[data-theme="christmas"] .thermostat-person-pill.home {
+  border-color: rgba(112, 228, 147, .24);
+  background: rgba(86, 209, 125, .08);
+}
+
+.app-shell[data-theme="christmas"] .thermostat-person-pill.away {
+  border-color: rgba(240, 200, 106, .24);
+  background: rgba(200, 59, 78, .09);
+}
+
+.app-shell[data-theme="christmas"] input,
+.app-shell[data-theme="christmas"] select,
+.app-shell[data-theme="christmas"] textarea {
+  background: #0a140f;
+  border: 1px solid rgba(113, 213, 145, .20);
+  color: #eff9ef;
+}
+
+.app-shell[data-theme="christmas"] input[type="range"] {
+  accent-color: var(--xmas-red);
+}
+
+.app-shell[data-theme="christmas"] .theme-choice-btn.active[data-theme-choice="regular"] {
+  background: linear-gradient(180deg, #8ce7ff, #53b0c9);
+  color: #061018;
+}
+
+.app-shell[data-theme="christmas"] .theme-choice-btn.active[data-theme-choice="star-trek"] {
+  background: linear-gradient(180deg, #f0bf5c, #b97a24);
+  color: #140d04;
+}
+
+@media (max-width: 1240px) {
+  .settings-sheet.thermostat-setup .thermostat-people-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 880px) {
+  .settings-sheet.thermostat-setup .thermostat-theme-section .theme-choice-grid {
+    grid-template-columns: 1fr;
+  }
+  .settings-sheet.thermostat-setup .thermostat-people-list {
+    grid-template-columns: 1fr;
+  }
+}
