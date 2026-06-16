@@ -7427,37 +7427,162 @@ body[data-theme="christmas"] {
 }
 
 
-/* 2026-06-16 editable user access code + visible disarm code in Comfort Setup */
-.security-code-grid {
+/* 2026-06-16 security code visibility + onboard keypad/keyboard */
+.security-code-card {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
 }
-.security-code-grid .alarm-code-card {
+
+.security-code-card .alarm-code-field {
   min-width: 0;
 }
-.security-code-grid .alarm-code-field input {
-  letter-spacing: .08em;
+
+.security-code-card .scene-btn {
+  min-height: 46px;
+  white-space: nowrap;
 }
-.settings-sheet.thermostat-setup .security-code-grid {
+
+#alarmDisarmCodeInput {
+  -webkit-text-security: none;
+}
+
+#userAccessCodeInput {
+  -webkit-text-security: disc;
+}
+
+.onboard-keyboard {
+  position: fixed;
+  left: max(12px, env(safe-area-inset-left));
+  right: max(12px, env(safe-area-inset-right));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  z-index: 10000;
+  display: grid;
   gap: 8px;
+  padding: 10px;
+  border-radius: 22px;
+  border: 1px solid rgba(255,255,255,.16);
+  background: linear-gradient(180deg, rgba(18,27,40,.98), rgba(5,9,15,.99));
+  box-shadow: 0 22px 70px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.08);
+  transform: translateY(calc(100% + 30px));
+  opacity: 0;
+  pointer-events: none;
+  transition: transform .18s ease, opacity .18s ease;
 }
-.settings-sheet.thermostat-setup .security-code-grid .alarm-code-card {
-  grid-template-columns: minmax(130px, 1fr) minmax(108px, auto);
+
+.onboard-keyboard.open {
+  transform: translateY(0);
+  opacity: 1;
+  pointer-events: auto;
 }
-.settings-sheet.thermostat-setup .security-code-grid .scene-btn {
+
+.onboard-keyboard-handle {
+  width: 54px;
+  height: 5px;
+  justify-self: center;
+  border-radius: 999px;
+  background: rgba(255,255,255,.28);
+}
+
+.onboard-keyboard-title {
+  justify-self: center;
+  color: rgba(230,242,255,.72);
+  font-size: .74rem;
+  font-weight: 950;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.onboard-keyboard-rows {
+  display: grid;
+  gap: 7px;
+}
+
+.onboard-keyboard-row {
+  display: flex;
+  justify-content: center;
+  gap: 7px;
+}
+
+.onboard-keyboard button {
+  min-width: clamp(42px, 5.2vw, 72px);
+  min-height: clamp(42px, 5vh, 58px);
   padding: 0 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: linear-gradient(180deg, rgba(255,255,255,.13), rgba(255,255,255,.055));
+  color: rgba(245,250,255,.94);
+  font-size: clamp(1rem, 1.25vw, 1.35rem);
+  font-weight: 950;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.09), 0 8px 16px rgba(0,0,0,.18);
 }
-@media (max-width: 900px) {
-  .security-code-grid {
-    grid-template-columns: 1fr;
+
+.onboard-keyboard button.special {
+  min-width: clamp(70px, 8vw, 120px);
+  color: rgba(207,232,255,.92);
+  background: linear-gradient(180deg, rgba(72,168,255,.22), rgba(72,168,255,.10));
+}
+
+.onboard-keyboard[data-mode="number"] {
+  left: 50%;
+  right: auto;
+  width: min(420px, calc(100vw - 24px));
+  transform: translate(-50%, calc(100% + 30px));
+}
+
+.onboard-keyboard[data-mode="number"].open {
+  transform: translate(-50%, 0);
+}
+
+.onboard-keyboard[data-mode="number"] .onboard-keyboard-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(74px, 1fr));
+}
+
+.onboard-keyboard[data-mode="number"] .onboard-keyboard-row:last-child {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.onboard-keyboard[data-mode="number"] button {
+  min-height: 58px;
+}
+
+.app-shell[data-theme="star-trek"] .onboard-keyboard,
+.app-shell[data-theme="star-trek"] ~ .onboard-keyboard {
+  background: linear-gradient(180deg, rgba(30,32,33,.98), rgba(7,8,8,.99));
+  border-color: rgba(205,168,110,.30);
+}
+
+.app-shell[data-theme="christmas"] .onboard-keyboard,
+.app-shell[data-theme="christmas"] ~ .onboard-keyboard {
+  background: linear-gradient(180deg, rgba(18,48,32,.98), rgba(5,12,8,.99));
+  border-color: rgba(127,223,159,.22);
+}
+
+@media (max-width: 1180px) {
+  .security-code-card {
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 }
-@media (max-width: 900px) and (min-width: 700px) {
-  .settings-sheet.thermostat-setup .security-code-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+
+@media (max-width: 760px), (max-height: 680px) {
+  .onboard-keyboard {
+    gap: 6px;
+    padding: 8px;
+    border-radius: 18px;
   }
-  .settings-sheet.thermostat-setup .security-code-grid .alarm-code-card {
-    grid-template-columns: minmax(120px, 1fr);
+  .onboard-keyboard-row {
+    gap: 5px;
+  }
+  .onboard-keyboard button {
+    min-width: 34px;
+    min-height: 38px;
+    padding: 0 8px;
+    border-radius: 11px;
+    font-size: .95rem;
+  }
+  .onboard-keyboard button.special {
+    min-width: 58px;
   }
 }
