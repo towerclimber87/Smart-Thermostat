@@ -6408,3 +6408,609 @@ body[data-theme="star-trek"] {
     opacity: .65;
   }
 }
+
+/* 2026-06-16 Star Trek theme v4 - stronger bridge-console layout and clearer setpoint readout */
+.app-shell[data-theme="star-trek"] {
+  --st-console-black: #050607;
+  --st-console-deep: #0b0e10;
+  --st-console-soft: #15191c;
+  --st-frame-mid: #8b7a63;
+  --st-frame-dark: #514231;
+  --st-frame-light: #c2aa84;
+  --st-text-warm: #f0dfbf;
+  --st-text-muted: rgba(230, 204, 165, .78);
+  --st-amber: #e5a13a;
+  --st-orange: #d77730;
+  --st-red: #b54f33;
+  --st-blue: #4694df;
+  --st-blue-hot: #7dc5ff;
+  --st-green: #7fbd75;
+  color: var(--st-text-warm);
+  background:
+    radial-gradient(ellipse at 50% -10%, rgba(231, 169, 69, .12), transparent 36%),
+    linear-gradient(90deg, rgba(47, 38, 29, .95) 0 1.15%, transparent 1.15% 98.85%, rgba(47, 38, 29, .95) 98.85%),
+    linear-gradient(180deg, #aa987d 0%, #76634d 20%, #443629 100%);
+}
+
+.app-shell[data-theme="star-trek"]::before {
+  inset: clamp(7px, .9vw, 13px);
+  border-radius: clamp(25px, 2.5vw, 40px);
+  background:
+    linear-gradient(90deg, rgba(53,43,33,.95) 0 1.25%, transparent 1.25% 98.75%, rgba(53,43,33,.95) 98.75%),
+    linear-gradient(180deg, #aa987d 0%, #87745b 15%, #63513e 58%, #3f3226 100%);
+  border: 1px solid rgba(245, 219, 177, .36);
+  box-shadow:
+    0 32px 82px rgba(0,0,0,.62),
+    inset 0 2px 0 rgba(255,255,255,.17),
+    inset 0 -22px 36px rgba(0,0,0,.36),
+    inset 0 0 0 clamp(8px, .8vw, 13px) rgba(39,31,24,.28);
+}
+
+.app-shell[data-theme="star-trek"]::after {
+  inset: clamp(25px, 2.15vw, 36px);
+  border-radius: clamp(20px, 2vw, 32px);
+  background:
+    radial-gradient(ellipse at 50% 38%, rgba(76, 94, 114, .12), transparent 34%),
+    linear-gradient(90deg, rgba(9,9,9,.54) 0 6.4%, transparent 6.4% 93.6%, rgba(9,9,9,.54) 93.6%),
+    linear-gradient(180deg, #12171b 0%, #080b0d 68%, #040505 100%);
+  border: 1px solid rgba(232, 197, 143, .27);
+  box-shadow:
+    inset 0 0 0 2px rgba(4,5,6,.92),
+    inset 0 0 0 8px rgba(255, 207, 137, .033),
+    inset 0 -38px 60px rgba(0,0,0,.55);
+  opacity: 1;
+  mask-image: none;
+}
+
+.app-shell[data-theme="star-trek"] .screen-track::before {
+  content: "";
+  position: absolute;
+  left: clamp(30px, 2.8vw, 56px);
+  right: clamp(30px, 2.8vw, 56px);
+  bottom: clamp(9px, 1vw, 18px);
+  height: clamp(66px, 6.4vw, 112px);
+  z-index: 1;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, rgba(18,14,10,.76) 0 13.5%, transparent 13.5% 86.5%, rgba(18,14,10,.76) 86.5%),
+    linear-gradient(180deg, rgba(153,133,105,.98), rgba(82,66,48,.98));
+  border-top: 1px solid rgba(246, 215, 165, .22);
+  border-radius: 14px 14px 0 0;
+  box-shadow: inset 0 10px 16px rgba(0,0,0,.27), 0 -10px 24px rgba(0,0,0,.14);
+}
+
+.app-shell[data-theme="star-trek"] .screen-track::after {
+  content: "";
+  position: absolute;
+  left: clamp(46px, 4vw, 84px);
+  right: clamp(46px, 4vw, 84px);
+  bottom: clamp(29px, 2.8vw, 52px);
+  height: clamp(31px, 3vw, 50px);
+  z-index: 2;
+  pointer-events: none;
+  border-radius: 12px;
+  background:
+    linear-gradient(90deg,
+      #2e261d 0 7%, transparent 7% 10%, #2e261d 10% 13.5%, transparent 13.5% 86.5%, #2e261d 86.5% 90%, transparent 90% 93%, #2e261d 93% 100%),
+    linear-gradient(90deg,
+      #b14f32 0 2.8%, transparent 2.8% 4.2%, #d27b30 4.2% 7%, transparent 7% 8.2%, #e4a541 8.2% 11.2%, transparent 11.2% 12.8%, #4f8fbd 12.8% 16.8%, transparent 16.8% 83.2%, #d27b30 83.2% 86.2%, transparent 86.2% 87.8%, #e4a541 87.8% 90.8%, transparent 90.8% 92.2%, #4f8fbd 92.2% 96.4%);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 2px 8px rgba(0,0,0,.28);
+}
+
+.app-shell[data-theme="star-trek"] .ambient { display: none !important; }
+.app-shell[data-theme="star-trek"] .climate-backdrop { opacity: .18; }
+.app-shell[data-theme="star-trek"] .screen { z-index: 5; }
+.app-shell[data-theme="star-trek"] .panel-controls { z-index: 45; top: clamp(20px, 1.8vw, 31px); }
+
+.app-shell[data-theme="star-trek"] .top-nav {
+  border-radius: 13px;
+  padding: 4px;
+  gap: 4px;
+  background: linear-gradient(180deg, #0c0f10 0%, #171410 100%);
+  border: 2px solid rgba(61, 49, 36, .98);
+  outline: 1px solid rgba(222, 190, 140, .24);
+  box-shadow: 0 9px 20px rgba(0,0,0,.44), inset 0 1px 0 rgba(255,255,255,.08);
+}
+
+.app-shell[data-theme="star-trek"] .nav-pill,
+.app-shell[data-theme="star-trek"] .clock,
+.app-shell[data-theme="star-trek"] .icon-button,
+.app-shell[data-theme="star-trek"] .panel-info-button,
+.app-shell[data-theme="star-trek"] .mode-button,
+.app-shell[data-theme="star-trek"] .segment,
+.app-shell[data-theme="star-trek"] .scene-btn,
+.app-shell[data-theme="star-trek"] .blind-action,
+.app-shell[data-theme="star-trek"] .room-tab,
+.app-shell[data-theme="star-trek"] .transport,
+.app-shell[data-theme="star-trek"] .temp-step,
+.app-shell[data-theme="star-trek"] .panel-lock-button,
+.app-shell[data-theme="star-trek"] .theme-choice-btn {
+  border-radius: 8px;
+  background: linear-gradient(180deg, #222528 0%, #0b0d0e 100%);
+  border: 1px solid rgba(205, 168, 110, .28);
+  color: #e8c891;
+  text-shadow: 0 1px 0 rgba(0,0,0,.68);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 7px 14px rgba(0,0,0,.24);
+}
+
+.app-shell[data-theme="star-trek"] .nav-pill {
+  min-height: 42px;
+  min-width: clamp(102px, 7.2vw, 134px);
+  font-size: clamp(.88rem, .95vw, 1rem);
+}
+
+.app-shell[data-theme="star-trek"] .nav-pill.active,
+.app-shell[data-theme="star-trek"] .theme-choice-btn.active[data-theme-choice="star-trek"] {
+  background: linear-gradient(180deg, #f4b242 0%, #d68723 52%, #975017 100%);
+  border-color: rgba(255,205,105,.70);
+  color: #0a0805;
+  text-shadow: none;
+  box-shadow: 0 0 18px rgba(226,142,36,.24), inset 0 1px 0 rgba(255,255,255,.22);
+}
+
+.app-shell[data-theme="star-trek"] .clock {
+  color: #ff8840;
+  font-weight: 950;
+  letter-spacing: .04em;
+}
+
+.app-shell[data-theme="star-trek"] .panel-info-button {
+  color: #06131d;
+  background: linear-gradient(180deg, #63a6df, #255f96);
+}
+
+.app-shell[data-theme="star-trek"] .panel,
+.app-shell[data-theme="star-trek"] .audio-main-card,
+.app-shell[data-theme="star-trek"] .audio-side-card,
+.app-shell[data-theme="star-trek"] .blind-card,
+.app-shell[data-theme="star-trek"] .light-card,
+.app-shell[data-theme="star-trek"] .room-card,
+.app-shell[data-theme="star-trek"] .room-control-card,
+.app-shell[data-theme="star-trek"] .settings-sheet,
+.app-shell[data-theme="star-trek"] .panel-info-sheet,
+.app-shell[data-theme="star-trek"] .light-color-sheet,
+.app-shell[data-theme="star-trek"] .alarm-keypad-sheet,
+.app-shell[data-theme="star-trek"] .alarm-arm-sheet {
+  background:
+    linear-gradient(180deg, rgba(23,27,30,.98), rgba(7,8,9,.99));
+  border: 1px solid rgba(222, 188, 132, .24);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 14px 30px rgba(0,0,0,.34);
+}
+
+.app-shell[data-theme="star-trek"] .panel::after { opacity: .18; }
+.app-shell[data-theme="star-trek"] .panel-heading h1,
+.app-shell[data-theme="star-trek"] .panel-heading h2,
+.app-shell[data-theme="star-trek"] .screen h1,
+.app-shell[data-theme="star-trek"] .screen h2,
+.app-shell[data-theme="star-trek"] .screen h3,
+.app-shell[data-theme="star-trek"] .settings-header h2,
+.app-shell[data-theme="star-trek"] .audio-track-title,
+.app-shell[data-theme="star-trek"] .blind-name,
+.app-shell[data-theme="star-trek"] .light-name,
+.app-shell[data-theme="star-trek"] .room-card-title {
+  color: var(--st-text-warm);
+}
+
+.app-shell[data-theme="star-trek"] .eyebrow,
+.app-shell[data-theme="star-trek"] .settings-hint,
+.app-shell[data-theme="star-trek"] .audio-artist,
+.app-shell[data-theme="star-trek"] .audio-album,
+.app-shell[data-theme="star-trek"] .muted {
+  color: var(--st-text-muted);
+}
+
+/* Thermostat bridge-console treatment */
+.app-shell[data-theme="star-trek"] .thermostat-stage {
+  isolation: isolate;
+  background:
+    radial-gradient(ellipse at 50% 46%, rgba(74, 99, 124, .10), transparent 34%),
+    linear-gradient(90deg, rgba(7,7,8,.68) 0 6.5%, transparent 6.5% 93.5%, rgba(7,7,8,.68) 93.5%),
+    linear-gradient(180deg, rgba(16,20,24,.16), rgba(2,3,4,.18));
+}
+
+.app-shell[data-theme="star-trek"] .thermostat-stage::before {
+  content: "";
+  position: absolute;
+  left: clamp(44px, 4.1vw, 82px);
+  top: clamp(210px, 24vh, 318px);
+  width: clamp(128px, 11.8vw, 202px);
+  height: clamp(380px, 44vh, 560px);
+  z-index: 2;
+  pointer-events: none;
+  opacity: .98;
+  background:
+    linear-gradient(90deg, rgba(120,105,82,.90) 0 44px, transparent 44px 54px, rgba(120,105,82,.78) 54px 68px, transparent 68px),
+    linear-gradient(#a34d31 0 38px, transparent 38px 49px),
+    linear-gradient(#ca6535 0 38px, transparent 38px 50px),
+    linear-gradient(#4d7fa4 0 66px, transparent 66px 98px),
+    radial-gradient(circle, #e4a43d 0 6px, transparent 7px),
+    radial-gradient(circle, #72abc9 0 5px, transparent 6px),
+    radial-gradient(circle, #e19a34 0 5px, transparent 6px),
+    radial-gradient(circle, #c95838 0 5px, transparent 6px),
+    radial-gradient(circle, #e4a43d 0 5px, transparent 6px),
+    radial-gradient(circle, #79b2cd 0 5px, transparent 6px),
+    radial-gradient(circle, #e19a34 0 5px, transparent 6px),
+    linear-gradient(90deg, #bd9652 0 13px, transparent 13px 25px, #e1a33a 25px 39px, transparent 39px 51px, #4d82a9 51px 68px, transparent 68px 80px, #a9803f 80px 96px, transparent 96px);
+  background-size:
+    128px 18px,
+    48px 49px, 48px 50px, 48px 98px,
+    22px 22px,22px 22px,22px 22px,22px 22px,22px 22px,22px 22px,22px 22px,
+    122px 16px;
+  background-position:
+    62px 9px,
+    0 0, 0 54px, 0 112px,
+    7px 238px, 43px 238px, 7px 276px, 43px 276px, 7px 314px, 43px 314px, 78px 314px,
+    62px 420px;
+  background-repeat: no-repeat;
+  filter: drop-shadow(0 2px 2px rgba(0,0,0,.42)) drop-shadow(0 0 9px rgba(224,162,59,.16));
+}
+
+.app-shell[data-theme="star-trek"] .thermostat-stage::after {
+  content: "";
+  position: absolute;
+  right: clamp(46px, 4.4vw, 86px);
+  top: clamp(224px, 25.5vh, 334px);
+  width: clamp(118px, 10vw, 170px);
+  height: clamp(370px, 43vh, 540px);
+  z-index: 2;
+  pointer-events: none;
+  opacity: .98;
+  background:
+    linear-gradient(90deg, rgba(120,105,82,.78) 0 18px, transparent 18px 30px, rgba(120,105,82,.90) 30px 76px, transparent 76px),
+    linear-gradient(#d85d32 0 36px, transparent 36px 47px),
+    linear-gradient(#c26935 0 26px, transparent 26px 38px),
+    linear-gradient(#918368 0 24px, transparent 24px 38px),
+    radial-gradient(circle, #e4a642 0 6px, transparent 7px),
+    radial-gradient(circle, #c45634 0 5px, transparent 6px),
+    radial-gradient(circle, #e4a642 0 5px, transparent 6px),
+    radial-gradient(circle, #d49333 0 5px, transparent 6px),
+    radial-gradient(circle, #e4a642 0 5px, transparent 6px),
+    radial-gradient(circle, #c45634 0 5px, transparent 6px),
+    linear-gradient(90deg, #d58b30 0 16px, transparent 16px 28px, #e4a642 28px 45px, transparent 45px 57px, #918368 57px 73px, transparent 73px 86px, #4e85ae 86px 112px);
+  background-size:
+    124px 18px,
+    42px 47px, 42px 38px, 42px 38px,
+    22px 22px,22px 22px,22px 22px,22px 22px,22px 22px,22px 22px,
+    130px 18px;
+  background-position:
+    0 10px,
+    70px 0, 70px 56px, 70px 100px,
+    22px 188px, 58px 188px, 22px 226px, 58px 226px, 22px 264px, 58px 264px,
+    0 438px;
+  background-repeat: no-repeat;
+  filter: drop-shadow(0 2px 2px rgba(0,0,0,.42)) drop-shadow(0 0 9px rgba(224,162,59,.16));
+}
+
+.app-shell[data-theme="star-trek"] .thermostat-title-block h1,
+.app-shell[data-theme="star-trek"] .screen-thermostat h1 {
+  color: var(--st-text-warm);
+  font-family: "Arial Narrow", "Roboto Condensed", "DIN Condensed", Impact, sans-serif;
+  font-stretch: condensed;
+  font-weight: 950;
+  letter-spacing: -.04em;
+  text-shadow: 0 3px 0 rgba(0,0,0,.42), 0 0 18px rgba(229,161,58,.05);
+}
+
+.app-shell[data-theme="star-trek"] .outdoor-top-badge,
+.app-shell[data-theme="star-trek"] .comfort-status {
+  border-radius: 7px;
+  background: linear-gradient(180deg, rgba(28,31,35,.98), rgba(8,9,10,.99));
+  border: 1px solid rgba(213, 176, 112, .30);
+  color: #d99a36;
+  text-transform: uppercase;
+  letter-spacing: .13em;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 9px 18px rgba(0,0,0,.25);
+}
+
+.app-shell[data-theme="star-trek"] .outdoor-top-badge strong,
+.app-shell[data-theme="star-trek"] .comfort-status strong {
+  color: var(--st-text-warm);
+  letter-spacing: .05em;
+}
+
+.app-shell[data-theme="star-trek"] .pulse-dot {
+  background: #69d89b;
+  box-shadow: 0 0 15px rgba(105,216,155,.70);
+}
+
+.app-shell[data-theme="star-trek"] .thermostat-focus { z-index: 7; }
+.app-shell[data-theme="star-trek"] .thermo-dial {
+  --st-dial-fill: var(--st-blue-hot);
+  --st-dial-fill-soft: rgba(125,197,255,.68);
+  border: 11px solid rgba(132, 115, 91, .96);
+  outline: 2px solid rgba(229, 203, 158, .28);
+  background:
+    conic-gradient(from 225deg, var(--st-dial-fill) 0 var(--angle), rgba(0,0,0,0) var(--angle) 270deg, rgba(0,0,0,0) 270deg 360deg),
+    repeating-conic-gradient(from 225deg, rgba(108,93,73,.85) 0 3.9deg, rgba(57,48,37,.92) 3.9deg 7.3deg, rgba(0,0,0,0) 7.3deg 10deg),
+    conic-gradient(from 225deg, rgba(27,31,35,.98) 0 270deg, transparent 270deg 360deg);
+  box-shadow:
+    0 21px 36px rgba(0,0,0,.46),
+    inset 0 0 0 2px rgba(27,20,14,.82),
+    inset 0 0 0 7px rgba(238,209,160,.045),
+    0 0 28px rgba(76,148,223,.09);
+}
+
+.app-shell[data-theme="star-trek"] .thermo-dial.heat {
+  --st-dial-fill: #d7643a;
+  --st-dial-fill-soft: rgba(215,100,58,.70);
+  background:
+    conic-gradient(from 225deg, var(--st-dial-fill) 0 var(--angle), rgba(0,0,0,0) var(--angle) 270deg, rgba(0,0,0,0) 270deg 360deg),
+    repeating-conic-gradient(from 225deg, rgba(112,91,72,.86) 0 3.9deg, rgba(57,45,35,.92) 3.9deg 7.3deg, rgba(0,0,0,0) 7.3deg 10deg),
+    conic-gradient(from 225deg, rgba(27,31,35,.98) 0 270deg, transparent 270deg 360deg);
+  box-shadow:
+    0 21px 36px rgba(0,0,0,.46),
+    inset 0 0 0 2px rgba(27,20,14,.82),
+    inset 0 0 0 7px rgba(238,209,160,.045),
+    0 0 28px rgba(215,100,58,.09);
+}
+
+.app-shell[data-theme="star-trek"].away-active .thermo-dial {
+  --st-dial-fill: #b990ff;
+  --st-dial-fill-soft: rgba(185,144,255,.65);
+}
+
+.app-shell[data-theme="star-trek"] .thermo-dial::before,
+.app-shell[data-theme="star-trek"] .thermo-dial::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.app-shell[data-theme="star-trek"] .thermo-dial::before {
+  inset: 4.6%;
+  z-index: 1;
+  background:
+    repeating-conic-gradient(from 225deg, rgba(0,0,0,.52) 0 2deg, rgba(255,255,255,.06) 2deg 2.7deg, transparent 2.7deg 10deg);
+  -webkit-mask: radial-gradient(circle, transparent 58%, #000 59% 77%, transparent 78%);
+  mask: radial-gradient(circle, transparent 58%, #000 59% 77%, transparent 78%);
+  opacity: .85;
+}
+
+.app-shell[data-theme="star-trek"] .thermo-dial::after {
+  inset: 1.8%;
+  z-index: 1;
+  border: 1px solid rgba(229,203,158,.20);
+  box-shadow: inset 0 0 0 6px rgba(5,6,7,.58), inset 0 0 28px rgba(0,0,0,.42);
+}
+
+.app-shell[data-theme="star-trek"] .dial-glow {
+  inset: 7%;
+  background:
+    radial-gradient(circle at 50% 38%, rgba(73,84,92,.36), rgba(7,8,9,.97) 71%);
+  box-shadow: inset 0 0 0 2px rgba(234,202,154,.11), inset 0 -18px 38px rgba(0,0,0,.62);
+}
+
+.app-shell[data-theme="star-trek"] .dial-inner {
+  inset: 14%;
+  padding: clamp(18px, 2.3vw, 30px);
+  background:
+    radial-gradient(circle at 50% 42%, rgba(29,33,37,.97), rgba(5,6,7,.99) 70%);
+  border: 1px solid rgba(229, 199, 153, .24);
+  box-shadow:
+    inset 0 0 0 1px rgba(0,0,0,.86),
+    inset 0 -12px 25px rgba(0,0,0,.58),
+    0 0 0 7px rgba(12,14,16,.70);
+}
+
+.app-shell[data-theme="star-trek"] .current-label {
+  color: #e3a03a;
+  letter-spacing: .23em;
+  font-size: clamp(.66rem, .72vw, .82rem);
+  font-weight: 950;
+}
+
+.app-shell[data-theme="star-trek"] .current-temp {
+  color: var(--st-text-warm);
+  font-family: "Arial Narrow", Impact, Inter, system-ui, sans-serif;
+  font-weight: 950;
+  text-shadow: 0 3px 0 rgba(0,0,0,.58), 0 0 18px rgba(125,197,255,.10);
+}
+
+.app-shell[data-theme="star-trek"] .current-temp small {
+  color: rgba(240,223,191,.86);
+  letter-spacing: -.04em;
+}
+
+.app-shell[data-theme="star-trek"] .dial-inner .target-row {
+  min-width: clamp(150px, 12vw, 190px);
+  min-height: clamp(42px, 3.5vw, 52px);
+  margin-top: clamp(10px, 1.1vw, 16px);
+  padding: 6px 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(18,30,42,.98), rgba(5,11,16,.98));
+  border: 1px solid rgba(125,197,255,.52);
+  color: #e5a13a;
+  text-transform: uppercase;
+  letter-spacing: .13em;
+  font-size: clamp(.68rem, .72vw, .82rem);
+  font-weight: 950;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.09),
+    0 0 17px rgba(85,154,222,.17),
+    0 7px 14px rgba(0,0,0,.30);
+}
+
+.app-shell[data-theme="star-trek"] .dial-inner .target-row span {
+  color: #e5a13a;
+  white-space: nowrap;
+}
+
+.app-shell[data-theme="star-trek"] .dial-inner .target-row strong {
+  color: #ffffff;
+  letter-spacing: -.03em;
+  font-size: clamp(1.35rem, 1.7vw, 1.85rem);
+  line-height: .92;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 12px rgba(125,197,255,.22);
+}
+
+.app-shell[data-theme="star-trek"] .thermo-dial.setpoint-preview .dial-inner .target-row {
+  border-color: rgba(230, 192, 125, .48);
+  background: linear-gradient(180deg, rgba(42,31,16,.98), rgba(15,9,4,.98));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 0 17px rgba(229,161,58,.18), 0 7px 14px rgba(0,0,0,.30);
+}
+
+.app-shell[data-theme="star-trek"] .dial-range {
+  bottom: 8.8%;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(5,6,7,.76);
+  border: 1px solid rgba(229,203,158,.14);
+  font-size: clamp(.72rem, .74vw, .88rem);
+  font-weight: 950;
+  text-shadow: 0 1px 0 rgba(0,0,0,.72);
+}
+.app-shell[data-theme="star-trek"] .dial-range.min { color: var(--st-blue-hot); }
+.app-shell[data-theme="star-trek"] .dial-range.max { color: #ef7547; }
+
+.app-shell[data-theme="star-trek"] .dial-knob {
+  width: 34px;
+  height: 34px;
+  background: linear-gradient(180deg, #f2bd4c, #bd7426);
+  border: 1px solid rgba(255,224,153,.45);
+  box-shadow: 0 0 0 6px rgba(232,178,77,.13), 0 10px 18px rgba(0,0,0,.38), 0 0 18px rgba(232,178,77,.18);
+}
+
+.app-shell[data-theme="star-trek"] .temp-step {
+  width: clamp(72px, 5.3vw, 94px);
+  height: clamp(72px, 5.3vw, 94px);
+  border-radius: 12px;
+  color: #e5a13a;
+  background: linear-gradient(180deg, #202326, #090a0b);
+  border-color: rgba(213,176,112,.30);
+}
+
+.app-shell[data-theme="star-trek"] .virtual-thermostat-panel,
+.app-shell[data-theme="star-trek"] .door-control-widget,
+.app-shell[data-theme="star-trek"] .alarm-control-widget,
+.app-shell[data-theme="star-trek"] .floating-chip,
+.app-shell[data-theme="star-trek"] .mode-deck {
+  border-radius: 14px;
+  background: linear-gradient(180deg, #171b1e, #08090a);
+  border: 2px solid rgba(61, 49, 36, .95);
+  outline: 1px solid rgba(222, 188, 132, .21);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 12px 24px rgba(0,0,0,.34);
+}
+
+.app-shell[data-theme="star-trek"] .virtual-title,
+.app-shell[data-theme="star-trek"] .virtual-sensor-label span,
+.app-shell[data-theme="star-trek"] .floating-chip span,
+.app-shell[data-theme="star-trek"] .relay-box .eyebrow {
+  color: #d99a36;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+}
+
+.app-shell[data-theme="star-trek"] .virtual-sensor-label strong,
+.app-shell[data-theme="star-trek"] .virtual-temp-range,
+.app-shell[data-theme="star-trek"] .alarm-copy strong,
+.app-shell[data-theme="star-trek"] .door-copy strong {
+  color: var(--st-text-warm);
+}
+
+.app-shell[data-theme="star-trek"] .door-control-widget,
+.app-shell[data-theme="star-trek"] .alarm-control-widget {
+  background:
+    radial-gradient(circle at 50% 21%, rgba(127,189,117,.16), transparent 42%),
+    linear-gradient(180deg, rgba(18,31,28,.99), rgba(5,16,17,.99));
+}
+
+.app-shell[data-theme="star-trek"] .door-control-widget.closed .door-copy em,
+.app-shell[data-theme="star-trek"] .alarm-control-widget.disarmed .alarm-copy em {
+  color: #9ad186;
+}
+
+.app-shell[data-theme="star-trek"] .relay-pill {
+  border-radius: 8px;
+  background: linear-gradient(180deg, #24282b, #101112);
+  border: 1px solid rgba(213,176,112,.24);
+}
+
+.app-shell[data-theme="star-trek"] .relay-pill[data-relay="fan"].active,
+.app-shell[data-theme="star-trek"] .relay-pill[data-relay="cool"].active {
+  background: linear-gradient(180deg, #5aa5e7, #255f9e);
+  color: #061018;
+}
+
+.app-shell[data-theme="star-trek"] .relay-pill[data-relay="heat"].active {
+  background: linear-gradient(180deg, #c86538, #813625);
+  color: #170807;
+}
+
+.app-shell[data-theme="star-trek"] .humidity-chip strong,
+.app-shell[data-theme="star-trek"] .fan-chip strong { color: var(--st-blue-hot); }
+
+.app-shell[data-theme="star-trek"] .mode-button {
+  border-radius: 8px !important;
+  color: #ddbf8e;
+  background: linear-gradient(180deg, #26292b, #101111);
+  border: 1px solid rgba(205,168,110,.25);
+}
+
+.app-shell[data-theme="star-trek"] .mode-button.active[data-mode="cool"] {
+  color: #061018;
+  background: linear-gradient(180deg, #75c0fa, #326eb8);
+  box-shadow: 0 0 18px rgba(85,154,222,.23), inset 0 1px 0 rgba(255,255,255,.20);
+}
+
+.app-shell[data-theme="star-trek"] .mode-button.active[data-mode="heat"] {
+  color: #170807;
+  background: linear-gradient(180deg, #d66d39, #853928);
+  box-shadow: 0 0 18px rgba(215,100,58,.20), inset 0 1px 0 rgba(255,255,255,.18);
+}
+
+.app-shell[data-theme="star-trek"] .mode-button.active[data-mode="auto"],
+.app-shell[data-theme="star-trek"] .mode-button.active.away {
+  color: #110b05;
+  background: linear-gradient(180deg, #e8a941, #9c611f);
+  box-shadow: 0 0 18px rgba(229,161,58,.18), inset 0 1px 0 rgba(255,255,255,.18);
+}
+
+.app-shell[data-theme="star-trek"] input,
+.app-shell[data-theme="star-trek"] select,
+.app-shell[data-theme="star-trek"] textarea {
+  background: #0b0d0f;
+  border: 1px solid rgba(205,168,110,.26);
+  color: var(--st-text-warm);
+}
+
+.app-shell[data-theme="star-trek"] input[type="range"] { accent-color: var(--st-amber); }
+.app-shell[data-theme="star-trek"] .virtual-temp-slider { accent-color: var(--st-blue-hot); }
+.app-shell[data-theme="star-trek"] .outdoor-temp-slider { accent-color: var(--st-amber); }
+
+.app-shell[data-theme="star-trek"] .settings-sheet {
+  outline: 8px solid rgba(108, 89, 67, .76);
+  border-radius: 22px;
+}
+
+.app-shell[data-theme="star-trek"] .theme-choice-btn.active[data-theme-choice="regular"] {
+  background: linear-gradient(180deg, #75c0fa, #326eb8);
+  color: #061018;
+}
+
+@media (max-width: 1200px) {
+  .app-shell[data-theme="star-trek"] .thermostat-stage::before,
+  .app-shell[data-theme="star-trek"] .thermostat-stage::after {
+    opacity: .42;
+  }
+}
+
+@media (max-width: 900px) {
+  .app-shell[data-theme="star-trek"] .thermostat-stage::before,
+  .app-shell[data-theme="star-trek"] .thermostat-stage::after {
+    opacity: .20;
+  }
+  .app-shell[data-theme="star-trek"] .screen-track::before,
+  .app-shell[data-theme="star-trek"] .screen-track::after {
+    opacity: .68;
+  }
+  .app-shell[data-theme="star-trek"] .dial-inner .target-row {
+    min-width: 136px;
+  }
+}

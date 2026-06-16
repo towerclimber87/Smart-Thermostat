@@ -1908,8 +1908,8 @@ function renderThermostat() {
 
   elements.currentTemp.textContent = showingSetpoint ? targetRounded : currentRounded;
   elements.targetTemp.textContent = showingSetpoint ? currentRounded : targetRounded;
-  if (elements.primaryTempLabel) elements.primaryTempLabel.textContent = showingSetpoint ? "Set To" : "Current";
-  if (elements.secondaryTempLabel) elements.secondaryTempLabel.textContent = showingSetpoint ? "Current" : "Set to";
+  if (elements.primaryTempLabel) elements.primaryTempLabel.textContent = showingSetpoint ? "Set Temp" : "Current";
+  if (elements.secondaryTempLabel) elements.secondaryTempLabel.textContent = showingSetpoint ? "Current" : "Set Temp";
   if (elements.headerCurrentTemp) elements.headerCurrentTemp.textContent = `${currentRounded}°`;
   if (elements.headerSetTemp) elements.headerSetTemp.textContent = `${targetRounded}°`;
   if (elements.virtualTempValue) elements.virtualTempValue.textContent = `${currentRounded}°`;
