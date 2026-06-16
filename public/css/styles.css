@@ -168,12 +168,14 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
 }
 .panel-lock-button {
   position: absolute;
-  z-index: 8;
-  left: clamp(18px, 2.4vw, 42px);
-  top: clamp(18px, 2.2vw, 38px);
-  min-height: clamp(46px, 4.7vw, 58px);
-  min-width: clamp(138px, 12vw, 176px);
-  padding: 7px 13px 7px 8px;
+  z-index: 31;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  min-height: 44px;
+  height: 44px;
+  min-width: 132px;
+  padding: 0 13px 0 6px;
   border-radius: 999px;
   display: inline-flex;
   align-items: center;
@@ -182,22 +184,27 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   color: rgba(235,249,255,.92);
   background:
     radial-gradient(circle at 26% 18%, rgba(77,238,255,.30), transparent 42%),
-    linear-gradient(145deg, rgba(255,255,255,.105), rgba(255,255,255,.032));
+    linear-gradient(135deg, rgba(255,255,255,.10), rgba(255,255,255,.035));
   border: 1px solid rgba(77,238,255,.24);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.16), 0 18px 38px rgba(0,0,0,.25), 0 0 26px rgba(77,238,255,.08);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.16), 0 14px 28px rgba(0,0,0,.20), 0 0 22px rgba(77,238,255,.08);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
   touch-action: manipulation;
+  pointer-events: auto;
+}
+.app-shell:not([data-page="thermostat"]) .panel-lock-button {
+  display: none;
 }
 .panel-lock-button span:last-child {
-  font-size: clamp(.72rem, .86vw, .88rem);
+  font-size: .78rem;
   font-weight: 1000;
   letter-spacing: .02em;
   text-transform: uppercase;
+  line-height: 1;
 }
 .panel-lock-icon {
-  width: clamp(34px, 3.2vw, 44px);
-  height: clamp(34px, 3.2vw, 44px);
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
   display: grid;
   place-items: center;
@@ -237,7 +244,7 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   outline: 2px solid rgba(77,238,255,.82);
   outline-offset: 4px;
 }
-.panel-lock-button:active { transform: scale(.975); }
+.panel-lock-button:active { transform: translateY(-50%) scale(.975); }
 .app-shell.panel-locked .top-nav {
   border-color: rgba(255,100,125,.22);
   box-shadow: inset 0 1px 0 rgba(255,255,255,.14), 0 18px 38px rgba(0,0,0,.30), 0 0 30px rgba(255,100,125,.07);
