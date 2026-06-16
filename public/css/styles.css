@@ -2613,6 +2613,18 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   letter-spacing: -.03em;
   font-variant-numeric: tabular-nums;
 }
+.outdoor-wind-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 8px;
+  margin-left: 2px;
+  border-left: 1px solid rgba(255,255,255,.14);
+  color: rgba(211,226,242,.72);
+}
+.outdoor-wind-badge strong {
+  font-size: .94rem;
+}
 .segment:disabled {
   opacity: .48;
   cursor: not-allowed;

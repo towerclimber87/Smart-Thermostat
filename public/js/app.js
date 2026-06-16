@@ -19,6 +19,7 @@ const HA_ALARM_SYNC_INTERVAL_MS = 5000;
 const HA_ALARM_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
 const HA_DOOR_SYNC_INTERVAL_MS = 5000;
 const HA_PRESENCE_SYNC_INTERVAL_MS = 5000;
+const HA_WEATHER_SYNC_INTERVAL_MS = 60000;
 const LOCAL_THERMOSTAT_SYNC_INTERVAL_MS = 1000;
 const LOCAL_THERMOSTAT_PUSH_DEBOUNCE_MS = 300;
 const LIGHT_COLOR_PRESETS = [
@@ -86,6 +87,8 @@ let haDoorSyncInFlight = false;
 let haDoorSyncLastError = "";
 let haPresenceSyncInFlight = false;
 let haPresenceSyncLastError = "";
+let haWeatherSyncInFlight = false;
+let haWeatherSyncLastError = "";
 let localThermostatSyncInFlight = false;
 let localThermostatPushTimer = null;
 let localThermostatPushInFlight = false;
@@ -202,6 +205,8 @@ const defaultIntegrations = {
     selectedMediaPlayerId: "",
     audioControlEntities: { gain: null, bass: null, treble: null, subwoofer: null, surround: null, projector: null },
     audioAvailableEntities: { mediaPlayers: [], numbers: [], switches: [] },
+    weatherEntity: { entityId: "weather.home", name: "Home" },
+    weatherAvailableEntities: [],
     alarmEntity: null,
     alarmAvailableEntities: [],
     doorEntity: null,
@@ -273,6 +278,8 @@ const state = {
     safetyHigh: 85,
     humidity: 45,
     outdoorTemp: 78,
+    outdoorWindSpeed: 0,
+    outdoorWindUnit: "mph",
     autoCoolOutdoorTarget: 70,
     autoHeatOutdoorTarget: 65,
     autoChangeoverLockoutMinutes: AUTO_CHANGEOVER_MINUTES,
@@ -402,6 +409,7 @@ const elements = {
   outdoorTempSlider: document.getElementById("outdoorTempSlider"),
   outdoorTempValue: document.getElementById("outdoorTempValue"),
   outdoorTempTopValue: document.getElementById("outdoorTempTopValue"),
+  outdoorWindTopValue: document.getElementById("outdoorWindTopValue"),
   autoCoolOutdoorTargetValue: document.getElementById("autoCoolOutdoorTargetValue"),
   autoHeatOutdoorTargetValue: document.getElementById("autoHeatOutdoorTargetValue"),
   autoLockoutValue: document.getElementById("autoLockoutValue"),
@@ -835,6 +843,8 @@ function buildSavedConfig() {
     safetyHigh: state.thermostat.safetyHigh,
     humidity: state.thermostat.humidity,
     outdoorTemp: state.thermostat.outdoorTemp,
+    outdoorWindSpeed: state.thermostat.outdoorWindSpeed,
+    outdoorWindUnit: state.thermostat.outdoorWindUnit || "mph",
     autoCoolOutdoorTarget: state.thermostat.autoCoolOutdoorTarget,
     autoHeatOutdoorTarget: state.thermostat.autoHeatOutdoorTarget,
     autoChangeoverLockoutMinutes: state.thermostat.autoChangeoverLockoutMinutes,
@@ -898,6 +908,10 @@ function applySavedConfig(saved = {}) {
       coolFanRemainOnMinutes: Number.isFinite(Number(savedThermostat.coolFanRemainOnMinutes))
         ? Number(savedThermostat.coolFanRemainOnMinutes)
         : defaults.coolFanRemainOnMinutes,
+      outdoorWindSpeed: Number.isFinite(Number(savedThermostat.outdoorWindSpeed))
+        ? Number(savedThermostat.outdoorWindSpeed)
+        : defaults.outdoorWindSpeed,
+      outdoorWindUnit: String(savedThermostat.outdoorWindUnit || defaults.outdoorWindUnit || "mph"),
       heatLocked: Boolean(savedThermostat.heatLocked),
       coolLocked: Boolean(savedThermostat.coolLocked),
       people: normalizeThermostatPeople(savedThermostat.people || defaults.people),
@@ -1083,6 +1097,91 @@ function localThermostatPayload() {
   };
 }
 
+function getHomeAssistantWeatherEntityId() {
+  const ha = state.integrations.homeAssistant || {};
+  const configured = ha.weatherEntity;
+  if (configured && typeof configured === "object" && configured.entityId) return String(configured.entityId).trim() || "weather.home";
+  if (typeof configured === "string" && configured.trim()) return configured.trim();
+  if (ha.weatherEntityId) return String(ha.weatherEntityId).trim() || "weather.home";
+  return "weather.home";
+}
+
+function isHomeAssistantWeatherEnabled() {
+  const ha = state.integrations.homeAssistant || {};
+  return Boolean(String(ha.url || "").trim() && String(ha.token || "").trim() && getHomeAssistantWeatherEntityId());
+}
+
+function normalizeWeatherWindUnit(value) {
+  const text = String(value || "mph").trim();
+  return text || "mph";
+}
+
+function applyHomeAssistantWeather(weather = {}) {
+  if (!weather || typeof weather !== "object") return false;
+  const t = state.thermostat;
+  let changed = false;
+
+  const temperature = Number(weather.temperature);
+  if (Number.isFinite(temperature)) {
+    const nextTemp = clamp(Number(temperature.toFixed(1)), -40, 130);
+    if (Number(t.outdoorTemp) !== nextTemp) {
+      t.outdoorTemp = nextTemp;
+      changed = true;
+    }
+  }
+
+  const windSpeed = Number(weather.windSpeed);
+  if (Number.isFinite(windSpeed)) {
+    const nextWind = clamp(Number(windSpeed.toFixed(1)), 0, 250);
+    if (Number(t.outdoorWindSpeed || 0) !== nextWind) {
+      t.outdoorWindSpeed = nextWind;
+      changed = true;
+    }
+  }
+
+  const windUnit = normalizeWeatherWindUnit(weather.windSpeedUnit);
+  if ((t.outdoorWindUnit || "mph") !== windUnit) {
+    t.outdoorWindUnit = windUnit;
+    changed = true;
+  }
+
+  if (changed) {
+    renderThermostat();
+    scheduleLocalThermostatPush();
+  }
+  return changed;
+}
+
+async function pollHomeAssistantWeather(options = {}) {
+  if (!options.force && document.visibilityState === "hidden") return;
+  const ha = state.integrations.homeAssistant || {};
+  if (!ha.url || !ha.token) return;
+  const entityId = getHomeAssistantWeatherEntityId();
+  if (!entityId) return;
+  if (haWeatherSyncInFlight) return;
+  haWeatherSyncInFlight = true;
+  try {
+    const response = await fetch("/api/ha/weather/state", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({ url: ha.url, token: ha.token, entityId }),
+    });
+    if (!response.ok) throw new Error(`Weather sync failed (${response.status})`);
+    const payload = await response.json();
+    if (payload?.weather) applyHomeAssistantWeather(payload.weather);
+    if (haWeatherSyncLastError) haWeatherSyncLastError = "";
+  } catch (error) {
+    const message = error.message || String(error);
+    if (message !== haWeatherSyncLastError) {
+      haWeatherSyncLastError = message;
+      console.warn("Home Assistant weather sync paused", message);
+    }
+  } finally {
+    haWeatherSyncInFlight = false;
+  }
+}
+
 function applyLocalThermostatState(remote = {}) {
   const source = remote.thermostat || remote;
   if (!source || typeof source !== "object") return false;
@@ -1126,7 +1225,12 @@ function applyLocalThermostatState(remote = {}) {
   setNumber("safetyLow", ABS_MIN, ABS_MAX - 2);
   setNumber("safetyHigh", ABS_MIN + 2, ABS_MAX);
   setNumber("humidity", 0, 100);
-  setNumber("outdoorTemp", -40, 130);
+  if (!isHomeAssistantWeatherEnabled()) setNumber("outdoorTemp", -40, 130);
+  if (!isHomeAssistantWeatherEnabled()) setNumber("outdoorWindSpeed", 0, 250);
+  if (!isHomeAssistantWeatherEnabled() && (source.outdoorWindUnit !== undefined || source.outdoor_wind_unit !== undefined)) {
+    const windUnit = normalizeWeatherWindUnit(source.outdoorWindUnit || source.outdoor_wind_unit);
+    if ((t.outdoorWindUnit || "mph") !== windUnit) { t.outdoorWindUnit = windUnit; changed = true; }
+  }
   setNumber("autoCoolOutdoorTarget", 41, 100);
   setNumber("autoHeatOutdoorTarget", 40, 99);
   setNumber("autoChangeoverLockoutMinutes", AUTO_CHANGEOVER_MINUTES, 720);
@@ -2410,6 +2514,8 @@ function renderThermostat() {
   const currentRounded = Math.round(t.currentTemp);
   const targetRounded = Math.round(t.targetTemp);
   const outdoorRounded = Math.round(t.outdoorTemp);
+  const outdoorWindRounded = Math.round(Number(t.outdoorWindSpeed || 0));
+  const outdoorWindUnit = normalizeWeatherWindUnit(t.outdoorWindUnit || "mph");
   const outputs = getThermostatOutputs({ recordRuntime: true });
   const controlMode = outputs.controlMode;
   const now = Date.now();
@@ -2427,6 +2533,7 @@ function renderThermostat() {
   if (elements.virtualTempSlider && document.activeElement !== elements.virtualTempSlider) elements.virtualTempSlider.value = String(clamp(currentRounded, VIRTUAL_TEMP_MIN, VIRTUAL_TEMP_MAX));
   if (elements.outdoorTempValue) elements.outdoorTempValue.textContent = `${outdoorRounded}°`;
   if (elements.outdoorTempTopValue) elements.outdoorTempTopValue.textContent = `${outdoorRounded}°`;
+  if (elements.outdoorWindTopValue) elements.outdoorWindTopValue.textContent = `${outdoorWindRounded} ${outdoorWindUnit}`;
   if (elements.outdoorTempSlider && document.activeElement !== elements.outdoorTempSlider) elements.outdoorTempSlider.value = String(clamp(outdoorRounded, 40, 100));
   if (elements.headerSetPill) {
     elements.headerSetPill.classList.toggle("heat", controlMode === "heat" && !t.away);
@@ -6946,6 +7053,7 @@ async function init() {
   renderThermostatPeople();
   renderPanelLock();
   fetchLocalThermostatStatus({ force: true });
+  pollHomeAssistantWeather({ force: true });
   renderDoorWidget();
   renderAlarmWidget();
   renderAudio();
@@ -6968,6 +7076,7 @@ async function init() {
   setInterval(() => pollHomeAssistantAlarm(), HA_ALARM_SYNC_INTERVAL_MS);
   setInterval(() => pollHomeAssistantDoor(), HA_DOOR_SYNC_INTERVAL_MS);
   setInterval(() => pollHomeAssistantThermostatPeople(), HA_PRESENCE_SYNC_INTERVAL_MS);
+  setInterval(() => pollHomeAssistantWeather(), HA_WEATHER_SYNC_INTERVAL_MS);
   pollHomeAssistantAlarm({ force: true });
   pollHomeAssistantDoor({ force: true });
   pollHomeAssistantThermostatPeople({ force: true });

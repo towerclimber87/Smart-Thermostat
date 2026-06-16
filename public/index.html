@@ -221,7 +221,7 @@
         <section class="thermostat-stage">
           <div class="thermostat-topline">
             <div class="thermostat-title-block">
-              <div class="outdoor-top-badge">Outdoor <strong id="outdoorTempTopValue">78°</strong></div>
+              <div class="outdoor-top-badge">Outdoor <strong id="outdoorTempTopValue">78°</strong><span class="outdoor-wind-badge">Wind <strong id="outdoorWindTopValue">-- mph</strong></span></div>
               <h1>Climate Control</h1>
             </div>
             <div class="comfort-status" aria-live="polite">
@@ -264,17 +264,6 @@
               </div>
             </div>
 
-            <div class="virtual-section virtual-sensor-section outdoor-sensor-section">
-              <label class="virtual-sensor-label" for="outdoorTempSlider">
-                <span>Outdoor Temp</span>
-                <strong id="outdoorTempValue">78°</strong>
-              </label>
-              <input id="outdoorTempSlider" class="virtual-temp-slider outdoor-temp-slider" type="range" min="40" max="100" step="1" value="78" aria-label="Set virtual outdoor temperature" />
-              <div class="virtual-temp-range" aria-hidden="true">
-                <span>40°</span>
-                <span>100°</span>
-              </div>
-            </div>
           </aside>
 
           <div id="safetyWarningBanner" class="safety-warning-banner" aria-live="assertive" aria-hidden="true">

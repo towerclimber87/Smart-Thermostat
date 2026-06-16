@@ -8628,7 +8628,12 @@
         ],
         "selectedMediaPlayerId": "media_player.livingroom_sonos",
         "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIxMzJhMzM2ZjMxNmM0YWRmODE2NDQxNTkwNDgwNzIxZSIsImlhdCI6MTc4MTU0NTI1MSwiZXhwIjoyMDk2OTA1MjUxfQ.dDAeuZM1BRON10g7qbzLkUKZgNR8u8Xw1-Dw6HX_UTY",
-        "url": "http://192.168.1.135:8123/"
+        "url": "http://192.168.1.135:8123/",
+        "weatherEntity": {
+          "entityId": "weather.home",
+          "name": "Home"
+        },
+        "weatherAvailableEntities": []
       }
     },
     "lights": {
@@ -8906,7 +8911,9 @@
       "mode": "auto",
       "name": "Livingroom Test",
       "outdoorTemp": 40,
-      "targetTemp": 73
+      "targetTemp": 73,
+      "outdoorWindSpeed": 0,
+      "outdoorWindUnit": "mph"
     },
     "version": 11
   },

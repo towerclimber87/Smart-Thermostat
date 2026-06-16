@@ -84,7 +84,12 @@
         "numbers": [],
         "switches": []
       },
-      "lightAvailableEntities": []
+      "lightAvailableEntities": [],
+      "weatherEntity": {
+        "entityId": "weather.home",
+        "name": "Home"
+      },
+      "weatherAvailableEntities": []
     }
   },
   "lights": {

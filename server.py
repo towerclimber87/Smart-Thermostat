@@ -58,6 +58,8 @@ DEFAULT_THERMOSTAT = {
     "safetyHigh": 85,
     "humidity": 45,
     "outdoorTemp": 78,
+    "outdoorWindSpeed": 0,
+    "outdoorWindUnit": "mph",
     "autoCoolOutdoorTarget": 70,
     "autoHeatOutdoorTarget": 65,
     "autoChangeoverLockoutMinutes": 120,
@@ -102,6 +104,8 @@ DEFAULT_HOME_ASSISTANT_CONFIG = {
         "projector": None,
     },
     "audioAvailableEntities": {"mediaPlayers": [], "numbers": [], "switches": []},
+    "weatherEntity": {"entityId": "weather.home", "name": "Home"},
+    "weatherAvailableEntities": [],
     "alarmEntity": None,
     "alarmAvailableEntities": [],
     "doorEntity": None,
@@ -390,6 +394,7 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             ("safetyHigh", base.get("safetyHigh", base.get("awayCool", 85)), 47, 95),
             ("humidity", base["humidity"], 0, 100),
             ("outdoorTemp", base["outdoorTemp"], -40, 130),
+            ("outdoorWindSpeed", base.get("outdoorWindSpeed", 0), 0, 250),
             ("autoCoolOutdoorTarget", base["autoCoolOutdoorTarget"], 41, 100),
             ("autoHeatOutdoorTarget", base["autoHeatOutdoorTarget"], 40, 99),
             ("autoChangeoverLockoutMinutes", base["autoChangeoverLockoutMinutes"], 120, 720),
@@ -405,6 +410,10 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
         ):
             if key in source:
                 base[key] = _number(source.get(key), fallback, minimum, maximum)
+
+        if "outdoorWindUnit" in source:
+            wind_unit = str(source.get("outdoorWindUnit") or "").strip()
+            base["outdoorWindUnit"] = (wind_unit or "mph")[:16]
 
         if "temperature" in source:
             base["targetTemp"] = _number(source.get("temperature"), base["targetTemp"], 45, 95)
@@ -626,6 +635,10 @@ def _thermostat_status_payload() -> dict:
         "hvac_modes": _available_hvac_modes(thermostat),
         "hvacModes": _available_hvac_modes(thermostat),
         "outdoor_temperature": thermostat["outdoorTemp"],
+        "outdoorWindSpeed": thermostat.get("outdoorWindSpeed", 0),
+        "outdoor_wind_speed": thermostat.get("outdoorWindSpeed", 0),
+        "outdoorWindUnit": thermostat.get("outdoorWindUnit", "mph"),
+        "outdoor_wind_unit": thermostat.get("outdoorWindUnit", "mph"),
         "safetyMode": outputs.get("safetyMode", ""),
         "relays": {"fan": outputs["fan"], "heat": outputs["heat"], "cool": outputs["cool"]},
     }
@@ -664,6 +677,10 @@ def _thermostat_status_payload() -> dict:
         "humidity": thermostat["humidity"],
         "outdoorTemp": thermostat["outdoorTemp"],
         "outdoor_temperature": thermostat["outdoorTemp"],
+        "outdoorWindSpeed": thermostat.get("outdoorWindSpeed", 0),
+        "outdoor_wind_speed": thermostat.get("outdoorWindSpeed", 0),
+        "outdoorWindUnit": thermostat.get("outdoorWindUnit", "mph"),
+        "outdoor_wind_unit": thermostat.get("outdoorWindUnit", "mph"),
         "safetyMode": outputs.get("safetyMode", ""),
         "relays": {"fan": outputs["fan"], "heat": outputs["heat"], "cool": outputs["cool"]},
         "relayFan": outputs["fan"],
@@ -1394,6 +1411,58 @@ def _fetch_ha_entities(ha_url: str, token: str, domains: list[str] | None = None
     return entities
 
 
+def _normalize_weather_item(item: dict) -> dict:
+    attrs = item.get("attributes") or {}
+    entity_id = str(item.get("entity_id", ""))
+
+    def optional_number(raw: object, minimum: float, maximum: float) -> float | None:
+        if raw is None or raw == "":
+            return None
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        return min(max(value, minimum), maximum)
+
+    temperature = optional_number(attrs.get("temperature"), -100, 180)
+    wind_speed = optional_number(attrs.get("wind_speed"), 0, 250)
+    temp_unit = str(attrs.get("temperature_unit") or attrs.get("unit_of_measurement") or "°F").strip() or "°F"
+    wind_unit = str(attrs.get("wind_speed_unit") or "mph").strip() or "mph"
+
+    # The wall panel and thermostat logic are Fahrenheit based. HA weather.home
+    # normally follows the HA unit system, but convert if a Celsius weather entity
+    # is ever selected so auto-switch targets stay consistent.
+    if temperature is not None and temp_unit.lower() in {"°c", "c", "celsius"}:
+        temperature = (temperature * 9 / 5) + 32
+        temp_unit = "°F"
+
+    return {
+        "entityId": entity_id,
+        "name": attrs.get("friendly_name") or entity_id,
+        "state": item.get("state") or "unknown",
+        "temperature": temperature,
+        "temperatureUnit": temp_unit,
+        "windSpeed": wind_speed,
+        "windSpeedUnit": wind_unit,
+        "humidity": attrs.get("humidity"),
+        "pressure": attrs.get("pressure"),
+        "pressureUnit": attrs.get("pressure_unit"),
+        "windBearing": attrs.get("wind_bearing"),
+        "lastChanged": item.get("last_changed") or "",
+        "lastUpdated": item.get("last_updated") or "",
+    }
+
+
+def _fetch_ha_weather_state(ha_url: str, token: str, entity_id: str = "weather.home") -> dict:
+    entity_id = (entity_id or "weather.home").strip() or "weather.home"
+    if not entity_id.startswith("weather."):
+        raise ValueError("Entity must be a weather.* entity")
+    item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
+    if not isinstance(item, dict):
+        raise RuntimeError("Home Assistant did not return a weather state")
+    return _normalize_weather_item(item)
+
+
 def _fetch_ha_switch_control_states(ha_url: str, token: str, controls: dict) -> dict:
     kinds = ("subwoofer", "surround", "projector")
     entity_by_kind = {
@@ -1962,7 +2031,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action"}:
             self.send_error(404, "Not found")
             return
 
@@ -1999,6 +2068,14 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                     payload.get("domains", []),
                 )
                 return _json(self, 200, {"ok": True, "entities": entities, "count": len(entities)})
+
+            if path == "/api/ha/weather/state":
+                weather = _fetch_ha_weather_state(
+                    payload.get("url", ""),
+                    payload.get("token", ""),
+                    payload.get("entityId", "weather.home"),
+                )
+                return _json(self, 200, {"ok": True, "weather": weather})
 
             if path == "/api/ha/alarm/states":
                 alarms = _fetch_ha_alarm_states_for_entities(
