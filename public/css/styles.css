@@ -195,6 +195,44 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
 .app-shell:not([data-page="thermostat"]) .panel-lock-button {
   display: none;
 }
+
+.changeover-bypass-button {
+  position: absolute;
+  z-index: 31;
+  left: 144px;
+  top: 50%;
+  transform: translateY(-50%);
+  min-height: 44px;
+  height: 44px;
+  padding: 0 18px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255,250,218,.98);
+  font-size: .78rem;
+  font-weight: 1000;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  background:
+    radial-gradient(circle at 25% 18%, rgba(255,224,75,.32), transparent 44%),
+    linear-gradient(135deg, rgba(255,255,255,.12), rgba(255,255,255,.04));
+  border: 1px solid rgba(255,224,75,.42);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.18), 0 16px 32px rgba(0,0,0,.22), 0 0 28px rgba(255,224,75,.12);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  touch-action: manipulation;
+  pointer-events: auto;
+}
+.changeover-bypass-button[hidden],
+.app-shell:not([data-page="thermostat"]) .changeover-bypass-button {
+  display: none !important;
+}
+.changeover-bypass-button:focus-visible {
+  outline: 2px solid rgba(255,224,75,.88);
+  outline-offset: 4px;
+}
+.changeover-bypass-button:active { transform: translateY(-50%) scale(.975); }
 .panel-lock-button span:last-child {
   font-size: .78rem;
   font-weight: 1000;
@@ -7585,4 +7623,19 @@ body[data-theme="christmas"] {
   .onboard-keyboard button.special {
     min-width: 58px;
   }
+}
+
+
+/* 2026-06-16 heat/cool changeover bypass button */
+.app-shell[data-theme="star-trek"] .changeover-bypass-button {
+  color: #1d1205;
+  background: linear-gradient(180deg, #f3c85f, #c78123);
+  border-color: rgba(255,225,127,.78);
+  box-shadow: inset 0 2px 0 rgba(255,255,255,.28), 0 0 0 2px rgba(0,0,0,.18), 0 18px 34px rgba(0,0,0,.34);
+}
+.app-shell[data-theme="christmas"] .changeover-bypass-button {
+  color: rgba(255,255,255,.96);
+  background: linear-gradient(145deg, rgba(230,46,84,.90), rgba(47,168,92,.72));
+  border-color: rgba(255,255,255,.30);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.20), 0 18px 34px rgba(0,0,0,.30), 0 0 28px rgba(230,46,84,.18);
 }
