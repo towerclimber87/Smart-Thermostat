@@ -5389,3 +5389,403 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
     min-height: 40px;
   }
 }
+
+/* 2026-06-16 Iron Man / arc-reactor HUD theme polish
+   Visual-only overrides. Existing heat/cool climate state colors are intentionally left in place. */
+:root {
+  --panel: rgba(12, 18, 25, 0.68);
+  --panel-strong: rgba(20, 28, 36, 0.94);
+  --panel-border: rgba(248, 200, 88, 0.18);
+  --text: #fff8ea;
+  --muted: #b9c1c7;
+  --muted-2: #7f8b93;
+  --blue: #38aaff;
+  --cyan: #57f4ff;
+  --purple: #f8c858;
+  --orange: #ffb84c;
+  --red: #ff5948;
+  --green: #67f4b5;
+  --armor-red: #9f1419;
+  --armor-red-soft: rgba(160, 20, 25, .28);
+  --arc-gold: #f8c858;
+  --arc-gold-soft: rgba(248, 200, 88, .22);
+  --arc-cyan-soft: rgba(87, 244, 255, .18);
+  --shadow: 0 34px 92px rgba(0, 0, 0, 0.60);
+}
+
+html,
+body {
+  background:
+    radial-gradient(circle at 50% 47%, rgba(87, 244, 255, .10), transparent 22%),
+    radial-gradient(circle at 82% 14%, rgba(255, 184, 76, .12), transparent 28%),
+    radial-gradient(circle at 14% 12%, rgba(160, 20, 25, .30), transparent 31%),
+    radial-gradient(circle at 88% 82%, rgba(87, 244, 255, .08), transparent 30%),
+    linear-gradient(145deg, #020304 0%, #091015 44%, #210609 72%, #030506 100%);
+}
+
+.ambient-one { background: rgba(87, 244, 255, .24); }
+.ambient-two { background: rgba(160, 20, 25, .34); }
+.ambient-three { background: rgba(248, 200, 88, .18); }
+
+.app-shell::before {
+  background:
+    radial-gradient(circle at 50% 44%, rgba(87,244,255,.10), transparent 28%),
+    radial-gradient(circle at 88% 8%, rgba(248,200,88,.12), transparent 34%),
+    linear-gradient(120deg, rgba(255,255,255,.09), rgba(255,255,255,.018)),
+    linear-gradient(145deg, rgba(7,11,14,.96), rgba(18,25,31,.88) 48%, rgba(32,7,10,.76));
+  border-color: rgba(248, 200, 88, .24);
+  box-shadow:
+    var(--shadow),
+    inset 0 1px 0 rgba(255,255,255,.16),
+    inset 0 0 0 1px rgba(87,244,255,.08),
+    0 0 38px rgba(248,200,88,.08);
+}
+
+.app-shell::after {
+  background:
+    radial-gradient(circle at 50% 49%, transparent 0 11%, rgba(87,244,255,.14) 11.25% 11.65%, transparent 11.95% 18%, rgba(248,200,88,.10) 18.25% 18.55%, transparent 18.85%),
+    conic-gradient(from 18deg at 50% 49%, transparent 0 7%, rgba(87,244,255,.12) 7% 8%, transparent 8% 16%, rgba(248,200,88,.11) 16% 17%, transparent 17% 28%, rgba(160,20,25,.10) 28% 29%, transparent 29% 100%),
+    linear-gradient(115deg, transparent 0 18%, rgba(248,200,88,.055) 18.3% 18.8%, transparent 19.1% 100%),
+    linear-gradient(245deg, transparent 0 27%, rgba(87,244,255,.050) 27.3% 27.9%, transparent 28.2% 100%),
+    linear-gradient(rgba(87,244,255,.030) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(87,244,255,.024) 1px, transparent 1px);
+  background-size: auto, auto, auto, auto, 46px 46px, 46px 46px;
+  mask-image: radial-gradient(circle at 50% 48%, black 0 55%, transparent 86%);
+  opacity: .76;
+}
+
+.top-nav,
+.clock,
+.icon-button,
+.mode-deck,
+.media-transport,
+.room-tabs,
+.light-room-status,
+.comfort-status,
+.floating-chip,
+.temp-step,
+.bottom-chip,
+.temp-mini-pill,
+.audio-state-pill,
+.audio-source-card,
+.audio-volume-card,
+.tone-control,
+.entity-sheet,
+.settings-sheet,
+.alarm-keypad-sheet,
+.alarm-arm-sheet,
+.panel-info-sheet {
+  background:
+    radial-gradient(circle at 18% 0%, rgba(87,244,255,.09), transparent 42%),
+    linear-gradient(145deg, rgba(255,255,255,.085), rgba(255,255,255,.028)),
+    linear-gradient(180deg, rgba(11,18,24,.90), rgba(5,8,12,.72));
+  border-color: rgba(248, 200, 88, .18);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.12),
+    inset 0 0 0 1px rgba(87,244,255,.04),
+    0 18px 46px rgba(0,0,0,.28),
+    0 0 24px rgba(248,200,88,.045);
+}
+
+.panel,
+.blind-card,
+.audio-main-card,
+.audio-side-card,
+.room-control-card,
+.light-card,
+.virtual-thermostat-panel,
+.settings-section,
+.setpoint-card,
+.room-config-card,
+.panel-info-row,
+.alarm-code-card,
+.thermostat-name-card {
+  background:
+    linear-gradient(135deg, rgba(255,255,255,.090), rgba(255,255,255,.024)),
+    radial-gradient(circle at 10% 0%, rgba(87,244,255,.070), transparent 35%),
+    radial-gradient(circle at 96% 0%, rgba(248,200,88,.075), transparent 34%),
+    linear-gradient(160deg, rgba(17,25,31,.74), rgba(4,8,12,.58));
+  border-color: rgba(248, 200, 88, .16);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.13),
+    inset 0 0 0 1px rgba(87,244,255,.035),
+    0 22px 52px rgba(0,0,0,.27);
+}
+
+.panel::before,
+.blind-card::before,
+.light-card::before,
+.audio-main-card::before,
+.audio-side-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    linear-gradient(135deg, rgba(248,200,88,.16), transparent 18%, transparent 82%, rgba(87,244,255,.10)),
+    linear-gradient(90deg, rgba(255,255,255,.035), transparent 24%, transparent 76%, rgba(255,255,255,.025));
+  opacity: .64;
+}
+
+.panel::after {
+  background:
+    radial-gradient(circle at 24% 0%, rgba(248,200,88,.13), transparent 30%),
+    linear-gradient(120deg, transparent 0 12%, rgba(87,244,255,.055) 12.4% 12.9%, transparent 13.3% 100%);
+  opacity: .78;
+}
+
+.eyebrow,
+.blind-percent,
+.current-label,
+.light-room-status span,
+.light-value-stack span,
+.panel-info-row span,
+.settings-section h3,
+.compact-source.audio-source-card label {
+  color: var(--arc-gold);
+  text-shadow: 0 0 18px rgba(248,200,88,.20);
+}
+
+h1,
+h2,
+h3,
+.current-temp,
+.track-info h2,
+.audio-device-head h3,
+.light-title-block strong,
+.blind-name,
+.panel-info-row strong {
+  text-shadow: 0 0 18px rgba(87,244,255,.10), 0 0 28px rgba(248,200,88,.06);
+}
+
+.nav-pill,
+.clock,
+.icon-button,
+.segment,
+.mode-button,
+.scene-btn,
+.blind-action,
+.room-tab,
+.temp-step,
+.transport,
+.light-toggle,
+.mini-add-person-button,
+.thermostat-lock-toggle,
+.fetch-update-btn,
+.restart-server-btn {
+  border-color: rgba(248, 200, 88, .18);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.11),
+    inset 0 0 0 1px rgba(87,244,255,.035),
+    0 14px 30px rgba(0,0,0,.22);
+}
+
+.nav-pill.active,
+.segment.active,
+.room-tab.active,
+.scene-btn,
+.blind-action.primary,
+.transport.primary,
+.media-transport .transport.primary,
+.light-room-actions .scene-btn,
+.fetch-update-btn,
+.restart-server-btn,
+.settings-sheet.thermostat-setup .alarm-code-card .scene-btn,
+.settings-sheet.thermostat-setup .thermostat-name-card .scene-btn,
+.settings-sheet.thermostat-setup .settings-footer .scene-btn {
+  color: #081015;
+  background:
+    radial-gradient(circle at 18% 0%, rgba(255,255,255,.42), transparent 36%),
+    linear-gradient(135deg, #ffe08a 0%, var(--arc-gold) 38%, #ff7b4f 63%, var(--cyan) 100%);
+  border-color: rgba(255, 223, 138, .48);
+  box-shadow:
+    0 18px 38px rgba(248,200,88,.18),
+    0 0 28px rgba(87,244,255,.13),
+    inset 0 1px 0 rgba(255,255,255,.44);
+}
+
+.mode-button.active[data-mode="cool"],
+.app-shell.cool-mode .mode-button.active[data-mode="cool"] {
+  color: #02111f;
+  background: linear-gradient(135deg, #78f7ff, #38aaff) !important;
+  border-color: rgba(87,244,255,.48);
+  box-shadow: 0 18px 38px rgba(56,170,255,.22), inset 0 1px 0 rgba(255,255,255,.42);
+}
+
+.mode-button.active[data-mode="heat"],
+.app-shell.heat-mode .mode-button.active[data-mode="heat"],
+.thermo-dial.heat ~ .mode-deck .mode-button.active[data-mode="heat"] {
+  color: #210704;
+  background: linear-gradient(135deg, #ffd46b, #ff7b4f 45%, #ff4f42) !important;
+  border-color: rgba(255, 124, 79, .50);
+  box-shadow: 0 18px 38px rgba(255,91,72,.20), inset 0 1px 0 rgba(255,255,255,.36);
+}
+
+.mode-button.active[data-mode="auto"],
+.app-shell.auto-mode .mode-button.active[data-mode="auto"] {
+  color: #061014;
+  background: linear-gradient(135deg, var(--cyan), var(--arc-gold)) !important;
+  border-color: rgba(87,244,255,.46);
+}
+
+.mode-button.home-state,
+.app-shell.away-active .mode-button.away.active,
+.close-blind {
+  color: #170a07;
+  background: linear-gradient(135deg, #ffe08a, #ff9b4d 52%, #d42b22) !important;
+  border-color: rgba(248,200,88,.42);
+}
+
+.thermostat-stage::before {
+  background:
+    radial-gradient(circle at 50% 46%, rgba(87,244,255,.13), transparent 30%),
+    radial-gradient(circle at 50% 46%, transparent 0 38%, rgba(248,200,88,.10) 38.5% 39%, transparent 39.5%),
+    radial-gradient(circle at 61% 39%, rgba(248,200,88,.12), transparent 35%);
+  filter: blur(20px);
+}
+
+.thermo-dial {
+  box-shadow:
+    0 0 0 10px rgba(248,200,88,.035),
+    0 0 0 1px rgba(87,244,255,.12),
+    0 0 52px rgba(87,244,255,.12),
+    0 40px 84px rgba(0,0,0,.42);
+}
+
+.dial-glow {
+  background:
+    radial-gradient(circle at 50% 36%, rgba(87,244,255,.28), rgba(248,200,88,.08) 34%, rgba(4,10,16,.96) 70%);
+  box-shadow:
+    inset 0 0 0 2px rgba(248,200,88,.12),
+    inset 0 -18px 40px rgba(0,0,0,.60),
+    0 0 42px rgba(87,244,255,.08);
+}
+
+.dial-inner {
+  background:
+    radial-gradient(circle at 50% 30%, rgba(87,244,255,.09), transparent 46%),
+    linear-gradient(180deg, rgba(36,45,49,.90), rgba(4,8,12,.96));
+  box-shadow:
+    inset 0 0 0 1px rgba(248,200,88,.15),
+    inset 0 0 34px rgba(87,244,255,.05),
+    inset 0 -12px 24px rgba(0,0,0,.44);
+}
+
+.dial-knob,
+.light-slider::-webkit-slider-thumb,
+.light-slider.light-slider-vertical::-webkit-slider-thumb,
+.audio-volume-card input[type="range"]::-webkit-slider-thumb,
+.tone-control input[type="range"]::-webkit-slider-thumb {
+  background: linear-gradient(180deg, #fff8e4, #f8c858);
+  box-shadow: 0 0 0 6px rgba(248,200,88,.13), 0 0 22px rgba(87,244,255,.14), 0 8px 18px rgba(0,0,0,.30);
+}
+
+.mode-badge,
+.relay-pill,
+.light-room-status,
+.audio-state-pill,
+.temp-mini-pill,
+.panel-info-row {
+  border-color: rgba(248,200,88,.18);
+}
+
+.mode-badge.heat,
+.relay-pill.heat,
+.app-shell.heat-mode .mode-badge {
+  background: rgba(255,91,72,.16);
+  border-color: rgba(255,91,72,.36);
+}
+
+.light-card {
+  background:
+    radial-gradient(circle at 50% 52%, rgba(255, 215, 111, calc(var(--light-glow) * .20)), transparent 36%),
+    linear-gradient(150deg, rgba(255,255,255,.090), rgba(255,255,255,.026)),
+    linear-gradient(160deg, rgba(17,25,31,.74), rgba(4,8,12,.58));
+}
+
+.light-toggle.on,
+.light-card:not(.off) .light-toggle {
+  background: linear-gradient(135deg, #ffe08a, #ff9b4d);
+  color: #1a0c06;
+  border-color: rgba(248,200,88,.50);
+}
+
+.light-card.off .light-toggle {
+  color: rgba(236,244,250,.78);
+  background: rgba(255,255,255,.06);
+}
+
+.light-slider::-webkit-slider-runnable-track,
+.light-slider.light-slider-vertical::-webkit-slider-runnable-track,
+.audio-volume-card input[type="range"]::-webkit-slider-runnable-track,
+.tone-control input[type="range"]::-webkit-slider-runnable-track {
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.14), 0 0 18px rgba(248,200,88,.07);
+}
+
+.audio-volume-card input[type="range"]::-webkit-slider-runnable-track {
+  background: linear-gradient(90deg, var(--arc-gold) 0 var(--range-fill), rgba(255,255,255,.18) var(--range-fill) 100%);
+}
+
+.tone-control input[type="range"]::-webkit-slider-runnable-track {
+  background: linear-gradient(0deg, var(--arc-gold) 0 var(--range-fill), rgba(255,255,255,.18) var(--range-fill) 100%);
+}
+
+.progress-bar span,
+.audio-volume-card input[type="range"]::-moz-range-progress,
+.tone-control input[type="range"]::-moz-range-progress {
+  background: linear-gradient(90deg, var(--cyan), var(--arc-gold), #ff7b4f);
+}
+
+.panel-lock-button {
+  background:
+    radial-gradient(circle at 26% 18%, rgba(87,244,255,.28), transparent 42%),
+    linear-gradient(135deg, rgba(248,200,88,.12), rgba(255,255,255,.035));
+  border-color: rgba(248,200,88,.28);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.16), 0 14px 28px rgba(0,0,0,.24), 0 0 22px rgba(248,200,88,.08);
+}
+
+.panel-lock-icon {
+  background: linear-gradient(145deg, rgba(248,200,88,.18), rgba(87,244,255,.08));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.18), 0 0 18px rgba(248,200,88,.14);
+}
+
+.panel-lock-button.locked {
+  border-color: rgba(255,91,72,.42);
+  color: rgba(255,224,214,.96);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.14), 0 18px 38px rgba(0,0,0,.30), 0 0 30px rgba(255,91,72,.12);
+}
+
+input,
+select,
+textarea,
+.alarm-code-field input,
+.thermostat-name-field input {
+  border-color: rgba(248,200,88,.18) !important;
+  background: rgba(3, 7, 10, .55) !important;
+  color: var(--text);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 0 20px rgba(87,244,255,.035);
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid rgba(87,244,255,.72);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 6px rgba(87,244,255,.12), 0 0 26px rgba(248,200,88,.10);
+}
+
+@media (max-width: 900px) {
+  .app-shell::after {
+    background-size: auto, auto, auto, auto, 34px 34px, 34px 34px;
+  }
+}
+
+/* Keep decorative HUD overlays pinned to their own cards. */
+.blind-card,
+.light-card,
+.audio-main-card,
+.audio-side-card {
+  position: relative;
+}
