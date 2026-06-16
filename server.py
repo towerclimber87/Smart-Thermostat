@@ -27,6 +27,9 @@ VERSION_FILE = ROOT / "VERSION"
 THERMOSTAT_STATE_FILE = DATA_DIR / "thermostat-state.json"
 PANEL_CONFIG_FILE = DATA_DIR / "panel-config.json"
 APP_STARTED_AT = time.time()
+HA_STATES_CACHE_TTL_SECONDS = float(os.environ.get("SMART_THERMOSTAT_HA_STATES_CACHE_TTL_SECONDS", "1.0"))
+_HA_STATES_CACHE_LOCK = threading.Lock()
+_HA_STATES_CACHE: dict[tuple[str, str], tuple[float, list[dict]]] = {}
 
 
 def _json(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> None:
@@ -514,6 +517,38 @@ def _system_uptime_seconds() -> float:
         return 0.0
 
 
+def _cpu_temperature_c() -> float | None:
+    for path in (Path("/sys/class/thermal/thermal_zone0/temp"),):
+        try:
+            raw = path.read_text(encoding="utf-8").strip()
+            value = float(raw)
+            return value / 1000.0 if value > 200 else value
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def _throttled_status() -> str:
+    vcgencmd = "/usr/bin/vcgencmd" if Path("/usr/bin/vcgencmd").exists() else "vcgencmd"
+    try:
+        result = subprocess.run(
+            [vcgencmd, "get_throttled"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "Unavailable"
+    raw = result.stdout.strip()
+    if not raw:
+        return "Unavailable"
+    if raw.endswith("0x0"):
+        return "OK"
+    return raw.replace("throttled=", "")
+
+
 def _system_info_payload() -> dict:
     thermostat = _read_thermostat_record()["thermostat"]
     thermostat_name = str(thermostat.get("name") or "IHA Thermostat").strip() or "IHA Thermostat"
@@ -521,6 +556,12 @@ def _system_info_payload() -> dict:
     app_uptime_seconds = max(0, time.time() - APP_STARTED_AT)
     system_uptime = _format_duration(system_uptime_seconds)
     app_uptime = _format_duration(app_uptime_seconds)
+    cpu_temp_c = _cpu_temperature_c()
+    cpu_temp_f = (cpu_temp_c * 9 / 5 + 32) if cpu_temp_c is not None else None
+    throttled = _throttled_status()
+    thermal_summary = "Unavailable"
+    if cpu_temp_c is not None:
+        thermal_summary = f"{cpu_temp_c:.1f}°C / {cpu_temp_f:.1f}°F • {throttled}"
     return {
         "ok": True,
         "ipAddress": _local_ip_address(),
@@ -533,6 +574,10 @@ def _system_info_payload() -> dict:
         "appUptime": app_uptime,
         "systemUptimeSeconds": int(system_uptime_seconds),
         "appUptimeSeconds": int(app_uptime_seconds),
+        "cpuTempC": round(cpu_temp_c, 1) if cpu_temp_c is not None else None,
+        "cpuTempF": round(cpu_temp_f, 1) if cpu_temp_f is not None else None,
+        "throttled": throttled,
+        "thermal": thermal_summary,
     }
 
 
@@ -749,56 +794,13 @@ def _fetch_ha_covers(ha_url: str, token: str) -> list[dict]:
 
 
 def _fetch_ha_cover_states_for_entities(ha_url: str, token: str, entity_ids: list[str]) -> list[dict]:
-    """Fetch current state for selected cover entities using one HA states call.
-
-    This is intentionally lightweight for the Pi UI: the browser polls this endpoint
-    only for linked blinds, and this function makes a single Home Assistant REST
-    request per poll instead of one request per blind.
-    """
-    wanted = []
-    seen = set()
-    for raw in entity_ids or []:
-        entity_id = str(raw or "").strip()
-        if not entity_id.startswith("cover.") or entity_id in seen:
-            continue
-        seen.add(entity_id)
-        wanted.append(entity_id)
-
-    if not wanted:
-        return []
-
-    ha_url = _normalize_ha_url(ha_url)
-    token = (token or "").strip()
-    if not token:
-        raise ValueError("Missing Home Assistant token")
-
-    req = request.Request(
-        f"{ha_url}/api/states",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-            "User-Agent": "SmartThermostatPanel/0.1",
-            "Connection": "close",
-        },
-        method="GET",
-    )
-    try:
-        with request.urlopen(req, timeout=8) as resp:
-            raw = resp.read()
-    except error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")[:500]
-        raise RuntimeError(f"Home Assistant returned HTTP {exc.code}: {body}") from exc
-    except error.URLError as exc:
-        raise RuntimeError(f"Could not reach Home Assistant: {exc.reason}") from exc
-
-    states = json.loads(raw.decode("utf-8"))
-    wanted_set = set(wanted)
+    """Fetch current state for selected cover entities with ordered batching."""
+    wanted = _ordered_unique_entity_ids(entity_ids, {"cover"})
+    items = _fetch_ha_state_items_for_entities(ha_url, token, wanted, {"cover"}, all_states_threshold=2)
     covers = []
-    for item in states:
-        entity_id = str(item.get("entity_id", ""))
-        if entity_id not in wanted_set:
-            continue
+    for item in items:
         attrs = item.get("attributes") or {}
+        entity_id = str(item.get("entity_id", ""))
         covers.append({
             "entityId": entity_id,
             "name": attrs.get("friendly_name") or entity_id,
@@ -806,8 +808,6 @@ def _fetch_ha_cover_states_for_entities(ha_url: str, token: str, entity_ids: lis
             "currentPosition": attrs.get("current_position"),
             "supportedFeatures": attrs.get("supported_features"),
         })
-
-    # Preserve the caller's entity order so UI updates stay predictable.
     by_id = {item["entityId"]: item for item in covers}
     return [by_id[entity_id] for entity_id in wanted if entity_id in by_id]
 
@@ -845,6 +845,88 @@ def _ha_json_request(ha_url: str, token: str, method: str, path: str, payload: d
         return json.loads(raw.decode("utf-8"))
     except json.JSONDecodeError:
         return {"raw": raw.decode("utf-8", errors="replace")}
+
+
+def _ha_all_states_cached(ha_url: str, token: str) -> list[dict]:
+    """Return HA /api/states with a tiny cache shared by all panel pollers.
+
+    The touchscreen polls several HA-backed widgets. When two widgets poll at
+    nearly the same time, this keeps the Pi from asking Home Assistant for the
+    full state table repeatedly. Service commands still bypass this cache.
+    """
+    ha_url = _normalize_ha_url(ha_url)
+    token = (token or "").strip()
+    if not token:
+        raise ValueError("Missing Home Assistant token")
+
+    cache_key = (ha_url, token)
+    now = time.monotonic()
+    with _HA_STATES_CACHE_LOCK:
+        cached = _HA_STATES_CACHE.get(cache_key)
+        if cached and now - cached[0] <= HA_STATES_CACHE_TTL_SECONDS:
+            return cached[1]
+
+    states = _ha_json_request(ha_url, token, "GET", "/api/states")
+    if not isinstance(states, list):
+        states = []
+
+    with _HA_STATES_CACHE_LOCK:
+        _HA_STATES_CACHE[cache_key] = (time.monotonic(), states)
+    return states
+
+
+def _invalidate_ha_state_cache(ha_url: str, token: str) -> None:
+    try:
+        cache_key = (_normalize_ha_url(ha_url), (token or "").strip())
+    except ValueError:
+        return
+    with _HA_STATES_CACHE_LOCK:
+        _HA_STATES_CACHE.pop(cache_key, None)
+
+
+def _ordered_unique_entity_ids(entity_ids: list[str] | None, domains: set[str] | None = None) -> list[str]:
+    wanted: list[str] = []
+    seen: set[str] = set()
+    for raw in entity_ids or []:
+        entity_id = str(raw or "").strip()
+        if not entity_id or entity_id in seen or "." not in entity_id:
+            continue
+        domain = entity_id.split(".", 1)[0]
+        if domains and domain not in domains:
+            continue
+        seen.add(entity_id)
+        wanted.append(entity_id)
+    return wanted
+
+
+def _fetch_ha_state_items_for_entities(
+    ha_url: str,
+    token: str,
+    entity_ids: list[str] | None,
+    domains: set[str] | None = None,
+    all_states_threshold: int = 3,
+) -> list[dict]:
+    """Fetch selected HA entity states in order with fewer REST calls.
+
+    One or two entities are cheaper as direct /api/states/<entity_id> calls.
+    Larger batches use one cached /api/states call, which is much lighter than
+    making a dozen separate calls from a wall-mounted Pi.
+    """
+    wanted = _ordered_unique_entity_ids(entity_ids, domains)
+    if not wanted:
+        return []
+
+    if len(wanted) < max(2, int(all_states_threshold or 3)):
+        items: list[dict] = []
+        for entity_id in wanted:
+            item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
+            if isinstance(item, dict):
+                items.append(item)
+        return items
+
+    states = _ha_all_states_cached(ha_url, token)
+    by_id = {str(item.get("entity_id", "")): item for item in states if isinstance(item, dict)}
+    return [by_id[entity_id] for entity_id in wanted if entity_id in by_id]
 
 
 def _normalize_media_player_item(ha_url: str, item: dict) -> dict:
@@ -917,21 +999,14 @@ def _fetch_ha_media_players(ha_url: str, token: str) -> list[dict]:
 
 
 def _fetch_ha_media_states_for_entities(ha_url: str, token: str, entity_ids: list[str]) -> list[dict]:
-    """Fetch selected media player states without pulling every HA entity.
-
-    The panel polls this endpoint while the Audio page is active, so keep it
-    lightweight. The old version used /api/states for every poll; this asks HA
-    only for the selected media_player entity.
-    """
-    wanted = []
-    seen = set()
-    for raw in entity_ids or []:
-        entity_id = str(raw or "").strip()
-        if not entity_id.startswith("media_player.") or entity_id in seen:
-            continue
-        seen.add(entity_id)
-        wanted.append(entity_id)
-    return [_fetch_ha_media_state(ha_url, token, entity_id) for entity_id in wanted]
+    """Fetch selected media player states without pulling every HA entity for one player."""
+    wanted = _ordered_unique_entity_ids(entity_ids, {"media_player"})
+    if len(wanted) == 1:
+        return [_fetch_ha_media_state(ha_url, token, wanted[0])]
+    items = _fetch_ha_state_items_for_entities(ha_url, token, wanted, {"media_player"}, all_states_threshold=2)
+    players = [_normalize_media_player_item(ha_url, item) for item in items]
+    by_id = {item["entityId"]: item for item in players}
+    return [by_id[entity_id] for entity_id in wanted if entity_id in by_id]
 
 
 def _fetch_ha_media_state(ha_url: str, token: str, entity_id: str) -> dict:
@@ -1020,15 +1095,13 @@ def _fetch_ha_binary_sensor_state(ha_url: str, token: str, entity_id: str) -> di
 
 
 def _fetch_ha_binary_sensor_states_for_entities(ha_url: str, token: str, entity_ids: list[str]) -> list[dict]:
-    wanted = []
-    seen = set()
-    for raw in entity_ids or []:
-        entity_id = str(raw or "").strip()
-        if not entity_id.startswith("binary_sensor.") or entity_id in seen:
-            continue
-        seen.add(entity_id)
-        wanted.append(entity_id)
-    return [_fetch_ha_binary_sensor_state(ha_url, token, entity_id) for entity_id in wanted]
+    wanted = _ordered_unique_entity_ids(entity_ids, {"binary_sensor"})
+    if len(wanted) == 1:
+        return [_fetch_ha_binary_sensor_state(ha_url, token, wanted[0])]
+    items = _fetch_ha_state_items_for_entities(ha_url, token, wanted, {"binary_sensor"}, all_states_threshold=2)
+    sensors = [_normalize_binary_sensor_item(item) for item in items]
+    by_id = {item["entityId"]: item for item in sensors}
+    return [by_id[entity_id] for entity_id in wanted if entity_id in by_id]
 
 
 def _fetch_ha_alarm_state(ha_url: str, token: str, entity_id: str) -> dict:
@@ -1040,15 +1113,13 @@ def _fetch_ha_alarm_state(ha_url: str, token: str, entity_id: str) -> dict:
 
 
 def _fetch_ha_alarm_states_for_entities(ha_url: str, token: str, entity_ids: list[str]) -> list[dict]:
-    wanted = []
-    seen = set()
-    for raw in entity_ids or []:
-        entity_id = str(raw or "").strip()
-        if not entity_id.startswith("alarm_control_panel.") or entity_id in seen:
-            continue
-        seen.add(entity_id)
-        wanted.append(entity_id)
-    return [_fetch_ha_alarm_state(ha_url, token, entity_id) for entity_id in wanted]
+    wanted = _ordered_unique_entity_ids(entity_ids, {"alarm_control_panel"})
+    if len(wanted) == 1:
+        return [_fetch_ha_alarm_state(ha_url, token, wanted[0])]
+    items = _fetch_ha_state_items_for_entities(ha_url, token, wanted, {"alarm_control_panel"}, all_states_threshold=2)
+    alarms = [_normalize_alarm_control_item(item) for item in items]
+    by_id = {item["entityId"]: item for item in alarms}
+    return [by_id[entity_id] for entity_id in wanted if entity_id in by_id]
 
 
 def _call_alarm_service(ha_url: str, token: str, entity_id: str, action: str, code: str | None = None) -> dict:
@@ -1073,6 +1144,7 @@ def _call_alarm_service(ha_url: str, token: str, entity_id: str, action: str, co
         payload["code"] = code_value
 
     _ha_json_request(ha_url, token, "POST", f"/api/services/alarm_control_panel/{service}", payload)
+    _invalidate_ha_state_cache(ha_url, token)
     try:
         return _fetch_ha_alarm_state(ha_url, token, entity_id)
     except Exception:
@@ -1097,14 +1169,19 @@ def _fetch_ha_entities(ha_url: str, token: str, domains: list[str] | None = None
 
 
 def _fetch_ha_switch_control_states(ha_url: str, token: str, controls: dict) -> dict:
+    kinds = ("subwoofer", "surround", "projector")
+    entity_by_kind = {
+        kind: str((controls.get(kind) or {}).get("entityId") or "").strip()
+        for kind in kinds
+    }
+    wanted = [entity_id for entity_id in entity_by_kind.values() if entity_id.startswith("switch.")]
+    items = _fetch_ha_state_items_for_entities(ha_url, token, wanted, {"switch"}, all_states_threshold=2)
+    by_id = {str(item.get("entity_id", "")): item for item in items}
     refreshed: dict[str, dict | None] = {}
-    for kind in ("subwoofer", "surround", "projector"):
-        entity_id = str((controls.get(kind) or {}).get("entityId") or "").strip()
-        if not entity_id.startswith("switch."):
-            refreshed[kind] = None
-            continue
-        item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
-        refreshed[kind] = _normalize_generic_entity(item)
+    for kind in kinds:
+        entity_id = entity_by_kind[kind]
+        item = by_id.get(entity_id)
+        refreshed[kind] = _normalize_generic_entity(item) if item else None
     return refreshed
 
 
@@ -1117,6 +1194,7 @@ def _call_switch_service(ha_url: str, token: str, entity_id: str, action: str) -
     if not service:
         raise ValueError("Unsupported switch action")
     _ha_json_request(ha_url, token, "POST", f"/api/services/switch/{service}", {"entity_id": entity_id})
+    _invalidate_ha_state_cache(ha_url, token)
     try:
         item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
         return _normalize_generic_entity(item)
@@ -1146,15 +1224,10 @@ def _fetch_ha_room_control_states_for_entities(ha_url: str, token: str, entity_i
         seen.add(entity_id)
         wanted.append(entity_id)
 
-    controls: list[dict] = []
-    for entity_id in wanted:
-        try:
-            item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
-            if isinstance(item, dict):
-                controls.append(_normalize_generic_entity(item))
-        except Exception:
-            continue
-    return controls
+    items = _fetch_ha_state_items_for_entities(ha_url, token, wanted, None, all_states_threshold=3)
+    controls = [_normalize_generic_entity(item) for item in items]
+    by_id = {item["entityId"]: item for item in controls}
+    return [by_id[entity_id] for entity_id in wanted if entity_id in by_id]
 
 
 def _room_control_service_for_action(domain: str, action: str) -> tuple[str, str] | None:
@@ -1249,6 +1322,7 @@ def _call_room_control_service(ha_url: str, token: str, entity_id: str, action: 
     if code_value and service_domain == "lock":
         service_payload["code"] = code_value
     _ha_json_request(ha_url, token, "POST", f"/api/services/{service_domain}/{service}", service_payload)
+    _invalidate_ha_state_cache(ha_url, token)
     try:
         item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
         if isinstance(item, dict):
@@ -1350,15 +1424,13 @@ def _fetch_ha_light_state(ha_url: str, token: str, entity_id: str) -> dict:
 
 
 def _fetch_ha_light_states_for_entities(ha_url: str, token: str, entity_ids: list[str]) -> list[dict]:
-    wanted = []
-    seen = set()
-    for raw in entity_ids or []:
-        entity_id = str(raw or "").strip()
-        if not entity_id.startswith("light.") or entity_id in seen:
-            continue
-        seen.add(entity_id)
-        wanted.append(entity_id)
-    return [_fetch_ha_light_state(ha_url, token, entity_id) for entity_id in wanted]
+    wanted = _ordered_unique_entity_ids(entity_ids, {"light"})
+    if len(wanted) == 1:
+        return [_fetch_ha_light_state(ha_url, token, wanted[0])]
+    items = _fetch_ha_state_items_for_entities(ha_url, token, wanted, {"light"}, all_states_threshold=2)
+    lights = [_normalize_light_item(item) for item in items]
+    by_id = {item["entityId"]: item for item in lights}
+    return [by_id[entity_id] for entity_id in wanted if entity_id in by_id]
 
 
 def _call_light_service(ha_url: str, token: str, entity_id: str, action: str, brightness: int | float | None = None, color: str | None = None) -> dict:
@@ -1385,6 +1457,7 @@ def _call_light_service(ha_url: str, token: str, entity_id: str, action: str, br
             payload["rgb_color"] = rgb_color
         _ha_json_request(ha_url, token, "POST", "/api/services/light/turn_on", payload)
 
+    _invalidate_ha_state_cache(ha_url, token)
     try:
         return _fetch_ha_light_state(ha_url, token, entity_id)
     except Exception:
@@ -1504,14 +1577,19 @@ def _fetch_ha_audio_controls(ha_url: str, token: str, media_player_id: str, medi
 
 
 def _fetch_ha_audio_control_states(ha_url: str, token: str, controls: dict) -> dict:
+    kinds = ("gain", "bass", "treble")
+    entity_by_kind = {
+        kind: str((controls.get(kind) or {}).get("entityId") or "").strip()
+        for kind in kinds
+    }
+    wanted = [entity_id for entity_id in entity_by_kind.values() if entity_id.startswith("number.")]
+    items = _fetch_ha_state_items_for_entities(ha_url, token, wanted, {"number"}, all_states_threshold=2)
+    by_id = {str(item.get("entity_id", "")): item for item in items}
     refreshed: dict[str, dict | None] = {}
-    for kind in ("gain", "bass", "treble"):
-        entity_id = str((controls.get(kind) or {}).get("entityId") or "").strip()
-        if not entity_id.startswith("number."):
-            refreshed[kind] = None
-            continue
-        item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
-        refreshed[kind] = _normalize_number_control(item, kind)
+    for kind in kinds:
+        entity_id = entity_by_kind[kind]
+        item = by_id.get(entity_id)
+        refreshed[kind] = _normalize_number_control(item, kind) if item else None
     return refreshed
 
 
@@ -1528,6 +1606,7 @@ def _call_number_service(ha_url: str, token: str, entity_id: str, value: int | f
         "entity_id": entity_id,
         "value": numeric_value,
     })
+    _invalidate_ha_state_cache(ha_url, token)
     try:
         item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
         return _normalize_number_control(item)
@@ -1567,6 +1646,7 @@ def _call_media_service(ha_url: str, token: str, entity_id: str, action: str, va
         payload["source"] = source
 
     _ha_json_request(ha_url, token, "POST", f"/api/services/media_player/{service}", payload)
+    _invalidate_ha_state_cache(ha_url, token)
     try:
         return _fetch_ha_media_state(ha_url, token, entity_id)
     except Exception:
@@ -1610,6 +1690,7 @@ def _call_cover_service(ha_url: str, token: str, entity_id: str, action: str, po
         payload["position"] = max(0, min(100, int(position)))
 
     _ha_json_request(ha_url, token, "POST", f"/api/services/cover/{service}", payload)
+    _invalidate_ha_state_cache(ha_url, token)
     try:
         state = _fetch_ha_state(ha_url, token, entity_id)
     except Exception:

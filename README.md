@@ -54,6 +54,28 @@ http://<device-ip>:8080
 ```
 
 
+
+## Raspberry Pi wall-panel kiosk
+
+This build includes a Raspberry Pi kiosk setup for the wall-mounted thermostat panel. The Pi runs the local Python server and starts Chromium automatically in full-screen kiosk mode at `http://127.0.0.1:8080`.
+
+Install on the Pi:
+
+```bash
+cd ~/Smart-Thermostat-Development
+chmod +x scripts/install-pi.sh scripts/kiosk-launch.sh scripts/network_watchdog.py
+./scripts/install-pi.sh
+sudo reboot
+```
+
+Services installed:
+
+- `smart-thermostat-web.service` — local API/static web server
+- `smart-thermostat-kiosk.service` — Chromium kiosk launcher
+- `smart-thermostat-network-watchdog.service` — Ethernet priority and Wi-Fi reconnect watchdog
+
+Kiosk configuration is stored in `/etc/smart-thermostat/kiosk.env`. More details are in `docs/raspberry-pi-notes.md`.
+
 ## Home Assistant auto-discovery
 
 This build includes a no-MQTT Home Assistant path. The Raspberry Pi server exposes a local thermostat API and advertises `_iha-thermostat._tcp.local.` over mDNS/Zeroconf. The included custom integration in `custom_components/iha` turns the panel into a Home Assistant `climate` entity after the discovered device is accepted.

@@ -1,0 +1,19 @@
+[Unit]
+Description=IHA Chromium kiosk display
+After=graphical.target smart-thermostat-web.service
+Wants=graphical.target smart-thermostat-web.service
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__PROJECT_DIR__
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/__USER__/.Xauthority
+Environment=XDG_RUNTIME_DIR=/run/user/__UID__
+EnvironmentFile=-/etc/smart-thermostat/kiosk.env
+ExecStart=__PROJECT_DIR__/scripts/kiosk-launch.sh
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=graphical.target

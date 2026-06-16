@@ -1,51 +1,132 @@
-# Raspberry Pi Notes
+# Raspberry Pi Wall Panel Notes
 
-This starter project is designed to run as a lightweight static web UI on a Raspberry Pi with a touchscreen.
+This build is set up for a Raspberry Pi 4 wall-mounted thermostat panel running the local Python server plus Chromium in kiosk mode.
 
-## Display target
+## Hardware target
 
-Initial assumed display:
+- Raspberry Pi 4
+- 10.1 inch DSI capacitive touch display, 800×1280 portrait-native panel
+- PoE HAT with active cooling
+- Wall case with limited airflow
 
-- 10.1 inch Waveshare DSI capacitive touch display
-- 800×1280 portrait-native or software-rotated landscape
-- Raspberry Pi 3B/4B/5 compatible
-
-The UI is responsive and should work in either landscape or portrait, but the intended wall-panel layout is landscape.
-
-## Run the UI manually
-
-```bash
-cd ~/Smart-Thermostat
-python3 -m http.server 8080 --directory public
-```
-
-## Install as a system service
-
-The included `scripts/install-pi.sh` copies the systemd service and enables it.
-
-```bash
-chmod +x scripts/install-pi.sh
-./scripts/install-pi.sh
-```
-
-Then browse to:
+The UI still works in a normal desktop browser, but the production target is the local kiosk URL:
 
 ```text
-http://localhost:8080
+http://127.0.0.1:8080
 ```
 
-## Future kiosk note
+## Recommended OS approach
 
-For first testing, use a normal browser on your development computer.
+Use Raspberry Pi OS with a desktop session for the wall panel. The kiosk service expects a graphical session on `DISPLAY=:0` and launches Chromium as the normal Pi user. Avoid installing extra office/games/media packages. The code does not require Node, Electron, or a heavy app wrapper on the Pi.
 
-For the wall panel, you can later choose between:
+## Install/update on the Pi
 
-1. Chromium kiosk mode.
-2. A native wrapper app such as Electron/Tauri-style packaging.
-3. A Qt/QML native app if you decide to move away from browser UI.
+From the project folder:
 
-The backend control service should remain separate from the UI either way.
+```bash
+cd ~/Smart-Thermostat-Development
+chmod +x scripts/install-pi.sh scripts/kiosk-launch.sh scripts/network_watchdog.py
+./scripts/install-pi.sh
+sudo reboot
+```
 
-## GPIO caution
+The installer enables these services:
 
-Use proper interface hardware. Raspberry Pi GPIO is control logic only, not relay coil power.
+```bash
+smart-thermostat-web.service
+smart-thermostat-kiosk.service
+smart-thermostat-network-watchdog.service
+```
+
+If the Pi is currently configured to boot to console, switch it to desktop boot:
+
+```bash
+sudo systemctl set-default graphical.target
+sudo reboot
+```
+
+## Kiosk mode
+
+`systemd/smart-thermostat-kiosk.service` runs `scripts/kiosk-launch.sh`, which:
+
+- waits for `/api/health` before opening Chromium
+- launches Chromium full-screen at `http://127.0.0.1:8080`
+- disables first-run prompts, default apps, translate, sync, background networking, and browser crash bubbles
+- uses `/tmp` for the Chromium profile/cache to reduce SD-card writes
+- hides the mouse pointer when `unclutter` is installed
+- disables display blanking through `xset` when available
+
+Useful commands:
+
+```bash
+sudo systemctl status smart-thermostat-web.service --no-pager -l
+sudo systemctl status smart-thermostat-kiosk.service --no-pager -l
+sudo systemctl restart smart-thermostat-kiosk.service
+journalctl -u smart-thermostat-kiosk.service -f
+```
+
+Kiosk settings live here:
+
+```bash
+sudo nano /etc/smart-thermostat/kiosk.env
+```
+
+Defaults:
+
+```bash
+SMART_THERMOSTAT_URL=http://127.0.0.1:8080
+SMART_KIOSK_PROFILE_DIR=/tmp/smart-thermostat-chromium-profile
+SMART_KIOSK_CACHE_DIR=/tmp/smart-thermostat-chromium-cache
+SMART_KIOSK_HEALTH_TIMEOUT_SECONDS=45
+SMART_KIOSK_EXTRA_FLAGS=
+```
+
+For a display scale test, add something like this to `SMART_KIOSK_EXTRA_FLAGS`:
+
+```bash
+SMART_KIOSK_EXTRA_FLAGS=--force-device-scale-factor=1
+```
+
+Then restart kiosk:
+
+```bash
+sudo systemctl restart smart-thermostat-kiosk.service
+```
+
+## Touch/display orientation
+
+The attached DSI screen is portrait-native. The UI is designed to work in either orientation, but the intended thermostat wall layout is landscape. Configure display rotation at the OS display level after the screen is attached. Keep the app URL the same.
+
+## Home Assistant traffic optimization
+
+The panel keeps thermostat sync local and lightweight. Home Assistant-backed pages poll only when useful:
+
+- thermostat local status: every 1 second, local Pi only
+- active HA-backed page: every 5 seconds
+- inactive HA-backed pages: at most every 5 minutes
+- after a button/slider command: quick follow-up polls so the UI confirms the change
+
+The Python backend batches Home Assistant entity state reads when multiple entities are needed, and uses a short shared `/api/states` cache so the Pi does not ask Home Assistant for the same state table repeatedly when several widgets refresh at the same time.
+
+## Network watchdog
+
+The network watchdog keeps Ethernet preferred and retries Wi-Fi recovery every 60 seconds when needed. Settings:
+
+```bash
+sudo nano /etc/smart-thermostat/network-watchdog.env
+```
+
+## Thermal checks
+
+Check temperature and throttling after the screen, HAT, and case are installed:
+
+```bash
+vcgencmd measure_temp
+vcgencmd get_throttled
+```
+
+`get_throttled=0x0` is ideal. Any non-zero value means the Pi has seen undervoltage or thermal throttling at some point since boot.
+
+## Notes on power/heat
+
+The kiosk intentionally avoids Electron and keeps Chromium stripped down. Do not disable GPU acceleration unless you see display artifacts, because software rendering usually increases CPU load and heat. If the wall case gets warm, verify the HAT fan is running and confirm the screen brightness/backlight setting on the display hardware.

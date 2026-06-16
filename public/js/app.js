@@ -4,18 +4,18 @@ const DIAL_SWEEP_DEG = 270;
 const DIAL_START_DEG = 225;
 const LEGACY_CONFIG_STORAGE_KEY = "smartThermostat.config.v2";
 const CONFIG_API_ENDPOINT = "/api/config";
-const HA_SYNC_INTERVAL_MS = 3000;
+const HA_SYNC_INTERVAL_MS = 5000;
 const HA_SYNC_AFTER_COMMAND_DELAYS = [900, 2400, 5200];
-const HA_AUDIO_SYNC_INTERVAL_MS = 3000;
+const HA_AUDIO_SYNC_INTERVAL_MS = 5000;
 const HA_AUDIO_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
-const HA_LIGHT_SYNC_INTERVAL_MS = 3000;
+const HA_LIGHT_SYNC_INTERVAL_MS = 5000;
 const HA_LIGHT_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
-const HA_ROOM_SYNC_INTERVAL_MS = 3000;
+const HA_ROOM_SYNC_INTERVAL_MS = 5000;
 const HA_ROOM_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
 const INACTIVE_PAGE_SYNC_INTERVAL_MS = 5 * 60 * 1000;
-const HA_ALARM_SYNC_INTERVAL_MS = 3000;
+const HA_ALARM_SYNC_INTERVAL_MS = 5000;
 const HA_ALARM_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
-const HA_DOOR_SYNC_INTERVAL_MS = 3000;
+const HA_DOOR_SYNC_INTERVAL_MS = 5000;
 const LOCAL_THERMOSTAT_SYNC_INTERVAL_MS = 1000;
 const LOCAL_THERMOSTAT_PUSH_DEBOUNCE_MS = 300;
 const LIGHT_COLOR_PRESETS = [
@@ -400,6 +400,7 @@ const elements = {
   unitIpValue: document.getElementById("unitIpValue"),
   unitVersionValue: document.getElementById("unitVersionValue"),
   unitUptimeValue: document.getElementById("unitUptimeValue"),
+  unitThermalValue: document.getElementById("unitThermalValue"),
   fetchUpdateButton: document.getElementById("fetchUpdateButton"),
   restartServerButton: document.getElementById("restartServerButton"),
   fetchUpdateStatus: document.getElementById("fetchUpdateStatus"),
@@ -1058,9 +1059,11 @@ function renderSystemInfo() {
   const name = state.systemInfo.thermostatName || getThermostatName();
   if (elements.unitNameValue) elements.unitNameValue.textContent = name;
   const uptime = state.systemInfo.uptime || state.systemInfo.systemUptime || "Unavailable";
+  const thermal = state.systemInfo.thermal || "Unavailable";
   if (elements.unitIpValue) elements.unitIpValue.textContent = ip;
   if (elements.unitVersionValue) elements.unitVersionValue.textContent = version;
   if (elements.unitUptimeValue) elements.unitUptimeValue.textContent = uptime;
+  if (elements.unitThermalValue) elements.unitThermalValue.textContent = thermal;
 }
 
 async function fetchSystemInfo() {
@@ -1076,6 +1079,10 @@ async function fetchSystemInfo() {
       uptime: payload.uptime || payload.systemUptime || "",
       systemUptime: payload.systemUptime || "",
       appUptime: payload.appUptime || "",
+      thermal: payload.thermal || "",
+      cpuTempC: payload.cpuTempC,
+      cpuTempF: payload.cpuTempF,
+      throttled: payload.throttled || "",
     };
   } catch (error) {
     state.systemInfo = {
@@ -1086,6 +1093,10 @@ async function fetchSystemInfo() {
       uptime: state.systemInfo.uptime || "Unavailable",
       systemUptime: state.systemInfo.systemUptime || "",
       appUptime: state.systemInfo.appUptime || "",
+      thermal: state.systemInfo.thermal || "Unavailable",
+      cpuTempC: state.systemInfo.cpuTempC,
+      cpuTempF: state.systemInfo.cpuTempF,
+      throttled: state.systemInfo.throttled || "",
     };
     console.warn("Unable to load system info", error);
   } finally {
@@ -5971,7 +5982,6 @@ async function init() {
   setInterval(() => pollHomeAssistantRoomControls(), HA_ROOM_SYNC_INTERVAL_MS);
   setInterval(() => pollHomeAssistantAlarm(), HA_ALARM_SYNC_INTERVAL_MS);
   setInterval(() => pollHomeAssistantDoor(), HA_DOOR_SYNC_INTERVAL_MS);
-  pollHomeAssistantRoomControls({ force: true });
   pollHomeAssistantAlarm({ force: true });
   pollHomeAssistantDoor({ force: true });
 }
