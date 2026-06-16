@@ -65,6 +65,7 @@ const ROOM_CONTROL_PICKER_DOMAINS = [
 const ROOM_CONTROL_READ_ONLY_DOMAINS = new Set(["binary_sensor", "sensor", "number", "input_number", "select", "input_select", "person", "device_tracker", "climate"]);
 const ROOM_CONTROL_MOMENTARY_DOMAINS = new Set(["button", "input_button", "scene", "script"]);
 const ROOM_CONTROL_EXCLUDED_DOMAINS = new Set(["automation"]);
+const PANEL_THEMES = ["regular", "star-trek"];
 let haSyncInFlight = false;
 let haSyncLastError = "";
 let haAudioSyncInFlight = false;
@@ -253,6 +254,7 @@ const state = {
   panelLock: { locked: false },
   settingsAccessCode: "",
   settingsAccessTarget: "settings",
+  theme: "regular",
   thermostat: {
     name: "IHA Thermostat",
     currentTemp: 70,
@@ -400,6 +402,7 @@ const elements = {
   saveAlarmCodeButton: document.getElementById("saveAlarmCodeButton"),
   thermostatNameInput: document.getElementById("thermostatNameInput"),
   saveThermostatNameButton: document.getElementById("saveThermostatNameButton"),
+  themeChoiceButtons: Array.from(document.querySelectorAll("[data-theme-choice]")),
   addThermostatPersonButton: document.getElementById("addThermostatPersonButton"),
   thermostatPeopleList: document.getElementById("thermostatPeopleList"),
   heatLockToggle: document.getElementById("heatLockToggle"),
@@ -725,6 +728,40 @@ function getActiveRoomControlRoom() {
   return normalizeRoomControlRoom(state.roomControl.rooms[state.roomControl.room], state.roomControl.room);
 }
 
+function normalizePanelTheme(value) {
+  const candidate = String(value || "").trim().toLowerCase();
+  if (["star-trek", "startrek", "star_trek", "star trek", "trek"].includes(candidate)) return "star-trek";
+  return "regular";
+}
+
+function getPanelThemeMetaColor(theme = state.theme) {
+  return normalizePanelTheme(theme) === "star-trek" ? "#6d5b49" : "#050812";
+}
+
+function renderPanelThemePicker() {
+  const activeTheme = normalizePanelTheme(state.theme);
+  (elements.themeChoiceButtons || []).forEach((button) => {
+    const active = normalizePanelTheme(button.dataset.themeChoice) === activeTheme;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+}
+
+function applyPanelTheme(theme, options = {}) {
+  const nextTheme = normalizePanelTheme(theme);
+  const changed = state.theme !== nextTheme;
+  state.theme = nextTheme;
+  document.documentElement.dataset.theme = nextTheme;
+  document.body.dataset.theme = nextTheme;
+  elements.app?.setAttribute("data-theme", nextTheme);
+  const themeMeta = document.querySelector('meta[name="theme-color"]');
+  if (themeMeta) themeMeta.setAttribute("content", getPanelThemeMetaColor(nextTheme));
+  renderPanelThemePicker();
+  if (changed && options.save !== false) saveConfig({ toast: false });
+  if (changed && options.toast) showToast(nextTheme === "star-trek" ? "Theme set to Star Trek" : "Theme set to Regular");
+  return changed;
+}
+
 function serializeLightsConfig() {
   const copy = clone(state.lights || defaultLightConfig);
   Object.values(copy.rooms || {}).forEach((room) => {
@@ -769,7 +806,8 @@ function buildSavedConfig() {
     limits: state.thermostat.limits,
   };
   return {
-    version: 14,
+    version: 15,
+    theme: normalizePanelTheme(state.theme),
     panelLock: { locked: Boolean(state.panelLock?.locked) },
     thermostat: thermostatToSave,
     alarm: {
@@ -783,6 +821,7 @@ function buildSavedConfig() {
 }
 
 function applySavedConfig(saved = {}) {
+  state.theme = normalizePanelTheme(saved?.theme || saved?.appearance?.theme || state.theme);
   if (saved?.panelLock && typeof saved.panelLock === "object") {
     state.panelLock.locked = Boolean(saved.panelLock.locked);
   }
@@ -1961,6 +2000,7 @@ function renderThermostat() {
   if (elements.thermostatNameInput && document.activeElement !== elements.thermostatNameInput) {
     elements.thermostatNameInput.value = getThermostatName();
   }
+  renderPanelThemePicker();
   elements.app.classList.toggle("heat-locked", Boolean(t.heatLocked));
   elements.app.classList.toggle("cool-locked", Boolean(t.coolLocked));
   renderThermostatPeople();
@@ -5973,6 +6013,8 @@ function bindEvents() {
   elements.saveThermostatNameButton?.addEventListener("click", () => saveThermostatName({ toast: true, force: true }));
   elements.thermostatNameInput?.addEventListener("change", () => saveThermostatName({ toast: false }));
 
+  (elements.themeChoiceButtons || []).forEach((button) => button.addEventListener("click", () => applyPanelTheme(button.dataset.themeChoice, { toast: true })));
+
   elements.settingsCodeClose?.addEventListener("click", closeSettingsCodePrompt);
   document.querySelectorAll("[data-close-settings-code]").forEach((el) => el.addEventListener("click", closeSettingsCodePrompt));
   elements.settingsCodeGrid?.addEventListener("click", (event) => {
@@ -6301,6 +6343,7 @@ function mockTrackProgress() {
 
 async function init() {
   await loadSavedConfig();
+  applyPanelTheme(state.theme, { save: false });
   state.thermostat.away = false;
   syncAlarmFromConfig();
   syncDoorFromConfig();
