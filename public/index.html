@@ -512,13 +512,21 @@
           <div class="settings-section alarm-code-section">
             <div>
               <h3>Security Code</h3>
-              <p class="settings-hint">This code is used by the panel keypad and sent with alarm arm/disarm commands.</p>
+              <p class="settings-hint">User access opens panel menus. Disarm code is sent with alarm disarm commands.</p>
             </div>
-            <div class="alarm-code-card">
-              <label class="alarm-code-field">Disarm Code
-                <input id="alarmDisarmCodeInput" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="off" aria-label="Set alarm disarm code" />
-              </label>
-              <button id="saveAlarmCodeButton" class="scene-btn secondary" type="button">Save Code</button>
+            <div class="security-code-grid">
+              <div class="alarm-code-card">
+                <label class="alarm-code-field">User Access Code
+                  <input id="userAccessCodeInput" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" aria-label="Set user access code" />
+                </label>
+                <button id="saveUserAccessCodeButton" class="scene-btn secondary" type="button">Save Access</button>
+              </div>
+              <div class="alarm-code-card">
+                <label class="alarm-code-field">Disarm Code
+                  <input id="alarmDisarmCodeInput" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="off" aria-label="Set alarm disarm code" />
+                </label>
+                <button id="saveAlarmCodeButton" class="scene-btn secondary" type="button">Save Disarm</button>
+              </div>
             </div>
           </div>
 

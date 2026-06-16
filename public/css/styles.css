@@ -7425,3 +7425,39 @@ body[data-theme="christmas"] {
     grid-template-columns: 1fr;
   }
 }
+
+
+/* 2026-06-16 editable user access code + visible disarm code in Comfort Setup */
+.security-code-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.security-code-grid .alarm-code-card {
+  min-width: 0;
+}
+.security-code-grid .alarm-code-field input {
+  letter-spacing: .08em;
+}
+.settings-sheet.thermostat-setup .security-code-grid {
+  gap: 8px;
+}
+.settings-sheet.thermostat-setup .security-code-grid .alarm-code-card {
+  grid-template-columns: minmax(130px, 1fr) minmax(108px, auto);
+}
+.settings-sheet.thermostat-setup .security-code-grid .scene-btn {
+  padding: 0 12px;
+}
+@media (max-width: 900px) {
+  .security-code-grid {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 900px) and (min-width: 700px) {
+  .settings-sheet.thermostat-setup .security-code-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .settings-sheet.thermostat-setup .security-code-grid .alarm-code-card {
+    grid-template-columns: minmax(120px, 1fr);
+  }
+}

@@ -34,7 +34,7 @@ const LIGHT_COLOR_PRESETS = [
   { name: "Night", color: "#6fa8ff" },
 ];
 const ALARM_AUTO_SUBMIT_LENGTH = 4;
-const SETTINGS_ACCESS_CODE = "3762";
+const DEFAULT_USER_ACCESS_CODE = "3762";
 const ROOM_CONTROL_CODE_MAX_LENGTH = 12;
 const ROOM_CONTROL_MAX_ENTRIES = 12;
 const ALARM_ARM_AWAY_DELAY_SECONDS = 60;
@@ -252,6 +252,7 @@ const state = {
   pages: ["blinds", "audio", "thermostat", "lights", "room"],
   currentPage: "thermostat",
   panelLock: { locked: false },
+  userAccessCode: DEFAULT_USER_ACCESS_CODE,
   settingsAccessCode: "",
   settingsAccessTarget: "settings",
   theme: "regular",
@@ -400,6 +401,8 @@ const elements = {
   alarmArmCancelButton: document.getElementById("alarmArmCancelButton"),
   alarmDisarmCodeInput: document.getElementById("alarmDisarmCodeInput"),
   saveAlarmCodeButton: document.getElementById("saveAlarmCodeButton"),
+  userAccessCodeInput: document.getElementById("userAccessCodeInput"),
+  saveUserAccessCodeButton: document.getElementById("saveUserAccessCodeButton"),
   thermostatNameInput: document.getElementById("thermostatNameInput"),
   saveThermostatNameButton: document.getElementById("saveThermostatNameButton"),
   themeChoiceButtons: Array.from(document.querySelectorAll("[data-theme-choice]")),
@@ -813,9 +816,10 @@ function buildSavedConfig() {
     limits: state.thermostat.limits,
   };
   return {
-    version: 15,
+    version: 16,
     theme: normalizePanelTheme(state.theme),
     panelLock: { locked: Boolean(state.panelLock?.locked) },
+    userAccessCode: getUserAccessCode(),
     thermostat: thermostatToSave,
     alarm: {
       disarmCode: String(state.alarm.disarmCode || "").replace(/\D/g, "").slice(0, 8),
@@ -833,6 +837,8 @@ function applySavedConfig(saved = {}) {
     state.panelLock.locked = Boolean(saved.panelLock.locked);
   }
   if (typeof saved?.panelLocked === "boolean") state.panelLock.locked = saved.panelLocked;
+  const savedUserAccessCode = String(saved?.userAccessCode || saved?.security?.userAccessCode || saved?.settingsAccessCode || "").replace(/\D/g, "").slice(0, 4);
+  state.userAccessCode = savedUserAccessCode.length === 4 ? savedUserAccessCode : DEFAULT_USER_ACCESS_CODE;
   if (saved?.thermostat) {
     const defaults = clone(state.thermostat);
     const savedThermostat = saved.thermostat || {};
@@ -1322,7 +1328,7 @@ function renderPanelLock() {
     elements.thermostatPanelLockButton.classList.toggle("unlocked", !locked);
     elements.thermostatPanelLockButton.setAttribute("aria-pressed", locked ? "true" : "false");
     elements.thermostatPanelLockButton.setAttribute("aria-label", locked ? "Unlock thermostat page navigation" : "Lock thermostat page navigation");
-    elements.thermostatPanelLockButton.title = locked ? "Panel locked. Enter master code to unlock." : "Lock panel navigation";
+    elements.thermostatPanelLockButton.title = locked ? "Panel locked. Enter user access code to unlock." : "Lock panel navigation";
   }
   if (elements.thermostatPanelLockLabel) elements.thermostatPanelLockLabel.textContent = locked ? "Locked" : "Unlocked";
   document.querySelectorAll(".nav-pill").forEach((button) => {
@@ -2050,6 +2056,27 @@ function getSavedAlarmCode() {
   return String(state.alarm.disarmCode || "").replace(/\D/g, "").slice(0, 8);
 }
 
+function getUserAccessCode() {
+  const code = String(state.userAccessCode || "").replace(/\D/g, "").slice(0, 4);
+  return code.length === 4 ? code : DEFAULT_USER_ACCESS_CODE;
+}
+
+function saveUserAccessCode(options = {}) {
+  const raw = elements.userAccessCodeInput ? elements.userAccessCodeInput.value : state.userAccessCode;
+  const code = String(raw || "").replace(/\D/g, "").slice(0, 4);
+  if (code.length !== 4) {
+    if (elements.userAccessCodeInput) elements.userAccessCodeInput.value = getUserAccessCode();
+    if (options.toast !== false) showToast("Enter a 4-digit user access code");
+    return false;
+  }
+  state.userAccessCode = code;
+  if (elements.userAccessCodeInput) elements.userAccessCodeInput.value = code;
+  saveConfig({ toast: false });
+  if (options.toast !== false) showToast("User access code saved");
+  renderSettingsCodePrompt();
+  return true;
+}
+
 function getAlarmSubmitLength() {
   return clamp(getSavedAlarmCode().length || ALARM_AUTO_SUBMIT_LENGTH, 1, 8);
 }
@@ -2669,7 +2696,8 @@ function renderSettingsCodePrompt() {
     elements.settingsCodeTitle.textContent = target === "panelUnlock" ? "Unlock Panel" : target === "info" ? "Panel Info" : "Enter Code";
   }
   const code = state.settingsAccessCode || "";
-  elements.settingsCodeDots.innerHTML = Array.from({ length: 4 }, (_, index) =>
+  const requiredLength = getUserAccessCode().length || 4;
+  elements.settingsCodeDots.innerHTML = Array.from({ length: requiredLength }, (_, index) =>
     `<span class="${index < code.length ? "filled" : ""}"></span>`
   ).join("");
 }
@@ -2677,7 +2705,7 @@ function renderSettingsCodePrompt() {
 function openSettingsCodePrompt(target = "settings") {
   const accessTarget = target === "panelUnlock" ? "panelUnlock" : target === "info" ? "info" : "settings";
   if (accessTarget === "settings" && isPanelLocked()) {
-    showToast("Panel locked. Enter master code to unlock.");
+    showToast("Panel locked. Enter user access code to unlock.");
     return openSettingsCodePrompt("panelUnlock");
   }
   if (accessTarget === "settings" && !isSettingsAllowedByAlarm()) {
@@ -2688,7 +2716,7 @@ function openSettingsCodePrompt(target = "settings") {
   state.settingsAccessTarget = accessTarget;
   if (elements.settingsCodeStatus) {
     elements.settingsCodeStatus.dataset.error = "";
-    elements.settingsCodeStatus.textContent = accessTarget === "panelUnlock" ? "Enter master code to unlock navigation." : "";
+    elements.settingsCodeStatus.textContent = accessTarget === "panelUnlock" ? "Enter user access code to unlock navigation." : "";
   }
   elements.settingsCodeOverlay?.classList.add("open");
   elements.settingsCodeOverlay?.setAttribute("aria-hidden", "false");
@@ -2707,8 +2735,9 @@ function closeSettingsCodePrompt() {
 }
 
 function verifySettingsCode() {
-  if ((state.settingsAccessCode || "").length !== 4) return;
-  if (state.settingsAccessCode === SETTINGS_ACCESS_CODE) {
+  const requiredCode = getUserAccessCode();
+  if ((state.settingsAccessCode || "").length !== requiredCode.length) return;
+  if (state.settingsAccessCode === requiredCode) {
     const target = state.settingsAccessTarget || "settings";
     closeSettingsCodePrompt();
     if (target === "panelUnlock") setPanelLocked(false);
@@ -2728,13 +2757,13 @@ function handleSettingsCodeKey(value) {
   const current = state.settingsAccessCode || "";
   if (value === "clear") state.settingsAccessCode = "";
   else if (value === "back") state.settingsAccessCode = current.slice(0, -1);
-  else if (/^\d$/.test(value) && current.length < 4) state.settingsAccessCode = current + value;
+  else if (/^\d$/.test(value) && current.length < getUserAccessCode().length) state.settingsAccessCode = current + value;
   if (elements.settingsCodeStatus) {
     elements.settingsCodeStatus.dataset.error = "";
     elements.settingsCodeStatus.textContent = "";
   }
   renderSettingsCodePrompt();
-  if ((state.settingsAccessCode || "").length === 4) verifySettingsCode();
+  if ((state.settingsAccessCode || "").length === getUserAccessCode().length) verifySettingsCode();
 }
 
 function hideAllSettingsViews() {
@@ -2770,6 +2799,7 @@ function openSettings() {
     elements.settingsSheet.classList.add("full-setup", "thermostat-setup");
     elements.thermostatSettingsView.hidden = false;
     if (elements.alarmDisarmCodeInput) elements.alarmDisarmCodeInput.value = getSavedAlarmCode();
+    if (elements.userAccessCodeInput) elements.userAccessCodeInput.value = getUserAccessCode();
     if (elements.thermostatNameInput) elements.thermostatNameInput.value = getThermostatName();
     renderThermostatPeople();
   }
@@ -2780,6 +2810,7 @@ function openSettings() {
 function closeSettings() {
   if (state.currentPage === "thermostat" && elements.thermostatSettingsView && !elements.thermostatSettingsView.hidden) {
     if (elements.alarmDisarmCodeInput) saveAlarmCode({ toast: false });
+    if (elements.userAccessCodeInput) saveUserAccessCode({ toast: false });
     if (elements.thermostatNameInput) saveThermostatName({ toast: false });
     saveConfig();
   }
@@ -6016,6 +6047,10 @@ function bindEvents() {
   elements.saveAlarmCodeButton?.addEventListener("click", () => saveAlarmCode({ toast: true }));
   elements.alarmDisarmCodeInput?.addEventListener("input", (event) => {
     event.target.value = String(event.target.value || "").replace(/\D/g, "").slice(0, 8);
+  });
+  elements.saveUserAccessCodeButton?.addEventListener("click", () => saveUserAccessCode({ toast: true }));
+  elements.userAccessCodeInput?.addEventListener("input", (event) => {
+    event.target.value = String(event.target.value || "").replace(/\D/g, "").slice(0, 4);
   });
   elements.saveThermostatNameButton?.addEventListener("click", () => saveThermostatName({ toast: true, force: true }));
   elements.thermostatNameInput?.addEventListener("change", () => saveThermostatName({ toast: false }));
