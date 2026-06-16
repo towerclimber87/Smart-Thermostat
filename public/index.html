@@ -277,6 +277,21 @@
             </div>
           </aside>
 
+          <div id="safetyWarningBanner" class="safety-warning-banner" aria-live="assertive" aria-hidden="true">
+            <span class="safety-warning-eyebrow">Warning</span>
+            <strong id="safetyWarningTitle">Safety Heat Engaged</strong>
+            <div class="safety-warning-readouts">
+              <span>Setpoint <b id="safetyWarningSetpoint">70°</b></span>
+              <span>Current <b id="safetyWarningCurrent">70°</b></span>
+            </div>
+          </div>
+
+          <button id="autoSwitchNotice" class="auto-switch-notice" type="button" hidden aria-hidden="true" aria-label="Auto-switch notice. Tap to review options.">
+            <span>Auto-switched</span>
+            <strong id="autoSwitchNoticeMode">To Cool</strong>
+            <em id="autoSwitchNoticeDetail">Outdoor 78°</em>
+          </button>
+
           <button id="doorWidget" class="door-control-widget unlinked" type="button" aria-label="Door status. Tap or hold to assign Home Assistant binary sensor.">
             <span class="door-alert-ring" aria-hidden="true"></span>
             <span class="door-icon" aria-hidden="true">
@@ -391,6 +406,24 @@
       </article>
     </section>
 
+
+    <section id="autoSwitchOverlay" class="settings-overlay auto-switch-overlay" aria-hidden="true">
+      <div class="settings-backdrop" data-close-auto-switch></div>
+      <aside class="auto-switch-sheet" role="dialog" aria-modal="true" aria-labelledby="autoSwitchTitle">
+        <div class="auto-switch-head">
+          <div>
+            <p class="eyebrow">Outdoor Auto-Switch</p>
+            <h2 id="autoSwitchTitle">Auto-switched to Cool</h2>
+          </div>
+          <button id="autoSwitchClose" class="icon-button close" aria-label="Close auto-switch options">×</button>
+        </div>
+        <p id="autoSwitchMessage" class="auto-switch-message">Outdoor readings crossed an auto-switch target.</p>
+        <div class="auto-switch-actions">
+          <button id="autoSwitchRevertButton" class="scene-btn auto-switch-revert" type="button">Revert</button>
+          <button id="autoSwitchDismissButton" class="scene-btn auto-switch-dismiss" type="button">Dismiss</button>
+        </div>
+      </aside>
+    </section>
 
     <section id="settingsCodeOverlay" class="settings-overlay alarm-keypad-overlay settings-code-overlay" aria-hidden="true">
       <div class="settings-backdrop" data-close-settings-code></div>

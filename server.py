@@ -77,6 +77,8 @@ DEFAULT_THERMOSTAT = {
     "equipmentLastCoolRunAt": 0,
     "coolRelayWasOn": False,
     "coolFanHoldUntil": 0,
+    "autoSwitchNotice": {"active": False, "source": "", "fromMode": "", "toMode": "", "outdoorTemp": 0, "coolTarget": 0, "heatTarget": 0, "createdAt": 0},
+    "autoSwitchHold": {"active": False, "source": "", "mode": ""},
     "limits": {
         "cool": {"min": 65, "max": 80},
         "heat": {"min": 60, "max": 78},
@@ -306,6 +308,44 @@ def _deepcopy_json(value: object) -> object:
     return json.loads(json.dumps(value))
 
 
+
+def _normalize_pending_mode(value: object) -> str:
+    mode = str(value or "").strip().lower()
+    return mode if mode in {"heat", "cool"} else ""
+
+
+def _normalize_auto_switch_notice(value: object) -> dict:
+    if not isinstance(value, dict):
+        return _deepcopy_json(DEFAULT_THERMOSTAT["autoSwitchNotice"])
+    source = str(value.get("source") or "").strip().lower()
+    from_mode = _normalize_pending_mode(value.get("fromMode"))
+    to_mode = _normalize_pending_mode(value.get("toMode"))
+    active = bool(value.get("active")) and source in {"auto", "manual"} and from_mode and to_mode and from_mode != to_mode
+    if not active:
+        return _deepcopy_json(DEFAULT_THERMOSTAT["autoSwitchNotice"])
+    return {
+        "active": True,
+        "source": source,
+        "fromMode": from_mode,
+        "toMode": to_mode,
+        "outdoorTemp": _number(value.get("outdoorTemp"), 0, -40, 130),
+        "coolTarget": _number(value.get("coolTarget"), 0, 0, 130),
+        "heatTarget": _number(value.get("heatTarget"), 0, 0, 130),
+        "createdAt": _number(value.get("createdAt"), 0, 0, None),
+    }
+
+
+def _normalize_auto_switch_hold(value: object) -> dict:
+    if not isinstance(value, dict):
+        return _deepcopy_json(DEFAULT_THERMOSTAT["autoSwitchHold"])
+    source = str(value.get("source") or "").strip().lower()
+    mode = _normalize_pending_mode(value.get("mode"))
+    active = bool(value.get("active")) and source in {"auto", "manual"} and mode
+    if not active:
+        return _deepcopy_json(DEFAULT_THERMOSTAT["autoSwitchHold"])
+    return {"active": True, "source": source, "mode": mode}
+
+
 def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None = None) -> dict:
     base = _deepcopy_json(DEFAULT_THERMOSTAT)
     for source in (existing or {}, incoming or {}):
@@ -383,6 +423,10 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             base["manualPendingMode"] = pending if pending in {"", "heat", "cool"} else ""
         if "coolRelayWasOn" in source:
             base["coolRelayWasOn"] = bool(source.get("coolRelayWasOn"))
+        if "autoSwitchNotice" in source:
+            base["autoSwitchNotice"] = _normalize_auto_switch_notice(source.get("autoSwitchNotice"))
+        if "autoSwitchHold" in source:
+            base["autoSwitchHold"] = _normalize_auto_switch_hold(source.get("autoSwitchHold"))
 
         incoming_limits = source.get("limits") if isinstance(source.get("limits"), dict) else {}
         for mode in ("cool", "heat", "auto"):
@@ -410,12 +454,17 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
     if base.get("manualPendingMode") == "cool" and base.get("coolLocked"):
         base["manualPendingMode"] = ""
         base["manualLockoutUntil"] = 0
+    hold_mode = base.get("autoSwitchHold", {}).get("mode") if isinstance(base.get("autoSwitchHold"), dict) else ""
+    if (hold_mode == "heat" and base.get("heatLocked")) or (hold_mode == "cool" and base.get("coolLocked")):
+        base["autoSwitchHold"] = _deepcopy_json(DEFAULT_THERMOSTAT["autoSwitchHold"])
     if base.get("heatLocked") and base.get("coolLocked"):
         base["autoActiveMode"] = ""
         base["autoPendingMode"] = ""
         base["autoLockoutUntil"] = 0
         base["manualPendingMode"] = ""
         base["manualLockoutUntil"] = 0
+        base["autoSwitchNotice"] = _deepcopy_json(DEFAULT_THERMOSTAT["autoSwitchNotice"])
+        base["autoSwitchHold"] = _deepcopy_json(DEFAULT_THERMOSTAT["autoSwitchHold"])
         base["coolFanHoldUntil"] = 0
         base["coolRelayWasOn"] = False
     mode_limits = base["limits"].get(base["mode"], {"min": 45, "max": 95})
