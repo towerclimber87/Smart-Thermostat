@@ -246,6 +246,7 @@ const AUDIO_PRESETS = {
 const state = {
   pages: ["blinds", "audio", "thermostat", "lights", "room"],
   currentPage: "thermostat",
+  panelLock: { locked: false },
   settingsAccessCode: "",
   settingsAccessTarget: "settings",
   thermostat: {
@@ -344,6 +345,8 @@ const elements = {
   secondaryTempRow: document.getElementById("secondaryTempRow"),
   humidityValue: document.getElementById("humidityValue"),
   thermoDial: document.getElementById("thermoDial"),
+  thermostatPanelLockButton: document.getElementById("thermostatPanelLockButton"),
+  thermostatPanelLockLabel: document.getElementById("thermostatPanelLockLabel"),
   modeBadge: document.getElementById("modeBadge"),
   runtimeState: document.getElementById("runtimeState"),
   awayToggle: document.getElementById("awayToggle"),
@@ -407,6 +410,7 @@ const elements = {
   settingsButton: document.getElementById("settingsButton"),
   settingsCodeOverlay: document.getElementById("settingsCodeOverlay"),
   settingsCodeClose: document.getElementById("settingsCodeClose"),
+  settingsCodeTitle: document.getElementById("settingsCodeTitle"),
   settingsCodeStatus: document.getElementById("settingsCodeStatus"),
   settingsCodeDots: document.getElementById("settingsCodeDots"),
   settingsCodeGrid: document.getElementById("settingsCodeGrid"),
@@ -750,7 +754,8 @@ function buildSavedConfig() {
     limits: state.thermostat.limits,
   };
   return {
-    version: 12,
+    version: 13,
+    panelLock: { locked: Boolean(state.panelLock?.locked) },
     thermostat: thermostatToSave,
     alarm: {
       disarmCode: String(state.alarm.disarmCode || "").replace(/\D/g, "").slice(0, 8),
@@ -763,6 +768,10 @@ function buildSavedConfig() {
 }
 
 function applySavedConfig(saved = {}) {
+  if (saved?.panelLock && typeof saved.panelLock === "object") {
+    state.panelLock.locked = Boolean(saved.panelLock.locked);
+  }
+  if (typeof saved?.panelLocked === "boolean") state.panelLock.locked = saved.panelLocked;
   if (saved?.thermostat) {
     const defaults = clone(state.thermostat);
     const savedThermostat = saved.thermostat || {};
@@ -1201,8 +1210,59 @@ function markPageInactiveSyncBaseline(pageName) {
   }
 }
 
-function gotoPage(pageName) {
+function isPanelLocked() {
+  return Boolean(state.panelLock?.locked);
+}
+
+function renderPanelLock() {
+  const locked = isPanelLocked();
+  elements.app?.classList.toggle("panel-locked", locked);
+  elements.app?.setAttribute("data-panel-locked", locked ? "true" : "false");
+  if (elements.thermostatPanelLockButton) {
+    elements.thermostatPanelLockButton.classList.toggle("locked", locked);
+    elements.thermostatPanelLockButton.classList.toggle("unlocked", !locked);
+    elements.thermostatPanelLockButton.setAttribute("aria-pressed", locked ? "true" : "false");
+    elements.thermostatPanelLockButton.setAttribute("aria-label", locked ? "Unlock thermostat page navigation" : "Lock thermostat page navigation");
+    elements.thermostatPanelLockButton.title = locked ? "Panel locked. Enter master code to unlock." : "Lock panel navigation";
+  }
+  if (elements.thermostatPanelLockLabel) elements.thermostatPanelLockLabel.textContent = locked ? "Locked" : "Unlocked";
+  document.querySelectorAll(".nav-pill").forEach((button) => {
+    const blocked = locked && button.dataset.goto !== "thermostat";
+    button.classList.toggle("panel-lock-blocked", blocked);
+    button.setAttribute("aria-disabled", blocked ? "true" : "false");
+  });
+}
+
+function setPanelLocked(locked, options = {}) {
+  state.panelLock.locked = Boolean(locked);
+  renderPanelLock();
+  if (state.panelLock.locked && state.currentPage !== "thermostat") gotoPage("thermostat", { force: true, silent: true });
+  if (options.save !== false) saveConfig({ sync: false });
+  if (options.toast !== false) showToast(state.panelLock.locked ? "Panel locked" : "Panel unlocked");
+}
+
+function requestPanelUnlock() {
+  openSettingsCodePrompt("panelUnlock");
+}
+
+function togglePanelLock() {
+  if (isPanelLocked()) {
+    requestPanelUnlock();
+    return;
+  }
+  setPanelLocked(true);
+}
+
+function guardPanelLockedNavigation(targetPage, options = {}) {
+  if (!isPanelLocked() || targetPage === "thermostat" || options.force) return false;
+  if (!options.silent) showToast("Panel locked. Unlock to leave thermostat.");
+  gotoPage("thermostat", { force: true, silent: true });
+  return true;
+}
+
+function gotoPage(pageName, options = {}) {
   if (!state.pages.includes(pageName)) return;
+  if (guardPanelLockedNavigation(pageName, options)) return;
   const previousPage = state.currentPage;
   state.currentPage = pageName;
   if (previousPage !== pageName) markPageInactiveSyncBaseline(previousPage);
@@ -1212,6 +1272,7 @@ function gotoPage(pageName) {
   elements.screenTrack.style.transform = `translateX(-${index * pageWidth}%)`;
   document.querySelectorAll(".nav-pill").forEach((button) => button.classList.toggle("active", button.dataset.goto === pageName));
   if (elements.tempMiniStatus) elements.tempMiniStatus.hidden = pageName === "thermostat";
+  renderPanelLock();
   if (pageName === "blinds") pollHomeAssistantLinkedCovers({ force: true });
   if (pageName === "audio") pollHomeAssistantMediaPlayer({ force: true, controls: true });
   if (pageName === "lights") pollHomeAssistantLights({ force: true });
@@ -1478,6 +1539,7 @@ function renderThermostat() {
   const now = Date.now();
 
   renderTemperatureAtmosphere(t.currentTemp);
+  renderPanelLock();
 
   elements.currentTemp.textContent = showingSetpoint ? targetRounded : currentRounded;
   elements.targetTemp.textContent = showingSetpoint ? currentRounded : targetRounded;
@@ -2210,6 +2272,10 @@ function adjustAutoSetting(kind, delta) {
 
 function renderSettingsCodePrompt() {
   if (!elements.settingsCodeDots) return;
+  const target = state.settingsAccessTarget || "settings";
+  if (elements.settingsCodeTitle) {
+    elements.settingsCodeTitle.textContent = target === "panelUnlock" ? "Unlock Panel" : target === "info" ? "Panel Info" : "Enter Code";
+  }
   const code = state.settingsAccessCode || "";
   elements.settingsCodeDots.innerHTML = Array.from({ length: 4 }, (_, index) =>
     `<span class="${index < code.length ? "filled" : ""}"></span>`
@@ -2217,7 +2283,11 @@ function renderSettingsCodePrompt() {
 }
 
 function openSettingsCodePrompt(target = "settings") {
-  const accessTarget = target === "info" ? "info" : "settings";
+  const accessTarget = target === "panelUnlock" ? "panelUnlock" : target === "info" ? "info" : "settings";
+  if (accessTarget === "settings" && isPanelLocked()) {
+    showToast("Panel locked. Enter master code to unlock.");
+    return openSettingsCodePrompt("panelUnlock");
+  }
   if (accessTarget === "settings" && !isSettingsAllowedByAlarm()) {
     showToast("Disarm the alarm before opening settings");
     return;
@@ -2226,7 +2296,7 @@ function openSettingsCodePrompt(target = "settings") {
   state.settingsAccessTarget = accessTarget;
   if (elements.settingsCodeStatus) {
     elements.settingsCodeStatus.dataset.error = "";
-    elements.settingsCodeStatus.textContent = "";
+    elements.settingsCodeStatus.textContent = accessTarget === "panelUnlock" ? "Enter master code to unlock navigation." : "";
   }
   elements.settingsCodeOverlay?.classList.add("open");
   elements.settingsCodeOverlay?.setAttribute("aria-hidden", "false");
@@ -2249,7 +2319,8 @@ function verifySettingsCode() {
   if (state.settingsAccessCode === SETTINGS_ACCESS_CODE) {
     const target = state.settingsAccessTarget || "settings";
     closeSettingsCodePrompt();
-    if (target === "info") openThermostatInfo();
+    if (target === "panelUnlock") setPanelLocked(false);
+    else if (target === "info") openThermostatInfo();
     else openSettings();
     return;
   }
@@ -5128,6 +5199,7 @@ function bindSwipeNavigation() {
   let pointerId = null, startX = 0, startY = 0, moved = false;
   elements.app.addEventListener("pointerdown", (event) => {
     if (event.button !== undefined && event.button !== 0) return;
+    if (isPanelLocked()) return;
     if (isInteractiveTarget(event.target)) return;
     pointerId = event.pointerId; startX = event.clientX; startY = event.clientY; moved = false;
   });
@@ -5504,6 +5576,7 @@ function bindLongPress(target, callback, options = {}) {
 
 function bindEvents() {
   document.querySelectorAll(".nav-pill").forEach((button) => button.addEventListener("click", () => gotoPage(button.dataset.goto)));
+  elements.thermostatPanelLockButton?.addEventListener("click", togglePanelLock);
   document.getElementById("tempDown").addEventListener("click", () => adjustSetpoint(-1));
   document.getElementById("tempUp").addEventListener("click", () => adjustSetpoint(1));
   elements.awayToggle.addEventListener("click", toggleAway);
@@ -5560,11 +5633,11 @@ function bindEvents() {
     const button = event.target.closest("[data-room-control-code-key]");
     if (button) handleRoomControlCodeKey(button.dataset.roomControlCodeKey);
   });
-  elements.settingsButton.addEventListener("click", () => openSettingsCodePrompt("settings"));
+  elements.settingsButton.addEventListener("click", () => isPanelLocked() ? requestPanelUnlock() : openSettingsCodePrompt("settings"));
   elements.settingsClose.addEventListener("click", closeSettings);
   elements.settingsDone.addEventListener("click", closeSettings);
   document.querySelectorAll("[data-close-settings]").forEach((el) => el.addEventListener("click", closeSettings));
-  elements.thermostatInfoButton?.addEventListener("click", () => openSettingsCodePrompt("info"));
+  elements.thermostatInfoButton?.addEventListener("click", () => isPanelLocked() ? requestPanelUnlock() : openSettingsCodePrompt("info"));
   elements.thermostatInfoClose?.addEventListener("click", closeThermostatInfo);
   elements.fetchUpdateButton?.addEventListener("click", fetchPanelUpdate);
   elements.restartServerButton?.addEventListener("click", restartPanelServer);
@@ -5875,6 +5948,7 @@ async function init() {
   bindEvents();
   updateClock();
   renderThermostat();
+  renderPanelLock();
   fetchLocalThermostatStatus({ force: true });
   renderDoorWidget();
   renderAlarmWidget();

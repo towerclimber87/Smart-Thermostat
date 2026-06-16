@@ -166,6 +166,91 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
 .thermostat-stage {
   position: relative; height: 100%; display: grid; grid-template-rows: auto minmax(0,1fr) auto; gap: 12px; padding: 16px clamp(18px, 3vw, 44px) 10px;
 }
+.panel-lock-button {
+  position: absolute;
+  z-index: 8;
+  left: clamp(18px, 2.4vw, 42px);
+  top: clamp(18px, 2.2vw, 38px);
+  min-height: clamp(46px, 4.7vw, 58px);
+  min-width: clamp(138px, 12vw, 176px);
+  padding: 7px 13px 7px 8px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 9px;
+  color: rgba(235,249,255,.92);
+  background:
+    radial-gradient(circle at 26% 18%, rgba(77,238,255,.30), transparent 42%),
+    linear-gradient(145deg, rgba(255,255,255,.105), rgba(255,255,255,.032));
+  border: 1px solid rgba(77,238,255,.24);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.16), 0 18px 38px rgba(0,0,0,.25), 0 0 26px rgba(77,238,255,.08);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  touch-action: manipulation;
+}
+.panel-lock-button span:last-child {
+  font-size: clamp(.72rem, .86vw, .88rem);
+  font-weight: 1000;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+}
+.panel-lock-icon {
+  width: clamp(34px, 3.2vw, 44px);
+  height: clamp(34px, 3.2vw, 44px);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(145deg, rgba(77,238,255,.22), rgba(69,168,255,.06));
+  border: 1px solid rgba(255,255,255,.14);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.18), 0 0 18px rgba(77,238,255,.14);
+}
+.panel-lock-icon svg {
+  width: 72%;
+  height: 72%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 4.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.panel-lock-icon .lock-body { fill: rgba(77,238,255,.08); }
+.panel-lock-icon .lock-key { stroke-width: 4.8; }
+.panel-lock-button.unlocked {
+  color: rgba(189,255,232,.96);
+  border-color: rgba(99,241,173,.31);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.16), 0 18px 38px rgba(0,0,0,.25), 0 0 26px rgba(99,241,173,.09);
+}
+.panel-lock-button.locked {
+  color: rgba(255,222,227,.96);
+  background:
+    radial-gradient(circle at 26% 18%, rgba(255,100,125,.32), transparent 42%),
+    linear-gradient(145deg, rgba(255,255,255,.105), rgba(255,255,255,.032));
+  border-color: rgba(255,100,125,.45);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.16), 0 18px 38px rgba(0,0,0,.28), 0 0 32px rgba(255,100,125,.13);
+}
+.panel-lock-button .lock-shackle.closed { opacity: 0; }
+.panel-lock-button .lock-shackle.open { opacity: 1; }
+.panel-lock-button.locked .lock-shackle.closed { opacity: 1; }
+.panel-lock-button.locked .lock-shackle.open { opacity: 0; }
+.panel-lock-button:focus-visible {
+  outline: 2px solid rgba(77,238,255,.82);
+  outline-offset: 4px;
+}
+.panel-lock-button:active { transform: scale(.975); }
+.app-shell.panel-locked .top-nav {
+  border-color: rgba(255,100,125,.22);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.14), 0 18px 38px rgba(0,0,0,.30), 0 0 30px rgba(255,100,125,.07);
+}
+.app-shell.panel-locked .nav-pill:not(.active) {
+  opacity: .38;
+  filter: grayscale(.55);
+}
+.app-shell.panel-locked #settingsButton,
+.app-shell.panel-locked #thermostatInfoButton {
+  border-color: rgba(255,100,125,.32);
+  color: rgba(255,221,227,.88);
+}
 .thermostat-stage::before {
   content:""; position: absolute; inset: 10% 16% 10%; border-radius: 50%;
   background: radial-gradient(circle at 50% 46%, rgba(83,240,255,.12), transparent 31%), radial-gradient(circle at 61% 39%, rgba(155,109,255,.18), transparent 35%);

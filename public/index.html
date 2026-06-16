@@ -207,6 +207,17 @@
 
       <article class="screen screen-thermostat" data-screen="thermostat" aria-label="Thermostat controls">
         <section class="thermostat-stage">
+          <button id="thermostatPanelLockButton" class="panel-lock-button unlocked" type="button" aria-pressed="false" aria-label="Lock thermostat page navigation">
+            <span class="panel-lock-icon" aria-hidden="true">
+              <svg viewBox="0 0 64 64" focusable="false">
+                <path class="lock-shackle closed" d="M20 28v-7c0-8 5.2-13 12-13s12 5 12 13v7"></path>
+                <path class="lock-shackle open" d="M20 28v-7c0-8 5.2-13 12-13 5.8 0 10.5 3.7 11.7 9.8"></path>
+                <rect class="lock-body" x="14" y="27" width="36" height="26" rx="8"></rect>
+                <path class="lock-key" d="M32 36v8"></path>
+              </svg>
+            </span>
+            <span id="thermostatPanelLockLabel">Unlocked</span>
+          </button>
           <div class="thermostat-topline">
             <div class="thermostat-title-block">
               <div class="outdoor-top-badge">Outdoor <strong id="outdoorTempTopValue">78°</strong></div>
