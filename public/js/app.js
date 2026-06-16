@@ -1,5 +1,7 @@
 const ABS_MIN = 45;
 const ABS_MAX = 95;
+const VIRTUAL_TEMP_MIN = 50;
+const VIRTUAL_TEMP_MAX = 90;
 const DIAL_SWEEP_DEG = 270;
 const DIAL_START_DEG = 225;
 const LEGACY_CONFIG_STORAGE_KEY = "smartThermostat.config.v2";
@@ -1983,7 +1985,7 @@ function setTargetTemp(temp, options = {}) {
 }
 
 function setVirtualCurrentTemp(temp) {
-  const next = clamp(Number(temp), 65, 75);
+  const next = clamp(Number(temp), VIRTUAL_TEMP_MIN, VIRTUAL_TEMP_MAX);
   state.thermostat.currentTemp = next;
   renderThermostat();
   saveConfig();
@@ -2118,7 +2120,7 @@ function renderThermostat() {
   if (elements.headerCurrentTemp) elements.headerCurrentTemp.textContent = `${currentRounded}°`;
   if (elements.headerSetTemp) elements.headerSetTemp.textContent = `${targetRounded}°`;
   if (elements.virtualTempValue) elements.virtualTempValue.textContent = `${currentRounded}°`;
-  if (elements.virtualTempSlider && document.activeElement !== elements.virtualTempSlider) elements.virtualTempSlider.value = String(clamp(currentRounded, 65, 75));
+  if (elements.virtualTempSlider && document.activeElement !== elements.virtualTempSlider) elements.virtualTempSlider.value = String(clamp(currentRounded, VIRTUAL_TEMP_MIN, VIRTUAL_TEMP_MAX));
   if (elements.outdoorTempValue) elements.outdoorTempValue.textContent = `${outdoorRounded}°`;
   if (elements.outdoorTempTopValue) elements.outdoorTempTopValue.textContent = `${outdoorRounded}°`;
   if (elements.outdoorTempSlider && document.activeElement !== elements.outdoorTempSlider) elements.outdoorTempSlider.value = String(clamp(outdoorRounded, 40, 100));
