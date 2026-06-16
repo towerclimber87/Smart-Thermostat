@@ -466,7 +466,7 @@
           </div>
 
           <div class="settings-section">
-            <div><h3>Auto Mode</h3></div>
+            <div><h3>Auto Mode (Auto Switch Targets)</h3></div>
             <div class="settings-grid two-col auto-settings-grid">
               <div class="setpoint-card"><span>Cool Target</span><div class="setpoint-controls"><button data-auto-adjust="coolTarget:-1">−</button><strong><span id="autoCoolOutdoorTargetValue">70</span>°</strong><button data-auto-adjust="coolTarget:1">+</button></div></div>
               <div class="setpoint-card"><span>Heat Target</span><div class="setpoint-controls"><button data-auto-adjust="heatTarget:-1">−</button><strong><span id="autoHeatOutdoorTargetValue">65</span>°</strong><button data-auto-adjust="heatTarget:1">+</button></div></div>
@@ -475,27 +475,31 @@
           </div>
 
           <div class="settings-section">
-            <div><h3>Cooling</h3></div>
-            <div class="settings-grid two-col cooling-settings-grid">
-              <div class="setpoint-card"><span>Cool Fan Remain On</span><div class="setpoint-controls"><button data-auto-adjust="coolFanRemain:-1">−</button><strong><span id="coolFanRemainValue">2</span> min</strong><button data-auto-adjust="coolFanRemain:1">+</button></div></div>
-            </div>
-          </div>
-
-          <div class="settings-section thermostat-presence-section">
-            <div class="thermostat-section-head">
-              <h3>Fan</h3>
-              <button id="addThermostatPersonButton" class="mini-add-person-button" type="button" aria-label="Add Home Assistant person">+ Person</button>
-            </div>
+            <div><h3>Fan</h3></div>
             <div class="segmented fan-segments" role="group" aria-label="Fan mode">
               <button class="segment" data-fan="off">Off</button>
               <button class="segment" data-fan="on">On</button>
               <button class="segment active" data-fan="auto">Auto</button>
             </div>
-            <div id="thermostatPeopleList" class="thermostat-people-list" aria-live="polite"></div>
+            <div class="settings-grid two-col cooling-settings-grid">
+              <div class="setpoint-card"><span>Cool Fan Remain On</span><div class="setpoint-controls"><button data-auto-adjust="coolFanRemain:-1">−</button><strong><span id="coolFanRemainValue">2</span> min</strong><button data-auto-adjust="coolFanRemain:1">+</button></div></div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div><h3>Safety Controls</h3></div>
             <div class="thermostat-lock-grid" aria-label="Equipment lockouts">
               <button id="coolLockToggle" class="thermostat-lock-toggle" type="button" aria-pressed="false">Cool Lock</button>
               <button id="heatLockToggle" class="thermostat-lock-toggle" type="button" aria-pressed="false">Heat Lock</button>
             </div>
+          </div>
+
+          <div class="settings-section thermostat-presence-section">
+            <div class="thermostat-section-head">
+              <h3>Auto Away / Home</h3>
+              <button id="addThermostatPersonButton" class="mini-add-person-button" type="button" aria-label="Add Home Assistant person">+ Person</button>
+            </div>
+            <div id="thermostatPeopleList" class="thermostat-people-list" aria-live="polite"></div>
           </div>
 
           <div class="settings-section thermostat-theme-section">
