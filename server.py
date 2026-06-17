@@ -33,6 +33,34 @@ _HA_STATES_CACHE_LOCK = threading.Lock()
 _HA_STATES_CACHE: dict[tuple[str, str], tuple[float, list[dict]]] = {}
 
 
+HARDWARE_RELAY_PINS = {
+    "fan": {"gpio": 7, "physical": 26, "label": "Fan Relay", "resistor": "R98 470Ω"},
+    "cool": {"gpio": 8, "physical": 24, "label": "Cool Relay", "resistor": "R97 470Ω"},
+    "heat": {"gpio": 22, "physical": 15, "label": "Heat Relay", "resistor": "R95 470Ω"},
+}
+HARDWARE_I2C_PINS = {
+    "sda": {"gpio": 2, "physical": 3, "label": "SDA"},
+    "scl": {"gpio": 3, "physical": 5, "label": "SCL"},
+}
+HARDWARE_RGB_PIN = {"gpio": 26, "physical": 37, "label": "RGB Data / LED"}
+HARDWARE_POWER_PINS = {
+    "3v3": {"physical": 17, "label": "3.3V"},
+    "5v": {"physical": 4, "label": "5V"},
+    "gnd": {"physical": 6, "label": "GND"},
+}
+HARDWARE_RELAY_ACTIVE_LOW = os.environ.get("SMART_THERMOSTAT_RELAY_ACTIVE_LOW", "0").strip().lower() in {"1", "true", "yes", "on"}
+HARDWARE_I2C_BUS = int(os.environ.get("SMART_THERMOSTAT_I2C_BUS", "1"))
+
+_HARDWARE_LOCK = threading.RLock()
+_HARDWARE_RELAY_BACKEND = None
+_HARDWARE_RGB_BACKEND = None
+_HARDWARE_LAST_RELAYS = {"fan": False, "heat": False, "cool": False}
+_HARDWARE_LAST_RELAY_SOURCE = "thermostat"
+_HARDWARE_MANUAL = {"active": False, "relays": {"fan": False, "heat": False, "cool": False}}
+_HARDWARE_RGB = {"on": False, "color": "#35eaff"}
+_HARDWARE_LAST_I2C_SCAN = {"at": 0.0, "payload": None}
+
+
 def _json(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> None:
     body = json.dumps(payload).encode("utf-8")
     handler.send_response(status)
@@ -623,6 +651,7 @@ def _thermostat_status_payload() -> dict:
     record = _read_thermostat_record()
     thermostat = record["thermostat"]
     outputs = _thermostat_outputs(thermostat)
+    _apply_thermostat_outputs_to_hardware(outputs)
     hvac_mode = "heat_cool" if thermostat["mode"] == "auto" else thermostat["mode"]
     preset_mode = "away" if thermostat.get("away") else "home"
     thermostat_detail = {
@@ -830,6 +859,360 @@ def _system_info_payload() -> dict:
         "cpuTempF": round(cpu_temp_f, 1) if cpu_temp_f is not None else None,
         "throttled": throttled,
         "thermal": thermal_summary,
+    }
+
+
+
+class _SimulatedRelayBackend:
+    name = "simulated"
+    available = False
+    error = "GPIO library is unavailable or this is not running on Raspberry Pi hardware."
+
+    def write(self, relay: str, on: bool) -> None:
+        return None
+
+
+class _GpioZeroRelayBackend:
+    name = "gpiozero"
+    available = True
+    error = ""
+
+    def __init__(self) -> None:
+        from gpiozero import OutputDevice  # type: ignore
+        active_high = not HARDWARE_RELAY_ACTIVE_LOW
+        self.devices = {
+            relay: OutputDevice(meta["gpio"], active_high=active_high, initial_value=False)
+            for relay, meta in HARDWARE_RELAY_PINS.items()
+        }
+
+    def write(self, relay: str, on: bool) -> None:
+        device = self.devices[relay]
+        device.on() if on else device.off()
+
+
+class _RpiGpioRelayBackend:
+    name = "RPi.GPIO"
+    available = True
+    error = ""
+
+    def __init__(self) -> None:
+        import RPi.GPIO as GPIO  # type: ignore
+        self.GPIO = GPIO
+        GPIO.setwarnings(False)
+        GPIO.setmode(GPIO.BCM)
+        off_level = GPIO.HIGH if HARDWARE_RELAY_ACTIVE_LOW else GPIO.LOW
+        for meta in HARDWARE_RELAY_PINS.values():
+            GPIO.setup(meta["gpio"], GPIO.OUT, initial=off_level)
+
+    def write(self, relay: str, on: bool) -> None:
+        level_on = self.GPIO.LOW if HARDWARE_RELAY_ACTIVE_LOW else self.GPIO.HIGH
+        level_off = self.GPIO.HIGH if HARDWARE_RELAY_ACTIVE_LOW else self.GPIO.LOW
+        self.GPIO.output(HARDWARE_RELAY_PINS[relay]["gpio"], level_on if on else level_off)
+
+
+class _NeoPixelRgbBackend:
+    name = "neopixel"
+    available = True
+    error = ""
+
+    def __init__(self) -> None:
+        import board  # type: ignore
+        import neopixel  # type: ignore
+        pin_name = f"D{HARDWARE_RGB_PIN['gpio']}"
+        pin = getattr(board, pin_name)
+        self.pixels = neopixel.NeoPixel(pin, 1, auto_write=False)
+
+    def write(self, on: bool, color: str) -> None:
+        self.pixels[0] = _hex_to_rgb(color) if on else (0, 0, 0)
+        self.pixels.show()
+
+
+class _RpiWs281xRgbBackend:
+    name = "rpi_ws281x"
+    available = True
+    error = ""
+
+    def __init__(self) -> None:
+        from rpi_ws281x import PixelStrip, Color  # type: ignore
+        self.Color = Color
+        self.strip = PixelStrip(1, HARDWARE_RGB_PIN["gpio"], 800000, 10, False, 255, 0)
+        self.strip.begin()
+
+    def write(self, on: bool, color: str) -> None:
+        red, green, blue = _hex_to_rgb(color) if on else (0, 0, 0)
+        self.strip.setPixelColor(0, self.Color(red, green, blue))
+        self.strip.show()
+
+
+class _SimulatedRgbBackend:
+    name = "simulated"
+    available = False
+    error = "RGB library is unavailable. Install a supported addressable LED library if this pin drives a NeoPixel-style RGB LED."
+
+    def write(self, on: bool, color: str) -> None:
+        return None
+
+
+def _hex_to_rgb(value: str) -> tuple[int, int, int]:
+    raw = str(value or "").strip().lstrip("#")
+    if len(raw) == 3:
+        raw = "".join(ch * 2 for ch in raw)
+    if len(raw) != 6:
+        raw = "35eaff"
+    try:
+        return int(raw[0:2], 16), int(raw[2:4], 16), int(raw[4:6], 16)
+    except ValueError:
+        return (53, 234, 255)
+
+
+def _normalize_hex_color(value: object, fallback: str = "#35eaff") -> str:
+    red, green, blue = _hex_to_rgb(str(value or fallback))
+    return f"#{red:02x}{green:02x}{blue:02x}"
+
+
+def _relay_backend():
+    global _HARDWARE_RELAY_BACKEND
+    if _HARDWARE_RELAY_BACKEND is not None:
+        return _HARDWARE_RELAY_BACKEND
+
+    errors: list[str] = []
+    for backend_cls in (_GpioZeroRelayBackend, _RpiGpioRelayBackend):
+        try:
+            _HARDWARE_RELAY_BACKEND = backend_cls()
+            return _HARDWARE_RELAY_BACKEND
+        except Exception as exc:
+            errors.append(f"{backend_cls.name}: {exc}")
+
+    backend = _SimulatedRelayBackend()
+    backend.error = "; ".join(errors) or backend.error
+    _HARDWARE_RELAY_BACKEND = backend
+    return backend
+
+
+def _rgb_backend():
+    global _HARDWARE_RGB_BACKEND
+    if _HARDWARE_RGB_BACKEND is not None:
+        return _HARDWARE_RGB_BACKEND
+
+    errors: list[str] = []
+    for backend_cls in (_NeoPixelRgbBackend, _RpiWs281xRgbBackend):
+        try:
+            _HARDWARE_RGB_BACKEND = backend_cls()
+            return _HARDWARE_RGB_BACKEND
+        except Exception as exc:
+            errors.append(f"{backend_cls.name}: {exc}")
+
+    backend = _SimulatedRgbBackend()
+    backend.error = "; ".join(errors) or backend.error
+    _HARDWARE_RGB_BACKEND = backend
+    return backend
+
+
+def _normalize_relay_outputs(relays: dict) -> dict[str, bool]:
+    normalized = {name: bool(relays.get(name)) for name in ("fan", "heat", "cool")}
+    # Never energize heating and cooling together from the hardware test page or thermostat output layer.
+    if normalized["heat"] and normalized["cool"]:
+        normalized["cool"] = False
+    return normalized
+
+
+def _write_relay_outputs_locked(relays: dict, source: str) -> None:
+    global _HARDWARE_LAST_RELAYS, _HARDWARE_LAST_RELAY_SOURCE
+    normalized = _normalize_relay_outputs(relays)
+    backend = _relay_backend()
+    for relay, on in normalized.items():
+        try:
+            backend.write(relay, on)
+        except Exception as exc:
+            backend.available = False
+            backend.error = str(exc)
+    _HARDWARE_LAST_RELAYS = normalized
+    _HARDWARE_LAST_RELAY_SOURCE = source
+
+
+def _apply_thermostat_outputs_to_hardware(outputs: dict) -> None:
+    with _HARDWARE_LOCK:
+        if _HARDWARE_MANUAL.get("active"):
+            return
+        _write_relay_outputs_locked(
+            {"fan": outputs.get("fan"), "heat": outputs.get("heat"), "cool": outputs.get("cool")},
+            "thermostat",
+        )
+
+
+def _set_manual_relay(relay: str, on: bool) -> dict:
+    relay = str(relay or "").strip().lower()
+    if relay not in HARDWARE_RELAY_PINS:
+        raise ValueError("Unknown relay")
+    with _HARDWARE_LOCK:
+        relays = dict(_HARDWARE_MANUAL.get("relays") or {"fan": False, "heat": False, "cool": False})
+        relays[relay] = bool(on)
+        if relay == "heat" and on:
+            relays["cool"] = False
+        if relay == "cool" and on:
+            relays["heat"] = False
+        _HARDWARE_MANUAL["active"] = True
+        _HARDWARE_MANUAL["relays"] = _normalize_relay_outputs(relays)
+        _write_relay_outputs_locked(_HARDWARE_MANUAL["relays"], "manual")
+    return _hardware_status_payload()
+
+
+def _release_manual_hardware() -> dict:
+    with _HARDWARE_LOCK:
+        _HARDWARE_MANUAL["active"] = False
+        _HARDWARE_MANUAL["relays"] = {"fan": False, "heat": False, "cool": False}
+    thermostat = _read_thermostat_record()["thermostat"]
+    _apply_thermostat_outputs_to_hardware(_thermostat_outputs(thermostat))
+    return _hardware_status_payload()
+
+
+def _set_rgb_hardware(on: bool, color: object) -> dict:
+    with _HARDWARE_LOCK:
+        _HARDWARE_RGB["on"] = bool(on)
+        _HARDWARE_RGB["color"] = _normalize_hex_color(color, _HARDWARE_RGB.get("color") or "#35eaff")
+        backend = _rgb_backend()
+        try:
+            backend.write(bool(_HARDWARE_RGB["on"]), str(_HARDWARE_RGB["color"]))
+        except Exception as exc:
+            backend.available = False
+            backend.error = str(exc)
+    return _hardware_status_payload()
+
+
+def _parse_i2cdetect_output(output: str) -> list[dict]:
+    devices: list[dict] = []
+    for line in output.splitlines():
+        line = line.strip()
+        if not line or ":" not in line:
+            continue
+        row_label, _, remainder = line.partition(":")
+        try:
+            row_base = int(row_label, 16)
+        except ValueError:
+            continue
+        for column, token in enumerate(remainder.split()):
+            token = token.strip()
+            if token == "--":
+                continue
+            address = row_base + column
+            if token == "UU":
+                devices.append({"address": f"0x{address:02X}", "decimal": address, "status": "in-use"})
+                continue
+            try:
+                parsed = int(token, 16)
+            except ValueError:
+                continue
+            devices.append({"address": f"0x{parsed:02X}", "decimal": parsed, "status": "found"})
+    devices.sort(key=lambda item: item["decimal"])
+    return devices
+
+def _scan_i2c_with_i2cdetect() -> dict:
+    result = subprocess.run(
+        ["i2cdetect", "-y", str(HARDWARE_I2C_BUS)],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=4,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "i2cdetect failed")
+    devices = _parse_i2cdetect_output(result.stdout)
+    return {"backend": "i2cdetect", "addresses": [item["address"] for item in devices], "devices": devices, "error": ""}
+
+
+def _scan_i2c_with_smbus() -> dict:
+    try:
+        from smbus2 import SMBus  # type: ignore
+    except Exception:
+        from smbus import SMBus  # type: ignore
+    devices: list[dict] = []
+    with SMBus(HARDWARE_I2C_BUS) as bus:
+        for address in range(0x03, 0x78):
+            try:
+                bus.read_byte(address)
+            except Exception:
+                continue
+            devices.append({"address": f"0x{address:02X}", "decimal": address, "status": "found"})
+    devices.sort(key=lambda item: item["decimal"])
+    return {"backend": "smbus", "addresses": [item["address"] for item in devices], "devices": devices, "error": ""}
+
+
+def _scan_i2c_devices(force: bool = False) -> dict:
+    now = time.time()
+    cached = _HARDWARE_LAST_I2C_SCAN.get("payload")
+    if not force and cached and now - float(_HARDWARE_LAST_I2C_SCAN.get("at") or 0) < 3:
+        return cached
+
+    errors: list[str] = []
+    for scanner in (_scan_i2c_with_i2cdetect, _scan_i2c_with_smbus):
+        try:
+            payload = scanner()
+            payload["bus"] = HARDWARE_I2C_BUS
+            payload["scannedAt"] = int(now)
+            _HARDWARE_LAST_I2C_SCAN["at"] = now
+            _HARDWARE_LAST_I2C_SCAN["payload"] = payload
+            return payload
+        except Exception as exc:
+            errors.append(str(exc))
+    payload = {
+        "backend": "unavailable",
+        "bus": HARDWARE_I2C_BUS,
+        "addresses": [],
+        "devices": [],
+        "scannedAt": int(now),
+        "error": "; ".join(error for error in errors if error) or "No I2C scanner available",
+    }
+    _HARDWARE_LAST_I2C_SCAN["at"] = now
+    _HARDWARE_LAST_I2C_SCAN["payload"] = payload
+    return payload
+
+
+def _hardware_status_payload(force_i2c: bool = False) -> dict:
+    with _HARDWARE_LOCK:
+        relay_backend = _relay_backend()
+        rgb_backend = _rgb_backend()
+        relays = {
+            name: {
+                **meta,
+                "on": bool(_HARDWARE_LAST_RELAYS.get(name)),
+                "activeLow": HARDWARE_RELAY_ACTIVE_LOW,
+            }
+            for name, meta in HARDWARE_RELAY_PINS.items()
+        }
+        rgb = {
+            **HARDWARE_RGB_PIN,
+            "on": bool(_HARDWARE_RGB.get("on")),
+            "color": _normalize_hex_color(_HARDWARE_RGB.get("color")),
+            "backend": getattr(rgb_backend, "name", "simulated"),
+            "available": bool(getattr(rgb_backend, "available", False)),
+            "error": str(getattr(rgb_backend, "error", "") or ""),
+        }
+        gpio = {
+            "backend": getattr(relay_backend, "name", "simulated"),
+            "available": bool(getattr(relay_backend, "available", False)),
+            "error": str(getattr(relay_backend, "error", "") or ""),
+            "source": _HARDWARE_LAST_RELAY_SOURCE,
+            "activeLow": HARDWARE_RELAY_ACTIVE_LOW,
+        }
+        manual = {
+            "active": bool(_HARDWARE_MANUAL.get("active")),
+            "relays": dict(_HARDWARE_MANUAL.get("relays") or {}),
+        }
+
+    return {
+        "ok": True,
+        "gpio": gpio,
+        "manual": manual,
+        "relays": relays,
+        "rgb": rgb,
+        "i2c": _scan_i2c_devices(force=force_i2c),
+        "pinout": {
+            "relays": HARDWARE_RELAY_PINS,
+            "rgb": HARDWARE_RGB_PIN,
+            "i2c": HARDWARE_I2C_PINS,
+            "power": HARDWARE_POWER_PINS,
+        },
     }
 
 
@@ -2016,6 +2399,8 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
             return _json(self, 200, {"ok": True})
         if path == "/api/system/info":
             return _json(self, 200, _system_info_payload())
+        if path == "/api/hardware/status":
+            return _json(self, 200, _hardware_status_payload(force_i2c=True))
         if path == "/api/config":
             return _json(self, 200, _panel_config_payload())
         if path == "/api/thermostat/status":
@@ -2040,7 +2425,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action"}:
             self.send_error(404, "Not found")
             return
 
@@ -2062,6 +2447,15 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
             if path == "/api/system/reboot":
                 result = _reboot_payload()
                 return _json(self, 200 if result.get("ok") else 500, result)
+
+            if path == "/api/hardware/relay":
+                return _json(self, 200, _set_manual_relay(payload.get("relay", ""), bool(payload.get("on"))))
+
+            if path == "/api/hardware/rgb":
+                return _json(self, 200, _set_rgb_hardware(bool(payload.get("on")), payload.get("color")))
+
+            if path == "/api/hardware/release":
+                return _json(self, 200, _release_manual_hardware())
 
             if path in {"/api/thermostat/status", "/api/thermostat/control"}:
                 return _json(self, 200, _handle_thermostat_update(payload))

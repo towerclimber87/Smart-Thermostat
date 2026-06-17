@@ -75,6 +75,7 @@ const DEFAULT_SCREEN_TIMEOUT_MINUTES = 5;
 const MIN_SCREEN_TIMEOUT_MINUTES = 1;
 const MAX_SCREEN_TIMEOUT_MINUTES = 120;
 const SCREEN_TIMEOUT_CHECK_INTERVAL_MS = 5000;
+const HARDWARE_STATUS_INTERVAL_MS = 5000;
 let haSyncInFlight = false;
 let haSyncLastError = "";
 let haAudioSyncInFlight = false;
@@ -101,6 +102,8 @@ let localThermostatSyncInFlight = false;
 let localThermostatPushTimer = null;
 let localThermostatPushInFlight = false;
 let localThermostatLastError = "";
+let hardwareStatusInFlight = false;
+let hardwareLastError = "";
 let lastLocalThermostatPushAt = 0;
 let haAudioSyncTick = 0;
 let lastInactiveBlindSyncAt = Date.now();
@@ -379,6 +382,14 @@ const state = {
   audioEntityPicker: { kind: null, domain: null, entities: [], search: "" },
   diagnostics: { haLogs: [] },
   systemInfo: { ipAddress: "", version: "", host: "", thermostatName: "", uptime: "", systemUptime: "", appUptime: "" },
+  hardware: {
+    loaded: false,
+    gpio: { backend: "", available: false, error: "", source: "thermostat", activeLow: false },
+    manual: { active: false, relays: { fan: false, cool: false, heat: false } },
+    relays: { fan: { on: false, gpio: 7, physical: 26 }, cool: { on: false, gpio: 8, physical: 24 }, heat: { on: false, gpio: 22, physical: 15 } },
+    rgb: { on: false, color: "#35eaff", backend: "", available: false, error: "", gpio: 26, physical: 37 },
+    i2c: { addresses: [], devices: [], bus: 1, backend: "", scannedAt: 0, error: "" },
+  },
 };
 
 const elements = {
@@ -509,6 +520,20 @@ const elements = {
   settingsEyebrow: document.getElementById("settingsEyebrow"),
   settingsFooter: document.getElementById("settingsFooter"),
   thermostatSettingsView: document.getElementById("thermostatSettingsView"),
+  hardwareSettingsView: document.getElementById("hardwareSettingsView"),
+  openHardwareInfoButton: document.getElementById("openHardwareInfoButton"),
+  backToComfortSetup: document.getElementById("backToComfortSetup"),
+  refreshHardwareButton: document.getElementById("refreshHardwareButton"),
+  hardwareBackendStatus: document.getElementById("hardwareBackendStatus"),
+  hardwareManualStatus: document.getElementById("hardwareManualStatus"),
+  releaseHardwareManualButton: document.getElementById("releaseHardwareManualButton"),
+  hardwareRelayButtons: Array.from(document.querySelectorAll("[data-hardware-relay]")),
+  hardwareRgbPowerButton: document.getElementById("hardwareRgbPowerButton"),
+  hardwareRgbColorInput: document.getElementById("hardwareRgbColorInput"),
+  hardwareRgbPresetGrid: document.getElementById("hardwareRgbPresetGrid"),
+  hardwareRgbStatus: document.getElementById("hardwareRgbStatus"),
+  i2cAddressList: document.getElementById("i2cAddressList"),
+  i2cStatusLine: document.getElementById("i2cStatusLine"),
   blindSettingsView: document.getElementById("blindSettingsView"),
   audioSettingsView: document.getElementById("audioSettingsView"),
   lightsSettingsView: document.getElementById("lightsSettingsView"),
@@ -1812,6 +1837,202 @@ function openThermostatInfo() {
 
 function closeThermostatInfo() {
   setOverlayOpen(elements.thermostatInfoOverlay, false);
+}
+
+function applyHardwareStatusPayload(payload = {}) {
+  if (!payload || typeof payload !== "object") return;
+  state.hardware.loaded = true;
+  state.hardware.gpio = { ...state.hardware.gpio, ...(payload.gpio || {}) };
+  state.hardware.manual = { ...state.hardware.manual, ...(payload.manual || {}) };
+  state.hardware.relays = { ...state.hardware.relays, ...(payload.relays || {}) };
+  state.hardware.rgb = { ...state.hardware.rgb, ...(payload.rgb || {}) };
+  state.hardware.i2c = { ...state.hardware.i2c, ...(payload.i2c || {}) };
+}
+
+function isHardwareViewOpen() {
+  return Boolean(elements.hardwareSettingsView && !elements.hardwareSettingsView.hidden && elements.settingsOverlay?.classList.contains("open"));
+}
+
+function formatHardwareScanTime(value) {
+  const numeric = Number(value || 0);
+  if (!numeric) return "Not scanned yet";
+  const date = new Date(numeric * 1000);
+  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
+}
+
+function renderHardwareStatus() {
+  const hw = state.hardware;
+  const gpio = hw.gpio || {};
+  const gpioReady = Boolean(gpio.available);
+  if (elements.hardwareBackendStatus) {
+    elements.hardwareBackendStatus.textContent = gpioReady ? `${gpio.backend || "GPIO"} Ready` : `${gpio.backend || "GPIO"} Simulated`;
+    elements.hardwareBackendStatus.dataset.ready = gpioReady ? "1" : "0";
+  }
+  const manualActive = Boolean(hw.manual?.active);
+  if (elements.hardwareManualStatus) {
+    const source = gpio.source === "manual" || manualActive ? "Manual relay testing is active." : "Thermostat automation has relay control.";
+    const error = gpio.error ? ` ${gpio.error}` : "";
+    elements.hardwareManualStatus.textContent = `${source}${error}`;
+    elements.hardwareManualStatus.dataset.active = manualActive ? "1" : "0";
+  }
+  if (elements.releaseHardwareManualButton) elements.releaseHardwareManualButton.disabled = !manualActive;
+
+  (elements.hardwareRelayButtons || []).forEach((button) => {
+    const relay = button.dataset.hardwareRelay;
+    const relayInfo = hw.relays?.[relay] || {};
+    const isOn = Boolean(relayInfo.on);
+    button.classList.toggle("active", isOn);
+    button.setAttribute("aria-pressed", String(isOn));
+    const label = relayInfo.label || `${titleCase(relay)} Relay`;
+    const gpioPin = relayInfo.gpio ?? "?";
+    const physicalPin = relayInfo.physical ?? "?";
+    button.innerHTML = `<strong>${escapeHtml(label)}</strong><span>${isOn ? "ON" : "OFF"} • GPIO ${escapeHtml(gpioPin)} / Pin ${escapeHtml(physicalPin)}</span>`;
+    button.disabled = false;
+  });
+
+  const rgb = hw.rgb || {};
+  const rgbOn = Boolean(rgb.on);
+  if (elements.hardwareRgbPowerButton) {
+    elements.hardwareRgbPowerButton.textContent = rgbOn ? "On" : "Off";
+    elements.hardwareRgbPowerButton.classList.toggle("active", rgbOn);
+    elements.hardwareRgbPowerButton.setAttribute("aria-pressed", String(rgbOn));
+  }
+  if (elements.hardwareRgbColorInput && rgb.color) elements.hardwareRgbColorInput.value = normalizeHexColor(rgb.color, "#35eaff");
+  if (elements.hardwareRgbStatus) {
+    const backend = rgb.backend || "RGB";
+    const status = rgb.available ? "ready" : "simulated";
+    const note = rgb.error ? ` • ${rgb.error}` : "";
+    elements.hardwareRgbStatus.textContent = `${backend} ${status} • GPIO ${rgb.gpio ?? 26} / Pin ${rgb.physical ?? 37}${note}`;
+    elements.hardwareRgbStatus.dataset.ready = rgb.available ? "1" : "0";
+  }
+
+  const i2c = hw.i2c || {};
+  const addresses = Array.isArray(i2c.addresses) ? i2c.addresses : [];
+  if (elements.i2cAddressList) {
+    if (addresses.length) {
+      elements.i2cAddressList.innerHTML = addresses.map((address) => `<div class="i2c-address-pill">${escapeHtml(address)}</div>`).join("");
+    } else {
+      const emptyText = i2c.error ? "No addresses available" : "No I2C devices found";
+      elements.i2cAddressList.innerHTML = `<div class="empty-state compact">${emptyText}</div>`;
+    }
+  }
+  if (elements.i2cStatusLine) {
+    const backend = i2c.backend || "scanner";
+    const count = addresses.length;
+    const error = i2c.error ? ` • ${i2c.error}` : "";
+    elements.i2cStatusLine.textContent = `${count} address${count === 1 ? "" : "es"} • ${backend} • Last scan ${formatHardwareScanTime(i2c.scannedAt)}${error}`;
+    elements.i2cStatusLine.dataset.error = i2c.error ? "1" : "0";
+  }
+}
+
+async function fetchHardwareStatus(options = {}) {
+  if (hardwareStatusInFlight) return;
+  if (!options.force && !isHardwareViewOpen()) return;
+  hardwareStatusInFlight = true;
+  try {
+    const payload = await fetchJsonWithTimeout(`/api/hardware/status?_=${Date.now()}`, { cache: "no-store" }, 9000);
+    applyHardwareStatusPayload(payload);
+    hardwareLastError = "";
+  } catch (error) {
+    hardwareLastError = error.message || String(error);
+    if (elements.hardwareBackendStatus) {
+      elements.hardwareBackendStatus.textContent = "Unavailable";
+      elements.hardwareBackendStatus.dataset.ready = "0";
+    }
+    if (elements.hardwareManualStatus) elements.hardwareManualStatus.textContent = hardwareLastError;
+    console.warn("Unable to load hardware status", error);
+  } finally {
+    hardwareStatusInFlight = false;
+    renderHardwareStatus();
+  }
+}
+
+async function sendHardwareRelayCommand(relay) {
+  const relayInfo = state.hardware.relays?.[relay] || {};
+  const nextOn = !Boolean(relayInfo.on);
+  (elements.hardwareRelayButtons || []).forEach((button) => { button.disabled = true; });
+  try {
+    const payload = await fetchJsonWithTimeout("/api/hardware/relay", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ relay, on: nextOn }),
+    }, 7000);
+    applyHardwareStatusPayload(payload);
+    showToast(`${titleCase(relay)} relay ${nextOn ? "on" : "off"}`);
+  } catch (error) {
+    showToast("Relay command failed");
+    console.warn("Relay command failed", error);
+  } finally {
+    renderHardwareStatus();
+  }
+}
+
+async function releaseHardwareManualControl() {
+  if (!elements.releaseHardwareManualButton || elements.releaseHardwareManualButton.disabled) return;
+  elements.releaseHardwareManualButton.disabled = true;
+  try {
+    const payload = await fetchJsonWithTimeout("/api/hardware/release", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    }, 7000);
+    applyHardwareStatusPayload(payload);
+    showToast("Thermostat control restored");
+  } catch (error) {
+    showToast("Release failed");
+    console.warn("Release hardware control failed", error);
+  } finally {
+    renderHardwareStatus();
+  }
+}
+
+async function sendHardwareRgbCommand(options = {}) {
+  const current = state.hardware.rgb || {};
+  const color = normalizeHexColor(options.color || elements.hardwareRgbColorInput?.value || current.color || "#35eaff", "#35eaff");
+  const on = typeof options.on === "boolean" ? options.on : !Boolean(current.on);
+  if (elements.hardwareRgbPowerButton) elements.hardwareRgbPowerButton.disabled = true;
+  try {
+    const payload = await fetchJsonWithTimeout("/api/hardware/rgb", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ on, color }),
+    }, 7000);
+    applyHardwareStatusPayload(payload);
+    showToast(`RGB ${on ? "on" : "off"}`);
+  } catch (error) {
+    showToast("RGB command failed");
+    console.warn("RGB command failed", error);
+  } finally {
+    if (elements.hardwareRgbPowerButton) elements.hardwareRgbPowerButton.disabled = false;
+    renderHardwareStatus();
+  }
+}
+
+function showHardwareInfoView() {
+  if (!elements.hardwareSettingsView) return;
+  if (elements.thermostatSettingsView) elements.thermostatSettingsView.hidden = true;
+  elements.hardwareSettingsView.hidden = false;
+  elements.settingsSheet.classList.add("full-setup", "thermostat-setup", "hardware-setup");
+  elements.settingsTitle.textContent = "Hardware Information";
+  elements.settingsEyebrow.textContent = "Pinout & Manual Testing";
+  elements.settingsFooter.hidden = true;
+  renderHardwareStatus();
+  fetchHardwareStatus({ force: true });
+}
+
+function showComfortSetupView() {
+  if (elements.hardwareSettingsView) elements.hardwareSettingsView.hidden = true;
+  if (elements.thermostatSettingsView) elements.thermostatSettingsView.hidden = false;
+  elements.settingsSheet.classList.add("full-setup", "thermostat-setup");
+  elements.settingsSheet.classList.remove("hardware-setup");
+  elements.settingsTitle.textContent = "Comfort Setup";
+  elements.settingsEyebrow.textContent = "Panel Settings";
+  elements.settingsFooter.hidden = false;
+  if (elements.alarmDisarmCodeInput) elements.alarmDisarmCodeInput.value = getSavedAlarmCode();
+  if (elements.userAccessCodeInput) elements.userAccessCodeInput.value = getUserAccessCode();
+  if (elements.thermostatNameInput) elements.thermostatNameInput.value = getThermostatName();
+  renderScreenTimeoutSettings();
+  renderThermostatPeople();
 }
 
 function scheduleLocalThermostatPush() {
@@ -3806,8 +4027,8 @@ function handleSettingsCodeKey(value) {
 }
 
 function hideAllSettingsViews() {
-  [elements.thermostatSettingsView, elements.blindSettingsView, elements.audioSettingsView, elements.lightsSettingsView, elements.roomControlSettingsView].forEach((view) => { if (view) view.hidden = true; });
-  elements.settingsSheet.classList.remove("full-setup", "ha-focus", "thermostat-setup", "room-control-setup");
+  [elements.thermostatSettingsView, elements.hardwareSettingsView, elements.blindSettingsView, elements.audioSettingsView, elements.lightsSettingsView, elements.roomControlSettingsView].forEach((view) => { if (view) view.hidden = true; });
+  elements.settingsSheet.classList.remove("full-setup", "ha-focus", "thermostat-setup", "hardware-setup", "room-control-setup");
   elements.settingsFooter.hidden = false;
 }
 
@@ -3833,22 +4054,14 @@ function openSettings() {
     elements.roomControlSettingsView.hidden = false;
     showRoomControlSetupView();
   } else {
-    elements.settingsTitle.textContent = "Comfort Setup";
-    elements.settingsEyebrow.textContent = "Panel Settings";
-    elements.settingsSheet.classList.add("full-setup", "thermostat-setup");
-    elements.thermostatSettingsView.hidden = false;
-    if (elements.alarmDisarmCodeInput) elements.alarmDisarmCodeInput.value = getSavedAlarmCode();
-    if (elements.userAccessCodeInput) elements.userAccessCodeInput.value = getUserAccessCode();
-    if (elements.thermostatNameInput) elements.thermostatNameInput.value = getThermostatName();
-    renderScreenTimeoutSettings();
-    renderThermostatPeople();
+    showComfortSetupView();
   }
   elements.settingsOverlay.classList.add("open");
   elements.settingsOverlay.setAttribute("aria-hidden", "false");
 }
 
 function closeSettings() {
-  if (state.currentPage === "thermostat" && elements.thermostatSettingsView && !elements.thermostatSettingsView.hidden) {
+  if (state.currentPage === "thermostat") {
     if (elements.alarmDisarmCodeInput) saveAlarmCode({ toast: false });
     if (elements.userAccessCodeInput) saveUserAccessCode({ toast: false });
     if (elements.thermostatNameInput) saveThermostatName({ toast: false });
@@ -7149,6 +7362,18 @@ function bindEvents() {
     if (button) handleRoomControlCodeKey(button.dataset.roomControlCodeKey);
   });
   elements.settingsButton.addEventListener("click", () => isPanelLocked() ? requestPanelUnlock() : openSettingsCodePrompt("settings"));
+  elements.openHardwareInfoButton?.addEventListener("click", showHardwareInfoView);
+  elements.backToComfortSetup?.addEventListener("click", showComfortSetupView);
+  elements.refreshHardwareButton?.addEventListener("click", () => fetchHardwareStatus({ force: true }));
+  elements.releaseHardwareManualButton?.addEventListener("click", releaseHardwareManualControl);
+  (elements.hardwareRelayButtons || []).forEach((button) => button.addEventListener("click", () => sendHardwareRelayCommand(button.dataset.hardwareRelay)));
+  elements.hardwareRgbPowerButton?.addEventListener("click", () => sendHardwareRgbCommand());
+  elements.hardwareRgbColorInput?.addEventListener("change", (event) => sendHardwareRgbCommand({ on: true, color: event.target.value }));
+  elements.hardwareRgbPresetGrid?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-hardware-rgb-color]");
+    if (!button) return;
+    sendHardwareRgbCommand({ on: true, color: button.dataset.hardwareRgbColor });
+  });
   elements.settingsClose.addEventListener("click", closeSettings);
   elements.settingsDone.addEventListener("click", closeSettings);
   document.querySelectorAll("[data-close-settings]").forEach((el) => el.addEventListener("click", closeSettings));
@@ -7499,6 +7724,7 @@ async function init() {
   // setInterval(mockSensorDrift, 4500);
   setInterval(mockTrackProgress, 1200);
   setInterval(() => maybeApplyScreenTimeout(), SCREEN_TIMEOUT_CHECK_INTERVAL_MS);
+  setInterval(() => fetchHardwareStatus(), HARDWARE_STATUS_INTERVAL_MS);
   setInterval(() => pollHomeAssistantLinkedCovers(), HA_SYNC_INTERVAL_MS);
   setInterval(() => pollHomeAssistantMediaPlayer(), HA_AUDIO_SYNC_INTERVAL_MS);
   setInterval(() => pollHomeAssistantLights(), HA_LIGHT_SYNC_INTERVAL_MS);

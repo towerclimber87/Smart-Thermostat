@@ -28,6 +28,21 @@ install_packages() {
     unclutter
   )
 
+  local optional_hardware_packages=(
+    python3-gpiozero
+    python3-rpi.gpio
+    python3-smbus
+    i2c-tools
+  )
+  local optional_package
+  for optional_package in "${optional_hardware_packages[@]}"; do
+    if apt-cache show "${optional_package}" >/dev/null 2>&1; then
+      packages+=("${optional_package}")
+    else
+      echo "WARNING: ${optional_package} is not available in apt; hardware page will use fallbacks if needed." >&2
+    fi
+  done
+
   if apt-cache show chromium-browser >/dev/null 2>&1; then
     packages+=(chromium-browser)
   elif apt-cache show chromium >/dev/null 2>&1; then
@@ -65,6 +80,12 @@ EOF_SUDOERS
 }
 
 install_packages
+if getent group gpio >/dev/null 2>&1; then
+  sudo usermod -aG gpio "${USER}" || true
+fi
+if getent group i2c >/dev/null 2>&1; then
+  sudo usermod -aG i2c "${USER}" || true
+fi
 chmod +x "${PROJECT_DIR}/scripts/install-pi.sh" "${PROJECT_DIR}/scripts/kiosk-launch.sh" "${PROJECT_DIR}/scripts/network_watchdog.py" 2>/dev/null || true
 
 install_service "${WEB_SERVICE_NAME}"

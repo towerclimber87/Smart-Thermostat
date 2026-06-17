@@ -474,6 +474,9 @@
         </div>
 
         <div id="thermostatSettingsView" class="settings-view">
+          <div class="hardware-info-top" aria-label="Hardware information shortcut">
+            <button id="openHardwareInfoButton" class="scene-btn hardware-info-launch" type="button">Hardware Information</button>
+          </div>
           <div class="settings-section">
             <div><h3>Safety Range</h3></div>
             <div class="settings-grid two-col">
@@ -620,6 +623,98 @@
               </label>
               <button id="saveThermostatNameButton" class="scene-btn secondary" type="button">Save Name</button>
             </div>
+          </div>
+        </div>
+
+
+        <div id="hardwareSettingsView" class="settings-view hardware-settings-view" hidden>
+          <div class="hardware-page-top">
+            <button id="backToComfortSetup" class="ghost-button" type="button">← Comfort Setup</button>
+            <button id="refreshHardwareButton" class="scene-btn secondary" type="button">Refresh Hardware</button>
+          </div>
+
+          <div class="hardware-layout">
+            <section class="hardware-card hardware-status-card">
+              <div class="hardware-card-head">
+                <div>
+                  <p class="eyebrow">GPIO Backend</p>
+                  <h3>Hardware Status</h3>
+                </div>
+                <span id="hardwareBackendStatus" class="hardware-status-pill">Loading…</span>
+              </div>
+              <div id="hardwareManualStatus" class="hardware-manual-status">Thermostat automation has relay control.</div>
+              <button id="releaseHardwareManualButton" class="scene-btn secondary release-hardware-control" type="button" disabled>Return Control to Thermostat</button>
+            </section>
+
+            <section class="hardware-card hardware-rgb-card">
+              <div class="hardware-card-head">
+                <div>
+                  <p class="eyebrow">GPIO 26 / Pin 37</p>
+                  <h3>Attached RGB</h3>
+                </div>
+                <button id="hardwareRgbPowerButton" class="hardware-power-button" type="button" aria-pressed="false">Off</button>
+              </div>
+              <div class="hardware-rgb-row">
+                <label class="hardware-color-field">Color
+                  <input id="hardwareRgbColorInput" type="color" value="#35eaff" aria-label="RGB LED color" />
+                </label>
+                <div id="hardwareRgbPresetGrid" class="hardware-rgb-presets" aria-label="RGB color presets">
+                  <button type="button" data-hardware-rgb-color="#35eaff" style="--swatch:#35eaff">Cyan</button>
+                  <button type="button" data-hardware-rgb-color="#3f7cff" style="--swatch:#3f7cff">Blue</button>
+                  <button type="button" data-hardware-rgb-color="#35e27a" style="--swatch:#35e27a">Green</button>
+                  <button type="button" data-hardware-rgb-color="#ff3b3b" style="--swatch:#ff3b3b">Red</button>
+                  <button type="button" data-hardware-rgb-color="#ff8a2a" style="--swatch:#ff8a2a">Orange</button>
+                  <button type="button" data-hardware-rgb-color="#ffffff" style="--swatch:#ffffff">White</button>
+                </div>
+              </div>
+              <div id="hardwareRgbStatus" class="hardware-note">RGB backend loading…</div>
+            </section>
+
+            <section class="hardware-card hardware-relay-card">
+              <div class="hardware-card-head">
+                <div>
+                  <p class="eyebrow">Manual Test</p>
+                  <h3>Relay Outputs</h3>
+                </div>
+              </div>
+              <div class="hardware-relay-grid">
+                <button type="button" class="hardware-relay-button" data-hardware-relay="fan" aria-pressed="false"><strong>Fan Relay</strong><span>GPIO 7 / Pin 26</span></button>
+                <button type="button" class="hardware-relay-button" data-hardware-relay="cool" aria-pressed="false"><strong>Cool Relay</strong><span>GPIO 8 / Pin 24</span></button>
+                <button type="button" class="hardware-relay-button" data-hardware-relay="heat" aria-pressed="false"><strong>Heat Relay</strong><span>GPIO 22 / Pin 15</span></button>
+              </div>
+              <div class="hardware-note warning">Manual relay testing stays active until you press Return Control to Thermostat.</div>
+            </section>
+
+            <section class="hardware-card hardware-i2c-card">
+              <div class="hardware-card-head">
+                <div>
+                  <p class="eyebrow">I2C Bus 1</p>
+                  <h3>Detected Addresses</h3>
+                </div>
+                <span class="hardware-pin-mini">SDA 3 • SCL 5</span>
+              </div>
+              <div id="i2cAddressList" class="i2c-address-list" aria-live="polite">
+                <div class="empty-state compact">Scanning I2C…</div>
+              </div>
+              <div id="i2cStatusLine" class="hardware-note">Waiting for scan.</div>
+            </section>
+
+            <section class="hardware-card hardware-pinout-card">
+              <div class="hardware-card-head">
+                <div>
+                  <p class="eyebrow">Pinned From Schematic</p>
+                  <h3>GPIO Map</h3>
+                </div>
+              </div>
+              <div class="hardware-pin-grid">
+                <div><strong>Heat Relay</strong><span>GPIO 22 • Pin 15 • R95 470Ω</span></div>
+                <div><strong>Cool Relay</strong><span>GPIO 8 • Pin 24 • R97 470Ω</span></div>
+                <div><strong>Fan Relay</strong><span>GPIO 7 • Pin 26 • R98 470Ω</span></div>
+                <div><strong>RGB / LED</strong><span>GPIO 26 • Pin 37</span></div>
+                <div><strong>I2C</strong><span>SDA GPIO 2 Pin 3 • SCL GPIO 3 Pin 5</span></div>
+                <div><strong>Power</strong><span>3.3V Pin 17 • 5V Pin 4 • GND Pin 6</span></div>
+              </div>
+            </section>
           </div>
         </div>
 
