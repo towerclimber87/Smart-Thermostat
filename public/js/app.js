@@ -298,6 +298,8 @@ const state = {
     mode: "cool",
     fan: "auto",
     away: false,
+    awaySource: "",
+    manualAwayPresenceLatch: null,
     awayHeat: 55,
     awayCool: 85,
     safetyLow: 55,
@@ -1019,6 +1021,8 @@ function buildSavedConfig() {
     mode: state.thermostat.mode,
     fan: state.thermostat.fan,
     away: Boolean(state.thermostat.away),
+    awaySource: normalizeAwaySource(state.thermostat.awaySource),
+    manualAwayPresenceLatch: normalizeManualAwayPresenceLatch(state.thermostat.manualAwayPresenceLatch),
     awayHeat: state.thermostat.awayHeat,
     awayCool: state.thermostat.awayCool,
     safetyLow: state.thermostat.safetyLow,
@@ -1099,13 +1103,15 @@ function applySavedConfig(saved = {}) {
       heatLocked: Boolean(savedThermostat.heatLocked),
       coolLocked: Boolean(savedThermostat.coolLocked),
       people: normalizeThermostatPeople(savedThermostat.people || defaults.people),
+      away: Boolean(savedThermostat.away),
+      awaySource: normalizeAwaySource(savedThermostat.awaySource),
+      manualAwayPresenceLatch: normalizeManualAwayPresenceLatch(savedThermostat.manualAwayPresenceLatch),
       autoSwitchNotice: normalizeAutoSwitchNotice(savedThermostat.autoSwitchNotice || defaults.autoSwitchNotice),
       autoSwitchHold: normalizeAutoSwitchHold(savedThermostat.autoSwitchHold || defaults.autoSwitchHold),
       limits: {
         ...defaults.limits,
         ...(savedThermostat.limits || {}),
       },
-      away: false,
       autoPendingMode: "",
       autoLockoutUntil: 0,
       manualPendingMode: "",
@@ -1658,6 +1664,17 @@ function applyLocalThermostatState(remote = {}) {
       changed = true;
     }
   }
+  if (source.awaySource !== undefined) {
+    const nextSource = normalizeAwaySource(source.awaySource);
+    if (normalizeAwaySource(t.awaySource) !== nextSource) { t.awaySource = nextSource; changed = true; }
+  }
+  if (source.manualAwayPresenceLatch !== undefined) {
+    const nextLatch = normalizeManualAwayPresenceLatch(source.manualAwayPresenceLatch);
+    if (JSON.stringify(t.manualAwayPresenceLatch || null) !== JSON.stringify(nextLatch)) {
+      t.manualAwayPresenceLatch = nextLatch;
+      changed = true;
+    }
+  }
 
   const incomingMode = source.hvac_mode || source.hvacMode || source.mode;
   if (incomingMode !== undefined) {
@@ -1685,7 +1702,12 @@ function applyLocalThermostatState(remote = {}) {
   if (source.preset_mode !== undefined || source.presetMode !== undefined || source.away !== undefined) {
     const preset = String(source.preset_mode ?? source.presetMode ?? "").toLowerCase();
     const nextAway = source.away !== undefined ? Boolean(source.away) : preset === "away";
-    if (t.away !== nextAway) { t.away = nextAway; changed = true; }
+    if (t.away !== nextAway) {
+      t.away = nextAway;
+      if (!nextAway) clearManualAwayPresenceLatch();
+      else if (!normalizeAwaySource(t.awaySource)) t.awaySource = "manual";
+      changed = true;
+    }
   }
 
   if (source.limits && typeof source.limits === "object") {
@@ -2434,6 +2456,70 @@ function normalizeThermostatPeople(people = []) {
     });
 }
 
+function normalizeAwaySource(value) {
+  const source = String(value || "").trim().toLowerCase();
+  return ["manual", "presence"].includes(source) ? source : "";
+}
+
+function normalizePresenceEntityList(value = []) {
+  const seen = new Set();
+  return (Array.isArray(value) ? value : [])
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .filter((entityId) => {
+      if (seen.has(entityId)) return false;
+      seen.add(entityId);
+      return true;
+    });
+}
+
+function normalizeManualAwayPresenceLatch(latch = null) {
+  if (!latch || typeof latch !== "object" || latch.active === false) return null;
+  const startedAt = Number(latch.startedAt || Date.now());
+  return {
+    active: true,
+    startedAt: Number.isFinite(startedAt) ? startedAt : Date.now(),
+    baselineHome: normalizePresenceEntityList(latch.baselineHome),
+    seenAway: normalizePresenceEntityList(latch.seenAway),
+  };
+}
+
+function createManualAwayPresenceLatch(people = getThermostatPeople()) {
+  const baselineHome = [];
+  const seenAway = [];
+  people.forEach((person) => {
+    if (!person?.entityId) return;
+    if (isPersonHomeState(person.state)) baselineHome.push(person.entityId);
+    else if (isKnownPresenceState(person.state)) seenAway.push(person.entityId);
+  });
+  return normalizeManualAwayPresenceLatch({ active: true, startedAt: Date.now(), baselineHome, seenAway });
+}
+
+function clearManualAwayPresenceLatch() {
+  state.thermostat.manualAwayPresenceLatch = null;
+}
+
+function updateManualAwayPresenceLatch(people = getThermostatPeople()) {
+  const t = state.thermostat;
+  let latch = normalizeManualAwayPresenceLatch(t.manualAwayPresenceLatch);
+  if (!latch) latch = createManualAwayPresenceLatch(people);
+  const seenAway = new Set(latch.seenAway);
+  let changed = JSON.stringify(t.manualAwayPresenceLatch || null) !== JSON.stringify(latch);
+
+  people.forEach((person) => {
+    if (!person?.entityId) return;
+    if (isKnownPresenceState(person.state) && !isPersonHomeState(person.state) && !seenAway.has(person.entityId)) {
+      seenAway.add(person.entityId);
+      changed = true;
+    }
+  });
+
+  latch.seenAway = Array.from(seenAway);
+  t.manualAwayPresenceLatch = latch;
+  const returnedPerson = people.find((person) => person?.entityId && isPersonHomeState(person.state) && seenAway.has(person.entityId));
+  return { returnedPerson, changed };
+}
+
 function getThermostatPeople() {
   state.thermostat.people = normalizeThermostatPeople(state.thermostat.people);
   return state.thermostat.people;
@@ -2492,21 +2578,41 @@ function applyThermostatPresenceAutomation(options = {}) {
   const allAway = allKnown && !anyHome;
   const t = state.thermostat;
   let changed = false;
-  if (allAway && !t.away) {
+
+  if (t.away && normalizeAwaySource(t.awaySource) !== "presence") {
+    t.awaySource = "manual";
+    const latchResult = updateManualAwayPresenceLatch(people);
+    changed = Boolean(latchResult.changed);
+    if (latchResult.returnedPerson) {
+      t.away = false;
+      t.awaySource = "presence";
+      clearManualAwayPresenceLatch();
+      const { min, max } = getModeLimits();
+      t.targetTemp = clamp(t.lastComfortTarget, min, max);
+      changed = true;
+      if (options.toast !== false) showToast(`${latchResult.returnedPerson.name || "Person"} returned • Home mode restored`);
+    }
+  } else if (allAway && !t.away) {
     t.away = true;
     t.lastComfortTarget = t.targetTemp;
     t.awaySource = "presence";
+    clearManualAwayPresenceLatch();
     applyAwayTarget();
     changed = true;
     if (options.toast !== false) showToast("Everyone away • Away mode active");
   } else if (anyHome && t.away) {
     t.away = false;
     t.awaySource = "presence";
+    clearManualAwayPresenceLatch();
     const { min, max } = getModeLimits();
     t.targetTemp = clamp(t.lastComfortTarget, min, max);
     changed = true;
     if (options.toast !== false) showToast("Person home • Home mode restored");
+  } else if (!t.away && t.manualAwayPresenceLatch) {
+    clearManualAwayPresenceLatch();
+    changed = true;
   }
+
   if (changed) {
     renderThermostat();
     saveConfig();
@@ -3114,6 +3220,7 @@ function setHomeMode() {
   if (!t.away) return;
   t.away = false;
   t.awaySource = "";
+  clearManualAwayPresenceLatch();
   const { min, max } = getModeLimits();
   t.targetTemp = clamp(t.lastComfortTarget, min, max);
   renderThermostat();
@@ -3151,6 +3258,7 @@ function setTargetTemp(temp, options = {}) {
   if (t.away && !options.keepAway) {
     t.away = false;
     t.awaySource = "";
+    clearManualAwayPresenceLatch();
     showToast("Returned home");
   }
   const { min, max } = getModeLimits();
@@ -4092,6 +4200,7 @@ function toggleAway() {
   }
   t.away = true;
   t.awaySource = "manual";
+  t.manualAwayPresenceLatch = createManualAwayPresenceLatch();
   t.lastComfortTarget = t.targetTemp;
   applyAwayTarget();
   renderThermostat();
@@ -7903,7 +8012,6 @@ async function init() {
   await loadSavedConfig();
   applyPanelTheme(state.theme, { save: false });
   renderScreenTimeoutSettings();
-  state.thermostat.away = false;
   syncAlarmFromConfig();
   syncDoorFromConfig();
   bindEvents();

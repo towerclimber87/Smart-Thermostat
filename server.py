@@ -96,6 +96,8 @@ DEFAULT_THERMOSTAT = {
     "mode": "cool",
     "fan": "auto",
     "away": False,
+    "awaySource": "",
+    "manualAwayPresenceLatch": None,
     "awayHeat": 55,
     "awayCool": 85,
     "safetyLow": 55,
@@ -320,6 +322,36 @@ def _normalize_person_entries(value: object) -> list[dict]:
     return people
 
 
+def _normalize_away_source(value: object) -> str:
+    source = str(value or "").strip().lower()
+    return source if source in {"manual", "presence"} else ""
+
+
+def _normalize_presence_entity_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        entity_id = str(item or "").strip()
+        if not entity_id or entity_id in seen:
+            continue
+        seen.add(entity_id)
+        result.append(entity_id)
+    return result
+
+
+def _normalize_manual_away_presence_latch(value: object) -> dict | None:
+    if not isinstance(value, dict) or value.get("active") is False:
+        return None
+    return {
+        "active": True,
+        "startedAt": _number(value.get("startedAt"), int(time.time() * 1000), 0, None),
+        "baselineHome": _normalize_presence_entity_list(value.get("baselineHome")),
+        "seenAway": _normalize_presence_entity_list(value.get("seenAway")),
+    }
+
+
 def _allowed_mode_for_locks(mode: str, thermostat: dict, fallback: str = "cool") -> str:
     requested = _normalize_mode(mode, fallback)
     cool_available = not bool(thermostat.get("coolLocked"))
@@ -427,6 +459,10 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             base["away"] = bool(source.get("away"))
         elif preset is not None:
             base["away"] = str(preset).strip().lower() == "away"
+        if "awaySource" in source:
+            base["awaySource"] = _normalize_away_source(source.get("awaySource"))
+        if "manualAwayPresenceLatch" in source:
+            base["manualAwayPresenceLatch"] = _normalize_manual_away_presence_latch(source.get("manualAwayPresenceLatch"))
 
         if "heatLocked" in source:
             base["heatLocked"] = _boolish(source.get("heatLocked"))
@@ -527,6 +563,13 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
         base["autoSwitchHold"] = _deepcopy_json(DEFAULT_THERMOSTAT["autoSwitchHold"])
         base["coolFanHoldUntil"] = 0
         base["coolRelayWasOn"] = False
+    base["awaySource"] = _normalize_away_source(base.get("awaySource"))
+    base["manualAwayPresenceLatch"] = _normalize_manual_away_presence_latch(base.get("manualAwayPresenceLatch"))
+    if not base["away"]:
+        base["awaySource"] = ""
+        base["manualAwayPresenceLatch"] = None
+    elif base["awaySource"] != "manual":
+        base["manualAwayPresenceLatch"] = None
     mode_limits = base["limits"].get(base["mode"], {"min": 45, "max": 95})
     if not base["away"]:
         base["targetTemp"] = _number(base["targetTemp"], 70, mode_limits.get("min"), mode_limits.get("max"))
@@ -543,6 +586,8 @@ THERMOSTAT_PERSIST_KEYS = (
     "mode",
     "fan",
     "away",
+    "awaySource",
+    "manualAwayPresenceLatch",
     "awayHeat",
     "awayCool",
     "safetyLow",
