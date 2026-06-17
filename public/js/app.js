@@ -2104,11 +2104,9 @@ function setHistoryDate(dateKey, options = {}) {
 
 function showHistoryView() {
   if (!elements.historySettingsView) return;
-  if (elements.thermostatSettingsView) elements.thermostatSettingsView.hidden = true;
-  if (elements.hardwareSettingsView) elements.hardwareSettingsView.hidden = true;
+  hideAllSettingsViews();
   elements.historySettingsView.hidden = false;
-  elements.settingsSheet.classList.add("full-setup", "thermostat-setup", "history-setup");
-  elements.settingsSheet.classList.remove("hardware-setup");
+  elements.settingsSheet.classList.add("full-setup", "history-setup");
   elements.settingsTitle.textContent = "History";
   elements.settingsEyebrow.textContent = "Daily Runtime";
   elements.settingsFooter.hidden = true;
@@ -2202,11 +2200,9 @@ async function sendHardwareRgbCommand(options = {}) {
 
 function showHardwareInfoView() {
   if (!elements.hardwareSettingsView) return;
-  if (elements.thermostatSettingsView) elements.thermostatSettingsView.hidden = true;
-  if (elements.historySettingsView) elements.historySettingsView.hidden = true;
+  hideAllSettingsViews();
   elements.hardwareSettingsView.hidden = false;
-  elements.settingsSheet.classList.add("full-setup", "thermostat-setup", "hardware-setup");
-  elements.settingsSheet.classList.remove("history-setup");
+  elements.settingsSheet.classList.add("full-setup", "hardware-setup");
   elements.settingsTitle.textContent = "Hardware Information";
   elements.settingsEyebrow.textContent = "Pinout & Manual Testing";
   elements.settingsFooter.hidden = true;

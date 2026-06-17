@@ -10516,3 +10516,28 @@ body[data-theme="christmas"] {
     text-align: left;
   }
 }
+
+/* 2026-06-17 v5.4: modal sub-pages must fully replace Comfort Setup. */
+.settings-sheet .settings-view[hidden],
+.settings-sheet .settings-subview[hidden],
+.settings-sheet.full-setup .settings-view[hidden],
+.settings-sheet.full-setup .settings-subview[hidden],
+.settings-sheet.thermostat-setup #thermostatSettingsView[hidden],
+.settings-sheet.hardware-setup #hardwareSettingsView[hidden],
+.settings-sheet.history-setup #historySettingsView[hidden] {
+  display: none !important;
+}
+
+.settings-sheet.hardware-setup,
+.settings-sheet.history-setup {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.settings-sheet.hardware-setup #hardwareSettingsView:not([hidden]),
+.settings-sheet.history-setup #historySettingsView:not([hidden]) {
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
