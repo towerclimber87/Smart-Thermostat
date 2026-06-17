@@ -1,5 +1,5 @@
 {
-  "version": 5,
+  "version": 6,
   "blinds": {
     "room": "living",
     "rooms": {
@@ -146,5 +146,6 @@
         ]
       }
     }
-  }
+  },
+  "screenTimeoutMinutes": 5
 }

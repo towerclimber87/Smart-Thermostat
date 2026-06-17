@@ -69,6 +69,10 @@ const ROOM_CONTROL_READ_ONLY_DOMAINS = new Set(["binary_sensor", "sensor", "numb
 const ROOM_CONTROL_MOMENTARY_DOMAINS = new Set(["button", "input_button", "scene", "script"]);
 const ROOM_CONTROL_EXCLUDED_DOMAINS = new Set(["automation"]);
 const PANEL_THEMES = ["regular", "star-trek", "christmas"];
+const DEFAULT_SCREEN_TIMEOUT_MINUTES = 5;
+const MIN_SCREEN_TIMEOUT_MINUTES = 1;
+const MAX_SCREEN_TIMEOUT_MINUTES = 120;
+const SCREEN_TIMEOUT_CHECK_INTERVAL_MS = 5000;
 let haSyncInFlight = false;
 let haSyncLastError = "";
 let haAudioSyncInFlight = false;
@@ -101,6 +105,9 @@ let lastInactiveLightSyncAt = Date.now();
 let lastInactiveRoomSyncAt = Date.now();
 let lastInactiveAlarmSyncAt = Date.now();
 let lastInactiveDoorSyncAt = Date.now();
+let lastScreenInteractionAt = Date.now();
+let screenHasUserInteraction = false;
+let startupDefaultScreenApplied = false;
 let audioMediaActionInFlight = false;
 let audioPresetInFlight = false;
 let audioVolumeDebounce = null;
@@ -264,6 +271,7 @@ const state = {
   settingsAccessCode: "",
   settingsAccessTarget: "settings",
   theme: "regular",
+  screenTimeoutMinutes: DEFAULT_SCREEN_TIMEOUT_MINUTES,
   thermostat: {
     name: "IHA Thermostat",
     currentTemp: 70,
@@ -442,6 +450,8 @@ const elements = {
   thermostatNameInput: document.getElementById("thermostatNameInput"),
   saveThermostatNameButton: document.getElementById("saveThermostatNameButton"),
   themeChoiceButtons: Array.from(document.querySelectorAll("[data-theme-choice]")),
+  screenTimeoutMinutesInput: document.getElementById("screenTimeoutMinutesInput"),
+  screenTimeoutSummary: document.getElementById("screenTimeoutSummary"),
   addThermostatPersonButton: document.getElementById("addThermostatPersonButton"),
   thermostatPeopleList: document.getElementById("thermostatPeopleList"),
   heatLockToggle: document.getElementById("heatLockToggle"),
@@ -800,12 +810,89 @@ function applyPanelTheme(theme, options = {}) {
   const themeMeta = document.querySelector('meta[name="theme-color"]');
   if (themeMeta) themeMeta.setAttribute("content", getPanelThemeMetaColor(nextTheme));
   renderPanelThemePicker();
+  renderScreenTimeoutSettings();
   if (changed && options.save !== false) saveConfig({ toast: false });
   if (changed && options.toast) {
     const themeLabel = nextTheme === "star-trek" ? "Star Trek" : nextTheme === "christmas" ? "Christmas" : "Regular";
     showToast(`Theme set to ${themeLabel}`);
   }
   return changed;
+}
+
+function normalizeScreenTimeoutMinutes(value, fallback = DEFAULT_SCREEN_TIMEOUT_MINUTES) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return clamp(Math.round(number), MIN_SCREEN_TIMEOUT_MINUTES, MAX_SCREEN_TIMEOUT_MINUTES);
+}
+
+function isAudioSourceTv(source = state.audio.source) {
+  const normalized = String(source || "").trim().toLowerCase();
+  const title = String(state.audio.title || "").trim().toLowerCase();
+  return normalized === "tv" || normalized === "television" || (!normalized && (title === "tv" || title === "television"));
+}
+
+function shouldDefaultToAudioScreen() {
+  return Boolean(state.audio.playing) && !isAudioSourceTv(state.audio.source);
+}
+
+function getDefaultScreenPage() {
+  return shouldDefaultToAudioScreen() ? "audio" : "thermostat";
+}
+
+function defaultScreenLabel() {
+  return getDefaultScreenPage() === "audio" ? "Audio" : "Thermostat";
+}
+
+function renderScreenTimeoutSettings() {
+  const minutes = normalizeScreenTimeoutMinutes(state.screenTimeoutMinutes);
+  state.screenTimeoutMinutes = minutes;
+  if (elements.screenTimeoutMinutesInput && document.activeElement !== elements.screenTimeoutMinutesInput) {
+    elements.screenTimeoutMinutesInput.value = String(minutes);
+  }
+  if (elements.screenTimeoutSummary) {
+    const label = defaultScreenLabel();
+    elements.screenTimeoutSummary.textContent = `After ${minutes} min inactive, return to ${label}. Audio stays default only while the selected player is playing and its source is not TV.`;
+  }
+}
+
+function setScreenTimeoutMinutes(value, options = {}) {
+  const next = normalizeScreenTimeoutMinutes(value, state.screenTimeoutMinutes);
+  const changed = next !== state.screenTimeoutMinutes;
+  state.screenTimeoutMinutes = next;
+  renderScreenTimeoutSettings();
+  if (changed && options.save !== false) saveConfig({ toast: false });
+  if (changed && options.toast) showToast(`Screen timeout set to ${next} min`);
+  maybeApplyScreenTimeout();
+}
+
+function markScreenActivity() {
+  lastScreenInteractionAt = Date.now();
+  screenHasUserInteraction = true;
+}
+
+function isAnyOverlayOpen() {
+  return Boolean(document.querySelector(".settings-overlay.open, .away-mode-overlay.open"));
+}
+
+function maybeApplyScreenTimeout(options = {}) {
+  if (document.visibilityState === "hidden") return;
+  if (isAnyOverlayOpen()) return;
+  if (options.startup && screenHasUserInteraction) return;
+  const timeoutMs = normalizeScreenTimeoutMinutes(state.screenTimeoutMinutes) * 60 * 1000;
+  if (!options.force && Date.now() - lastScreenInteractionAt < timeoutMs) return;
+  const targetPage = getDefaultScreenPage();
+  if (targetPage === state.currentPage) return;
+  gotoPage(targetPage, { silent: true, autoTimeout: true });
+}
+
+function scheduleDefaultScreenCheck(delay = 250) {
+  window.setTimeout(() => maybeApplyScreenTimeout(), delay);
+}
+
+function maybeApplyStartupDefaultScreen() {
+  if (startupDefaultScreenApplied) return;
+  startupDefaultScreenApplied = true;
+  window.setTimeout(() => maybeApplyScreenTimeout({ force: true, startup: true }), 250);
 }
 
 function serializeLightsConfig() {
@@ -859,8 +946,9 @@ function buildSavedConfig() {
     limits: state.thermostat.limits,
   };
   return {
-    version: 17,
+    version: 18,
     theme: normalizePanelTheme(state.theme),
+    screenTimeoutMinutes: normalizeScreenTimeoutMinutes(state.screenTimeoutMinutes),
     panelLock: { locked: Boolean(state.panelLock?.locked) },
     userAccessCode: getUserAccessCode(),
     thermostat: thermostatToSave,
@@ -876,6 +964,7 @@ function buildSavedConfig() {
 
 function applySavedConfig(saved = {}) {
   state.theme = normalizePanelTheme(saved?.theme || saved?.appearance?.theme || state.theme);
+  state.screenTimeoutMinutes = normalizeScreenTimeoutMinutes(saved?.screenTimeoutMinutes ?? saved?.appearance?.screenTimeoutMinutes ?? state.screenTimeoutMinutes);
   if (saved?.panelLock && typeof saved.panelLock === "object") {
     state.panelLock.locked = Boolean(saved.panelLock.locked);
   }
@@ -3466,6 +3555,7 @@ function openSettings() {
     if (elements.alarmDisarmCodeInput) elements.alarmDisarmCodeInput.value = getSavedAlarmCode();
     if (elements.userAccessCodeInput) elements.userAccessCodeInput.value = getUserAccessCode();
     if (elements.thermostatNameInput) elements.thermostatNameInput.value = getThermostatName();
+    renderScreenTimeoutSettings();
     renderThermostatPeople();
   }
   elements.settingsOverlay.classList.add("open");
@@ -3477,6 +3567,7 @@ function closeSettings() {
     if (elements.alarmDisarmCodeInput) saveAlarmCode({ toast: false });
     if (elements.userAccessCodeInput) saveUserAccessCode({ toast: false });
     if (elements.thermostatNameInput) saveThermostatName({ toast: false });
+    if (elements.screenTimeoutMinutesInput) setScreenTimeoutMinutes(elements.screenTimeoutMinutesInput.value, { save: false });
     saveConfig();
   }
   elements.settingsOverlay.classList.remove("open");
@@ -3794,6 +3885,9 @@ function applyMediaEntityState(entity) {
   state.audio.mediaPosition = entity.mediaPosition ?? null;
   state.audio.mediaDuration = entity.mediaDuration ?? null;
   maybeResolveAudioTrackLock(entity);
+  renderScreenTimeoutSettings();
+  maybeApplyStartupDefaultScreen();
+  scheduleDefaultScreenCheck();
 }
 
 function renderAudio() {
@@ -6727,6 +6821,19 @@ function bindEvents() {
   elements.thermostatNameInput?.addEventListener("change", () => saveThermostatName({ toast: false }));
 
   (elements.themeChoiceButtons || []).forEach((button) => button.addEventListener("click", () => applyPanelTheme(button.dataset.themeChoice, { toast: true })));
+  elements.screenTimeoutMinutesInput?.addEventListener("input", (event) => {
+    event.target.value = String(event.target.value || "").replace(/\D/g, "").slice(0, 3);
+    if (event.target.value) {
+      state.screenTimeoutMinutes = normalizeScreenTimeoutMinutes(event.target.value);
+      renderScreenTimeoutSettings();
+    }
+  });
+  elements.screenTimeoutMinutesInput?.addEventListener("change", (event) => setScreenTimeoutMinutes(event.target.value, { toast: true }));
+
+  ["pointerdown", "touchstart", "wheel"].forEach((eventName) => {
+    window.addEventListener(eventName, markScreenActivity, { capture: true, passive: true });
+  });
+  window.addEventListener("keydown", markScreenActivity, { capture: true });
 
   elements.settingsCodeClose?.addEventListener("click", closeSettingsCodePrompt);
   document.querySelectorAll("[data-close-settings-code]").forEach((el) => el.addEventListener("click", closeSettingsCodePrompt));
@@ -7061,6 +7168,7 @@ function mockTrackProgress() {
 async function init() {
   await loadSavedConfig();
   applyPanelTheme(state.theme, { save: false });
+  renderScreenTimeoutSettings();
   state.thermostat.away = false;
   syncAlarmFromConfig();
   syncDoorFromConfig();
@@ -7086,6 +7194,7 @@ async function init() {
   // The virtual temperature slider is now the temporary sensor input.
   // setInterval(mockSensorDrift, 4500);
   setInterval(mockTrackProgress, 1200);
+  setInterval(() => maybeApplyScreenTimeout(), SCREEN_TIMEOUT_CHECK_INTERVAL_MS);
   setInterval(() => pollHomeAssistantLinkedCovers(), HA_SYNC_INTERVAL_MS);
   setInterval(() => pollHomeAssistantMediaPlayer(), HA_AUDIO_SYNC_INTERVAL_MS);
   setInterval(() => pollHomeAssistantLights(), HA_LIGHT_SYNC_INTERVAL_MS);
@@ -7094,6 +7203,7 @@ async function init() {
   setInterval(() => pollHomeAssistantDoor(), HA_DOOR_SYNC_INTERVAL_MS);
   setInterval(() => pollHomeAssistantThermostatPeople(), HA_PRESENCE_SYNC_INTERVAL_MS);
   setInterval(() => pollHomeAssistantWeather(), HA_WEATHER_SYNC_INTERVAL_MS);
+  pollHomeAssistantMediaPlayer({ force: true, controls: true }).then(() => maybeApplyStartupDefaultScreen()).catch(() => maybeApplyStartupDefaultScreen());
   pollHomeAssistantAlarm({ force: true });
   pollHomeAssistantDoor({ force: true });
   pollHomeAssistantThermostatPeople({ force: true });

@@ -5477,8 +5477,46 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   box-shadow: 0 14px 34px rgba(72,168,255,.22), inset 0 1px 0 rgba(255,255,255,.42);
 }
 .theme-choice-btn.active span { color: rgba(3, 16, 31, .78); }
+.screen-timeout-card {
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.03));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
+}
+.screen-timeout-field {
+  display: grid;
+  gap: 7px;
+  color: rgba(226,238,250,.82);
+  font-size: .72rem;
+  font-weight: 950;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+.screen-timeout-field input {
+  width: 100%;
+  min-height: 48px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(2,8,18,.46);
+  color: #f7fbff;
+  padding: 0 14px;
+  font-size: 1.25rem;
+  font-weight: 950;
+  outline: none;
+}
+.screen-timeout-field input:focus {
+  border-color: rgba(77,238,255,.38);
+  box-shadow: 0 0 0 4px rgba(77,238,255,.08);
+}
+.screen-timeout-summary { margin: 0; }
 @media (max-width: 860px) {
   .theme-choice-grid { grid-template-columns: 1fr; }
+  .screen-timeout-card { grid-template-columns: 1fr; }
 }
 
 /* Star Trek theme */
@@ -7152,6 +7190,30 @@ body[data-theme="star-trek"] {
 .settings-sheet.thermostat-setup .thermostat-theme-section .theme-choice-btn span {
   font-size: .76rem;
   line-height: 1.2;
+}
+
+.settings-sheet.thermostat-setup .thermostat-theme-section .screen-timeout-card {
+  grid-template-columns: minmax(145px, 180px) minmax(0, 1fr);
+  padding: 11px 13px;
+  border-radius: 16px;
+}
+
+.settings-sheet.thermostat-setup .thermostat-theme-section .screen-timeout-field {
+  gap: 5px;
+  font-size: .66rem;
+  letter-spacing: .075em;
+}
+
+.settings-sheet.thermostat-setup .thermostat-theme-section .screen-timeout-field input {
+  min-height: 42px;
+  border-radius: 14px;
+  padding: 0 12px;
+  font-size: 1.08rem;
+}
+
+.settings-sheet.thermostat-setup .thermostat-theme-section .screen-timeout-summary {
+  font-size: .78rem;
+  line-height: 1.35;
 }
 
 .settings-sheet.thermostat-setup .theme-choice-btn[data-theme-choice="christmas"] {
