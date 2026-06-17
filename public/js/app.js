@@ -108,6 +108,7 @@ let lastInactiveDoorSyncAt = Date.now();
 let lastScreenInteractionAt = Date.now();
 let screenHasUserInteraction = false;
 let startupDefaultScreenApplied = false;
+let audioDefaultAutoShownForSession = false;
 let audioMediaActionInFlight = false;
 let audioPresetInFlight = false;
 let audioVolumeDebounce = null;
@@ -837,6 +838,21 @@ function shouldDefaultToAudioScreen() {
 
 function getDefaultScreenPage() {
   return shouldDefaultToAudioScreen() ? "audio" : "thermostat";
+}
+
+function maybeAutoShowAudioOnPlayback(wasAudioDefault = false) {
+  const isAudioDefault = shouldDefaultToAudioScreen();
+  if (!isAudioDefault) {
+    audioDefaultAutoShownForSession = false;
+    return;
+  }
+  if (wasAudioDefault || audioDefaultAutoShownForSession || state.currentPage === "audio") {
+    audioDefaultAutoShownForSession = state.currentPage === "audio" || audioDefaultAutoShownForSession;
+    return;
+  }
+  if (document.visibilityState === "hidden" || isAnyOverlayOpen() || isPanelLocked()) return;
+  audioDefaultAutoShownForSession = true;
+  gotoPage("audio", { silent: true, autoTimeout: true });
 }
 
 function defaultScreenLabel() {
@@ -3868,6 +3884,7 @@ function maybeResolveAudioTrackLock(entity = null) {
 
 function applyMediaEntityState(entity) {
   if (!entity?.entityId) return;
+  const wasAudioDefault = shouldDefaultToAudioScreen();
   state.audio.entityId = entity.entityId;
   state.audio.entityName = entity.name || entity.entityId;
   state.audio.status = entity.state || "unknown";
@@ -3886,6 +3903,7 @@ function applyMediaEntityState(entity) {
   state.audio.mediaDuration = entity.mediaDuration ?? null;
   maybeResolveAudioTrackLock(entity);
   renderScreenTimeoutSettings();
+  maybeAutoShowAudioOnPlayback(wasAudioDefault);
   maybeApplyStartupDefaultScreen();
   scheduleDefaultScreenCheck();
 }
@@ -4354,7 +4372,10 @@ async function pollHomeAssistantMediaPlayer(options = {}) {
   if (!options.force && document.visibilityState === "hidden") return;
   const now = Date.now();
   if (!options.force && state.currentPage !== "audio") {
-    if (now - lastInactiveAudioSyncAt < INACTIVE_PAGE_SYNC_INTERVAL_MS) return;
+    // Keep the selected media-player state live even while another page is open
+    // so the panel can jump to Audio as soon as music starts.  This only polls
+    // the one selected media_player entity; tone/switch controls stay throttled.
+    if (now - lastInactiveAudioSyncAt < HA_AUDIO_SYNC_INTERVAL_MS - 250) return;
     lastInactiveAudioSyncAt = now;
   }
   if (!options.force && state.currentPage === "audio" && now - lastAudioUserInteractionAt < 650) return;
@@ -4370,7 +4391,7 @@ async function pollHomeAssistantMediaPlayer(options = {}) {
     // Tone controls are much less time-sensitive than media state/volume. Do not
     // fetch three extra number entities on every poll; that keeps the Pi/HA light.
     haAudioSyncTick += 1;
-    const shouldSyncToneControls = Boolean(options.controls) || haAudioSyncTick % 5 === 0;
+    const shouldSyncToneControls = Boolean(options.controls) || (state.currentPage === "audio" && haAudioSyncTick % 5 === 0);
     if (shouldSyncToneControls && !audioMediaActionInFlight) {
       try {
         const controls = await fetchAudioControlStatesViaLocalBackend();
