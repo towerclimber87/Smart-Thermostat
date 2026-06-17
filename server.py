@@ -79,7 +79,7 @@ DEFAULT_THERMOSTAT = {
     "equipmentLastCoolRunAt": 0,
     "coolRelayWasOn": False,
     "coolFanHoldUntil": 0,
-    "autoSwitchNotice": {"active": False, "source": "", "fromMode": "", "toMode": "", "outdoorTemp": 0, "coolTarget": 0, "heatTarget": 0, "createdAt": 0},
+    "autoSwitchNotice": {"active": False, "source": "", "fromMode": "", "toMode": "", "switchTemp": 0, "outdoorTemp": 0, "coolTarget": 0, "heatTarget": 0, "createdAt": 0},
     "autoSwitchHold": {"active": False, "source": "", "mode": ""},
     "limits": {
         "cool": {"min": 65, "max": 80},
@@ -332,7 +332,8 @@ def _normalize_auto_switch_notice(value: object) -> dict:
         "source": source,
         "fromMode": from_mode,
         "toMode": to_mode,
-        "outdoorTemp": _number(value.get("outdoorTemp"), 0, -40, 130),
+        "switchTemp": _number(value.get("switchTemp", value.get("indoorTemp", value.get("currentTemp", value.get("outdoorTemp")))), 0, -40, 130),
+        "outdoorTemp": _number(value.get("switchTemp", value.get("indoorTemp", value.get("currentTemp", value.get("outdoorTemp")))), 0, -40, 130),
         "coolTarget": _number(value.get("coolTarget"), 0, 0, 130),
         "heatTarget": _number(value.get("heatTarget"), 0, 0, 130),
         "createdAt": _number(value.get("createdAt"), 0, 0, None),

@@ -299,7 +299,7 @@ const state = {
     equipmentLastCoolRunAt: 0,
     coolRelayWasOn: false,
     coolFanHoldUntil: 0,
-    autoSwitchNotice: { active: false, source: "", fromMode: "", toMode: "", outdoorTemp: 0, coolTarget: 0, heatTarget: 0, createdAt: 0 },
+    autoSwitchNotice: { active: false, source: "", fromMode: "", toMode: "", switchTemp: 0, outdoorTemp: 0, coolTarget: 0, heatTarget: 0, createdAt: 0 },
     autoSwitchHold: { active: false, source: "", mode: "" },
     limits: {
       cool: { min: 65, max: 80 },
@@ -1315,7 +1315,7 @@ function applyLocalThermostatState(remote = {}) {
   t.safetyHigh = clamp(Math.round(Number(t.safetyHigh) || 85), t.safetyLow + 2, ABS_MAX);
   t.autoHeatOutdoorTarget = Math.min(t.autoHeatOutdoorTarget, t.autoCoolOutdoorTarget - 1);
   if (normalizeThermostatModeForLocks()) changed = true;
-  if (applyOutdoorAutoSwitch({ notify: true })) changed = true;
+  if (applyAutoSwitch({ notify: true })) changed = true;
   if (t.away) applyAwayTarget();
   if (!t.away) {
     const { min, max } = getModeLimits();
@@ -1860,7 +1860,7 @@ function normalizePendingMode(value) {
 
 
 function emptyAutoSwitchNotice() {
-  return { active: false, source: "", fromMode: "", toMode: "", outdoorTemp: 0, coolTarget: 0, heatTarget: 0, createdAt: 0 };
+  return { active: false, source: "", fromMode: "", toMode: "", switchTemp: 0, outdoorTemp: 0, coolTarget: 0, heatTarget: 0, createdAt: 0 };
 }
 
 function emptyAutoSwitchHold() {
@@ -1874,7 +1874,7 @@ function normalizeAutoSwitchNotice(value = {}) {
   const toMode = normalizePendingMode(value.toMode);
   const active = Boolean(value.active && source && fromMode && toMode && fromMode !== toMode);
   if (!active) return emptyAutoSwitchNotice();
-  const outdoorTemp = Number(value.outdoorTemp);
+  const switchTemp = Number(value.switchTemp ?? value.indoorTemp ?? value.currentTemp ?? value.outdoorTemp);
   const coolTarget = Number(value.coolTarget);
   const heatTarget = Number(value.heatTarget);
   const createdAt = Number(value.createdAt);
@@ -1883,7 +1883,8 @@ function normalizeAutoSwitchNotice(value = {}) {
     source,
     fromMode,
     toMode,
-    outdoorTemp: Number.isFinite(outdoorTemp) ? outdoorTemp : Number(state.thermostat?.outdoorTemp || 0),
+    switchTemp: Number.isFinite(switchTemp) ? switchTemp : Number(state.thermostat?.currentTemp || 0),
+    outdoorTemp: Number.isFinite(switchTemp) ? switchTemp : Number(state.thermostat?.currentTemp || 0),
     coolTarget: Number.isFinite(coolTarget) ? coolTarget : Number(state.thermostat?.autoCoolOutdoorTarget || 0),
     heatTarget: Number.isFinite(heatTarget) ? heatTarget : Number(state.thermostat?.autoHeatOutdoorTarget || 0),
     createdAt: Number.isFinite(createdAt) && createdAt > 0 ? createdAt : Date.now(),
@@ -1898,17 +1899,22 @@ function normalizeAutoSwitchHold(value = {}) {
   return active ? { active: true, source, mode } : emptyAutoSwitchHold();
 }
 
-function getOutdoorAutoSwitchSignal() {
+function getAutoSwitchTemperature() {
+  const current = Number(state.thermostat.currentTemp);
+  return Number.isFinite(current) ? current : NaN;
+}
+
+function getAutoSwitchSignal() {
   const t = state.thermostat;
-  const outdoor = Number(t.outdoorTemp);
-  if (!Number.isFinite(outdoor)) return "";
+  const roomTemp = getAutoSwitchTemperature();
+  if (!Number.isFinite(roomTemp)) return "";
   const coolTarget = Number(t.autoCoolOutdoorTarget) || 70;
   const heatTarget = Math.min(Number(t.autoHeatOutdoorTarget) || 65, coolTarget - 1);
   const coolAvailable = !t.coolLocked;
   const heatAvailable = !t.heatLocked;
   if (!coolAvailable && !heatAvailable) return "";
-  if (outdoor > coolTarget) return coolAvailable ? "cool" : (heatAvailable ? "heat" : "");
-  if (outdoor <= heatTarget) return heatAvailable ? "heat" : (coolAvailable ? "cool" : "");
+  if (roomTemp > coolTarget) return coolAvailable ? "cool" : (heatAvailable ? "heat" : "");
+  if (roomTemp <= heatTarget) return heatAvailable ? "heat" : (coolAvailable ? "cool" : "");
   return "";
 }
 
@@ -1935,7 +1941,8 @@ function recordAutoSwitchNotice(source, fromMode, toMode) {
     source: normalizedSource,
     fromMode: from,
     toMode: to,
-    outdoorTemp: Number(t.outdoorTemp) || 0,
+    switchTemp: getAutoSwitchTemperature(),
+    outdoorTemp: getAutoSwitchTemperature(),
     coolTarget: Number(t.autoCoolOutdoorTarget) || 70,
     heatTarget: Number(t.autoHeatOutdoorTarget) || 65,
     createdAt: Date.now(),
@@ -1961,10 +1968,10 @@ function clampTargetToCurrentModeLimits() {
   t.lastComfortTarget = clamp(t.lastComfortTarget || t.targetTemp, limits.min, limits.max);
 }
 
-function applyOutdoorAutoSwitch(options = {}) {
+function applyAutoSwitch(options = {}) {
   const t = state.thermostat;
   let changed = false;
-  const signal = getOutdoorAutoSwitchSignal();
+  const signal = getAutoSwitchSignal();
   let hold = normalizeAutoSwitchHold(t.autoSwitchHold);
   if (JSON.stringify(t.autoSwitchHold || {}) !== JSON.stringify(hold)) {
     t.autoSwitchHold = hold;
@@ -2027,8 +2034,8 @@ function renderAutoSwitchNotice() {
   }
   if (elements.autoSwitchNoticeMode) elements.autoSwitchNoticeMode.textContent = active ? `To ${titleCase(notice.toMode)}` : "";
   if (elements.autoSwitchNoticeDetail) {
-    const outdoor = Math.round(Number(notice.outdoorTemp) || Number(state.thermostat.outdoorTemp) || 0);
-    elements.autoSwitchNoticeDetail.textContent = active ? `Outdoor ${outdoor}°` : "";
+    const roomTemp = Math.round(Number(notice.switchTemp) || Number(state.thermostat.currentTemp) || 0);
+    elements.autoSwitchNoticeDetail.textContent = active ? `Inside ${roomTemp}°` : "";
   }
   if (elements.autoSwitchOverlay?.classList.contains("open")) renderAutoSwitchOverlay();
 }
@@ -2041,12 +2048,12 @@ function renderAutoSwitchOverlay() {
   }
   const from = titleCase(notice.fromMode);
   const to = titleCase(notice.toMode);
-  const outdoor = Math.round(Number(notice.outdoorTemp) || Number(state.thermostat.outdoorTemp) || 0);
+  const roomTemp = Math.round(Number(notice.switchTemp) || Number(state.thermostat.currentTemp) || 0);
   const coolTarget = Math.round(Number(notice.coolTarget) || Number(state.thermostat.autoCoolOutdoorTarget) || 0);
   const heatTarget = Math.round(Number(notice.heatTarget) || Number(state.thermostat.autoHeatOutdoorTarget) || 0);
   if (elements.autoSwitchTitle) elements.autoSwitchTitle.textContent = `Auto-switched to ${to}`;
   if (elements.autoSwitchMessage) {
-    elements.autoSwitchMessage.textContent = `Outdoor is ${outdoor}°. Auto-switch targets are Heat at ${heatTarget}° or below and Cool above ${coolTarget}°. It changed from ${from} to ${to}. Dismiss this warning or revert to ${from} until the next outdoor swing.`;
+    elements.autoSwitchMessage.textContent = `Inside is ${roomTemp}°. Auto-switch targets are Heat at ${heatTarget}° or below and Cool above ${coolTarget}°. It changed from ${from} to ${to}. Dismiss this warning or revert to ${from} until the next room temperature swing.`;
   }
   if (elements.autoSwitchRevertButton) elements.autoSwitchRevertButton.textContent = `Revert to ${from}`;
 }
@@ -2188,14 +2195,14 @@ function getAutoControlMode(now = Date.now(), options = {}) {
   }
   const coolTarget = Number(t.autoCoolOutdoorTarget) || 70;
   const heatTarget = Math.min(Number(t.autoHeatOutdoorTarget) || 65, coolTarget - 1);
-  const outdoor = Number(t.outdoorTemp);
+  const roomTemp = getAutoSwitchTemperature();
   let active = ["heat", "cool"].includes(t.autoActiveMode) ? t.autoActiveMode : "";
   if (active === "heat" && !heatAvailable) active = "";
   if (active === "cool" && !coolAvailable) active = "";
 
   let hold = normalizeAutoSwitchHold(t.autoSwitchHold);
   if (hold.active && hold.source === "auto") {
-    const signal = getOutdoorAutoSwitchSignal();
+    const signal = getAutoSwitchSignal();
     if (!modeIsAvailableForAutoSwitch(hold.mode) || signal === hold.mode) {
       t.autoSwitchHold = emptyAutoSwitchHold();
       hold = t.autoSwitchHold;
@@ -2207,10 +2214,18 @@ function getAutoControlMode(now = Date.now(), options = {}) {
     }
   }
 
+  if (!Number.isFinite(roomTemp)) {
+    const fallbackMode = active || (coolAvailable ? "cool" : "heat");
+    t.autoActiveMode = fallbackMode;
+    t.autoPendingMode = "";
+    t.autoLockoutUntil = 0;
+    return fallbackMode;
+  }
+
   let desired = active;
-  if (outdoor > coolTarget) desired = coolAvailable ? "cool" : "heat";
-  else if (outdoor <= heatTarget) desired = heatAvailable ? "heat" : "cool";
-  else if (!desired) desired = outdoor >= ((coolTarget + heatTarget) / 2)
+  if (roomTemp > coolTarget) desired = coolAvailable ? "cool" : "heat";
+  else if (roomTemp <= heatTarget) desired = heatAvailable ? "heat" : "cool";
+  else if (!desired) desired = roomTemp >= ((coolTarget + heatTarget) / 2)
     ? (coolAvailable ? "cool" : "heat")
     : (heatAvailable ? "heat" : "cool");
   if (desired === "heat" && !heatAvailable) desired = coolAvailable ? "cool" : "locked";
@@ -2393,6 +2408,8 @@ function setTargetTemp(temp, options = {}) {
 function setVirtualCurrentTemp(temp) {
   const next = clamp(Number(temp), VIRTUAL_TEMP_MIN, VIRTUAL_TEMP_MAX);
   state.thermostat.currentTemp = next;
+  applyAutoSwitch({ notify: true });
+  if (state.thermostat.away) applyAwayTarget();
   renderThermostat();
   saveConfig();
 }
@@ -2400,7 +2417,7 @@ function setVirtualCurrentTemp(temp) {
 function setVirtualOutdoorTemp(temp) {
   const next = clamp(Number(temp), 40, 100);
   state.thermostat.outdoorTemp = next;
-  applyOutdoorAutoSwitch({ notify: true });
+  applyAutoSwitch({ notify: true });
   if (state.thermostat.away) applyAwayTarget();
   renderThermostat();
   saveConfig();
@@ -2507,7 +2524,7 @@ function renderTemperatureAtmosphere(currentTemp) {
 function renderThermostat() {
   const t = state.thermostat;
   normalizeThermostatModeForLocks();
-  const autoSwitchChanged = applyOutdoorAutoSwitch({ notify: true });
+  const autoSwitchChanged = applyAutoSwitch({ notify: true });
   if (autoSwitchChanged) saveConfig();
   const { min, max } = getModeLimits();
   const showingSetpoint = isSetpointPreviewActive();
@@ -3255,7 +3272,7 @@ function setMode(mode) {
   }
   t.mode = getAllowedThermostatMode(mode, t.mode);
   clearAutoSwitchHold();
-  applyOutdoorAutoSwitch({ notify: true });
+  applyAutoSwitch({ notify: true });
   if (t.away) {
     applyAwayTarget();
   } else {
@@ -3330,7 +3347,7 @@ function adjustAutoSetting(kind, delta) {
     if (t.coolFanRemainOnMinutes === 0) t.coolFanHoldUntil = 0;
   }
   t.autoHeatOutdoorTarget = Math.min(t.autoHeatOutdoorTarget, t.autoCoolOutdoorTarget - 1);
-  applyOutdoorAutoSwitch({ notify: true });
+  applyAutoSwitch({ notify: true });
   if (t.away) applyAwayTarget();
   renderThermostat();
   saveConfig();
