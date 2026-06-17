@@ -262,6 +262,7 @@
                 <span>50°</span>
                 <span>90°</span>
               </div>
+              <p id="virtualTempOverrideStatus" class="virtual-temp-override-status">Manual test source</p>
             </div>
 
           </aside>
@@ -414,6 +415,24 @@
       </aside>
     </section>
 
+    <section id="autoConfirmOverlay" class="settings-overlay auto-confirm-overlay" aria-hidden="true">
+      <div class="settings-backdrop" data-close-auto-confirm></div>
+      <aside class="auto-switch-sheet auto-confirm-sheet" role="dialog" aria-modal="true" aria-labelledby="autoConfirmTitle">
+        <div class="auto-switch-head">
+          <div>
+            <p class="eyebrow">Confirm Mode Change</p>
+            <h2 id="autoConfirmTitle">Switch to Auto?</h2>
+          </div>
+          <button id="autoConfirmClose" class="icon-button close" aria-label="Close auto confirmation">×</button>
+        </div>
+        <p class="auto-switch-message">Please confirm you want to switch to Auto.</p>
+        <div class="auto-switch-actions auto-confirm-actions">
+          <button id="autoConfirmCancelButton" class="scene-btn auto-confirm-cancel" type="button">Cancel</button>
+          <button id="autoConfirmSwitchButton" class="scene-btn auto-confirm-switch" type="button">Switch to Auto</button>
+        </div>
+      </aside>
+    </section>
+
     <section id="settingsCodeOverlay" class="settings-overlay alarm-keypad-overlay settings-code-overlay" aria-hidden="true">
       <div class="settings-backdrop" data-close-settings-code></div>
       <aside class="alarm-keypad-sheet" role="dialog" aria-modal="true" aria-labelledby="settingsCodeTitle">
@@ -483,6 +502,24 @@
                 <div class="limit-title">Heat Range</div>
                 <div class="setpoint-card"><span>Low Limit</span><div class="setpoint-controls"><button data-limit-adjust="heat:min:-1">−</button><strong><span id="heatMinValue">60</span>°</strong><button data-limit-adjust="heat:min:1">+</button></div></div>
                 <div class="setpoint-card"><span>High Limit</span><div class="setpoint-controls"><button data-limit-adjust="heat:max:-1">−</button><strong><span id="heatMaxValue">78</span>°</strong><button data-limit-adjust="heat:max:1">+</button></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-section current-temp-source-section">
+            <div>
+              <h3>Current Temperature Source</h3>
+              <p class="settings-hint">Choose the Home Assistant sensor used as the room temperature. Moving the virtual temp slider temporarily overrides this source for 2 minutes.</p>
+            </div>
+            <div class="current-temp-source-card">
+              <div class="current-temp-source-copy">
+                <strong id="currentTempSourceName">Virtual Temp</strong>
+                <span id="currentTempSourceId">No Home Assistant sensor selected</span>
+                <em id="currentTempSourceStatus">Using the virtual temp slider until a sensor is selected</em>
+              </div>
+              <div class="current-temp-source-actions">
+                <button id="chooseCurrentTempSensorButton" class="scene-btn choose-current-temp-sensor" type="button">Choose Sensor</button>
+                <button id="clearCurrentTempSensorButton" class="scene-btn clear-current-temp-sensor" type="button" hidden>Clear</button>
               </div>
             </div>
           </div>

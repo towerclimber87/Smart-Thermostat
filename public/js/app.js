@@ -20,7 +20,9 @@ const HA_ALARM_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
 const HA_DOOR_SYNC_INTERVAL_MS = 5000;
 const HA_PRESENCE_SYNC_INTERVAL_MS = 5000;
 const HA_WEATHER_SYNC_INTERVAL_MS = 60000;
+const HA_TEMP_SENSOR_SYNC_INTERVAL_MS = 5000;
 const LOCAL_THERMOSTAT_SYNC_INTERVAL_MS = 1000;
+const VIRTUAL_TEMP_OVERRIDE_MS = 2 * 60 * 1000;
 const LOCAL_THERMOSTAT_PUSH_DEBOUNCE_MS = 300;
 const LIGHT_COLOR_PRESETS = [
   { name: "Warm White", color: "#ffd76f" },
@@ -93,6 +95,8 @@ let haPresenceSyncInFlight = false;
 let haPresenceSyncLastError = "";
 let haWeatherSyncInFlight = false;
 let haWeatherSyncLastError = "";
+let haTempSensorSyncInFlight = false;
+let haTempSensorSyncLastError = "";
 let localThermostatSyncInFlight = false;
 let localThermostatPushTimer = null;
 let localThermostatPushInFlight = false;
@@ -145,6 +149,8 @@ let configSaveTimer = null;
 let configSaveInFlight = false;
 let configSaveQueued = false;
 let configQueuedToast = false;
+let virtualTempOverrideUntil = 0;
+let virtualTempOverrideTimer = null;
 
 const defaultBlindConfig = {
   room: "living",
@@ -215,6 +221,8 @@ const defaultIntegrations = {
     audioAvailableEntities: { mediaPlayers: [], numbers: [], switches: [] },
     weatherEntity: { entityId: "weather.home", name: "Home" },
     weatherAvailableEntities: [],
+    currentTempEntity: null,
+    currentTempAvailableEntities: [],
     alarmEntity: null,
     alarmAvailableEntities: [],
     doorEntity: null,
@@ -276,6 +284,8 @@ const state = {
   thermostat: {
     name: "IHA Thermostat",
     currentTemp: 70,
+    currentTempSource: "virtual",
+    currentTempSourceName: "Virtual Temp",
     targetTemp: 70,
     lastComfortTarget: 70,
     mode: "cool",
@@ -401,6 +411,10 @@ const elements = {
   autoSwitchMessage: document.getElementById("autoSwitchMessage"),
   autoSwitchDismissButton: document.getElementById("autoSwitchDismissButton"),
   autoSwitchRevertButton: document.getElementById("autoSwitchRevertButton"),
+  autoConfirmOverlay: document.getElementById("autoConfirmOverlay"),
+  autoConfirmClose: document.getElementById("autoConfirmClose"),
+  autoConfirmCancelButton: document.getElementById("autoConfirmCancelButton"),
+  autoConfirmSwitchButton: document.getElementById("autoConfirmSwitchButton"),
   awayToggle: document.getElementById("awayToggle"),
   awayModeOverlay: document.getElementById("awayModeOverlay"),
   awayHomeButton: document.getElementById("awayHomeButton"),
@@ -415,6 +429,7 @@ const elements = {
   relayCool: document.getElementById("relayCool"),
   virtualTempSlider: document.getElementById("virtualTempSlider"),
   virtualTempValue: document.getElementById("virtualTempValue"),
+  virtualTempOverrideStatus: document.getElementById("virtualTempOverrideStatus"),
   outdoorTempSlider: document.getElementById("outdoorTempSlider"),
   outdoorTempValue: document.getElementById("outdoorTempValue"),
   outdoorTempTopValue: document.getElementById("outdoorTempTopValue"),
@@ -453,6 +468,11 @@ const elements = {
   themeChoiceButtons: Array.from(document.querySelectorAll("[data-theme-choice]")),
   screenTimeoutMinutesInput: document.getElementById("screenTimeoutMinutesInput"),
   screenTimeoutSummary: document.getElementById("screenTimeoutSummary"),
+  currentTempSourceName: document.getElementById("currentTempSourceName"),
+  currentTempSourceId: document.getElementById("currentTempSourceId"),
+  currentTempSourceStatus: document.getElementById("currentTempSourceStatus"),
+  chooseCurrentTempSensorButton: document.getElementById("chooseCurrentTempSensorButton"),
+  clearCurrentTempSensorButton: document.getElementById("clearCurrentTempSensorButton"),
   addThermostatPersonButton: document.getElementById("addThermostatPersonButton"),
   thermostatPeopleList: document.getElementById("thermostatPeopleList"),
   heatLockToggle: document.getElementById("heatLockToggle"),
@@ -935,6 +955,8 @@ function buildSavedConfig() {
   const thermostatToSave = {
     name: state.thermostat.name || "IHA Thermostat",
     currentTemp: state.thermostat.currentTemp,
+    currentTempSource: state.thermostat.currentTempSource || "virtual",
+    currentTempSourceName: state.thermostat.currentTempSourceName || "Virtual Temp",
     targetTemp: state.thermostat.targetTemp,
     lastComfortTarget: state.thermostat.lastComfortTarget,
     mode: state.thermostat.mode,
@@ -1038,6 +1060,8 @@ function applySavedConfig(saved = {}) {
       coolRelayWasOn: false,
       coolFanHoldUntil: 0,
     };
+    state.thermostat.currentTempSource = String(state.thermostat.currentTempSource || "virtual");
+    state.thermostat.currentTempSourceName = String(state.thermostat.currentTempSourceName || "Virtual Temp");
     state.thermostat.safetyLow = clamp(Math.round(Number(state.thermostat.safetyLow) || 55), ABS_MIN, ABS_MAX - 2);
     state.thermostat.safetyHigh = clamp(Math.round(Number(state.thermostat.safetyHigh) || 85), state.thermostat.safetyLow + 2, ABS_MAX);
     state.thermostat.autoHeatOutdoorTarget = Math.min(state.thermostat.autoHeatOutdoorTarget, state.thermostat.autoCoolOutdoorTarget - 1);
@@ -1285,6 +1309,212 @@ async function pollHomeAssistantWeather(options = {}) {
   } finally {
     haWeatherSyncInFlight = false;
   }
+}
+
+function getCurrentTempEntity() {
+  const ha = state.integrations.homeAssistant || {};
+  const configured = ha.currentTempEntity;
+  if (configured && typeof configured === "object" && configured.entityId) return configured;
+  if (typeof configured === "string" && configured.trim()) return { entityId: configured.trim(), name: configured.trim(), domain: "sensor" };
+  return null;
+}
+
+function isVirtualTempOverrideActive(now = Date.now()) {
+  return Boolean(virtualTempOverrideUntil && virtualTempOverrideUntil > now);
+}
+
+function getVirtualTempOverrideRemainingMs(now = Date.now()) {
+  return Math.max(0, Number(virtualTempOverrideUntil || 0) - now);
+}
+
+function formatShortDuration(ms) {
+  const seconds = Math.max(0, Math.ceil(ms / 1000));
+  if (seconds >= 60) {
+    const minutes = Math.floor(seconds / 60);
+    const rest = seconds % 60;
+    return rest ? `${minutes}m ${rest}s` : `${minutes}m`;
+  }
+  return `${seconds}s`;
+}
+
+function scheduleVirtualTempOverrideExpiry() {
+  if (virtualTempOverrideTimer) window.clearTimeout(virtualTempOverrideTimer);
+  const remaining = getVirtualTempOverrideRemainingMs();
+  if (!remaining) {
+    virtualTempOverrideTimer = null;
+    return;
+  }
+  virtualTempOverrideTimer = window.setTimeout(() => {
+    virtualTempOverrideTimer = null;
+    if (isVirtualTempOverrideActive()) {
+      scheduleVirtualTempOverrideExpiry();
+      return;
+    }
+    virtualTempOverrideUntil = 0;
+    renderThermostat();
+    pollHomeAssistantCurrentTempSensor({ force: true });
+  }, Math.min(remaining + 100, 30 * 1000));
+}
+
+function normalizeTemperatureUnit(value) {
+  return String(value || "°F").trim();
+}
+
+function isCelsiusUnit(unit) {
+  const text = normalizeTemperatureUnit(unit).toLowerCase();
+  return ["°c", "c", "celsius"].includes(text);
+}
+
+function isKelvinUnit(unit) {
+  const text = normalizeTemperatureUnit(unit).toLowerCase();
+  return ["k", "kelvin"].includes(text);
+}
+
+function sensorTemperatureToFahrenheit(value, unit) {
+  const raw = Number(value);
+  if (!Number.isFinite(raw)) return NaN;
+  if (isCelsiusUnit(unit)) return (raw * 9 / 5) + 32;
+  if (isKelvinUnit(unit)) return ((raw - 273.15) * 9 / 5) + 32;
+  return raw;
+}
+
+function readTemperatureFromEntity(entity = {}) {
+  if (!entity || typeof entity !== "object") return NaN;
+  const unit = normalizeTemperatureUnit(entity.unitOfMeasurement || entity.unit_of_measurement);
+  return sensorTemperatureToFahrenheit(entity.state, unit);
+}
+
+function isLikelyTemperatureSensor(entity = {}) {
+  if (!entity || entity.domain !== "sensor") return false;
+  const deviceClass = String(entity.deviceClass || "").toLowerCase();
+  const unit = normalizeTemperatureUnit(entity.unitOfMeasurement || "").toLowerCase();
+  const label = `${entity.name || ""} ${entity.entityId || ""}`.toLowerCase();
+  return deviceClass === "temperature" || ["°f", "f", "fahrenheit", "°c", "c", "celsius", "k", "kelvin"].includes(unit) || label.includes("temp");
+}
+
+function applyCurrentTempSensorEntity(entity = {}, options = {}) {
+  const temp = readTemperatureFromEntity(entity);
+  if (!Number.isFinite(temp)) return false;
+  if (isVirtualTempOverrideActive() && options.ignoreOverride !== true) return false;
+  const t = state.thermostat;
+  const next = clamp(Number(temp.toFixed(1)), ABS_MIN, ABS_MAX);
+  let changed = false;
+  if (Number(t.currentTemp) !== next) {
+    t.currentTemp = next;
+    changed = true;
+  }
+  t.currentTempSource = "home-assistant";
+  t.currentTempSourceName = entity.name || entity.entityId || "Home Assistant Sensor";
+  const ha = state.integrations.homeAssistant || {};
+  if (ha.currentTempEntity?.entityId === entity.entityId) {
+    ha.currentTempEntity = { ...ha.currentTempEntity, ...entity, state: entity.state };
+  }
+  if (changed) {
+    applyAutoSwitch({ notify: true });
+    if (t.away) applyAwayTarget();
+    renderThermostat();
+    scheduleLocalThermostatPush();
+  } else {
+    renderCurrentTempSourceSettings();
+  }
+  return changed;
+}
+
+async function fetchCurrentTempSensorStateViaLocalBackend(entityId) {
+  const ha = state.integrations.homeAssistant;
+  const baseUrl = getHaBaseUrl();
+  if (!baseUrl || !ha.token || !entityId) throw new Error("Missing Home Assistant temperature sensor config");
+  const payload = await fetchJsonWithTimeout("/api/ha/room/states", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: baseUrl, token: ha.token, entityIds: [entityId] }),
+  }, 9000);
+  return (payload.controls || [])[0] || null;
+}
+
+async function pollHomeAssistantCurrentTempSensor(options = {}) {
+  if (!options.force && document.visibilityState === "hidden") return;
+  const entity = getCurrentTempEntity();
+  if (!entity?.entityId) {
+    renderCurrentTempSourceSettings();
+    return;
+  }
+  if (isVirtualTempOverrideActive() && !options.ignoreOverride) {
+    renderCurrentTempSourceSettings();
+    return;
+  }
+  if (haTempSensorSyncInFlight) return;
+  haTempSensorSyncInFlight = true;
+  try {
+    const update = await fetchCurrentTempSensorStateViaLocalBackend(entity.entityId);
+    if (update) applyCurrentTempSensorEntity(update, { ignoreOverride: options.ignoreOverride === true });
+    if (haTempSensorSyncLastError) haTempSensorSyncLastError = "";
+  } catch (error) {
+    const message = error.message || String(error);
+    if (message !== haTempSensorSyncLastError) {
+      haTempSensorSyncLastError = message;
+      addHaLog("warn", "Current temperature sensor sync paused", message);
+    }
+  } finally {
+    haTempSensorSyncInFlight = false;
+  }
+}
+
+function renderCurrentTempSourceSettings() {
+  const entity = getCurrentTempEntity();
+  const overrideActive = isVirtualTempOverrideActive();
+  const remaining = getVirtualTempOverrideRemainingMs();
+  if (elements.currentTempSourceName) elements.currentTempSourceName.textContent = entity?.name || "Virtual Temp";
+  if (elements.currentTempSourceId) elements.currentTempSourceId.textContent = entity?.entityId || "No Home Assistant sensor selected";
+  if (elements.currentTempSourceStatus) {
+    elements.currentTempSourceStatus.textContent = overrideActive
+      ? `Virtual override active for ${formatShortDuration(remaining)}`
+      : entity?.entityId
+        ? "Using Home Assistant for current room temperature"
+        : "Using the virtual temp slider until a sensor is selected";
+  }
+  if (elements.virtualTempOverrideStatus) {
+    elements.virtualTempOverrideStatus.textContent = overrideActive
+      ? `Manual override ${formatShortDuration(remaining)}`
+      : entity?.entityId
+        ? "Slider overrides for 2 min"
+        : "Manual test source";
+    elements.virtualTempOverrideStatus.classList.toggle("active", overrideActive);
+  }
+  if (elements.clearCurrentTempSensorButton) {
+    elements.clearCurrentTempSensorButton.hidden = !entity?.entityId;
+  }
+}
+
+function assignCurrentTempSensor(entity = {}) {
+  if (!entity?.entityId) return;
+  const ha = state.integrations.homeAssistant;
+  ha.currentTempEntity = { ...entity };
+  if (!Array.isArray(ha.currentTempAvailableEntities)) ha.currentTempAvailableEntities = [];
+  const existing = ha.currentTempAvailableEntities.filter((item) => item.entityId !== entity.entityId);
+  ha.currentTempAvailableEntities = [entity, ...existing].slice(0, 80);
+  state.thermostat.currentTempSource = "home-assistant";
+  state.thermostat.currentTempSourceName = entity.name || entity.entityId;
+  virtualTempOverrideUntil = 0;
+  scheduleVirtualTempOverrideExpiry();
+  closeAudioEntityPicker();
+  applyCurrentTempSensorEntity(entity, { ignoreOverride: true });
+  renderThermostat();
+  saveConfig({ toast: true });
+  pollHomeAssistantCurrentTempSensor({ force: true, ignoreOverride: true });
+  showToast("Current temp sensor selected");
+}
+
+function clearCurrentTempSensor() {
+  const ha = state.integrations.homeAssistant;
+  ha.currentTempEntity = null;
+  state.thermostat.currentTempSource = "virtual";
+  state.thermostat.currentTempSourceName = "Virtual Temp";
+  virtualTempOverrideUntil = 0;
+  scheduleVirtualTempOverrideExpiry();
+  renderThermostat();
+  saveConfig({ toast: true });
+  showToast("Using virtual temp slider");
 }
 
 function applyLocalThermostatState(remote = {}) {
@@ -2512,6 +2742,17 @@ function setTargetTemp(temp, options = {}) {
 
 function setVirtualCurrentTemp(temp) {
   const next = clamp(Number(temp), VIRTUAL_TEMP_MIN, VIRTUAL_TEMP_MAX);
+  const hasHaSensor = Boolean(getCurrentTempEntity()?.entityId);
+  if (hasHaSensor) {
+    virtualTempOverrideUntil = Date.now() + VIRTUAL_TEMP_OVERRIDE_MS;
+    scheduleVirtualTempOverrideExpiry();
+    state.thermostat.currentTempSource = "virtual-override";
+    state.thermostat.currentTempSourceName = "Virtual Temp Override";
+  } else {
+    virtualTempOverrideUntil = 0;
+    state.thermostat.currentTempSource = "virtual";
+    state.thermostat.currentTempSourceName = "Virtual Temp";
+  }
   state.thermostat.currentTemp = next;
   applyAutoSwitch({ notify: true });
   if (state.thermostat.away) applyAwayTarget();
@@ -2653,6 +2894,7 @@ function renderThermostat() {
   if (elements.headerSetTemp) elements.headerSetTemp.textContent = `${targetRounded}°`;
   if (elements.virtualTempValue) elements.virtualTempValue.textContent = `${currentRounded}°`;
   if (elements.virtualTempSlider && document.activeElement !== elements.virtualTempSlider) elements.virtualTempSlider.value = String(clamp(currentRounded, VIRTUAL_TEMP_MIN, VIRTUAL_TEMP_MAX));
+  renderCurrentTempSourceSettings();
   if (elements.outdoorTempValue) elements.outdoorTempValue.textContent = `${outdoorRounded}°`;
   if (elements.outdoorTempTopValue) elements.outdoorTempTopValue.textContent = `${outdoorRounded}°`;
   if (elements.outdoorWindTopValue) elements.outdoorWindTopValue.textContent = `${outdoorWindRounded} ${outdoorWindUnit}`;
@@ -3367,12 +3609,33 @@ async function sendAlarmArm(action) {
   }
 }
 
-function setMode(mode) {
+function shouldConfirmAutoMode(mode) {
+  return String(mode || "").toLowerCase() === "auto" && (state.thermostat.mode !== "auto" || state.thermostat.away);
+}
+
+function openAutoConfirmOverlay() {
+  setOverlayOpen(elements.autoConfirmOverlay, true);
+}
+
+function closeAutoConfirmOverlay() {
+  setOverlayOpen(elements.autoConfirmOverlay, false);
+}
+
+function confirmAutoMode() {
+  closeAutoConfirmOverlay();
+  setMode("auto", { confirmed: true });
+}
+
+function setMode(mode, options = {}) {
   const t = state.thermostat;
   if (!["cool", "heat", "auto"].includes(mode)) return;
   if (isThermostatModeLocked(mode) || (mode === "auto" && t.heatLocked && t.coolLocked)) {
     showToast(`${titleCase(mode)} is locked out`);
     renderThermostat();
+    return;
+  }
+  if (shouldConfirmAutoMode(mode) && !options.confirmed) {
+    openAutoConfirmOverlay();
     return;
   }
   t.mode = getAllowedThermostatMode(mode, t.mode);
@@ -6607,6 +6870,7 @@ function getAudioPickerMeta(kind) {
     help: "Select any useful Home Assistant entity. Automations are hidden, and the card will choose the icon, status, and action from its domain and device class."
   };
   if (kind === "thermostatPerson") return { domain: "person", title: "Add Person", help: "Select the Home Assistant person entry that should control Home/Away mode." };
+  if (kind === "thermostatTemp") return { domain: "sensor", title: "Choose Current Temp Sensor", help: "Select the Home Assistant sensor used for the thermostat current room temperature. The virtual slider will temporarily override it for 2 minutes." };
   if (kind === "light") return { domain: "light", title: "Assign Light", help: "Select the Home Assistant light entry for this slider." };
   return { domain: "", title: "Assign Entity", help: "Select the Home Assistant entity for this control." };
 }
@@ -6627,6 +6891,7 @@ function renderAudioEntityPicker() {
   const search = elements.audioEntitySearch?.value || picker.search || "";
   const entities = (picker.entities || [])
     .filter((entity) => picker.kind !== "roomControl" || isRoomControlEntityAllowed(entity))
+    .filter((entity) => picker.kind !== "thermostatTemp" || isLikelyTemperatureSensor(entity))
     .filter((entity) => scoreEntityForSearch(entity, search) > 0);
   if (elements.audioEntityPickerTitle) elements.audioEntityPickerTitle.textContent = getAudioPickerMeta(picker.kind).title;
   if (elements.audioEntityPickerHelp) elements.audioEntityPickerHelp.textContent = getAudioPickerMeta(picker.kind).help;
@@ -6658,9 +6923,9 @@ async function openAudioEntityPicker(kind) {
   if (kind === "light") readHaFieldsFromScreen("lights");
   else if (!["alarm", "door", "roomControl", "thermostatPerson"].includes(kind)) readHaFieldsFromScreen("audio");
   if (!getHaBaseUrl() || !state.integrations.homeAssistant.token) {
-    showToast(["alarm", "door", "roomControl", "thermostatPerson"].includes(kind) ? "Add Home Assistant config from Blinds, Audio, or Lights settings first" : "Add Home Assistant config first");
+    showToast(["alarm", "door", "roomControl", "thermostatPerson", "thermostatTemp"].includes(kind) ? "Add Home Assistant config from Blinds, Audio, or Lights settings first" : "Add Home Assistant config first");
     if (kind === "light") { openSettings(); showLightsHaView(); }
-    else if (!["alarm", "door", "roomControl", "thermostatPerson"].includes(kind)) { openSettings(); showAudioHaView(); }
+    else if (!["alarm", "door", "roomControl", "thermostatPerson", "thermostatTemp"].includes(kind)) { openSettings(); showAudioHaView(); }
     return;
   }
   state.audioEntityPicker = { kind, domain: meta.domain, entities: [], search: "" };
@@ -6685,6 +6950,7 @@ async function openAudioEntityPicker(kind) {
     if (meta.domain === "binary_sensor") ha.doorAvailableEntities = entities;
     if (meta.domain === "light") ha.lightAvailableEntities = entities;
     if (meta.domain === "person") ha.personAvailableEntities = entities;
+    if (kind === "thermostatTemp") ha.currentTempAvailableEntities = entities;
     if (kind === "roomControl") ha.roomAvailableEntities = entities;
     renderAudioEntityPicker();
   } catch (error) {
@@ -6754,6 +7020,10 @@ function selectAudioEntity(entityId) {
     upsertThermostatPerson(entity);
     return;
   }
+  if (kind === "thermostatTemp") {
+    assignCurrentTempSensor(entity);
+    return;
+  }
   if (kind === "roomControl") {
     assignEntityToRoomControl(entity);
     return;
@@ -6793,6 +7063,10 @@ function bindEvents() {
   elements.autoSwitchDismissButton?.addEventListener("click", dismissAutoSwitchNotice);
   elements.autoSwitchRevertButton?.addEventListener("click", revertAutoSwitchNotice);
   elements.autoSwitchOverlay?.querySelector("[data-close-auto-switch]")?.addEventListener("click", closeAutoSwitchOverlay);
+  elements.autoConfirmClose?.addEventListener("click", closeAutoConfirmOverlay);
+  elements.autoConfirmCancelButton?.addEventListener("click", closeAutoConfirmOverlay);
+  elements.autoConfirmSwitchButton?.addEventListener("click", confirmAutoMode);
+  elements.autoConfirmOverlay?.querySelector("[data-close-auto-confirm]")?.addEventListener("click", closeAutoConfirmOverlay);
   document.getElementById("tempDown").addEventListener("click", () => adjustSetpoint(-1));
   document.getElementById("tempUp").addEventListener("click", () => adjustSetpoint(1));
   elements.awayToggle.addEventListener("click", toggleAway);
@@ -6983,6 +7257,8 @@ function bindEvents() {
   elements.addThermostatPersonButton?.addEventListener("click", () => openAudioEntityPicker("thermostatPerson"));
   elements.heatLockToggle?.addEventListener("click", () => toggleThermostatEquipmentLock("heat"));
   elements.coolLockToggle?.addEventListener("click", () => toggleThermostatEquipmentLock("cool"));
+  elements.chooseCurrentTempSensorButton?.addEventListener("click", () => openAudioEntityPicker("thermostatTemp"));
+  elements.clearCurrentTempSensorButton?.addEventListener("click", clearCurrentTempSensor);
   elements.thermostatPeopleList?.addEventListener("click", (event) => {
     const removeButton = event.target.closest("[data-remove-thermostat-person]");
     if (removeButton) removeThermostatPerson(removeButton.dataset.removeThermostatPerson);
@@ -7167,7 +7443,7 @@ function bindEvents() {
     if (event.key === "ArrowLeft") goRelative(-1);
     if (event.key === "+" || event.key === "=") adjustSetpoint(1);
     if (event.key === "-" || event.key === "_") adjustSetpoint(-1);
-    if (event.key === "Escape") { closeSettingsCodePrompt(); closeRoomControlCodePrompt(); closeSettings(); closeEntityPicker(); closeAudioEntityPicker(); closeAlarmKeypad(); closeAlarmArmOptions(); closeLightColorPicker(); closeThermostatInfo(); }
+    if (event.key === "Escape") { closeSettingsCodePrompt(); closeRoomControlCodePrompt(); closeSettings(); closeEntityPicker(); closeAudioEntityPicker(); closeAlarmKeypad(); closeAlarmArmOptions(); closeLightColorPicker(); closeThermostatInfo(); closeAutoConfirmOverlay(); }
   });
 }
 
@@ -7196,6 +7472,7 @@ async function init() {
   bindEvents();
   updateClock();
   renderThermostat();
+  renderCurrentTempSourceSettings();
   renderThermostatPeople();
   renderPanelLock();
   fetchLocalThermostatStatus({ force: true });
@@ -7224,6 +7501,8 @@ async function init() {
   setInterval(() => pollHomeAssistantDoor(), HA_DOOR_SYNC_INTERVAL_MS);
   setInterval(() => pollHomeAssistantThermostatPeople(), HA_PRESENCE_SYNC_INTERVAL_MS);
   setInterval(() => pollHomeAssistantWeather(), HA_WEATHER_SYNC_INTERVAL_MS);
+  setInterval(() => pollHomeAssistantCurrentTempSensor(), HA_TEMP_SENSOR_SYNC_INTERVAL_MS);
+  pollHomeAssistantCurrentTempSensor({ force: true });
   pollHomeAssistantMediaPlayer({ force: true, controls: true }).then(() => maybeApplyStartupDefaultScreen()).catch(() => maybeApplyStartupDefaultScreen());
   pollHomeAssistantAlarm({ force: true });
   pollHomeAssistantDoor({ force: true });

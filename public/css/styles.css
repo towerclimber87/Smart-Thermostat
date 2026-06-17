@@ -7996,3 +7996,92 @@ body[data-theme="christmas"] {
     grid-template-columns: 1fr;
   }
 }
+
+/* 2026-06-17 v5.0: current temperature source selector and Auto mode confirmation. */
+.virtual-temp-override-status {
+  margin: 8px 0 0;
+  min-height: 18px;
+  color: rgba(190, 211, 231, .76);
+  font-size: .64rem;
+  font-weight: 900;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  text-align: center;
+}
+.virtual-temp-override-status.active {
+  color: rgba(255, 224, 75, .96);
+}
+.current-temp-source-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 16px;
+  border-radius: 20px;
+  border: 1px solid rgba(77,238,255,.16);
+  background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.03));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
+}
+.current-temp-source-copy {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.current-temp-source-copy strong {
+  color: #f8fcff;
+  font-size: 1.02rem;
+  font-weight: 1000;
+  letter-spacing: -.02em;
+}
+.current-temp-source-copy span,
+.current-temp-source-copy em {
+  overflow-wrap: anywhere;
+  color: rgba(188, 205, 224, .82);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 820;
+}
+.current-temp-source-copy em {
+  color: rgba(115, 238, 255, .88);
+}
+.current-temp-source-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.current-temp-source-actions .scene-btn {
+  min-height: 46px;
+  border-radius: 16px;
+  padding-inline: 16px;
+}
+.clear-current-temp-sensor {
+  background: linear-gradient(135deg, rgba(255,255,255,.12), rgba(255,255,255,.06));
+  color: rgba(232,241,250,.92);
+}
+.auto-confirm-sheet {
+  border-color: rgba(77,238,255,.24);
+  background:
+    radial-gradient(circle at 20% 0%, rgba(77,238,255,.18), transparent 38%),
+    linear-gradient(160deg, rgba(16,24,42,.98), rgba(5,10,22,.985));
+}
+.auto-confirm-switch {
+  background: linear-gradient(135deg, rgba(77,238,255,.94), rgba(84,161,255,.82));
+  color: #06131f;
+}
+.auto-confirm-cancel {
+  background: linear-gradient(135deg, rgba(255,255,255,.14), rgba(255,255,255,.07));
+  color: rgba(236,244,252,.94);
+}
+@media (max-width: 860px) {
+  .current-temp-source-card {
+    grid-template-columns: 1fr;
+  }
+  .current-temp-source-actions {
+    justify-content: stretch;
+  }
+  .current-temp-source-actions .scene-btn {
+    flex: 1 1 150px;
+  }
+}

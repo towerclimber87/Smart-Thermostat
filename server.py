@@ -47,6 +47,8 @@ def _json(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> None:
 DEFAULT_THERMOSTAT = {
     "name": "IHA Thermostat",
     "currentTemp": 70,
+    "currentTempSource": "virtual",
+    "currentTempSourceName": "Virtual Temp",
     "targetTemp": 70,
     "lastComfortTarget": 70,
     "mode": "cool",
@@ -106,6 +108,8 @@ DEFAULT_HOME_ASSISTANT_CONFIG = {
     "audioAvailableEntities": {"mediaPlayers": [], "numbers": [], "switches": []},
     "weatherEntity": {"entityId": "weather.home", "name": "Home"},
     "weatherAvailableEntities": [],
+    "currentTempEntity": None,
+    "currentTempAvailableEntities": [],
     "alarmEntity": None,
     "alarmAvailableEntities": [],
     "doorEntity": None,
@@ -363,6 +367,10 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             name = str(source.get("name") or "").strip()
             if name:
                 base["name"] = name[:80]
+        if "currentTempSource" in source:
+            base["currentTempSource"] = str(source.get("currentTempSource") or "virtual").strip()[:80] or "virtual"
+        if "currentTempSourceName" in source:
+            base["currentTempSourceName"] = str(source.get("currentTempSourceName") or "Virtual Temp").strip()[:120] or "Virtual Temp"
 
         hvac_mode = source.get("hvac_mode", source.get("hvacMode", source.get("mode")))
         if hvac_mode is not None:
