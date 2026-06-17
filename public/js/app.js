@@ -392,7 +392,7 @@ const state = {
     manual: { active: false, relays: { fan: false, cool: false, heat: false } },
     relays: { fan: { on: false, gpio: 7, physical: 26 }, cool: { on: false, gpio: 8, physical: 24 }, heat: { on: false, gpio: 22, physical: 15 } },
     rgb: { on: false, color: "#35eaff", backend: "", available: false, error: "", gpio: 26, physical: 37 },
-    i2c: { addresses: [], devices: [], bus: 1, backend: "", scannedAt: 0, error: "" },
+    i2c: { addresses: [], devices: [], bus: 1, backend: "", scannedAt: 0, error: "", enabled: false, available: false, devicePath: "/dev/i2c-1" },
   },
   history: {
     loaded: false,
@@ -1940,19 +1940,27 @@ function renderHardwareStatus() {
 
   const i2c = hw.i2c || {};
   const addresses = Array.isArray(i2c.addresses) ? i2c.addresses : [];
+  const i2cDisabled = i2c.enabled === false || i2c.backend === "disabled";
   if (elements.i2cAddressList) {
     if (addresses.length) {
       elements.i2cAddressList.innerHTML = addresses.map((address) => `<div class="i2c-address-pill">${escapeHtml(address)}</div>`).join("");
     } else {
-      const emptyText = i2c.error ? "No addresses available" : "No I2C devices found";
+      let emptyText = "No I2C devices found";
+      if (i2cDisabled) emptyText = "I2C bus not enabled yet";
+      else if (i2c.error) emptyText = "I2C scan unavailable";
       elements.i2cAddressList.innerHTML = `<div class="empty-state compact">${emptyText}</div>`;
     }
   }
   if (elements.i2cStatusLine) {
     const backend = i2c.backend || "scanner";
     const count = addresses.length;
-    const error = i2c.error ? ` • ${i2c.error}` : "";
-    elements.i2cStatusLine.textContent = `${count} address${count === 1 ? "" : "es"} • ${backend} • Last scan ${formatHardwareScanTime(i2c.scannedAt)}${error}`;
+    const devicePath = i2c.devicePath || `/dev/i2c-${i2c.bus ?? 1}`;
+    const statusText = i2c.error
+      ? ` • ${i2c.error}`
+      : addresses.length
+        ? ""
+        : " • Scan OK; no devices detected yet.";
+    elements.i2cStatusLine.textContent = `${count} address${count === 1 ? "" : "es"} • Bus ${i2c.bus ?? 1} ${devicePath} • ${backend} • Last scan ${formatHardwareScanTime(i2c.scannedAt)}${statusText}`;
     elements.i2cStatusLine.dataset.error = i2c.error ? "1" : "0";
   }
 }

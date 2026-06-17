@@ -70,6 +70,42 @@ install_service() {
   sudo cp "/tmp/${service_name}" "${service_path}"
 }
 
+enable_i2c() {
+  echo "Configuring Raspberry Pi I2C support..."
+
+  if command -v raspi-config >/dev/null 2>&1; then
+    sudo raspi-config nonint do_i2c 0 || true
+  else
+    local config_file=""
+    local candidate
+    for candidate in /boot/firmware/config.txt /boot/config.txt; do
+      if [[ -f "${candidate}" ]]; then
+        config_file="${candidate}"
+        break
+      fi
+    done
+
+    if [[ -n "${config_file}" ]]; then
+      if grep -Eq '^\s*dtparam=i2c_arm=on' "${config_file}"; then
+        true
+      elif grep -Eq '^\s*#?\s*dtparam=i2c_arm=' "${config_file}"; then
+        sudo sed -i -E 's|^\s*#?\s*dtparam=i2c_arm=.*|dtparam=i2c_arm=on|' "${config_file}"
+      else
+        echo 'dtparam=i2c_arm=on' | sudo tee -a "${config_file}" >/dev/null
+      fi
+    else
+      echo "WARNING: Could not find /boot/firmware/config.txt or /boot/config.txt to enable I2C." >&2
+    fi
+  fi
+
+  echo i2c-dev | sudo tee /etc/modules-load.d/smart-thermostat-i2c.conf >/dev/null
+  sudo modprobe i2c-dev >/dev/null 2>&1 || true
+
+  if [[ ! -e /dev/i2c-1 ]]; then
+    echo "NOTE: /dev/i2c-1 is not available yet. Reboot the Pi after this install before testing I2C sensors."
+  fi
+}
+
 install_sudoers() {
   local systemctl_bin
   systemctl_bin="$(command -v systemctl || echo /usr/bin/systemctl)"
@@ -86,6 +122,7 @@ fi
 if getent group i2c >/dev/null 2>&1; then
   sudo usermod -aG i2c "${USER}" || true
 fi
+enable_i2c
 chmod +x "${PROJECT_DIR}/scripts/install-pi.sh" "${PROJECT_DIR}/scripts/kiosk-launch.sh" "${PROJECT_DIR}/scripts/network_watchdog.py" 2>/dev/null || true
 
 install_service "${WEB_SERVICE_NAME}"

@@ -62,6 +62,7 @@ HARDWARE_POWER_PINS = {
 }
 HARDWARE_RELAY_ACTIVE_LOW = os.environ.get("SMART_THERMOSTAT_RELAY_ACTIVE_LOW", "0").strip().lower() in {"1", "true", "yes", "on"}
 HARDWARE_I2C_BUS = int(os.environ.get("SMART_THERMOSTAT_I2C_BUS", "1"))
+HARDWARE_I2C_DEVICE = Path(f"/dev/i2c-{HARDWARE_I2C_BUS}")
 
 _HARDWARE_LOCK = threading.RLock()
 _HARDWARE_RELAY_BACKEND = None
@@ -1518,6 +1519,41 @@ def _parse_i2cdetect_output(output: str) -> list[dict]:
     devices.sort(key=lambda item: item["decimal"])
     return devices
 
+def _i2c_disabled_payload(now: float, detail: str = "") -> dict:
+    message = (
+        f"I2C bus {HARDWARE_I2C_BUS} is not enabled in Raspberry Pi OS yet. "
+        "This is OK when no I2C sensors are installed. Run scripts/install-pi.sh or enable I2C, then reboot before sensors will appear."
+    )
+    if detail:
+        message = f"{message} ({detail})"
+    return {
+        "backend": "disabled",
+        "bus": HARDWARE_I2C_BUS,
+        "devicePath": str(HARDWARE_I2C_DEVICE),
+        "enabled": False,
+        "available": False,
+        "addresses": [],
+        "devices": [],
+        "scannedAt": int(now),
+        "error": message,
+    }
+
+
+def _friendly_i2c_error(exc: Exception | str) -> str:
+    raw = str(exc or "").strip()
+    lower = raw.lower()
+    if "no such file" in lower or str(HARDWARE_I2C_DEVICE) in raw and not HARDWARE_I2C_DEVICE.exists():
+        return _i2c_disabled_payload(time.time(), raw).get("error", raw)
+    if "permission denied" in lower or "could not open file" in lower and "permission" in lower:
+        return (
+            f"I2C permission denied for {HARDWARE_I2C_DEVICE}. "
+            "The service user must be in the i2c group; run scripts/install-pi.sh, then log out/in or reboot."
+        )
+    if isinstance(exc, FileNotFoundError) or "no such file or directory: 'i2cdetect'" in lower or "i2cdetect" in lower and "not found" in lower:
+        return "i2cdetect is not installed. Run scripts/install-pi.sh to install i2c-tools."
+    return raw or "I2C scan failed"
+
+
 def _scan_i2c_with_i2cdetect() -> dict:
     result = subprocess.run(
         ["i2cdetect", "-y", str(HARDWARE_I2C_BUS)],
@@ -1530,7 +1566,16 @@ def _scan_i2c_with_i2cdetect() -> dict:
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "i2cdetect failed")
     devices = _parse_i2cdetect_output(result.stdout)
-    return {"backend": "i2cdetect", "addresses": [item["address"] for item in devices], "devices": devices, "error": ""}
+    return {
+        "backend": "i2cdetect",
+        "bus": HARDWARE_I2C_BUS,
+        "devicePath": str(HARDWARE_I2C_DEVICE),
+        "enabled": True,
+        "available": True,
+        "addresses": [item["address"] for item in devices],
+        "devices": devices,
+        "error": "",
+    }
 
 
 def _scan_i2c_with_smbus() -> dict:
@@ -1547,7 +1592,16 @@ def _scan_i2c_with_smbus() -> dict:
                 continue
             devices.append({"address": f"0x{address:02X}", "decimal": address, "status": "found"})
     devices.sort(key=lambda item: item["decimal"])
-    return {"backend": "smbus", "addresses": [item["address"] for item in devices], "devices": devices, "error": ""}
+    return {
+        "backend": "smbus",
+        "bus": HARDWARE_I2C_BUS,
+        "devicePath": str(HARDWARE_I2C_DEVICE),
+        "enabled": True,
+        "available": True,
+        "addresses": [item["address"] for item in devices],
+        "devices": devices,
+        "error": "",
+    }
 
 
 def _scan_i2c_devices(force: bool = False) -> dict:
@@ -1559,11 +1613,20 @@ def _scan_i2c_devices(force: bool = False) -> dict:
         return {
             "backend": "not-scanned",
             "bus": HARDWARE_I2C_BUS,
+            "devicePath": str(HARDWARE_I2C_DEVICE),
+            "enabled": HARDWARE_I2C_DEVICE.exists(),
+            "available": False,
             "addresses": [],
             "devices": [],
             "scannedAt": 0,
             "error": "Open Hardware Information or press Refresh Hardware to scan I2C.",
         }
+
+    if not HARDWARE_I2C_DEVICE.exists():
+        payload = _i2c_disabled_payload(now, f"missing {HARDWARE_I2C_DEVICE}")
+        _HARDWARE_LAST_I2C_SCAN["at"] = now
+        _HARDWARE_LAST_I2C_SCAN["payload"] = payload
+        return payload
 
     errors: list[str] = []
     for scanner in (_scan_i2c_with_i2cdetect, _scan_i2c_with_smbus):
@@ -1575,10 +1638,15 @@ def _scan_i2c_devices(force: bool = False) -> dict:
             _HARDWARE_LAST_I2C_SCAN["payload"] = payload
             return payload
         except Exception as exc:
-            errors.append(str(exc))
+            friendly = _friendly_i2c_error(exc)
+            if friendly and friendly not in errors:
+                errors.append(friendly)
     payload = {
         "backend": "unavailable",
         "bus": HARDWARE_I2C_BUS,
+        "devicePath": str(HARDWARE_I2C_DEVICE),
+        "enabled": HARDWARE_I2C_DEVICE.exists(),
+        "available": False,
         "addresses": [],
         "devices": [],
         "scannedAt": int(now),
