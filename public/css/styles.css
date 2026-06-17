@@ -10217,6 +10217,11 @@ body[data-theme="christmas"] {
   background: rgba(255,190,96,.11);
   border-color: rgba(255,190,96,.18);
 }
+.hardware-note[data-note="1"] {
+  color: rgba(208,246,255,.92);
+  background: rgba(77,238,255,.08);
+  border-color: rgba(77,238,255,.16);
+}
 .hardware-note[data-error="1"] {
   color: #ffd9d3;
   background: rgba(255,104,93,.12);

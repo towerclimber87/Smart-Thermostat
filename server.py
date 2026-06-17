@@ -14,6 +14,7 @@ import mimetypes
 import os
 import signal
 import socket
+import shutil
 import subprocess
 import threading
 import time
@@ -1520,12 +1521,16 @@ def _parse_i2cdetect_output(output: str) -> list[dict]:
     return devices
 
 def _i2c_disabled_payload(now: float, detail: str = "") -> dict:
-    message = (
-        f"I2C bus {HARDWARE_I2C_BUS} is not enabled in Raspberry Pi OS yet. "
-        "This is OK when no I2C sensors are installed. Run scripts/install-pi.sh or enable I2C, then reboot before sensors will appear."
+    # A missing /dev/i2c-1 is a setup/not-installed state, not an application
+    # failure. Keep it out of the red error path so the hardware page stays
+    # calm until real I2C sensors are added.
+    notice = (
+        f"I2C bus {HARDWARE_I2C_BUS} is not active yet. "
+        "This is OK until I2C sensors are installed."
     )
+    action = "Run scripts/install-pi.sh, then reboot once before I2C sensors will appear."
     if detail:
-        message = f"{message} ({detail})"
+        action = f"{action} ({detail})"
     return {
         "backend": "disabled",
         "bus": HARDWARE_I2C_BUS,
@@ -1535,7 +1540,9 @@ def _i2c_disabled_payload(now: float, detail: str = "") -> dict:
         "addresses": [],
         "devices": [],
         "scannedAt": int(now),
-        "error": message,
+        "notice": notice,
+        "action": action,
+        "error": "",
     }
 
 
@@ -1619,7 +1626,8 @@ def _scan_i2c_devices(force: bool = False) -> dict:
             "addresses": [],
             "devices": [],
             "scannedAt": 0,
-            "error": "Open Hardware Information or press Refresh Hardware to scan I2C.",
+            "notice": "Open Hardware Information or press Refresh Hardware to scan I2C.",
+            "error": "",
         }
 
     if not HARDWARE_I2C_DEVICE.exists():
@@ -1774,9 +1782,50 @@ def _schedule_service_restart() -> None:
 
 
 def _schedule_server_reboot() -> None:
+    def _run_reboot_command(command: list[str]) -> bool:
+        try:
+            result = subprocess.run(
+                command,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=8,
+                check=False,
+            )
+        except Exception as exc:
+            print(f"Reboot command failed to start: {' '.join(command)}: {exc}", flush=True)
+            return False
+        if result.returncode == 0:
+            return True
+        message = (result.stderr or result.stdout or f"exit {result.returncode}").strip()
+        print(f"Reboot command failed: {' '.join(command)}: {message}", flush=True)
+        return False
+
     def _reboot() -> None:
         time.sleep(1.5)
-        subprocess.run(["sudo", "-n", "systemctl", "reboot"], check=False)
+        systemctl_candidates = []
+        for candidate in (shutil.which("systemctl"), "/usr/bin/systemctl", "/bin/systemctl"):
+            if candidate and candidate not in systemctl_candidates:
+                systemctl_candidates.append(candidate)
+        commands = [["sudo", "-n", "/usr/local/sbin/smart-thermostat-reboot"]]
+        commands.extend(["sudo", "-n", candidate, "reboot"] for candidate in systemctl_candidates)
+        commands.extend([
+            ["sudo", "-n", "/usr/sbin/reboot"],
+            ["sudo", "-n", "/sbin/reboot"],
+            ["sudo", "-n", "reboot"],
+        ])
+        seen: set[tuple[str, ...]] = set()
+        for command in commands:
+            key = tuple(command)
+            if key in seen:
+                continue
+            seen.add(key)
+            if _run_reboot_command(command):
+                return
+        print(
+            "Unable to reboot without a sudo password. Run scripts/install-pi.sh once to install the smart-thermostat sudoers rule.",
+            flush=True,
+        )
 
     threading.Thread(target=_reboot, daemon=True).start()
 

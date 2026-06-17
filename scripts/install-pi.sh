@@ -12,6 +12,8 @@ if [[ $EUID -eq 0 ]]; then
   exit 1
 fi
 
+INSTALL_USER="$(id -un)"
+
 install_packages() {
   if ! command -v apt-get >/dev/null 2>&1; then
     return 0
@@ -66,36 +68,38 @@ install_service() {
 
   local user_id
   user_id="$(id -u)"
-  sed -e "s|__PROJECT_DIR__|${PROJECT_DIR}|g" -e "s|__USER__|${USER}|g" -e "s|__UID__|${user_id}|g" "${source_path}" > "/tmp/${service_name}"
+  sed -e "s|__PROJECT_DIR__|${PROJECT_DIR}|g" -e "s|__USER__|${INSTALL_USER}|g" -e "s|__UID__|${user_id}|g" "${source_path}" > "/tmp/${service_name}"
   sudo cp "/tmp/${service_name}" "${service_path}"
 }
 
 enable_i2c() {
   echo "Configuring Raspberry Pi I2C support..."
 
+  local config_file=""
+  local candidate
+  for candidate in /boot/firmware/config.txt /boot/config.txt; do
+    if [[ -f "${candidate}" ]]; then
+      config_file="${candidate}"
+      break
+    fi
+  done
+
   if command -v raspi-config >/dev/null 2>&1; then
     sudo raspi-config nonint do_i2c 0 || true
-  else
-    local config_file=""
-    local candidate
-    for candidate in /boot/firmware/config.txt /boot/config.txt; do
-      if [[ -f "${candidate}" ]]; then
-        config_file="${candidate}"
-        break
-      fi
-    done
+  fi
 
-    if [[ -n "${config_file}" ]]; then
-      if grep -Eq '^\s*dtparam=i2c_arm=on' "${config_file}"; then
-        true
-      elif grep -Eq '^\s*#?\s*dtparam=i2c_arm=' "${config_file}"; then
-        sudo sed -i -E 's|^\s*#?\s*dtparam=i2c_arm=.*|dtparam=i2c_arm=on|' "${config_file}"
-      else
-        echo 'dtparam=i2c_arm=on' | sudo tee -a "${config_file}" >/dev/null
-      fi
+  # Also edit config.txt directly. On some Debian/Raspberry Pi OS builds,
+  # raspi-config may be unavailable or may not update the same boot config file.
+  if [[ -n "${config_file}" ]]; then
+    if grep -Eq '^\s*dtparam=i2c_arm=on' "${config_file}"; then
+      true
+    elif grep -Eq '^\s*#?\s*dtparam=i2c_arm=' "${config_file}"; then
+      sudo sed -i -E 's|^\s*#?\s*dtparam=i2c_arm=.*|dtparam=i2c_arm=on|' "${config_file}"
     else
-      echo "WARNING: Could not find /boot/firmware/config.txt or /boot/config.txt to enable I2C." >&2
+      echo 'dtparam=i2c_arm=on' | sudo tee -a "${config_file}" >/dev/null
     fi
+  else
+    echo "WARNING: Could not find /boot/firmware/config.txt or /boot/config.txt to enable I2C." >&2
   fi
 
   echo i2c-dev | sudo tee /etc/modules-load.d/smart-thermostat-i2c.conf >/dev/null
@@ -109,18 +113,33 @@ enable_i2c() {
 install_sudoers() {
   local systemctl_bin
   systemctl_bin="$(command -v systemctl || echo /usr/bin/systemctl)"
+
+  sudo install -d -m 755 /usr/local/sbin
+  sudo tee /usr/local/sbin/smart-thermostat-reboot >/dev/null <<'EOF_REBOOT_HELPER'
+#!/usr/bin/env bash
+set -euo pipefail
+if command -v systemctl >/dev/null 2>&1; then
+  exec systemctl reboot
+fi
+exec /sbin/reboot
+EOF_REBOOT_HELPER
+  sudo chmod 755 /usr/local/sbin/smart-thermostat-reboot
+
   sudo tee /etc/sudoers.d/smart-thermostat-panel >/dev/null <<EOF_SUDOERS
-${USER} ALL=(root) NOPASSWD: ${systemctl_bin} reboot, ${systemctl_bin} restart ${WEB_SERVICE_NAME}
+Cmnd_Alias SMART_THERMOSTAT_REBOOT = /usr/local/sbin/smart-thermostat-reboot, /usr/bin/systemctl reboot, /bin/systemctl reboot, ${systemctl_bin} reboot, /usr/sbin/reboot, /sbin/reboot, /usr/bin/reboot
+Cmnd_Alias SMART_THERMOSTAT_WEB_RESTART = /usr/bin/systemctl restart ${WEB_SERVICE_NAME}, /bin/systemctl restart ${WEB_SERVICE_NAME}, ${systemctl_bin} restart ${WEB_SERVICE_NAME}
+${INSTALL_USER} ALL=(root) NOPASSWD: SMART_THERMOSTAT_REBOOT, SMART_THERMOSTAT_WEB_RESTART
 EOF_SUDOERS
   sudo chmod 440 /etc/sudoers.d/smart-thermostat-panel
+  sudo visudo -cf /etc/sudoers.d/smart-thermostat-panel >/dev/null
 }
 
 install_packages
 if getent group gpio >/dev/null 2>&1; then
-  sudo usermod -aG gpio "${USER}" || true
+  sudo usermod -aG gpio "${INSTALL_USER}" || true
 fi
 if getent group i2c >/dev/null 2>&1; then
-  sudo usermod -aG i2c "${USER}" || true
+  sudo usermod -aG i2c "${INSTALL_USER}" || true
 fi
 enable_i2c
 chmod +x "${PROJECT_DIR}/scripts/install-pi.sh" "${PROJECT_DIR}/scripts/kiosk-launch.sh" "${PROJECT_DIR}/scripts/network_watchdog.py" 2>/dev/null || true

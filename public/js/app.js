@@ -1941,13 +1941,13 @@ function renderHardwareStatus() {
   const i2c = hw.i2c || {};
   const addresses = Array.isArray(i2c.addresses) ? i2c.addresses : [];
   const i2cDisabled = i2c.enabled === false || i2c.backend === "disabled";
+  const i2cNotice = i2c.notice || (i2cDisabled ? "I2C bus is not active yet. This is OK until sensors are installed." : "");
   if (elements.i2cAddressList) {
     if (addresses.length) {
       elements.i2cAddressList.innerHTML = addresses.map((address) => `<div class="i2c-address-pill">${escapeHtml(address)}</div>`).join("");
     } else {
-      let emptyText = "No I2C devices found";
-      if (i2cDisabled) emptyText = "I2C bus not enabled yet";
-      else if (i2c.error) emptyText = "I2C scan unavailable";
+      let emptyText = "No I2C sensors found yet";
+      if (i2c.error) emptyText = "I2C scan unavailable";
       elements.i2cAddressList.innerHTML = `<div class="empty-state compact">${emptyText}</div>`;
     }
   }
@@ -1955,13 +1955,14 @@ function renderHardwareStatus() {
     const backend = i2c.backend || "scanner";
     const count = addresses.length;
     const devicePath = i2c.devicePath || `/dev/i2c-${i2c.bus ?? 1}`;
-    const statusText = i2c.error
-      ? ` • ${i2c.error}`
-      : addresses.length
-        ? ""
-        : " • Scan OK; no devices detected yet.";
+    let statusText = "";
+    if (i2c.error) statusText = ` • ${i2c.error}`;
+    else if (i2c.action) statusText = ` • ${i2c.action}`;
+    else if (i2cNotice) statusText = ` • ${i2cNotice}`;
+    else if (!addresses.length) statusText = " • Scan OK; no devices detected yet.";
     elements.i2cStatusLine.textContent = `${count} address${count === 1 ? "" : "es"} • Bus ${i2c.bus ?? 1} ${devicePath} • ${backend} • Last scan ${formatHardwareScanTime(i2c.scannedAt)}${statusText}`;
     elements.i2cStatusLine.dataset.error = i2c.error ? "1" : "0";
+    elements.i2cStatusLine.dataset.note = !i2c.error && (i2cNotice || i2c.action) ? "1" : "0";
   }
 }
 
