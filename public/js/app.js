@@ -2867,6 +2867,11 @@ function renderTemperatureAtmosphere(currentTemp) {
   elements.app.style.setProperty("--climate-hot-glow", (heatIntensity * 0.44).toFixed(3));
 }
 
+function formatCurrentTemp(value) {
+  const temp = Number(value);
+  return Number.isFinite(temp) ? temp.toFixed(1) : "--";
+}
+
 function renderThermostat() {
   const t = state.thermostat;
   normalizeThermostatModeForLocks();
@@ -2875,6 +2880,7 @@ function renderThermostat() {
   const { min, max } = getModeLimits();
   const showingSetpoint = isSetpointPreviewActive();
   const currentRounded = Math.round(t.currentTemp);
+  const currentDisplay = formatCurrentTemp(t.currentTemp);
   const targetRounded = Math.round(t.targetTemp);
   const outdoorRounded = Math.round(t.outdoorTemp);
   const outdoorWindRounded = Math.round(Number(t.outdoorWindSpeed || 0));
@@ -2886,14 +2892,14 @@ function renderThermostat() {
   renderTemperatureAtmosphere(t.currentTemp);
   renderPanelLock();
 
-  elements.currentTemp.textContent = showingSetpoint ? targetRounded : currentRounded;
-  elements.targetTemp.textContent = showingSetpoint ? currentRounded : targetRounded;
+  elements.currentTemp.textContent = showingSetpoint ? targetRounded : currentDisplay;
+  elements.targetTemp.textContent = showingSetpoint ? currentDisplay : targetRounded;
   if (elements.primaryTempLabel) elements.primaryTempLabel.textContent = showingSetpoint ? "Set Temp" : "Current";
   if (elements.secondaryTempLabel) elements.secondaryTempLabel.textContent = showingSetpoint ? "Current" : "Set Temp";
-  if (elements.headerCurrentTemp) elements.headerCurrentTemp.textContent = `${currentRounded}°`;
+  if (elements.headerCurrentTemp) elements.headerCurrentTemp.textContent = `${currentDisplay}°`;
   if (elements.headerSetTemp) elements.headerSetTemp.textContent = `${targetRounded}°`;
-  if (elements.virtualTempValue) elements.virtualTempValue.textContent = `${currentRounded}°`;
-  if (elements.virtualTempSlider && document.activeElement !== elements.virtualTempSlider) elements.virtualTempSlider.value = String(clamp(currentRounded, VIRTUAL_TEMP_MIN, VIRTUAL_TEMP_MAX));
+  if (elements.virtualTempValue) elements.virtualTempValue.textContent = `${currentDisplay}°`;
+  if (elements.virtualTempSlider && document.activeElement !== elements.virtualTempSlider) elements.virtualTempSlider.value = String(clamp(Number(t.currentTemp), VIRTUAL_TEMP_MIN, VIRTUAL_TEMP_MAX));
   renderCurrentTempSourceSettings();
   if (elements.outdoorTempValue) elements.outdoorTempValue.textContent = `${outdoorRounded}°`;
   if (elements.outdoorTempTopValue) elements.outdoorTempTopValue.textContent = `${outdoorRounded}°`;
@@ -2945,7 +2951,7 @@ function renderThermostat() {
     elements.safetyWarningBanner.setAttribute("aria-hidden", safetyActive ? "false" : "true");
     if (elements.safetyWarningTitle) elements.safetyWarningTitle.textContent = `Safety ${titleCase(outputs.safetyMode || "")} Engaged`;
     if (elements.safetyWarningSetpoint) elements.safetyWarningSetpoint.textContent = `${targetRounded}°`;
-    if (elements.safetyWarningCurrent) elements.safetyWarningCurrent.textContent = `${currentRounded}°`;
+    if (elements.safetyWarningCurrent) elements.safetyWarningCurrent.textContent = `${currentDisplay}°`;
   }
 
   renderAutoSwitchNotice();
