@@ -425,6 +425,131 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   .chip-left { left: 9%; top: 42%; } .chip-right { right: 8%; top: 61%; }
   .blind-cards.blind-columns { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* 2026-06-17 HVAC history page */
+.history-settings-view {
+  min-height: 0;
+  overflow: hidden;
+}
+.history-layout {
+  grid-template-columns: minmax(260px, .68fr) minmax(0, 1.32fr);
+}
+.history-date-card {
+  align-content: start;
+}
+.history-date-row {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) 46px;
+  gap: 8px;
+  align-items: center;
+}
+.history-date-row input {
+  min-height: 46px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(3,10,22,.52);
+  color: rgba(246,251,255,.95);
+  padding: 0 12px;
+  font-weight: 950;
+  color-scheme: dark;
+}
+.ghost-button.compact {
+  min-width: 0;
+  padding: 0;
+  font-size: 1.35rem;
+}
+.history-summary-card {
+  align-content: start;
+}
+.history-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.history-total-card {
+  min-height: 112px;
+  display: grid;
+  gap: 5px;
+  align-content: center;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.09);
+  background: rgba(0,0,0,.16);
+}
+.history-total-card span {
+  color: rgba(221,234,248,.72);
+  font-size: .72rem;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.history-total-card strong {
+  color: rgba(246,251,255,.98);
+  font-size: clamp(1.25rem, 2.2vw, 2rem);
+  font-weight: 1000;
+  line-height: 1;
+}
+.history-total-card em {
+  color: rgba(219,232,246,.72);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 850;
+}
+.history-total-card.cool {
+  box-shadow: inset 0 0 0 1px rgba(77,238,255,.09), 0 10px 26px rgba(77,238,255,.06);
+}
+.history-total-card.heat {
+  box-shadow: inset 0 0 0 1px rgba(255,141,93,.11), 0 10px 26px rgba(255,104,93,.05);
+}
+.history-total-card.fan {
+  box-shadow: inset 0 0 0 1px rgba(99,241,173,.10), 0 10px 26px rgba(99,241,173,.04);
+}
+.history-timeline-card {
+  grid-column: 1 / -1;
+}
+.history-timeline {
+  max-height: min(42vh, 440px);
+  overflow: auto;
+  display: grid;
+  gap: 7px;
+  padding-right: 2px;
+}
+.history-event {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(74px, .35fr) minmax(0, 1fr) minmax(110px, .42fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.075);
+  background: rgba(0,0,0,.15);
+}
+.history-event strong {
+  font-weight: 1000;
+  color: rgba(246,251,255,.96);
+}
+.history-event span {
+  color: rgba(221,234,248,.78);
+  font-weight: 900;
+}
+.history-event em {
+  color: rgba(219,232,246,.68);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 820;
+  text-align: right;
+}
+.history-event.cool {
+  border-color: rgba(77,238,255,.15);
+}
+.history-event.heat {
+  border-color: rgba(255,141,93,.16);
+}
+.history-event.fan {
+  border-color: rgba(99,241,173,.14);
+}
+
 @media (max-width: 900px) {
   .screen-track { inset-top: 80px; }
   .thermostat-focus { align-items: center; }
@@ -783,6 +908,131 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   .shade-stage { min-height: 245px; }
   .room-config-list { grid-template-columns: 1fr; }
 }
+
+/* 2026-06-17 HVAC history page */
+.history-settings-view {
+  min-height: 0;
+  overflow: hidden;
+}
+.history-layout {
+  grid-template-columns: minmax(260px, .68fr) minmax(0, 1.32fr);
+}
+.history-date-card {
+  align-content: start;
+}
+.history-date-row {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) 46px;
+  gap: 8px;
+  align-items: center;
+}
+.history-date-row input {
+  min-height: 46px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(3,10,22,.52);
+  color: rgba(246,251,255,.95);
+  padding: 0 12px;
+  font-weight: 950;
+  color-scheme: dark;
+}
+.ghost-button.compact {
+  min-width: 0;
+  padding: 0;
+  font-size: 1.35rem;
+}
+.history-summary-card {
+  align-content: start;
+}
+.history-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.history-total-card {
+  min-height: 112px;
+  display: grid;
+  gap: 5px;
+  align-content: center;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.09);
+  background: rgba(0,0,0,.16);
+}
+.history-total-card span {
+  color: rgba(221,234,248,.72);
+  font-size: .72rem;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.history-total-card strong {
+  color: rgba(246,251,255,.98);
+  font-size: clamp(1.25rem, 2.2vw, 2rem);
+  font-weight: 1000;
+  line-height: 1;
+}
+.history-total-card em {
+  color: rgba(219,232,246,.72);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 850;
+}
+.history-total-card.cool {
+  box-shadow: inset 0 0 0 1px rgba(77,238,255,.09), 0 10px 26px rgba(77,238,255,.06);
+}
+.history-total-card.heat {
+  box-shadow: inset 0 0 0 1px rgba(255,141,93,.11), 0 10px 26px rgba(255,104,93,.05);
+}
+.history-total-card.fan {
+  box-shadow: inset 0 0 0 1px rgba(99,241,173,.10), 0 10px 26px rgba(99,241,173,.04);
+}
+.history-timeline-card {
+  grid-column: 1 / -1;
+}
+.history-timeline {
+  max-height: min(42vh, 440px);
+  overflow: auto;
+  display: grid;
+  gap: 7px;
+  padding-right: 2px;
+}
+.history-event {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(74px, .35fr) minmax(0, 1fr) minmax(110px, .42fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.075);
+  background: rgba(0,0,0,.15);
+}
+.history-event strong {
+  font-weight: 1000;
+  color: rgba(246,251,255,.96);
+}
+.history-event span {
+  color: rgba(221,234,248,.78);
+  font-weight: 900;
+}
+.history-event em {
+  color: rgba(219,232,246,.68);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 820;
+  text-align: right;
+}
+.history-event.cool {
+  border-color: rgba(77,238,255,.15);
+}
+.history-event.heat {
+  border-color: rgba(255,141,93,.16);
+}
+.history-event.fan {
+  border-color: rgba(99,241,173,.14);
+}
+
 @media (max-width: 900px) {
   .blind-command-row { align-items: stretch; flex-direction: column; }
   .room-tabs { max-width: 100%; width: 100%; }
@@ -2469,6 +2719,131 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   }
   .relay-pill { min-height: 38px; padding: 0 10px; gap: 8px; }
 }
+
+/* 2026-06-17 HVAC history page */
+.history-settings-view {
+  min-height: 0;
+  overflow: hidden;
+}
+.history-layout {
+  grid-template-columns: minmax(260px, .68fr) minmax(0, 1.32fr);
+}
+.history-date-card {
+  align-content: start;
+}
+.history-date-row {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) 46px;
+  gap: 8px;
+  align-items: center;
+}
+.history-date-row input {
+  min-height: 46px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(3,10,22,.52);
+  color: rgba(246,251,255,.95);
+  padding: 0 12px;
+  font-weight: 950;
+  color-scheme: dark;
+}
+.ghost-button.compact {
+  min-width: 0;
+  padding: 0;
+  font-size: 1.35rem;
+}
+.history-summary-card {
+  align-content: start;
+}
+.history-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.history-total-card {
+  min-height: 112px;
+  display: grid;
+  gap: 5px;
+  align-content: center;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.09);
+  background: rgba(0,0,0,.16);
+}
+.history-total-card span {
+  color: rgba(221,234,248,.72);
+  font-size: .72rem;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.history-total-card strong {
+  color: rgba(246,251,255,.98);
+  font-size: clamp(1.25rem, 2.2vw, 2rem);
+  font-weight: 1000;
+  line-height: 1;
+}
+.history-total-card em {
+  color: rgba(219,232,246,.72);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 850;
+}
+.history-total-card.cool {
+  box-shadow: inset 0 0 0 1px rgba(77,238,255,.09), 0 10px 26px rgba(77,238,255,.06);
+}
+.history-total-card.heat {
+  box-shadow: inset 0 0 0 1px rgba(255,141,93,.11), 0 10px 26px rgba(255,104,93,.05);
+}
+.history-total-card.fan {
+  box-shadow: inset 0 0 0 1px rgba(99,241,173,.10), 0 10px 26px rgba(99,241,173,.04);
+}
+.history-timeline-card {
+  grid-column: 1 / -1;
+}
+.history-timeline {
+  max-height: min(42vh, 440px);
+  overflow: auto;
+  display: grid;
+  gap: 7px;
+  padding-right: 2px;
+}
+.history-event {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(74px, .35fr) minmax(0, 1fr) minmax(110px, .42fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.075);
+  background: rgba(0,0,0,.15);
+}
+.history-event strong {
+  font-weight: 1000;
+  color: rgba(246,251,255,.96);
+}
+.history-event span {
+  color: rgba(221,234,248,.78);
+  font-weight: 900;
+}
+.history-event em {
+  color: rgba(219,232,246,.68);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 820;
+  text-align: right;
+}
+.history-event.cool {
+  border-color: rgba(77,238,255,.15);
+}
+.history-event.heat {
+  border-color: rgba(255,141,93,.16);
+}
+.history-event.fan {
+  border-color: rgba(99,241,173,.14);
+}
+
 @media (max-width: 900px) {
   .thermostat-stage { grid-template-rows: auto auto minmax(0,1fr) auto; }
   .virtual-thermostat-panel {
@@ -2487,6 +2862,131 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   .relay-pill { grid-template-columns: 10px 1fr; gap: 6px; min-height: 38px; }
   .relay-pill em { display: none; }
 }
+
+/* 2026-06-17 HVAC history page */
+.history-settings-view {
+  min-height: 0;
+  overflow: hidden;
+}
+.history-layout {
+  grid-template-columns: minmax(260px, .68fr) minmax(0, 1.32fr);
+}
+.history-date-card {
+  align-content: start;
+}
+.history-date-row {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) 46px;
+  gap: 8px;
+  align-items: center;
+}
+.history-date-row input {
+  min-height: 46px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(3,10,22,.52);
+  color: rgba(246,251,255,.95);
+  padding: 0 12px;
+  font-weight: 950;
+  color-scheme: dark;
+}
+.ghost-button.compact {
+  min-width: 0;
+  padding: 0;
+  font-size: 1.35rem;
+}
+.history-summary-card {
+  align-content: start;
+}
+.history-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.history-total-card {
+  min-height: 112px;
+  display: grid;
+  gap: 5px;
+  align-content: center;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.09);
+  background: rgba(0,0,0,.16);
+}
+.history-total-card span {
+  color: rgba(221,234,248,.72);
+  font-size: .72rem;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.history-total-card strong {
+  color: rgba(246,251,255,.98);
+  font-size: clamp(1.25rem, 2.2vw, 2rem);
+  font-weight: 1000;
+  line-height: 1;
+}
+.history-total-card em {
+  color: rgba(219,232,246,.72);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 850;
+}
+.history-total-card.cool {
+  box-shadow: inset 0 0 0 1px rgba(77,238,255,.09), 0 10px 26px rgba(77,238,255,.06);
+}
+.history-total-card.heat {
+  box-shadow: inset 0 0 0 1px rgba(255,141,93,.11), 0 10px 26px rgba(255,104,93,.05);
+}
+.history-total-card.fan {
+  box-shadow: inset 0 0 0 1px rgba(99,241,173,.10), 0 10px 26px rgba(99,241,173,.04);
+}
+.history-timeline-card {
+  grid-column: 1 / -1;
+}
+.history-timeline {
+  max-height: min(42vh, 440px);
+  overflow: auto;
+  display: grid;
+  gap: 7px;
+  padding-right: 2px;
+}
+.history-event {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(74px, .35fr) minmax(0, 1fr) minmax(110px, .42fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.075);
+  background: rgba(0,0,0,.15);
+}
+.history-event strong {
+  font-weight: 1000;
+  color: rgba(246,251,255,.96);
+}
+.history-event span {
+  color: rgba(221,234,248,.78);
+  font-weight: 900;
+}
+.history-event em {
+  color: rgba(219,232,246,.68);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 820;
+  text-align: right;
+}
+.history-event.cool {
+  border-color: rgba(77,238,255,.15);
+}
+.history-event.heat {
+  border-color: rgba(255,141,93,.16);
+}
+.history-event.fan {
+  border-color: rgba(99,241,173,.14);
+}
+
 @media (max-width: 900px) {
   .thermostat-bottom-row {
     width: min(520px, 92vw);
@@ -2572,6 +3072,131 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   }
   .mode-deck { width: 100%; }
 }
+
+/* 2026-06-17 HVAC history page */
+.history-settings-view {
+  min-height: 0;
+  overflow: hidden;
+}
+.history-layout {
+  grid-template-columns: minmax(260px, .68fr) minmax(0, 1.32fr);
+}
+.history-date-card {
+  align-content: start;
+}
+.history-date-row {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) 46px;
+  gap: 8px;
+  align-items: center;
+}
+.history-date-row input {
+  min-height: 46px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(3,10,22,.52);
+  color: rgba(246,251,255,.95);
+  padding: 0 12px;
+  font-weight: 950;
+  color-scheme: dark;
+}
+.ghost-button.compact {
+  min-width: 0;
+  padding: 0;
+  font-size: 1.35rem;
+}
+.history-summary-card {
+  align-content: start;
+}
+.history-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.history-total-card {
+  min-height: 112px;
+  display: grid;
+  gap: 5px;
+  align-content: center;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.09);
+  background: rgba(0,0,0,.16);
+}
+.history-total-card span {
+  color: rgba(221,234,248,.72);
+  font-size: .72rem;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.history-total-card strong {
+  color: rgba(246,251,255,.98);
+  font-size: clamp(1.25rem, 2.2vw, 2rem);
+  font-weight: 1000;
+  line-height: 1;
+}
+.history-total-card em {
+  color: rgba(219,232,246,.72);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 850;
+}
+.history-total-card.cool {
+  box-shadow: inset 0 0 0 1px rgba(77,238,255,.09), 0 10px 26px rgba(77,238,255,.06);
+}
+.history-total-card.heat {
+  box-shadow: inset 0 0 0 1px rgba(255,141,93,.11), 0 10px 26px rgba(255,104,93,.05);
+}
+.history-total-card.fan {
+  box-shadow: inset 0 0 0 1px rgba(99,241,173,.10), 0 10px 26px rgba(99,241,173,.04);
+}
+.history-timeline-card {
+  grid-column: 1 / -1;
+}
+.history-timeline {
+  max-height: min(42vh, 440px);
+  overflow: auto;
+  display: grid;
+  gap: 7px;
+  padding-right: 2px;
+}
+.history-event {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(74px, .35fr) minmax(0, 1fr) minmax(110px, .42fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.075);
+  background: rgba(0,0,0,.15);
+}
+.history-event strong {
+  font-weight: 1000;
+  color: rgba(246,251,255,.96);
+}
+.history-event span {
+  color: rgba(221,234,248,.78);
+  font-weight: 900;
+}
+.history-event em {
+  color: rgba(219,232,246,.68);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 820;
+  text-align: right;
+}
+.history-event.cool {
+  border-color: rgba(77,238,255,.15);
+}
+.history-event.heat {
+  border-color: rgba(255,141,93,.16);
+}
+.history-event.fan {
+  border-color: rgba(99,241,173,.14);
+}
+
 @media (max-width: 900px) {
   .virtual-thermostat-panel {
     grid-template-columns: 1fr;
@@ -2878,6 +3503,131 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   .alarm-shield { width: 54px; height: 62px; }
   .alarm-orbit { width: 78px; height: 78px; }
 }
+
+/* 2026-06-17 HVAC history page */
+.history-settings-view {
+  min-height: 0;
+  overflow: hidden;
+}
+.history-layout {
+  grid-template-columns: minmax(260px, .68fr) minmax(0, 1.32fr);
+}
+.history-date-card {
+  align-content: start;
+}
+.history-date-row {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) 46px;
+  gap: 8px;
+  align-items: center;
+}
+.history-date-row input {
+  min-height: 46px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(3,10,22,.52);
+  color: rgba(246,251,255,.95);
+  padding: 0 12px;
+  font-weight: 950;
+  color-scheme: dark;
+}
+.ghost-button.compact {
+  min-width: 0;
+  padding: 0;
+  font-size: 1.35rem;
+}
+.history-summary-card {
+  align-content: start;
+}
+.history-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.history-total-card {
+  min-height: 112px;
+  display: grid;
+  gap: 5px;
+  align-content: center;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.09);
+  background: rgba(0,0,0,.16);
+}
+.history-total-card span {
+  color: rgba(221,234,248,.72);
+  font-size: .72rem;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.history-total-card strong {
+  color: rgba(246,251,255,.98);
+  font-size: clamp(1.25rem, 2.2vw, 2rem);
+  font-weight: 1000;
+  line-height: 1;
+}
+.history-total-card em {
+  color: rgba(219,232,246,.72);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 850;
+}
+.history-total-card.cool {
+  box-shadow: inset 0 0 0 1px rgba(77,238,255,.09), 0 10px 26px rgba(77,238,255,.06);
+}
+.history-total-card.heat {
+  box-shadow: inset 0 0 0 1px rgba(255,141,93,.11), 0 10px 26px rgba(255,104,93,.05);
+}
+.history-total-card.fan {
+  box-shadow: inset 0 0 0 1px rgba(99,241,173,.10), 0 10px 26px rgba(99,241,173,.04);
+}
+.history-timeline-card {
+  grid-column: 1 / -1;
+}
+.history-timeline {
+  max-height: min(42vh, 440px);
+  overflow: auto;
+  display: grid;
+  gap: 7px;
+  padding-right: 2px;
+}
+.history-event {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(74px, .35fr) minmax(0, 1fr) minmax(110px, .42fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.075);
+  background: rgba(0,0,0,.15);
+}
+.history-event strong {
+  font-weight: 1000;
+  color: rgba(246,251,255,.96);
+}
+.history-event span {
+  color: rgba(221,234,248,.78);
+  font-weight: 900;
+}
+.history-event em {
+  color: rgba(219,232,246,.68);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 820;
+  text-align: right;
+}
+.history-event.cool {
+  border-color: rgba(77,238,255,.15);
+}
+.history-event.heat {
+  border-color: rgba(255,141,93,.16);
+}
+.history-event.fan {
+  border-color: rgba(99,241,173,.14);
+}
+
 @media (max-width: 900px) {
   .alarm-control-widget {
     position: relative;
@@ -3161,6 +3911,131 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
 .alarm-disarm-button {
   margin-top: 12px;
   min-height: 52px;
+}
+
+
+/* 2026-06-17 HVAC history page */
+.history-settings-view {
+  min-height: 0;
+  overflow: hidden;
+}
+.history-layout {
+  grid-template-columns: minmax(260px, .68fr) minmax(0, 1.32fr);
+}
+.history-date-card {
+  align-content: start;
+}
+.history-date-row {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) 46px;
+  gap: 8px;
+  align-items: center;
+}
+.history-date-row input {
+  min-height: 46px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(3,10,22,.52);
+  color: rgba(246,251,255,.95);
+  padding: 0 12px;
+  font-weight: 950;
+  color-scheme: dark;
+}
+.ghost-button.compact {
+  min-width: 0;
+  padding: 0;
+  font-size: 1.35rem;
+}
+.history-summary-card {
+  align-content: start;
+}
+.history-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.history-total-card {
+  min-height: 112px;
+  display: grid;
+  gap: 5px;
+  align-content: center;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.09);
+  background: rgba(0,0,0,.16);
+}
+.history-total-card span {
+  color: rgba(221,234,248,.72);
+  font-size: .72rem;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.history-total-card strong {
+  color: rgba(246,251,255,.98);
+  font-size: clamp(1.25rem, 2.2vw, 2rem);
+  font-weight: 1000;
+  line-height: 1;
+}
+.history-total-card em {
+  color: rgba(219,232,246,.72);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 850;
+}
+.history-total-card.cool {
+  box-shadow: inset 0 0 0 1px rgba(77,238,255,.09), 0 10px 26px rgba(77,238,255,.06);
+}
+.history-total-card.heat {
+  box-shadow: inset 0 0 0 1px rgba(255,141,93,.11), 0 10px 26px rgba(255,104,93,.05);
+}
+.history-total-card.fan {
+  box-shadow: inset 0 0 0 1px rgba(99,241,173,.10), 0 10px 26px rgba(99,241,173,.04);
+}
+.history-timeline-card {
+  grid-column: 1 / -1;
+}
+.history-timeline {
+  max-height: min(42vh, 440px);
+  overflow: auto;
+  display: grid;
+  gap: 7px;
+  padding-right: 2px;
+}
+.history-event {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(74px, .35fr) minmax(0, 1fr) minmax(110px, .42fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.075);
+  background: rgba(0,0,0,.15);
+}
+.history-event strong {
+  font-weight: 1000;
+  color: rgba(246,251,255,.96);
+}
+.history-event span {
+  color: rgba(221,234,248,.78);
+  font-weight: 900;
+}
+.history-event em {
+  color: rgba(219,232,246,.68);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 820;
+  text-align: right;
+}
+.history-event.cool {
+  border-color: rgba(77,238,255,.15);
+}
+.history-event.heat {
+  border-color: rgba(255,141,93,.16);
+}
+.history-event.fan {
+  border-color: rgba(99,241,173,.14);
 }
 
 @media (max-width: 900px) {
@@ -3604,6 +4479,131 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
 #lightsHaView[hidden] { display: none !important; }
 #lightsHaView:not([hidden]) { display: grid !important; }
 
+
+/* 2026-06-17 HVAC history page */
+.history-settings-view {
+  min-height: 0;
+  overflow: hidden;
+}
+.history-layout {
+  grid-template-columns: minmax(260px, .68fr) minmax(0, 1.32fr);
+}
+.history-date-card {
+  align-content: start;
+}
+.history-date-row {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) 46px;
+  gap: 8px;
+  align-items: center;
+}
+.history-date-row input {
+  min-height: 46px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(3,10,22,.52);
+  color: rgba(246,251,255,.95);
+  padding: 0 12px;
+  font-weight: 950;
+  color-scheme: dark;
+}
+.ghost-button.compact {
+  min-width: 0;
+  padding: 0;
+  font-size: 1.35rem;
+}
+.history-summary-card {
+  align-content: start;
+}
+.history-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.history-total-card {
+  min-height: 112px;
+  display: grid;
+  gap: 5px;
+  align-content: center;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.09);
+  background: rgba(0,0,0,.16);
+}
+.history-total-card span {
+  color: rgba(221,234,248,.72);
+  font-size: .72rem;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.history-total-card strong {
+  color: rgba(246,251,255,.98);
+  font-size: clamp(1.25rem, 2.2vw, 2rem);
+  font-weight: 1000;
+  line-height: 1;
+}
+.history-total-card em {
+  color: rgba(219,232,246,.72);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 850;
+}
+.history-total-card.cool {
+  box-shadow: inset 0 0 0 1px rgba(77,238,255,.09), 0 10px 26px rgba(77,238,255,.06);
+}
+.history-total-card.heat {
+  box-shadow: inset 0 0 0 1px rgba(255,141,93,.11), 0 10px 26px rgba(255,104,93,.05);
+}
+.history-total-card.fan {
+  box-shadow: inset 0 0 0 1px rgba(99,241,173,.10), 0 10px 26px rgba(99,241,173,.04);
+}
+.history-timeline-card {
+  grid-column: 1 / -1;
+}
+.history-timeline {
+  max-height: min(42vh, 440px);
+  overflow: auto;
+  display: grid;
+  gap: 7px;
+  padding-right: 2px;
+}
+.history-event {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(74px, .35fr) minmax(0, 1fr) minmax(110px, .42fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.075);
+  background: rgba(0,0,0,.15);
+}
+.history-event strong {
+  font-weight: 1000;
+  color: rgba(246,251,255,.96);
+}
+.history-event span {
+  color: rgba(221,234,248,.78);
+  font-weight: 900;
+}
+.history-event em {
+  color: rgba(219,232,246,.68);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 820;
+  text-align: right;
+}
+.history-event.cool {
+  border-color: rgba(77,238,255,.15);
+}
+.history-event.heat {
+  border-color: rgba(255,141,93,.16);
+}
+.history-event.fan {
+  border-color: rgba(99,241,173,.14);
+}
+
 @media (max-width: 900px) {
   .screen-track { inset-top: 80px; }
   .top-nav { max-width: calc(100vw - 170px); overflow-x: auto; scrollbar-width: none; }
@@ -3865,6 +4865,131 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   .light-cards { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
   .light-card { min-height: 330px; }
   .light-slider.light-slider-vertical { height: min(26vh, 205px); }
+}
+
+
+/* 2026-06-17 HVAC history page */
+.history-settings-view {
+  min-height: 0;
+  overflow: hidden;
+}
+.history-layout {
+  grid-template-columns: minmax(260px, .68fr) minmax(0, 1.32fr);
+}
+.history-date-card {
+  align-content: start;
+}
+.history-date-row {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) 46px;
+  gap: 8px;
+  align-items: center;
+}
+.history-date-row input {
+  min-height: 46px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(3,10,22,.52);
+  color: rgba(246,251,255,.95);
+  padding: 0 12px;
+  font-weight: 950;
+  color-scheme: dark;
+}
+.ghost-button.compact {
+  min-width: 0;
+  padding: 0;
+  font-size: 1.35rem;
+}
+.history-summary-card {
+  align-content: start;
+}
+.history-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.history-total-card {
+  min-height: 112px;
+  display: grid;
+  gap: 5px;
+  align-content: center;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.09);
+  background: rgba(0,0,0,.16);
+}
+.history-total-card span {
+  color: rgba(221,234,248,.72);
+  font-size: .72rem;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.history-total-card strong {
+  color: rgba(246,251,255,.98);
+  font-size: clamp(1.25rem, 2.2vw, 2rem);
+  font-weight: 1000;
+  line-height: 1;
+}
+.history-total-card em {
+  color: rgba(219,232,246,.72);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 850;
+}
+.history-total-card.cool {
+  box-shadow: inset 0 0 0 1px rgba(77,238,255,.09), 0 10px 26px rgba(77,238,255,.06);
+}
+.history-total-card.heat {
+  box-shadow: inset 0 0 0 1px rgba(255,141,93,.11), 0 10px 26px rgba(255,104,93,.05);
+}
+.history-total-card.fan {
+  box-shadow: inset 0 0 0 1px rgba(99,241,173,.10), 0 10px 26px rgba(99,241,173,.04);
+}
+.history-timeline-card {
+  grid-column: 1 / -1;
+}
+.history-timeline {
+  max-height: min(42vh, 440px);
+  overflow: auto;
+  display: grid;
+  gap: 7px;
+  padding-right: 2px;
+}
+.history-event {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(74px, .35fr) minmax(0, 1fr) minmax(110px, .42fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.075);
+  background: rgba(0,0,0,.15);
+}
+.history-event strong {
+  font-weight: 1000;
+  color: rgba(246,251,255,.96);
+}
+.history-event span {
+  color: rgba(221,234,248,.78);
+  font-weight: 900;
+}
+.history-event em {
+  color: rgba(219,232,246,.68);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 820;
+  text-align: right;
+}
+.history-event.cool {
+  border-color: rgba(77,238,255,.15);
+}
+.history-event.heat {
+  border-color: rgba(255,141,93,.16);
+}
+.history-event.fan {
+  border-color: rgba(99,241,173,.14);
 }
 
 @media (max-width: 900px) {
@@ -4425,6 +5550,131 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   }
 }
 
+
+/* 2026-06-17 HVAC history page */
+.history-settings-view {
+  min-height: 0;
+  overflow: hidden;
+}
+.history-layout {
+  grid-template-columns: minmax(260px, .68fr) minmax(0, 1.32fr);
+}
+.history-date-card {
+  align-content: start;
+}
+.history-date-row {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) 46px;
+  gap: 8px;
+  align-items: center;
+}
+.history-date-row input {
+  min-height: 46px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(3,10,22,.52);
+  color: rgba(246,251,255,.95);
+  padding: 0 12px;
+  font-weight: 950;
+  color-scheme: dark;
+}
+.ghost-button.compact {
+  min-width: 0;
+  padding: 0;
+  font-size: 1.35rem;
+}
+.history-summary-card {
+  align-content: start;
+}
+.history-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.history-total-card {
+  min-height: 112px;
+  display: grid;
+  gap: 5px;
+  align-content: center;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.09);
+  background: rgba(0,0,0,.16);
+}
+.history-total-card span {
+  color: rgba(221,234,248,.72);
+  font-size: .72rem;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.history-total-card strong {
+  color: rgba(246,251,255,.98);
+  font-size: clamp(1.25rem, 2.2vw, 2rem);
+  font-weight: 1000;
+  line-height: 1;
+}
+.history-total-card em {
+  color: rgba(219,232,246,.72);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 850;
+}
+.history-total-card.cool {
+  box-shadow: inset 0 0 0 1px rgba(77,238,255,.09), 0 10px 26px rgba(77,238,255,.06);
+}
+.history-total-card.heat {
+  box-shadow: inset 0 0 0 1px rgba(255,141,93,.11), 0 10px 26px rgba(255,104,93,.05);
+}
+.history-total-card.fan {
+  box-shadow: inset 0 0 0 1px rgba(99,241,173,.10), 0 10px 26px rgba(99,241,173,.04);
+}
+.history-timeline-card {
+  grid-column: 1 / -1;
+}
+.history-timeline {
+  max-height: min(42vh, 440px);
+  overflow: auto;
+  display: grid;
+  gap: 7px;
+  padding-right: 2px;
+}
+.history-event {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(74px, .35fr) minmax(0, 1fr) minmax(110px, .42fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.075);
+  background: rgba(0,0,0,.15);
+}
+.history-event strong {
+  font-weight: 1000;
+  color: rgba(246,251,255,.96);
+}
+.history-event span {
+  color: rgba(221,234,248,.78);
+  font-weight: 900;
+}
+.history-event em {
+  color: rgba(219,232,246,.68);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 820;
+  text-align: right;
+}
+.history-event.cool {
+  border-color: rgba(77,238,255,.15);
+}
+.history-event.heat {
+  border-color: rgba(255,141,93,.16);
+}
+.history-event.fan {
+  border-color: rgba(99,241,173,.14);
+}
+
 @media (max-width: 900px) {
   .virtual-thermostat-panel {
     position: absolute;
@@ -4746,6 +5996,131 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
 
 @media (max-width: 1180px) {
   .room-control-cards { --room-control-columns: 4; --room-control-card-height: clamp(218px, 27vh, 254px); }
+}
+
+
+/* 2026-06-17 HVAC history page */
+.history-settings-view {
+  min-height: 0;
+  overflow: hidden;
+}
+.history-layout {
+  grid-template-columns: minmax(260px, .68fr) minmax(0, 1.32fr);
+}
+.history-date-card {
+  align-content: start;
+}
+.history-date-row {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) 46px;
+  gap: 8px;
+  align-items: center;
+}
+.history-date-row input {
+  min-height: 46px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(3,10,22,.52);
+  color: rgba(246,251,255,.95);
+  padding: 0 12px;
+  font-weight: 950;
+  color-scheme: dark;
+}
+.ghost-button.compact {
+  min-width: 0;
+  padding: 0;
+  font-size: 1.35rem;
+}
+.history-summary-card {
+  align-content: start;
+}
+.history-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.history-total-card {
+  min-height: 112px;
+  display: grid;
+  gap: 5px;
+  align-content: center;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.09);
+  background: rgba(0,0,0,.16);
+}
+.history-total-card span {
+  color: rgba(221,234,248,.72);
+  font-size: .72rem;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.history-total-card strong {
+  color: rgba(246,251,255,.98);
+  font-size: clamp(1.25rem, 2.2vw, 2rem);
+  font-weight: 1000;
+  line-height: 1;
+}
+.history-total-card em {
+  color: rgba(219,232,246,.72);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 850;
+}
+.history-total-card.cool {
+  box-shadow: inset 0 0 0 1px rgba(77,238,255,.09), 0 10px 26px rgba(77,238,255,.06);
+}
+.history-total-card.heat {
+  box-shadow: inset 0 0 0 1px rgba(255,141,93,.11), 0 10px 26px rgba(255,104,93,.05);
+}
+.history-total-card.fan {
+  box-shadow: inset 0 0 0 1px rgba(99,241,173,.10), 0 10px 26px rgba(99,241,173,.04);
+}
+.history-timeline-card {
+  grid-column: 1 / -1;
+}
+.history-timeline {
+  max-height: min(42vh, 440px);
+  overflow: auto;
+  display: grid;
+  gap: 7px;
+  padding-right: 2px;
+}
+.history-event {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(74px, .35fr) minmax(0, 1fr) minmax(110px, .42fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.075);
+  background: rgba(0,0,0,.15);
+}
+.history-event strong {
+  font-weight: 1000;
+  color: rgba(246,251,255,.96);
+}
+.history-event span {
+  color: rgba(221,234,248,.78);
+  font-weight: 900;
+}
+.history-event em {
+  color: rgba(219,232,246,.68);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 820;
+  text-align: right;
+}
+.history-event.cool {
+  border-color: rgba(77,238,255,.15);
+}
+.history-event.heat {
+  border-color: rgba(255,141,93,.16);
+}
+.history-event.fan {
+  border-color: rgba(99,241,173,.14);
 }
 
 @media (max-width: 900px) {
@@ -5221,6 +6596,131 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
     grid-template-columns: repeat(4, minmax(250px, 1fr));
   }
 }
+
+/* 2026-06-17 HVAC history page */
+.history-settings-view {
+  min-height: 0;
+  overflow: hidden;
+}
+.history-layout {
+  grid-template-columns: minmax(260px, .68fr) minmax(0, 1.32fr);
+}
+.history-date-card {
+  align-content: start;
+}
+.history-date-row {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) 46px;
+  gap: 8px;
+  align-items: center;
+}
+.history-date-row input {
+  min-height: 46px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(3,10,22,.52);
+  color: rgba(246,251,255,.95);
+  padding: 0 12px;
+  font-weight: 950;
+  color-scheme: dark;
+}
+.ghost-button.compact {
+  min-width: 0;
+  padding: 0;
+  font-size: 1.35rem;
+}
+.history-summary-card {
+  align-content: start;
+}
+.history-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.history-total-card {
+  min-height: 112px;
+  display: grid;
+  gap: 5px;
+  align-content: center;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.09);
+  background: rgba(0,0,0,.16);
+}
+.history-total-card span {
+  color: rgba(221,234,248,.72);
+  font-size: .72rem;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.history-total-card strong {
+  color: rgba(246,251,255,.98);
+  font-size: clamp(1.25rem, 2.2vw, 2rem);
+  font-weight: 1000;
+  line-height: 1;
+}
+.history-total-card em {
+  color: rgba(219,232,246,.72);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 850;
+}
+.history-total-card.cool {
+  box-shadow: inset 0 0 0 1px rgba(77,238,255,.09), 0 10px 26px rgba(77,238,255,.06);
+}
+.history-total-card.heat {
+  box-shadow: inset 0 0 0 1px rgba(255,141,93,.11), 0 10px 26px rgba(255,104,93,.05);
+}
+.history-total-card.fan {
+  box-shadow: inset 0 0 0 1px rgba(99,241,173,.10), 0 10px 26px rgba(99,241,173,.04);
+}
+.history-timeline-card {
+  grid-column: 1 / -1;
+}
+.history-timeline {
+  max-height: min(42vh, 440px);
+  overflow: auto;
+  display: grid;
+  gap: 7px;
+  padding-right: 2px;
+}
+.history-event {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(74px, .35fr) minmax(0, 1fr) minmax(110px, .42fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.075);
+  background: rgba(0,0,0,.15);
+}
+.history-event strong {
+  font-weight: 1000;
+  color: rgba(246,251,255,.96);
+}
+.history-event span {
+  color: rgba(221,234,248,.78);
+  font-weight: 900;
+}
+.history-event em {
+  color: rgba(219,232,246,.68);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 820;
+  text-align: right;
+}
+.history-event.cool {
+  border-color: rgba(77,238,255,.15);
+}
+.history-event.heat {
+  border-color: rgba(255,141,93,.16);
+}
+.history-event.fan {
+  border-color: rgba(99,241,173,.14);
+}
+
 @media (max-width: 900px) {
   .settings-sheet.full-setup.room-control-setup {
     width: calc(100vw - 20px);
@@ -6048,6 +7548,131 @@ body[data-theme="star-trek"] {
   background: linear-gradient(180deg, #3f7fd4, #275ca9);
   color: #f4efe4;
 }
+
+/* 2026-06-17 HVAC history page */
+.history-settings-view {
+  min-height: 0;
+  overflow: hidden;
+}
+.history-layout {
+  grid-template-columns: minmax(260px, .68fr) minmax(0, 1.32fr);
+}
+.history-date-card {
+  align-content: start;
+}
+.history-date-row {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) 46px;
+  gap: 8px;
+  align-items: center;
+}
+.history-date-row input {
+  min-height: 46px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(3,10,22,.52);
+  color: rgba(246,251,255,.95);
+  padding: 0 12px;
+  font-weight: 950;
+  color-scheme: dark;
+}
+.ghost-button.compact {
+  min-width: 0;
+  padding: 0;
+  font-size: 1.35rem;
+}
+.history-summary-card {
+  align-content: start;
+}
+.history-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.history-total-card {
+  min-height: 112px;
+  display: grid;
+  gap: 5px;
+  align-content: center;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.09);
+  background: rgba(0,0,0,.16);
+}
+.history-total-card span {
+  color: rgba(221,234,248,.72);
+  font-size: .72rem;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.history-total-card strong {
+  color: rgba(246,251,255,.98);
+  font-size: clamp(1.25rem, 2.2vw, 2rem);
+  font-weight: 1000;
+  line-height: 1;
+}
+.history-total-card em {
+  color: rgba(219,232,246,.72);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 850;
+}
+.history-total-card.cool {
+  box-shadow: inset 0 0 0 1px rgba(77,238,255,.09), 0 10px 26px rgba(77,238,255,.06);
+}
+.history-total-card.heat {
+  box-shadow: inset 0 0 0 1px rgba(255,141,93,.11), 0 10px 26px rgba(255,104,93,.05);
+}
+.history-total-card.fan {
+  box-shadow: inset 0 0 0 1px rgba(99,241,173,.10), 0 10px 26px rgba(99,241,173,.04);
+}
+.history-timeline-card {
+  grid-column: 1 / -1;
+}
+.history-timeline {
+  max-height: min(42vh, 440px);
+  overflow: auto;
+  display: grid;
+  gap: 7px;
+  padding-right: 2px;
+}
+.history-event {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(74px, .35fr) minmax(0, 1fr) minmax(110px, .42fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.075);
+  background: rgba(0,0,0,.15);
+}
+.history-event strong {
+  font-weight: 1000;
+  color: rgba(246,251,255,.96);
+}
+.history-event span {
+  color: rgba(221,234,248,.78);
+  font-weight: 900;
+}
+.history-event em {
+  color: rgba(219,232,246,.68);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 820;
+  text-align: right;
+}
+.history-event.cool {
+  border-color: rgba(77,238,255,.15);
+}
+.history-event.heat {
+  border-color: rgba(255,141,93,.16);
+}
+.history-event.fan {
+  border-color: rgba(99,241,173,.14);
+}
+
 @media (max-width: 900px) {
   .app-shell[data-theme="star-trek"] .screen-track::before,
   .app-shell[data-theme="star-trek"] .screen-track::after {
@@ -7089,6 +8714,131 @@ body[data-theme="star-trek"] {
   }
 }
 
+
+/* 2026-06-17 HVAC history page */
+.history-settings-view {
+  min-height: 0;
+  overflow: hidden;
+}
+.history-layout {
+  grid-template-columns: minmax(260px, .68fr) minmax(0, 1.32fr);
+}
+.history-date-card {
+  align-content: start;
+}
+.history-date-row {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) 46px;
+  gap: 8px;
+  align-items: center;
+}
+.history-date-row input {
+  min-height: 46px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(3,10,22,.52);
+  color: rgba(246,251,255,.95);
+  padding: 0 12px;
+  font-weight: 950;
+  color-scheme: dark;
+}
+.ghost-button.compact {
+  min-width: 0;
+  padding: 0;
+  font-size: 1.35rem;
+}
+.history-summary-card {
+  align-content: start;
+}
+.history-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.history-total-card {
+  min-height: 112px;
+  display: grid;
+  gap: 5px;
+  align-content: center;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.09);
+  background: rgba(0,0,0,.16);
+}
+.history-total-card span {
+  color: rgba(221,234,248,.72);
+  font-size: .72rem;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.history-total-card strong {
+  color: rgba(246,251,255,.98);
+  font-size: clamp(1.25rem, 2.2vw, 2rem);
+  font-weight: 1000;
+  line-height: 1;
+}
+.history-total-card em {
+  color: rgba(219,232,246,.72);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 850;
+}
+.history-total-card.cool {
+  box-shadow: inset 0 0 0 1px rgba(77,238,255,.09), 0 10px 26px rgba(77,238,255,.06);
+}
+.history-total-card.heat {
+  box-shadow: inset 0 0 0 1px rgba(255,141,93,.11), 0 10px 26px rgba(255,104,93,.05);
+}
+.history-total-card.fan {
+  box-shadow: inset 0 0 0 1px rgba(99,241,173,.10), 0 10px 26px rgba(99,241,173,.04);
+}
+.history-timeline-card {
+  grid-column: 1 / -1;
+}
+.history-timeline {
+  max-height: min(42vh, 440px);
+  overflow: auto;
+  display: grid;
+  gap: 7px;
+  padding-right: 2px;
+}
+.history-event {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(74px, .35fr) minmax(0, 1fr) minmax(110px, .42fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.075);
+  background: rgba(0,0,0,.15);
+}
+.history-event strong {
+  font-weight: 1000;
+  color: rgba(246,251,255,.96);
+}
+.history-event span {
+  color: rgba(221,234,248,.78);
+  font-weight: 900;
+}
+.history-event em {
+  color: rgba(219,232,246,.68);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 820;
+  text-align: right;
+}
+.history-event.cool {
+  border-color: rgba(77,238,255,.15);
+}
+.history-event.heat {
+  border-color: rgba(255,141,93,.16);
+}
+.history-event.fan {
+  border-color: rgba(99,241,173,.14);
+}
+
 @media (max-width: 900px) {
   .app-shell[data-theme="star-trek"] .thermostat-stage::before,
   .app-shell[data-theme="star-trek"] .thermostat-stage::after {
@@ -7831,6 +9581,131 @@ body[data-theme="christmas"] {
   border-color: rgba(101,218,255,.90);
 }
 
+
+/* 2026-06-17 HVAC history page */
+.history-settings-view {
+  min-height: 0;
+  overflow: hidden;
+}
+.history-layout {
+  grid-template-columns: minmax(260px, .68fr) minmax(0, 1.32fr);
+}
+.history-date-card {
+  align-content: start;
+}
+.history-date-row {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) 46px;
+  gap: 8px;
+  align-items: center;
+}
+.history-date-row input {
+  min-height: 46px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(3,10,22,.52);
+  color: rgba(246,251,255,.95);
+  padding: 0 12px;
+  font-weight: 950;
+  color-scheme: dark;
+}
+.ghost-button.compact {
+  min-width: 0;
+  padding: 0;
+  font-size: 1.35rem;
+}
+.history-summary-card {
+  align-content: start;
+}
+.history-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.history-total-card {
+  min-height: 112px;
+  display: grid;
+  gap: 5px;
+  align-content: center;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.09);
+  background: rgba(0,0,0,.16);
+}
+.history-total-card span {
+  color: rgba(221,234,248,.72);
+  font-size: .72rem;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.history-total-card strong {
+  color: rgba(246,251,255,.98);
+  font-size: clamp(1.25rem, 2.2vw, 2rem);
+  font-weight: 1000;
+  line-height: 1;
+}
+.history-total-card em {
+  color: rgba(219,232,246,.72);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 850;
+}
+.history-total-card.cool {
+  box-shadow: inset 0 0 0 1px rgba(77,238,255,.09), 0 10px 26px rgba(77,238,255,.06);
+}
+.history-total-card.heat {
+  box-shadow: inset 0 0 0 1px rgba(255,141,93,.11), 0 10px 26px rgba(255,104,93,.05);
+}
+.history-total-card.fan {
+  box-shadow: inset 0 0 0 1px rgba(99,241,173,.10), 0 10px 26px rgba(99,241,173,.04);
+}
+.history-timeline-card {
+  grid-column: 1 / -1;
+}
+.history-timeline {
+  max-height: min(42vh, 440px);
+  overflow: auto;
+  display: grid;
+  gap: 7px;
+  padding-right: 2px;
+}
+.history-event {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(74px, .35fr) minmax(0, 1fr) minmax(110px, .42fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.075);
+  background: rgba(0,0,0,.15);
+}
+.history-event strong {
+  font-weight: 1000;
+  color: rgba(246,251,255,.96);
+}
+.history-event span {
+  color: rgba(221,234,248,.78);
+  font-weight: 900;
+}
+.history-event em {
+  color: rgba(219,232,246,.68);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 820;
+  text-align: right;
+}
+.history-event.cool {
+  border-color: rgba(77,238,255,.15);
+}
+.history-event.heat {
+  border-color: rgba(255,141,93,.16);
+}
+.history-event.fan {
+  border-color: rgba(99,241,173,.14);
+}
+
 @media (max-width: 900px) {
   .safety-warning-banner {
     top: 50%;
@@ -7981,6 +9856,131 @@ body[data-theme="christmas"] {
     width: clamp(142px, 15vw, 180px);
   }
 }
+
+/* 2026-06-17 HVAC history page */
+.history-settings-view {
+  min-height: 0;
+  overflow: hidden;
+}
+.history-layout {
+  grid-template-columns: minmax(260px, .68fr) minmax(0, 1.32fr);
+}
+.history-date-card {
+  align-content: start;
+}
+.history-date-row {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) 46px;
+  gap: 8px;
+  align-items: center;
+}
+.history-date-row input {
+  min-height: 46px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(3,10,22,.52);
+  color: rgba(246,251,255,.95);
+  padding: 0 12px;
+  font-weight: 950;
+  color-scheme: dark;
+}
+.ghost-button.compact {
+  min-width: 0;
+  padding: 0;
+  font-size: 1.35rem;
+}
+.history-summary-card {
+  align-content: start;
+}
+.history-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.history-total-card {
+  min-height: 112px;
+  display: grid;
+  gap: 5px;
+  align-content: center;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.09);
+  background: rgba(0,0,0,.16);
+}
+.history-total-card span {
+  color: rgba(221,234,248,.72);
+  font-size: .72rem;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.history-total-card strong {
+  color: rgba(246,251,255,.98);
+  font-size: clamp(1.25rem, 2.2vw, 2rem);
+  font-weight: 1000;
+  line-height: 1;
+}
+.history-total-card em {
+  color: rgba(219,232,246,.72);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 850;
+}
+.history-total-card.cool {
+  box-shadow: inset 0 0 0 1px rgba(77,238,255,.09), 0 10px 26px rgba(77,238,255,.06);
+}
+.history-total-card.heat {
+  box-shadow: inset 0 0 0 1px rgba(255,141,93,.11), 0 10px 26px rgba(255,104,93,.05);
+}
+.history-total-card.fan {
+  box-shadow: inset 0 0 0 1px rgba(99,241,173,.10), 0 10px 26px rgba(99,241,173,.04);
+}
+.history-timeline-card {
+  grid-column: 1 / -1;
+}
+.history-timeline {
+  max-height: min(42vh, 440px);
+  overflow: auto;
+  display: grid;
+  gap: 7px;
+  padding-right: 2px;
+}
+.history-event {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(74px, .35fr) minmax(0, 1fr) minmax(110px, .42fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.075);
+  background: rgba(0,0,0,.15);
+}
+.history-event strong {
+  font-weight: 1000;
+  color: rgba(246,251,255,.96);
+}
+.history-event span {
+  color: rgba(221,234,248,.78);
+  font-weight: 900;
+}
+.history-event em {
+  color: rgba(219,232,246,.68);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 820;
+  text-align: right;
+}
+.history-event.cool {
+  border-color: rgba(77,238,255,.15);
+}
+.history-event.heat {
+  border-color: rgba(255,141,93,.16);
+}
+.history-event.fan {
+  border-color: rgba(99,241,173,.14);
+}
+
 @media (max-width: 900px) {
   .auto-switch-notice {
     position: relative;
@@ -8087,30 +10087,37 @@ body[data-theme="christmas"] {
 }
 
 /* 2026-06-17 hardware information page */
+.comfort-top-actions,
 .hardware-info-top {
   grid-column: 1 / -1;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
   padding: 2px 0 4px;
 }
-.hardware-info-launch {
+.hardware-info-launch,
+.history-info-launch {
   min-height: 44px;
   border-radius: 16px;
   padding: 0 clamp(22px, 3vw, 42px);
   font-size: clamp(.9rem, 1.05vw, 1.08rem);
   box-shadow: 0 14px 32px rgba(77,238,255,.13), inset 0 1px 0 rgba(255,255,255,.22);
 }
-.settings-sheet.hardware-setup .settings-footer {
+.settings-sheet.hardware-setup .settings-footer,
+.settings-sheet.history-setup .settings-footer {
   display: none;
 }
-.settings-sheet.hardware-setup .settings-header {
+.settings-sheet.hardware-setup .settings-header,
+.settings-sheet.history-setup .settings-header {
   margin-bottom: 6px;
 }
 .hardware-settings-view {
   min-height: 0;
   overflow: hidden;
 }
-.hardware-page-top {
+.hardware-page-top,
+.history-page-top {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -8118,12 +10125,15 @@ body[data-theme="christmas"] {
   margin-bottom: 8px;
 }
 .hardware-page-top .ghost-button,
-.hardware-page-top .scene-btn {
+.hardware-page-top .scene-btn,
+.history-page-top .ghost-button,
+.history-page-top .scene-btn {
   min-height: 42px;
   border-radius: 14px;
   padding: 0 16px;
 }
-.hardware-layout {
+.hardware-layout,
+.history-layout {
   height: 100%;
   min-height: 0;
   overflow: auto;
@@ -8133,7 +10143,8 @@ body[data-theme="christmas"] {
   gap: 8px;
   align-content: start;
 }
-.hardware-card {
+.hardware-card,
+.history-card {
   min-width: 0;
   display: grid;
   gap: 10px;
@@ -8149,7 +10160,8 @@ body[data-theme="christmas"] {
   justify-content: space-between;
   gap: 12px;
 }
-.hardware-card h3 {
+.hardware-card h3,
+.history-card h3 {
   margin: 0;
   color: #f6fbff;
   font-size: clamp(.96rem, 1.22vw, 1.22rem);
@@ -8360,16 +10372,147 @@ body[data-theme="christmas"] {
   line-height: 1.2;
 }
 
+
+/* 2026-06-17 HVAC history page */
+.history-settings-view {
+  min-height: 0;
+  overflow: hidden;
+}
+.history-layout {
+  grid-template-columns: minmax(260px, .68fr) minmax(0, 1.32fr);
+}
+.history-date-card {
+  align-content: start;
+}
+.history-date-row {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) 46px;
+  gap: 8px;
+  align-items: center;
+}
+.history-date-row input {
+  min-height: 46px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(3,10,22,.52);
+  color: rgba(246,251,255,.95);
+  padding: 0 12px;
+  font-weight: 950;
+  color-scheme: dark;
+}
+.ghost-button.compact {
+  min-width: 0;
+  padding: 0;
+  font-size: 1.35rem;
+}
+.history-summary-card {
+  align-content: start;
+}
+.history-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.history-total-card {
+  min-height: 112px;
+  display: grid;
+  gap: 5px;
+  align-content: center;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.09);
+  background: rgba(0,0,0,.16);
+}
+.history-total-card span {
+  color: rgba(221,234,248,.72);
+  font-size: .72rem;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.history-total-card strong {
+  color: rgba(246,251,255,.98);
+  font-size: clamp(1.25rem, 2.2vw, 2rem);
+  font-weight: 1000;
+  line-height: 1;
+}
+.history-total-card em {
+  color: rgba(219,232,246,.72);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 850;
+}
+.history-total-card.cool {
+  box-shadow: inset 0 0 0 1px rgba(77,238,255,.09), 0 10px 26px rgba(77,238,255,.06);
+}
+.history-total-card.heat {
+  box-shadow: inset 0 0 0 1px rgba(255,141,93,.11), 0 10px 26px rgba(255,104,93,.05);
+}
+.history-total-card.fan {
+  box-shadow: inset 0 0 0 1px rgba(99,241,173,.10), 0 10px 26px rgba(99,241,173,.04);
+}
+.history-timeline-card {
+  grid-column: 1 / -1;
+}
+.history-timeline {
+  max-height: min(42vh, 440px);
+  overflow: auto;
+  display: grid;
+  gap: 7px;
+  padding-right: 2px;
+}
+.history-event {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(74px, .35fr) minmax(0, 1fr) minmax(110px, .42fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.075);
+  background: rgba(0,0,0,.15);
+}
+.history-event strong {
+  font-weight: 1000;
+  color: rgba(246,251,255,.96);
+}
+.history-event span {
+  color: rgba(221,234,248,.78);
+  font-weight: 900;
+}
+.history-event em {
+  color: rgba(219,232,246,.68);
+  font-size: .78rem;
+  font-style: normal;
+  font-weight: 820;
+  text-align: right;
+}
+.history-event.cool {
+  border-color: rgba(77,238,255,.15);
+}
+.history-event.heat {
+  border-color: rgba(255,141,93,.16);
+}
+.history-event.fan {
+  border-color: rgba(99,241,173,.14);
+}
+
 @media (max-width: 900px) {
   .hardware-layout,
+  .history-layout,
   .hardware-pin-grid {
     grid-template-columns: 1fr;
   }
   .hardware-relay-grid,
-  .hardware-rgb-presets {
+  .hardware-rgb-presets,
+  .history-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .hardware-rgb-row {
+  .hardware-rgb-row,
+  .history-event {
     grid-template-columns: 1fr;
+  }
+  .history-event em {
+    text-align: left;
   }
 }

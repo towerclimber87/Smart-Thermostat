@@ -474,8 +474,9 @@
         </div>
 
         <div id="thermostatSettingsView" class="settings-view">
-          <div class="hardware-info-top" aria-label="Hardware information shortcut">
+          <div class="comfort-top-actions" aria-label="Comfort setup shortcuts">
             <button id="openHardwareInfoButton" class="scene-btn hardware-info-launch" type="button">Hardware Information</button>
+            <button id="openHistoryButton" class="scene-btn history-info-launch" type="button">History</button>
           </div>
           <div class="settings-section">
             <div><h3>Safety Range</h3></div>
@@ -713,6 +714,69 @@
                 <div><strong>RGB / LED</strong><span>GPIO 26 • Pin 37</span></div>
                 <div><strong>I2C</strong><span>SDA GPIO 2 Pin 3 • SCL GPIO 3 Pin 5</span></div>
                 <div><strong>Power</strong><span>3.3V Pin 17 • 5V Pin 4 • GND Pin 6</span></div>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <div id="historySettingsView" class="settings-view history-settings-view" hidden>
+          <div class="history-page-top">
+            <button id="backToComfortSetupFromHistory" class="ghost-button" type="button">← Comfort Setup</button>
+            <button id="refreshHistoryButton" class="scene-btn secondary" type="button">Refresh History</button>
+          </div>
+
+          <div class="history-layout">
+            <section class="history-card history-date-card">
+              <div class="hardware-card-head">
+                <div>
+                  <p class="eyebrow">Daily Runtime</p>
+                  <h3>Choose Date</h3>
+                </div>
+              </div>
+              <div class="history-date-row">
+                <button id="historyPrevDayButton" class="ghost-button compact" type="button" aria-label="Previous day">‹</button>
+                <input id="historyDateInput" type="date" aria-label="History date" />
+                <button id="historyNextDayButton" class="ghost-button compact" type="button" aria-label="Next day">›</button>
+              </div>
+              <div id="historyWritePolicy" class="hardware-note">Active-day history is held in RAM and saved once per day.</div>
+            </section>
+
+            <section class="history-card history-summary-card">
+              <div class="hardware-card-head">
+                <div>
+                  <p class="eyebrow">Selected Day</p>
+                  <h3 id="historySelectedDateTitle">Today</h3>
+                </div>
+                <span id="historyUpdatedPill" class="hardware-status-pill">Loading…</span>
+              </div>
+              <div class="history-summary-grid">
+                <div class="history-total-card cool">
+                  <span>AC Runtime</span>
+                  <strong id="historyCoolTotal">0 min</strong>
+                  <em id="historyCoolCycles">0 cycles</em>
+                </div>
+                <div class="history-total-card heat">
+                  <span>Heat Runtime</span>
+                  <strong id="historyHeatTotal">0 min</strong>
+                  <em id="historyHeatCycles">0 cycles</em>
+                </div>
+                <div class="history-total-card fan">
+                  <span>Fan Runtime</span>
+                  <strong id="historyFanTotal">0 min</strong>
+                  <em id="historyFanCycles">0 cycles</em>
+                </div>
+              </div>
+            </section>
+
+            <section class="history-card history-timeline-card">
+              <div class="hardware-card-head">
+                <div>
+                  <p class="eyebrow">Event Timeline</p>
+                  <h3>Daily History</h3>
+                </div>
+              </div>
+              <div id="historyTimeline" class="history-timeline" aria-live="polite">
+                <div class="empty-state compact">Loading history…</div>
               </div>
             </section>
           </div>

@@ -6,6 +6,7 @@ const DIAL_SWEEP_DEG = 270;
 const DIAL_START_DEG = 225;
 const LEGACY_CONFIG_STORAGE_KEY = "smartThermostat.config.v2";
 const CONFIG_API_ENDPOINT = "/api/config";
+const HISTORY_API_ENDPOINT = "/api/history";
 const HA_SYNC_INTERVAL_MS = 5000;
 const HA_SYNC_AFTER_COMMAND_DELAYS = [900, 2400, 5200];
 const HA_AUDIO_SYNC_INTERVAL_MS = 5000;
@@ -76,6 +77,7 @@ const MIN_SCREEN_TIMEOUT_MINUTES = 1;
 const MAX_SCREEN_TIMEOUT_MINUTES = 120;
 const SCREEN_TIMEOUT_CHECK_INTERVAL_MS = 5000;
 const HARDWARE_STATUS_INTERVAL_MS = 5000;
+const HISTORY_STATUS_INTERVAL_MS = 30000;
 let haSyncInFlight = false;
 let haSyncLastError = "";
 let haAudioSyncInFlight = false;
@@ -104,6 +106,8 @@ let localThermostatPushInFlight = false;
 let localThermostatLastError = "";
 let hardwareStatusInFlight = false;
 let hardwareLastError = "";
+let historyStatusInFlight = false;
+let historyLastError = "";
 let lastLocalThermostatPushAt = 0;
 let haAudioSyncTick = 0;
 let lastInactiveBlindSyncAt = Date.now();
@@ -390,6 +394,17 @@ const state = {
     rgb: { on: false, color: "#35eaff", backend: "", available: false, error: "", gpio: 26, physical: 37 },
     i2c: { addresses: [], devices: [], bus: 1, backend: "", scannedAt: 0, error: "" },
   },
+  history: {
+    loaded: false,
+    selectedDate: "",
+    today: "",
+    availableDates: [],
+    summary: { fan: { totalMs: 0, cycles: 0, active: false }, heat: { totalMs: 0, cycles: 0, active: false }, cool: { totalMs: 0, cycles: 0, active: false } },
+    periods: [],
+    updatedAtMs: 0,
+    writePolicy: "",
+    error: "",
+  },
 };
 
 const elements = {
@@ -534,6 +549,23 @@ const elements = {
   hardwareRgbStatus: document.getElementById("hardwareRgbStatus"),
   i2cAddressList: document.getElementById("i2cAddressList"),
   i2cStatusLine: document.getElementById("i2cStatusLine"),
+  historySettingsView: document.getElementById("historySettingsView"),
+  openHistoryButton: document.getElementById("openHistoryButton"),
+  backToComfortSetupFromHistory: document.getElementById("backToComfortSetupFromHistory"),
+  refreshHistoryButton: document.getElementById("refreshHistoryButton"),
+  historyDateInput: document.getElementById("historyDateInput"),
+  historyPrevDayButton: document.getElementById("historyPrevDayButton"),
+  historyNextDayButton: document.getElementById("historyNextDayButton"),
+  historyWritePolicy: document.getElementById("historyWritePolicy"),
+  historySelectedDateTitle: document.getElementById("historySelectedDateTitle"),
+  historyUpdatedPill: document.getElementById("historyUpdatedPill"),
+  historyCoolTotal: document.getElementById("historyCoolTotal"),
+  historyHeatTotal: document.getElementById("historyHeatTotal"),
+  historyFanTotal: document.getElementById("historyFanTotal"),
+  historyCoolCycles: document.getElementById("historyCoolCycles"),
+  historyHeatCycles: document.getElementById("historyHeatCycles"),
+  historyFanCycles: document.getElementById("historyFanCycles"),
+  historyTimeline: document.getElementById("historyTimeline"),
   blindSettingsView: document.getElementById("blindSettingsView"),
   audioSettingsView: document.getElementById("audioSettingsView"),
   lightsSettingsView: document.getElementById("lightsSettingsView"),
@@ -1215,7 +1247,7 @@ function saveConfig(options = {}) {
     if (!configSaveQueued) return;
     configSaveQueued = false;
     flushConfigSave();
-  }, 180);
+  }, 650);
 }
 
 function localThermostatPayload() {
@@ -1925,6 +1957,166 @@ function renderHardwareStatus() {
   }
 }
 
+
+function isHistoryViewOpen() {
+  return Boolean(elements.historySettingsView && !elements.historySettingsView.hidden && elements.settingsOverlay?.classList.contains("open"));
+}
+
+function localDateKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function parseDateKey(dateKey) {
+  const raw = String(dateKey || "").trim();
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return new Date();
+  const year = Number(match[1]);
+  const month = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  return new Date(year, month, day, 12, 0, 0, 0);
+}
+
+function shiftDateKey(dateKey, offsetDays) {
+  const date = parseDateKey(dateKey || state.history.selectedDate || state.history.today || localDateKey());
+  date.setDate(date.getDate() + Number(offsetDays || 0));
+  return localDateKey(date);
+}
+
+function formatHistoryDateTitle(dateKey, todayKey = state.history.today) {
+  if (!dateKey) return "History";
+  if (dateKey === todayKey) return "Today";
+  const date = parseDateKey(dateKey);
+  return date.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+}
+
+function formatHistoryTime(ms) {
+  const value = Number(ms || 0);
+  if (!value) return "--";
+  return new Date(value).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function formatHistoryDuration(ms) {
+  const totalMinutes = Math.max(0, Math.round(Number(ms || 0) / 60000));
+  if (totalMinutes < 1) return Number(ms || 0) > 0 ? "<1 min" : "0 min";
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (!hours) return `${minutes} min`;
+  return minutes ? `${hours} hr ${minutes} min` : `${hours} hr`;
+}
+
+function formatHistoryCycles(count, active = false) {
+  const cycles = Math.max(0, Number(count || 0));
+  return `${cycles} cycle${cycles === 1 ? "" : "s"}${active ? " • active now" : ""}`;
+}
+
+function applyHistoryPayload(payload = {}) {
+  if (!payload || typeof payload !== "object") return;
+  state.history.loaded = true;
+  state.history.selectedDate = payload.date || state.history.selectedDate || localDateKey();
+  state.history.today = payload.today || state.history.today || localDateKey();
+  state.history.availableDates = Array.isArray(payload.availableDates) ? payload.availableDates : state.history.availableDates;
+  state.history.summary = { ...state.history.summary, ...(payload.summary || {}) };
+  state.history.periods = Array.isArray(payload.periods) ? payload.periods : [];
+  state.history.updatedAtMs = Number(payload.updatedAtMs || 0);
+  state.history.writePolicy = payload.writePolicy || state.history.writePolicy || "Active-day history is held in RAM and saved once per day.";
+  state.history.error = "";
+}
+
+function renderHistoryStatus() {
+  const history = state.history || {};
+  const selected = history.selectedDate || history.today || localDateKey();
+  if (elements.historyDateInput && elements.historyDateInput.value !== selected) {
+    elements.historyDateInput.value = selected;
+  }
+  if (elements.historySelectedDateTitle) elements.historySelectedDateTitle.textContent = formatHistoryDateTitle(selected, history.today);
+  if (elements.historyWritePolicy) elements.historyWritePolicy.textContent = history.writePolicy || "Active-day history is held in RAM and saved once per day.";
+  if (elements.historyUpdatedPill) {
+    const updated = Number(history.updatedAtMs || 0);
+    elements.historyUpdatedPill.textContent = historyStatusInFlight ? "Loading…" : updated ? `Updated ${formatHistoryTime(updated)}` : "No data";
+    elements.historyUpdatedPill.dataset.ready = history.error ? "0" : "1";
+  }
+
+  const summary = history.summary || {};
+  const cool = summary.cool || {};
+  const heat = summary.heat || {};
+  const fan = summary.fan || {};
+  if (elements.historyCoolTotal) elements.historyCoolTotal.textContent = formatHistoryDuration(cool.totalMs);
+  if (elements.historyHeatTotal) elements.historyHeatTotal.textContent = formatHistoryDuration(heat.totalMs);
+  if (elements.historyFanTotal) elements.historyFanTotal.textContent = formatHistoryDuration(fan.totalMs);
+  if (elements.historyCoolCycles) elements.historyCoolCycles.textContent = formatHistoryCycles(cool.cycles, cool.active);
+  if (elements.historyHeatCycles) elements.historyHeatCycles.textContent = formatHistoryCycles(heat.cycles, heat.active);
+  if (elements.historyFanCycles) elements.historyFanCycles.textContent = formatHistoryCycles(fan.cycles, fan.active);
+
+  if (elements.historyTimeline) {
+    const periods = Array.isArray(history.periods) ? history.periods : [];
+    const importantPeriods = periods.filter((period) => ["cool", "heat", "fan"].includes(String(period.relay || "")));
+    if (history.error) {
+      elements.historyTimeline.innerHTML = `<div class="empty-state compact">${escapeHtml(history.error)}</div>`;
+    } else if (!importantPeriods.length) {
+      elements.historyTimeline.innerHTML = `<div class="empty-state compact">No heat, AC, or fan runtime recorded for this date yet.</div>`;
+    } else {
+      elements.historyTimeline.innerHTML = importantPeriods.map((period) => {
+        const relay = String(period.relay || "").toLowerCase();
+        const label = relay === "cool" ? "AC" : titleCase(relay);
+        const start = formatHistoryTime(period.startMs);
+        const end = period.ongoing ? "Now" : formatHistoryTime(period.endMs);
+        const duration = formatHistoryDuration(period.durationMs);
+        const source = period.source && period.source !== "thermostat" ? ` • ${escapeHtml(period.source)}` : "";
+        return `<div class="history-event ${escapeHtml(relay)}"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(start)} – ${escapeHtml(end)}</span><em>${escapeHtml(duration)}${source}${period.ongoing ? " • running" : ""}</em></div>`;
+      }).join("");
+    }
+  }
+}
+
+async function fetchHistoryStatus(options = {}) {
+  if (historyStatusInFlight) return;
+  if (!options.force && !isHistoryViewOpen()) return;
+  historyStatusInFlight = true;
+  renderHistoryStatus();
+  const date = options.date || state.history.selectedDate || state.history.today || localDateKey();
+  try {
+    const payload = await fetchJsonWithTimeout(`${HISTORY_API_ENDPOINT}?date=${encodeURIComponent(date)}&_=${Date.now()}`, { cache: "no-store" }, 7000);
+    applyHistoryPayload(payload);
+    historyLastError = "";
+  } catch (error) {
+    historyLastError = error.message || String(error);
+    state.history.error = historyLastError;
+    if (elements.historyUpdatedPill) {
+      elements.historyUpdatedPill.textContent = "Unavailable";
+      elements.historyUpdatedPill.dataset.ready = "0";
+    }
+    console.warn("Unable to load HVAC history", error);
+  } finally {
+    historyStatusInFlight = false;
+    renderHistoryStatus();
+  }
+}
+
+function setHistoryDate(dateKey, options = {}) {
+  state.history.selectedDate = dateKey || localDateKey();
+  renderHistoryStatus();
+  fetchHistoryStatus({ force: true, date: state.history.selectedDate });
+  if (options.toast) showToast("History date changed");
+}
+
+function showHistoryView() {
+  if (!elements.historySettingsView) return;
+  if (elements.thermostatSettingsView) elements.thermostatSettingsView.hidden = true;
+  if (elements.hardwareSettingsView) elements.hardwareSettingsView.hidden = true;
+  elements.historySettingsView.hidden = false;
+  elements.settingsSheet.classList.add("full-setup", "thermostat-setup", "history-setup");
+  elements.settingsSheet.classList.remove("hardware-setup");
+  elements.settingsTitle.textContent = "History";
+  elements.settingsEyebrow.textContent = "Daily Runtime";
+  elements.settingsFooter.hidden = true;
+  if (!state.history.selectedDate) state.history.selectedDate = state.history.today || localDateKey();
+  renderHistoryStatus();
+  fetchHistoryStatus({ force: true });
+}
+
 async function fetchHardwareStatus(options = {}) {
   if (hardwareStatusInFlight) return;
   if (!options.force && !isHardwareViewOpen()) return;
@@ -2011,8 +2203,10 @@ async function sendHardwareRgbCommand(options = {}) {
 function showHardwareInfoView() {
   if (!elements.hardwareSettingsView) return;
   if (elements.thermostatSettingsView) elements.thermostatSettingsView.hidden = true;
+  if (elements.historySettingsView) elements.historySettingsView.hidden = true;
   elements.hardwareSettingsView.hidden = false;
   elements.settingsSheet.classList.add("full-setup", "thermostat-setup", "hardware-setup");
+  elements.settingsSheet.classList.remove("history-setup");
   elements.settingsTitle.textContent = "Hardware Information";
   elements.settingsEyebrow.textContent = "Pinout & Manual Testing";
   elements.settingsFooter.hidden = true;
@@ -2022,9 +2216,10 @@ function showHardwareInfoView() {
 
 function showComfortSetupView() {
   if (elements.hardwareSettingsView) elements.hardwareSettingsView.hidden = true;
+  if (elements.historySettingsView) elements.historySettingsView.hidden = true;
   if (elements.thermostatSettingsView) elements.thermostatSettingsView.hidden = false;
   elements.settingsSheet.classList.add("full-setup", "thermostat-setup");
-  elements.settingsSheet.classList.remove("hardware-setup");
+  elements.settingsSheet.classList.remove("hardware-setup", "history-setup");
   elements.settingsTitle.textContent = "Comfort Setup";
   elements.settingsEyebrow.textContent = "Panel Settings";
   elements.settingsFooter.hidden = false;
@@ -4027,8 +4222,8 @@ function handleSettingsCodeKey(value) {
 }
 
 function hideAllSettingsViews() {
-  [elements.thermostatSettingsView, elements.hardwareSettingsView, elements.blindSettingsView, elements.audioSettingsView, elements.lightsSettingsView, elements.roomControlSettingsView].forEach((view) => { if (view) view.hidden = true; });
-  elements.settingsSheet.classList.remove("full-setup", "ha-focus", "thermostat-setup", "hardware-setup", "room-control-setup");
+  [elements.thermostatSettingsView, elements.hardwareSettingsView, elements.historySettingsView, elements.blindSettingsView, elements.audioSettingsView, elements.lightsSettingsView, elements.roomControlSettingsView].forEach((view) => { if (view) view.hidden = true; });
+  elements.settingsSheet.classList.remove("full-setup", "ha-focus", "thermostat-setup", "hardware-setup", "history-setup", "room-control-setup");
   elements.settingsFooter.hidden = false;
 }
 
@@ -7363,8 +7558,14 @@ function bindEvents() {
   });
   elements.settingsButton.addEventListener("click", () => isPanelLocked() ? requestPanelUnlock() : openSettingsCodePrompt("settings"));
   elements.openHardwareInfoButton?.addEventListener("click", showHardwareInfoView);
+  elements.openHistoryButton?.addEventListener("click", showHistoryView);
   elements.backToComfortSetup?.addEventListener("click", showComfortSetupView);
+  elements.backToComfortSetupFromHistory?.addEventListener("click", showComfortSetupView);
   elements.refreshHardwareButton?.addEventListener("click", () => fetchHardwareStatus({ force: true }));
+  elements.refreshHistoryButton?.addEventListener("click", () => fetchHistoryStatus({ force: true }));
+  elements.historyDateInput?.addEventListener("change", (event) => setHistoryDate(event.target.value, { toast: false }));
+  elements.historyPrevDayButton?.addEventListener("click", () => setHistoryDate(shiftDateKey(state.history.selectedDate, -1)));
+  elements.historyNextDayButton?.addEventListener("click", () => setHistoryDate(shiftDateKey(state.history.selectedDate, 1)));
   elements.releaseHardwareManualButton?.addEventListener("click", releaseHardwareManualControl);
   (elements.hardwareRelayButtons || []).forEach((button) => button.addEventListener("click", () => sendHardwareRelayCommand(button.dataset.hardwareRelay)));
   elements.hardwareRgbPowerButton?.addEventListener("click", () => sendHardwareRgbCommand());
@@ -7725,6 +7926,7 @@ async function init() {
   setInterval(mockTrackProgress, 1200);
   setInterval(() => maybeApplyScreenTimeout(), SCREEN_TIMEOUT_CHECK_INTERVAL_MS);
   setInterval(() => fetchHardwareStatus(), HARDWARE_STATUS_INTERVAL_MS);
+  setInterval(() => fetchHistoryStatus(), HISTORY_STATUS_INTERVAL_MS);
   setInterval(() => pollHomeAssistantLinkedCovers(), HA_SYNC_INTERVAL_MS);
   setInterval(() => pollHomeAssistantMediaPlayer(), HA_AUDIO_SYNC_INTERVAL_MS);
   setInterval(() => pollHomeAssistantLights(), HA_LIGHT_SYNC_INTERVAL_MS);

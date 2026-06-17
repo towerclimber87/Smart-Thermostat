@@ -8,17 +8,20 @@ so the browser does not get blocked by CORS when loading entities.
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import mimetypes
 import os
+import signal
 import socket
 import subprocess
 import threading
 import time
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib import request, error
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parent
 PUBLIC = ROOT / "public"
@@ -26,11 +29,20 @@ DATA_DIR = ROOT / "data"
 VERSION_FILE = ROOT / "VERSION"
 THERMOSTAT_STATE_FILE = DATA_DIR / "thermostat-state.json"
 PANEL_CONFIG_FILE = DATA_DIR / "panel-config.json"
+HVAC_HISTORY_FILE = DATA_DIR / "hvac-history.json"
 APP_STARTED_AT = time.time()
 HA_STATES_CACHE_TTL_SECONDS = float(os.environ.get("SMART_THERMOSTAT_HA_STATES_CACHE_TTL_SECONDS", "1.0"))
+ACCESS_LOGS_ENABLED = os.environ.get("SMART_THERMOSTAT_ACCESS_LOGS", "0").strip().lower() in {"1", "true", "yes", "on"}
 MANUAL_CHANGEOVER_LOCKOUT_MINUTES = 10
 _HA_STATES_CACHE_LOCK = threading.Lock()
 _HA_STATES_CACHE: dict[tuple[str, str], tuple[float, list[dict]]] = {}
+_THERMOSTAT_RECORD_LOCK = threading.RLock()
+_THERMOSTAT_RECORD_CACHE: dict | None = None
+_THERMOSTAT_RECORD_LAST_PERSIST_SIGNATURE = ""
+_THERMOSTAT_RECORD_DIRTY = False
+_HVAC_HISTORY_LOCK = threading.RLock()
+_HVAC_HISTORY_ARCHIVE: dict | None = None
+_HVAC_HISTORY_CURRENT: dict | None = None
 
 
 HARDWARE_RELAY_PINS = {
@@ -520,7 +532,42 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
     return base
 
 
-def _read_thermostat_record() -> dict:
+THERMOSTAT_PERSIST_KEYS = (
+    "name",
+    "currentTempSource",
+    "currentTempSourceName",
+    "targetTemp",
+    "lastComfortTarget",
+    "mode",
+    "fan",
+    "away",
+    "awayHeat",
+    "awayCool",
+    "safetyLow",
+    "safetyHigh",
+    "autoCoolOutdoorTarget",
+    "autoHeatOutdoorTarget",
+    "autoChangeoverLockoutMinutes",
+    "manualChangeoverLockoutMinutes",
+    "coolFanRemainOnMinutes",
+    "heatLocked",
+    "coolLocked",
+    "people",
+    "autoActiveMode",
+    "autoSwitchNotice",
+    "autoSwitchHold",
+    "limits",
+)
+
+
+def _atomic_write_json(path: Path, record: dict) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_suffix(path.suffix + ".tmp")
+    temp_path.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
+    temp_path.replace(path)
+
+
+def _read_thermostat_record_from_disk() -> dict:
     if not THERMOSTAT_STATE_FILE.exists():
         thermostat = _merge_thermostat_state()
         return {"version": 1, "updatedAt": int(time.time()), "thermostat": thermostat}
@@ -536,13 +583,59 @@ def _read_thermostat_record() -> dict:
     }
 
 
-def _write_thermostat_record(thermostat: dict) -> dict:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    record = {"version": 1, "updatedAt": int(time.time()), "thermostat": _merge_thermostat_state(thermostat)}
-    temp_path = THERMOSTAT_STATE_FILE.with_suffix(".json.tmp")
-    temp_path.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
-    temp_path.replace(THERMOSTAT_STATE_FILE)
-    return record
+def _thermostat_persist_signature(thermostat: dict) -> str:
+    safe = _merge_thermostat_state(thermostat)
+    persistent = {key: _deepcopy_json(safe.get(key)) for key in THERMOSTAT_PERSIST_KEYS}
+    return json.dumps(persistent, sort_keys=True, separators=(",", ":"))
+
+
+def _read_thermostat_record() -> dict:
+    global _THERMOSTAT_RECORD_CACHE, _THERMOSTAT_RECORD_LAST_PERSIST_SIGNATURE
+    with _THERMOSTAT_RECORD_LOCK:
+        if _THERMOSTAT_RECORD_CACHE is None:
+            _THERMOSTAT_RECORD_CACHE = _read_thermostat_record_from_disk()
+            _THERMOSTAT_RECORD_LAST_PERSIST_SIGNATURE = _thermostat_persist_signature(_THERMOSTAT_RECORD_CACHE["thermostat"])
+        return _deepcopy_json(_THERMOSTAT_RECORD_CACHE)
+
+
+def _write_thermostat_record(thermostat: dict, *, force: bool = False) -> dict:
+    """Update thermostat state in RAM and avoid SD writes for live runtime changes.
+
+    Live readings, relay flags and lockout timers can change frequently. Those
+    are kept in RAM for the local API and Home Assistant, while long-term
+    thermostat choices still persist to the SD card when they actually change.
+    """
+    global _THERMOSTAT_RECORD_CACHE, _THERMOSTAT_RECORD_LAST_PERSIST_SIGNATURE, _THERMOSTAT_RECORD_DIRTY
+    with _THERMOSTAT_RECORD_LOCK:
+        if _THERMOSTAT_RECORD_CACHE is None:
+            _THERMOSTAT_RECORD_CACHE = _read_thermostat_record_from_disk()
+            _THERMOSTAT_RECORD_LAST_PERSIST_SIGNATURE = _thermostat_persist_signature(_THERMOSTAT_RECORD_CACHE["thermostat"])
+        merged = _merge_thermostat_state(thermostat)
+        now = int(time.time())
+        record = {
+            "version": int(_THERMOSTAT_RECORD_CACHE.get("version", 1) or 1),
+            "updatedAt": now,
+            "thermostat": merged,
+        }
+        _THERMOSTAT_RECORD_CACHE = record
+        _THERMOSTAT_RECORD_DIRTY = True
+        signature = _thermostat_persist_signature(merged)
+        should_write = force or signature != _THERMOSTAT_RECORD_LAST_PERSIST_SIGNATURE or not THERMOSTAT_STATE_FILE.exists()
+        if should_write:
+            _atomic_write_json(THERMOSTAT_STATE_FILE, record)
+            _THERMOSTAT_RECORD_LAST_PERSIST_SIGNATURE = signature
+            _THERMOSTAT_RECORD_DIRTY = False
+        return _deepcopy_json(record)
+
+
+def _flush_thermostat_state_to_disk() -> None:
+    global _THERMOSTAT_RECORD_DIRTY, _THERMOSTAT_RECORD_LAST_PERSIST_SIGNATURE
+    with _THERMOSTAT_RECORD_LOCK:
+        if not _THERMOSTAT_RECORD_DIRTY or _THERMOSTAT_RECORD_CACHE is None:
+            return
+        _atomic_write_json(THERMOSTAT_STATE_FILE, _THERMOSTAT_RECORD_CACHE)
+        _THERMOSTAT_RECORD_LAST_PERSIST_SIGNATURE = _thermostat_persist_signature(_THERMOSTAT_RECORD_CACHE["thermostat"])
+        _THERMOSTAT_RECORD_DIRTY = False
 
 
 def _normalize_panel_config(config: object) -> dict | None:
@@ -572,15 +665,330 @@ def _read_panel_config_record() -> dict:
 
 
 def _write_panel_config_record(config: dict) -> dict:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
     safe_config = _normalize_panel_config(config) or {}
     existing = _read_panel_config_record()
+    if existing.get("config") == safe_config and PANEL_CONFIG_FILE.exists():
+        return {
+            "version": int(existing.get("version", 1) or 1),
+            "updatedAt": int(existing.get("updatedAt", 0) or 0),
+            "config": safe_config,
+        }
     next_version = int(existing.get("version", 0) or 0) + 1
     record = {"version": next_version, "updatedAt": int(time.time()), "config": safe_config}
-    temp_path = PANEL_CONFIG_FILE.with_suffix(".json.tmp")
-    temp_path.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
-    temp_path.replace(PANEL_CONFIG_FILE)
+    _atomic_write_json(PANEL_CONFIG_FILE, record)
     return record
+
+
+
+HVAC_HISTORY_RELAYS = ("fan", "heat", "cool")
+HVAC_HISTORY_MAX_DAYS = int(os.environ.get("SMART_THERMOSTAT_HISTORY_MAX_DAYS", "370"))
+
+
+def _date_key_from_ms(ms: int | float | None = None) -> str:
+    seconds = (float(ms) / 1000.0) if ms is not None else time.time()
+    return time.strftime("%Y-%m-%d", time.localtime(seconds))
+
+
+def _midnight_after_date_key(date_key: str) -> int:
+    try:
+        date_value = datetime.strptime(date_key, "%Y-%m-%d") + timedelta(days=1)
+    except ValueError:
+        date_value = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    return int(time.mktime(date_value.timetuple()) * 1000)
+
+
+def _new_hvac_history_day(date_key: str, now_ms: int, relays: dict | None = None, source: str = "thermostat") -> dict:
+    relay_state = _normalize_relay_outputs(relays or {})
+    day = {
+        "date": date_key,
+        "startedAtMs": now_ms,
+        "updatedAtMs": now_ms,
+        "totalsMs": {relay: 0 for relay in HVAC_HISTORY_RELAYS},
+        "cycles": {relay: 0 for relay in HVAC_HISTORY_RELAYS},
+        "relays": relay_state,
+        "relayStartedAtMs": {relay: now_ms if relay_state.get(relay) else None for relay in HVAC_HISTORY_RELAYS},
+        "events": [],
+    }
+    for relay, on in relay_state.items():
+        if on:
+            day["cycles"][relay] = 1
+            day["events"].append({"relay": relay, "action": "on", "atMs": now_ms, "source": source})
+    return day
+
+
+def _normalize_hvac_history_day(value: object, date_key: str, now_ms: int) -> dict:
+    if not isinstance(value, dict):
+        return _new_hvac_history_day(date_key, now_ms)
+    day = _new_hvac_history_day(str(value.get("date") or date_key), now_ms)
+    totals = value.get("totalsMs") if isinstance(value.get("totalsMs"), dict) else {}
+    cycles = value.get("cycles") if isinstance(value.get("cycles"), dict) else {}
+    relays = value.get("relays") if isinstance(value.get("relays"), dict) else {}
+    starts = value.get("relayStartedAtMs") if isinstance(value.get("relayStartedAtMs"), dict) else {}
+    events = value.get("events") if isinstance(value.get("events"), list) else []
+    day["startedAtMs"] = int(value.get("startedAtMs") or now_ms)
+    day["updatedAtMs"] = int(value.get("updatedAtMs") or now_ms)
+    day["totalsMs"] = {relay: max(0, int(float(totals.get(relay) or 0))) for relay in HVAC_HISTORY_RELAYS}
+    day["cycles"] = {relay: max(0, int(float(cycles.get(relay) or 0))) for relay in HVAC_HISTORY_RELAYS}
+    day["relays"] = {relay: bool(relays.get(relay)) for relay in HVAC_HISTORY_RELAYS}
+    day["relayStartedAtMs"] = {
+        relay: int(starts.get(relay)) if starts.get(relay) not in (None, "") else None
+        for relay in HVAC_HISTORY_RELAYS
+    }
+    normalized_events = []
+    for event in events[-2000:]:
+        if not isinstance(event, dict):
+            continue
+        relay = str(event.get("relay") or "").lower()
+        action = str(event.get("action") or "").lower()
+        if relay not in HVAC_HISTORY_RELAYS or action not in {"on", "off"}:
+            continue
+        try:
+            at_ms = int(float(event.get("atMs") or 0))
+        except (TypeError, ValueError):
+            continue
+        if at_ms <= 0:
+            continue
+        normalized_events.append({"relay": relay, "action": action, "atMs": at_ms, "source": str(event.get("source") or "thermostat")[:40]})
+    day["events"] = normalized_events
+    return day
+
+
+def _load_hvac_history_archive_locked() -> dict:
+    global _HVAC_HISTORY_ARCHIVE
+    if _HVAC_HISTORY_ARCHIVE is not None:
+        return _HVAC_HISTORY_ARCHIVE
+    raw = {}
+    if HVAC_HISTORY_FILE.exists():
+        try:
+            raw = json.loads(HVAC_HISTORY_FILE.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            raw = {}
+    days_raw = raw.get("days") if isinstance(raw, dict) and isinstance(raw.get("days"), dict) else {}
+    now_ms = int(time.time() * 1000)
+    days = {}
+    for date_key, value in days_raw.items():
+        key = str(date_key)
+        if len(key) == 10:
+            days[key] = _normalize_hvac_history_day(value, key, now_ms)
+    _HVAC_HISTORY_ARCHIVE = {
+        "version": int(raw.get("version", 1) or 1) if isinstance(raw, dict) else 1,
+        "updatedAt": int(raw.get("updatedAt", 0) or 0) if isinstance(raw, dict) else 0,
+        "days": days,
+    }
+    return _HVAC_HISTORY_ARCHIVE
+
+
+def _save_hvac_history_archive_locked(include_current: bool = False) -> None:
+    archive = _load_hvac_history_archive_locked()
+    days = dict(archive.get("days") or {})
+    if include_current and _HVAC_HISTORY_CURRENT is not None:
+        days[str(_HVAC_HISTORY_CURRENT.get("date"))] = _deepcopy_json(_HVAC_HISTORY_CURRENT)
+    sorted_keys = sorted(days.keys())[-HVAC_HISTORY_MAX_DAYS:]
+    record = {
+        "version": 1,
+        "updatedAt": int(time.time()),
+        "days": {key: days[key] for key in sorted_keys},
+    }
+    _atomic_write_json(HVAC_HISTORY_FILE, record)
+    archive["version"] = record["version"]
+    archive["updatedAt"] = record["updatedAt"]
+    archive["days"] = record["days"]
+
+
+def _ensure_hvac_history_current_locked(now_ms: int) -> dict:
+    global _HVAC_HISTORY_CURRENT
+    archive = _load_hvac_history_archive_locked()
+    today = _date_key_from_ms(now_ms)
+    if _HVAC_HISTORY_CURRENT is None:
+        saved_today = archive.get("days", {}).get(today)
+        if saved_today:
+            _HVAC_HISTORY_CURRENT = _normalize_hvac_history_day(saved_today, today, now_ms)
+            # Do not count downtime between process stop and restart. Close any
+            # previously open period at the last saved time, then resume with
+            # all relays considered off until the next hardware write.
+            saved_stop_ms = int(_HVAC_HISTORY_CURRENT.get("updatedAtMs") or now_ms)
+            active_from_events = set()
+            for event in _HVAC_HISTORY_CURRENT.get("events") or []:
+                if not isinstance(event, dict):
+                    continue
+                relay = str(event.get("relay") or "").lower()
+                action = str(event.get("action") or "").lower()
+                if relay not in HVAC_HISTORY_RELAYS:
+                    continue
+                if action == "on":
+                    active_from_events.add(relay)
+                elif action == "off":
+                    active_from_events.discard(relay)
+            old_relays = dict(_HVAC_HISTORY_CURRENT.get("relays") or {})
+            for relay in HVAC_HISTORY_RELAYS:
+                if old_relays.get(relay) or relay in active_from_events:
+                    _HVAC_HISTORY_CURRENT.setdefault("events", []).append({"relay": relay, "action": "off", "atMs": saved_stop_ms, "source": "service-restart"})
+            _HVAC_HISTORY_CURRENT["updatedAtMs"] = now_ms
+            _HVAC_HISTORY_CURRENT["relays"] = {relay: False for relay in HVAC_HISTORY_RELAYS}
+            _HVAC_HISTORY_CURRENT["relayStartedAtMs"] = {relay: None for relay in HVAC_HISTORY_RELAYS}
+        else:
+            _HVAC_HISTORY_CURRENT = _new_hvac_history_day(today, now_ms)
+    return _HVAC_HISTORY_CURRENT
+
+
+def _account_hvac_history_duration_locked(day: dict, until_ms: int) -> None:
+    last_ms = int(day.get("updatedAtMs") or until_ms)
+    delta = max(0, int(until_ms) - last_ms)
+    if delta:
+        totals = day.setdefault("totalsMs", {relay: 0 for relay in HVAC_HISTORY_RELAYS})
+        relays = day.setdefault("relays", {relay: False for relay in HVAC_HISTORY_RELAYS})
+        for relay in HVAC_HISTORY_RELAYS:
+            if relays.get(relay):
+                totals[relay] = max(0, int(totals.get(relay) or 0)) + delta
+    day["updatedAtMs"] = int(until_ms)
+
+
+def _rollover_hvac_history_locked(now_ms: int) -> None:
+    global _HVAC_HISTORY_CURRENT
+    current = _ensure_hvac_history_current_locked(now_ms)
+    today = _date_key_from_ms(now_ms)
+    wrote_archive = False
+    while str(current.get("date")) != today:
+        midnight_ms = _midnight_after_date_key(str(current.get("date")))
+        relay_state = {relay: bool((current.get("relays") or {}).get(relay)) for relay in HVAC_HISTORY_RELAYS}
+        _account_hvac_history_duration_locked(current, midnight_ms)
+        for relay, on in relay_state.items():
+            if on:
+                current.setdefault("events", []).append({"relay": relay, "action": "off", "atMs": midnight_ms, "source": "day-rollover"})
+        archive = _load_hvac_history_archive_locked()
+        archive.setdefault("days", {})[str(current.get("date"))] = _deepcopy_json(current)
+        next_day = _date_key_from_ms(midnight_ms + 1000)
+        current = _new_hvac_history_day(next_day, midnight_ms, relay_state, "day-rollover")
+        _HVAC_HISTORY_CURRENT = current
+        wrote_archive = True
+    if wrote_archive:
+        _save_hvac_history_archive_locked(include_current=False)
+
+
+def _record_hvac_history(relays: dict, source: str = "thermostat") -> None:
+    now_ms = int(time.time() * 1000)
+    normalized = _normalize_relay_outputs(relays or {})
+    with _HVAC_HISTORY_LOCK:
+        _rollover_hvac_history_locked(now_ms)
+        day = _ensure_hvac_history_current_locked(now_ms)
+        _account_hvac_history_duration_locked(day, now_ms)
+        old_relays = day.setdefault("relays", {relay: False for relay in HVAC_HISTORY_RELAYS})
+        starts = day.setdefault("relayStartedAtMs", {relay: None for relay in HVAC_HISTORY_RELAYS})
+        cycles = day.setdefault("cycles", {relay: 0 for relay in HVAC_HISTORY_RELAYS})
+        events = day.setdefault("events", [])
+        for relay in HVAC_HISTORY_RELAYS:
+            old_on = bool(old_relays.get(relay))
+            new_on = bool(normalized.get(relay))
+            if old_on == new_on:
+                continue
+            events.append({"relay": relay, "action": "on" if new_on else "off", "atMs": now_ms, "source": str(source or "thermostat")[:40]})
+            if new_on:
+                starts[relay] = now_ms
+                cycles[relay] = max(0, int(cycles.get(relay) or 0)) + 1
+            else:
+                starts[relay] = None
+            old_relays[relay] = new_on
+        day["updatedAtMs"] = now_ms
+
+
+def _refresh_hvac_history_now() -> None:
+    with _HARDWARE_LOCK:
+        relays = dict(_HARDWARE_LAST_RELAYS)
+        source = str(_HARDWARE_LAST_RELAY_SOURCE or "thermostat")
+    _record_hvac_history(relays, source)
+
+
+def _hvac_history_periods(day: dict, now_ms: int) -> list[dict]:
+    active: dict[str, dict] = {}
+    periods: list[dict] = []
+    events = day.get("events") if isinstance(day.get("events"), list) else []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        relay = str(event.get("relay") or "").lower()
+        action = str(event.get("action") or "").lower()
+        if relay not in HVAC_HISTORY_RELAYS or action not in {"on", "off"}:
+            continue
+        at_ms = int(event.get("atMs") or 0)
+        if action == "on":
+            active[relay] = {"relay": relay, "startMs": at_ms, "source": event.get("source") or "thermostat"}
+        elif relay in active:
+            start = active.pop(relay)
+            periods.append({
+                "relay": relay,
+                "startMs": int(start.get("startMs") or at_ms),
+                "endMs": at_ms,
+                "durationMs": max(0, at_ms - int(start.get("startMs") or at_ms)),
+                "source": start.get("source") or event.get("source") or "thermostat",
+                "ongoing": False,
+            })
+    for relay, start in active.items():
+        start_ms = int(start.get("startMs") or now_ms)
+        periods.append({
+            "relay": relay,
+            "startMs": start_ms,
+            "endMs": now_ms,
+            "durationMs": max(0, now_ms - start_ms),
+            "source": start.get("source") or "thermostat",
+            "ongoing": True,
+        })
+    periods.sort(key=lambda item: (int(item.get("startMs") or 0), item.get("relay") or ""), reverse=True)
+    return periods[:200]
+
+
+def _hvac_history_payload(date_key: str | None = None) -> dict:
+    _refresh_hvac_history_now()
+    now_ms = int(time.time() * 1000)
+    today = _date_key_from_ms(now_ms)
+    requested = str(date_key or today).strip()[:10]
+    if len(requested) != 10:
+        requested = today
+    with _HVAC_HISTORY_LOCK:
+        archive = _load_hvac_history_archive_locked()
+        current = _ensure_hvac_history_current_locked(now_ms)
+        if requested == str(current.get("date")):
+            day = _deepcopy_json(current)
+        else:
+            day = _deepcopy_json((archive.get("days") or {}).get(requested) or _new_hvac_history_day(requested, now_ms))
+        dates = sorted(set((archive.get("days") or {}).keys()) | {str(current.get("date"))})
+    totals = day.get("totalsMs") if isinstance(day.get("totalsMs"), dict) else {}
+    cycles = day.get("cycles") if isinstance(day.get("cycles"), dict) else {}
+    relays = day.get("relays") if isinstance(day.get("relays"), dict) else {}
+    return {
+        "ok": True,
+        "date": requested,
+        "today": today,
+        "availableDates": dates,
+        "summary": {
+            relay: {
+                "totalMs": max(0, int(totals.get(relay) or 0)),
+                "cycles": max(0, int(cycles.get(relay) or 0)),
+                "active": requested == today and bool(relays.get(relay)),
+            }
+            for relay in HVAC_HISTORY_RELAYS
+        },
+        "periods": _hvac_history_periods(day, now_ms),
+        "updatedAtMs": int(day.get("updatedAtMs") or now_ms),
+        "writePolicy": "Active-day history is held in RAM and written to the SD card when the day rolls over. A clean service stop also saves one final snapshot.",
+    }
+
+
+def _hvac_history_dates_payload() -> dict:
+    _refresh_hvac_history_now()
+    with _HVAC_HISTORY_LOCK:
+        archive = _load_hvac_history_archive_locked()
+        current = _ensure_hvac_history_current_locked(int(time.time() * 1000))
+        dates = sorted(set((archive.get("days") or {}).keys()) | {str(current.get("date"))})
+    return {"ok": True, "dates": dates, "today": _date_key_from_ms()}
+
+
+def _flush_hvac_history_to_disk() -> None:
+    try:
+        _refresh_hvac_history_now()
+        with _HVAC_HISTORY_LOCK:
+            _save_hvac_history_archive_locked(include_current=True)
+    except Exception as exc:
+        print(f"Unable to flush HVAC history: {exc}")
 
 
 def _panel_config_payload() -> dict:
@@ -1028,6 +1436,10 @@ def _write_relay_outputs_locked(relays: dict, source: str) -> None:
             backend.error = str(exc)
     _HARDWARE_LAST_RELAYS = normalized
     _HARDWARE_LAST_RELAY_SOURCE = source
+    try:
+        _record_hvac_history(normalized, source)
+    except Exception as exc:
+        print(f"Unable to record HVAC history: {exc}")
 
 
 def _apply_thermostat_outputs_to_hardware(outputs: dict) -> None:
@@ -1143,6 +1555,15 @@ def _scan_i2c_devices(force: bool = False) -> dict:
     cached = _HARDWARE_LAST_I2C_SCAN.get("payload")
     if not force and cached and now - float(_HARDWARE_LAST_I2C_SCAN.get("at") or 0) < 3:
         return cached
+    if not force and not cached:
+        return {
+            "backend": "not-scanned",
+            "bus": HARDWARE_I2C_BUS,
+            "addresses": [],
+            "devices": [],
+            "scannedAt": 0,
+            "error": "Open Hardware Information or press Refresh Hardware to scan I2C.",
+        }
 
     errors: list[str] = []
     for scanner in (_scan_i2c_with_i2cdetect, _scan_i2c_with_smbus):
@@ -2391,16 +2812,24 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
     server_version = "SmartThermostatServer/0.1"
 
     def log_message(self, fmt: str, *args) -> None:  # token-safe basic logs
-        print(f"{self.address_string()} - {fmt % args}")
+        if ACCESS_LOGS_ENABLED:
+            print(f"{self.address_string()} - {fmt % args}")
 
     def do_GET(self) -> None:
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
+        query = parse_qs(parsed.query)
         if path == "/api/health":
             return _json(self, 200, {"ok": True})
         if path == "/api/system/info":
             return _json(self, 200, _system_info_payload())
         if path == "/api/hardware/status":
             return _json(self, 200, _hardware_status_payload(force_i2c=True))
+        if path == "/api/history":
+            requested_date = (query.get("date") or [None])[0]
+            return _json(self, 200, _hvac_history_payload(requested_date))
+        if path == "/api/history/dates":
+            return _json(self, 200, _hvac_history_dates_payload())
         if path == "/api/config":
             return _json(self, 200, _panel_config_payload())
         if path == "/api/thermostat/status":
@@ -2639,10 +3068,28 @@ def main() -> None:
         allow_reuse_address = True
         request_queue_size = 32
 
+    def _clean_shutdown(signum=None, frame=None):
+        _flush_thermostat_state_to_disk()
+        _flush_hvac_history_to_disk()
+        if signum is not None:
+            raise SystemExit(0)
+
+    atexit.register(_flush_thermostat_state_to_disk)
+    atexit.register(_flush_hvac_history_to_disk)
+    try:
+        signal.signal(signal.SIGTERM, _clean_shutdown)
+        signal.signal(signal.SIGINT, _clean_shutdown)
+    except Exception:
+        pass
+
     httpd = SmartThermostatHTTPServer((args.host, args.port), SmartThermostatHandler)
     print(f"Smart Thermostat server running at http://{args.host}:{args.port}")
     print("Open http://localhost:%s" % args.port)
-    httpd.serve_forever()
+    try:
+        httpd.serve_forever()
+    finally:
+        _flush_thermostat_state_to_disk()
+        _flush_hvac_history_to_disk()
 
 
 if __name__ == "__main__":
