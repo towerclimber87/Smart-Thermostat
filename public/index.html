@@ -421,7 +421,7 @@
                     </label>
                     <label class="schedule-field schedule-time-field">
                       <span>Time</span>
-                      <input id="scheduleTimeInput" type="time" step="60" />
+                      <input id="scheduleTimeInput" type="text" readonly autocomplete="off" inputmode="none" aria-haspopup="dialog" aria-controls="scheduleTimePickerOverlay" />
                     </label>
                     <button id="scheduleEnabledToggle" class="schedule-enabled-toggle" type="button" aria-pressed="true">Enabled</button>
                   </div>
@@ -463,6 +463,59 @@
                 </section>
               </div>
             </aside>
+
+            <section id="scheduleTimePickerOverlay" class="schedule-time-picker-overlay" aria-hidden="true">
+              <div class="schedule-time-picker-backdrop" data-close-schedule-time></div>
+              <aside class="schedule-time-picker-sheet" role="dialog" aria-modal="true" aria-labelledby="scheduleTimePickerTitle">
+                <div class="schedule-time-picker-header">
+                  <div>
+                    <p class="eyebrow">Schedule Time</p>
+                    <h3 id="scheduleTimePickerTitle">Pick a time</h3>
+                  </div>
+                  <button id="scheduleTimePickerClose" class="icon-button close" type="button" aria-label="Close time picker">×</button>
+                </div>
+
+                <div class="schedule-time-preview" aria-live="polite">
+                  <span>Runs at</span>
+                  <strong id="scheduleTimePreview">8:00 PM</strong>
+                </div>
+
+                <div class="schedule-time-picker-controls">
+                  <div class="schedule-time-step-card">
+                    <span>Hour</span>
+                    <div class="schedule-time-stepper">
+                      <button type="button" data-schedule-time-adjust="hour" data-delta="-1" aria-label="Decrease hour">−</button>
+                      <strong id="scheduleTimeHourValue">8</strong>
+                      <button type="button" data-schedule-time-adjust="hour" data-delta="1" aria-label="Increase hour">+</button>
+                    </div>
+                  </div>
+
+                  <div class="schedule-time-step-card">
+                    <span>Minute</span>
+                    <div class="schedule-time-stepper">
+                      <button type="button" data-schedule-time-adjust="minute" data-delta="-1" aria-label="Decrease minute">−</button>
+                      <strong id="scheduleTimeMinuteValue">00</strong>
+                      <button type="button" data-schedule-time-adjust="minute" data-delta="1" aria-label="Increase minute">+</button>
+                    </div>
+                  </div>
+
+                  <div class="schedule-time-step-card schedule-time-ampm-card">
+                    <span>AM / PM</span>
+                    <div class="schedule-time-meridiem-group">
+                      <button type="button" data-schedule-time-meridiem="AM">AM</button>
+                      <button type="button" data-schedule-time-meridiem="PM">PM</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="schedule-minute-shortcuts" id="scheduleMinuteShortcuts" aria-label="Quick minute choices"></div>
+
+                <div class="schedule-time-picker-actions">
+                  <button id="scheduleTimePickerCancel" class="scene-btn" type="button">Cancel</button>
+                  <button id="scheduleTimePickerApply" class="scene-btn schedule-time-apply-btn" type="button">Set Time</button>
+                </div>
+              </aside>
+            </section>
           </section>
         </section>
       </article>

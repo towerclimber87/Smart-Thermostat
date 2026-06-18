@@ -13115,3 +13115,186 @@ body.booting .boot-overlay {
     height: 52px;
   }
 }
+
+/* 2026-06-18 schedule time picker popup */
+.schedule-time-picker-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: none;
+  place-items: center;
+  padding: clamp(10px, 1.4vw, 18px);
+}
+.schedule-time-picker-overlay.open {
+  display: grid;
+}
+.schedule-time-picker-backdrop {
+  position: absolute;
+  inset: 0;
+  border-radius: 28px;
+  background: rgba(0,0,0,.38);
+  backdrop-filter: blur(6px);
+}
+.schedule-time-picker-sheet {
+  position: relative;
+  z-index: 1;
+  width: min(760px, calc(100vw - 40px));
+  max-height: min(620px, calc(100dvh - 40px));
+  overflow: auto;
+  display: grid;
+  gap: 14px;
+  border-radius: 26px;
+  border: 1px solid rgba(255,255,255,.16);
+  background: linear-gradient(155deg, rgba(25,39,64,.98), rgba(9,14,28,.99));
+  box-shadow: 0 32px 78px rgba(0,0,0,.58), inset 0 1px 0 rgba(255,255,255,.10);
+  padding: clamp(14px, 1.7vw, 22px);
+}
+.schedule-time-picker-header,
+.schedule-time-picker-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.schedule-time-picker-header h3 {
+  margin: 0;
+  color: rgba(247,251,255,.98);
+  font-size: clamp(1.35rem, 2.2vw, 2.3rem);
+  line-height: .98;
+  letter-spacing: -.055em;
+}
+.schedule-time-preview {
+  min-height: 86px;
+  border-radius: 22px;
+  border: 1px solid rgba(77,238,255,.20);
+  background: linear-gradient(135deg, rgba(77,238,255,.16), rgba(255,255,255,.045));
+  display: grid;
+  place-items: center;
+  gap: 2px;
+  text-align: center;
+  padding: 12px;
+}
+.schedule-time-preview span {
+  color: rgba(220,235,250,.64);
+  font-size: .72rem;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: .16em;
+}
+.schedule-time-preview strong {
+  color: rgba(255,255,255,.98);
+  font-size: clamp(2.1rem, 5vw, 4rem);
+  line-height: .95;
+  letter-spacing: -.07em;
+}
+.schedule-time-picker-controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.schedule-time-step-card {
+  min-width: 0;
+  border-radius: 20px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.045);
+  padding: 10px;
+  display: grid;
+  gap: 10px;
+}
+.schedule-time-step-card > span,
+.schedule-minute-shortcuts::before {
+  color: rgba(224,236,250,.70);
+  font-size: .68rem;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: .14em;
+}
+.schedule-time-stepper {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr) 54px;
+  align-items: center;
+  gap: 8px;
+}
+.schedule-time-stepper button,
+.schedule-time-meridiem-group button,
+.schedule-minute-shortcut {
+  min-height: 54px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.075);
+  color: rgba(241,248,255,.94);
+  font-size: 1.1rem;
+  font-weight: 1000;
+  cursor: pointer;
+}
+.schedule-time-stepper strong {
+  min-width: 0;
+  color: rgba(255,255,255,.98);
+  font-size: clamp(2rem, 4vw, 3.5rem);
+  line-height: 1;
+  text-align: center;
+  letter-spacing: -.06em;
+}
+.schedule-time-meridiem-group {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.schedule-time-meridiem-group button.active,
+.schedule-minute-shortcut.active {
+  border-color: rgba(77,238,255,.48);
+  background: linear-gradient(135deg, rgba(77,238,255,.30), rgba(132,255,201,.12));
+  color: #07121f;
+  box-shadow: 0 12px 30px rgba(77,238,255,.18);
+}
+.schedule-minute-shortcuts {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  border-radius: 20px;
+  border: 1px solid rgba(255,255,255,.08);
+  background: rgba(255,255,255,.035);
+  padding: 10px;
+}
+.schedule-minute-shortcuts::before {
+  content: "Quick minutes";
+  grid-column: 1 / -1;
+}
+.schedule-minute-shortcut {
+  min-height: 44px;
+  font-size: .92rem;
+}
+.schedule-time-picker-actions {
+  justify-content: flex-end;
+}
+.schedule-time-picker-actions .scene-btn {
+  min-width: 132px;
+  min-height: 50px;
+  border-radius: 16px;
+}
+.schedule-time-apply-btn {
+  background: linear-gradient(135deg, rgba(77,238,255,.88), rgba(140,255,202,.78));
+  color: #07121f;
+  border-color: rgba(255,255,255,.20);
+}
+.schedule-field input[readonly] {
+  cursor: pointer;
+  caret-color: transparent;
+}
+.schedule-field input[readonly]::selection {
+  background: transparent;
+}
+
+@media (max-width: 900px) {
+  .schedule-time-picker-sheet {
+    width: calc(100vw - 20px);
+    max-height: calc(100dvh - 20px);
+    border-radius: 22px;
+  }
+  .schedule-time-picker-controls {
+    grid-template-columns: 1fr;
+  }
+  .schedule-minute-shortcuts {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}

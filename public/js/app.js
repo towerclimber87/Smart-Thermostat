@@ -347,6 +347,7 @@ const state = {
     },
   },
   scheduleEditor: { selectedId: "", draft: null },
+  scheduleTimePicker: { hour12: 8, minute: 0, meridiem: "PM" },
   alarm: {
     entityId: "",
     name: "Alarm",
@@ -480,6 +481,15 @@ const elements = {
   schedulePersonChips: document.getElementById("schedulePersonChips"),
   scheduleDeleteButton: document.getElementById("scheduleDeleteButton"),
   scheduleSaveButton: document.getElementById("scheduleSaveButton"),
+  scheduleTimePickerOverlay: document.getElementById("scheduleTimePickerOverlay"),
+  scheduleTimePickerClose: document.getElementById("scheduleTimePickerClose"),
+  scheduleTimePickerTitle: document.getElementById("scheduleTimePickerTitle"),
+  scheduleTimePreview: document.getElementById("scheduleTimePreview"),
+  scheduleTimeHourValue: document.getElementById("scheduleTimeHourValue"),
+  scheduleTimeMinuteValue: document.getElementById("scheduleTimeMinuteValue"),
+  scheduleMinuteShortcuts: document.getElementById("scheduleMinuteShortcuts"),
+  scheduleTimePickerCancel: document.getElementById("scheduleTimePickerCancel"),
+  scheduleTimePickerApply: document.getElementById("scheduleTimePickerApply"),
   relayFan: document.getElementById("relayFan"),
   relayHeat: document.getElementById("relayHeat"),
   relayCool: document.getElementById("relayCool"),
@@ -2695,10 +2705,20 @@ function scheduleId() {
 }
 
 function normalizeScheduleTime(value, fallback = "20:00") {
-  const match = /^(\d{1,2}):(\d{2})$/.exec(String(value || "").trim());
+  const raw = String(value || "").trim();
+  let match = /^(\d{1,2}):(\d{2})$/.exec(raw);
+  if (match) {
+    const hour = clamp(Number(match[1]), 0, 23);
+    const minute = clamp(Number(match[2]), 0, 59);
+    return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  }
+  match = /^(\d{1,2})(?::(\d{1,2}))?\s*([AP])\.?M\.?$/i.exec(raw);
   if (!match) return fallback;
-  const hour = clamp(Number(match[1]), 0, 23);
-  const minute = clamp(Number(match[2]), 0, 59);
+  let hour = clamp(Number(match[1]), 1, 12);
+  const minute = clamp(Number(match[2] ?? 0), 0, 59);
+  const meridiem = match[3].toUpperCase();
+  if (meridiem === "AM") hour = hour === 12 ? 0 : hour;
+  else hour = hour === 12 ? 12 : hour + 12;
   return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
@@ -2777,6 +2797,115 @@ function formatScheduleTime(value) {
   const date = new Date();
   date.setHours(hour, minute, 0, 0);
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function scheduleTimeParts(value) {
+  const time = normalizeScheduleTime(value, "20:00");
+  const [hour24, minute] = time.split(":").map(Number);
+  const meridiem = hour24 >= 12 ? "PM" : "AM";
+  const hour12 = hour24 % 12 || 12;
+  return { hour12, minute, meridiem };
+}
+
+function scheduleTimeFromParts(parts = {}) {
+  let hour = clamp(Number(parts.hour12 || 8), 1, 12);
+  const minute = clamp(Number(parts.minute || 0), 0, 59);
+  const meridiem = String(parts.meridiem || "PM").toUpperCase() === "AM" ? "AM" : "PM";
+  if (meridiem === "AM") hour = hour === 12 ? 0 : hour;
+  else hour = hour === 12 ? 12 : hour + 12;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function setScheduleTimeInputValue(value) {
+  if (!elements.scheduleTimeInput) return;
+  const normalized = normalizeScheduleTime(value, "20:00");
+  elements.scheduleTimeInput.dataset.timeValue = normalized;
+  elements.scheduleTimeInput.value = formatScheduleTime(normalized);
+}
+
+function ensureScheduleTimePickerState() {
+  const current = state.scheduleTimePicker || scheduleTimeParts("20:00");
+  state.scheduleTimePicker = {
+    hour12: clamp(Number(current.hour12 || 8), 1, 12),
+    minute: clamp(Number(current.minute || 0), 0, 59),
+    meridiem: String(current.meridiem || "PM").toUpperCase() === "AM" ? "AM" : "PM",
+  };
+  return state.scheduleTimePicker;
+}
+
+function renderScheduleTimePicker() {
+  if (!elements.scheduleTimePickerOverlay) return;
+  const parts = ensureScheduleTimePickerState();
+  const time = scheduleTimeFromParts(parts);
+  if (elements.scheduleTimePreview) elements.scheduleTimePreview.textContent = formatScheduleTime(time);
+  if (elements.scheduleTimeHourValue) elements.scheduleTimeHourValue.textContent = String(parts.hour12);
+  if (elements.scheduleTimeMinuteValue) elements.scheduleTimeMinuteValue.textContent = String(parts.minute).padStart(2, "0");
+  elements.scheduleTimePickerOverlay.querySelectorAll("[data-schedule-time-meridiem]").forEach((button) => {
+    const active = button.dataset.scheduleTimeMeridiem === parts.meridiem;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+  if (elements.scheduleMinuteShortcuts) {
+    const options = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55];
+    elements.scheduleMinuteShortcuts.innerHTML = options.map((minute) => {
+      const active = minute === parts.minute ? " active" : "";
+      return `<button class="schedule-minute-shortcut${active}" type="button" data-schedule-minute="${minute}" aria-pressed="${active ? "true" : "false"}">:${String(minute).padStart(2, "0")}</button>`;
+    }).join("");
+  }
+}
+
+function openScheduleTimePicker(event) {
+  event?.preventDefault?.();
+  event?.stopPropagation?.();
+  const draft = updateScheduleDraftFromInputs();
+  state.scheduleTimePicker = scheduleTimeParts(draft.time || "20:00");
+  if (elements.scheduleTimePickerTitle) elements.scheduleTimePickerTitle.textContent = `Pick time for ${draft.name || "schedule"}`;
+  renderScheduleTimePicker();
+  elements.scheduleTimePickerOverlay?.classList.add("open");
+  elements.scheduleTimePickerOverlay?.setAttribute("aria-hidden", "false");
+}
+
+function closeScheduleTimePicker(options = {}) {
+  elements.scheduleTimePickerOverlay?.classList.remove("open");
+  elements.scheduleTimePickerOverlay?.setAttribute("aria-hidden", "true");
+  if (options.focusInput && elements.scheduleTimeInput) elements.scheduleTimeInput.focus({ preventScroll: true });
+}
+
+function adjustScheduleTimePickerPart(part, delta) {
+  const parts = ensureScheduleTimePickerState();
+  const amount = Number(delta || 0);
+  if (part === "hour") {
+    parts.hour12 += amount;
+    while (parts.hour12 < 1) parts.hour12 += 12;
+    while (parts.hour12 > 12) parts.hour12 -= 12;
+  }
+  if (part === "minute") {
+    parts.minute += amount;
+    while (parts.minute < 0) parts.minute += 60;
+    while (parts.minute > 59) parts.minute -= 60;
+  }
+  renderScheduleTimePicker();
+}
+
+function setScheduleTimePickerMinute(minute) {
+  const parts = ensureScheduleTimePickerState();
+  parts.minute = clamp(Number(minute || 0), 0, 59);
+  renderScheduleTimePicker();
+}
+
+function setScheduleTimePickerMeridiem(meridiem) {
+  const parts = ensureScheduleTimePickerState();
+  parts.meridiem = String(meridiem || "PM").toUpperCase() === "AM" ? "AM" : "PM";
+  renderScheduleTimePicker();
+}
+
+function applyScheduleTimePicker() {
+  const draft = ensureScheduleEditor();
+  draft.time = scheduleTimeFromParts(ensureScheduleTimePickerState());
+  draft.lastTriggeredDate = "";
+  setScheduleTimeInputValue(draft.time);
+  closeScheduleTimePicker();
+  renderScheduleOverlay();
 }
 
 function getSchedulePersonLabel(entityId) {
@@ -2925,7 +3054,9 @@ function commitScheduleDraft(options = {}) {
 function updateScheduleDraftFromInputs() {
   const draft = ensureScheduleEditor();
   if (elements.scheduleNameInput) draft.name = elements.scheduleNameInput.value;
-  if (elements.scheduleTimeInput) draft.time = normalizeScheduleTime(elements.scheduleTimeInput.value, draft.time || "20:00");
+  if (elements.scheduleTimeInput) {
+    draft.time = normalizeScheduleTime(elements.scheduleTimeInput.dataset.timeValue || elements.scheduleTimeInput.value, draft.time || "20:00");
+  }
   return draft;
 }
 
@@ -2997,7 +3128,7 @@ function renderScheduleOverlay() {
   const draft = ensureScheduleEditor();
   renderScheduleList();
   if (elements.scheduleNameInput && document.activeElement !== elements.scheduleNameInput) elements.scheduleNameInput.value = draft.name || "";
-  if (elements.scheduleTimeInput && document.activeElement !== elements.scheduleTimeInput) elements.scheduleTimeInput.value = normalizeScheduleTime(draft.time || "20:00");
+  if (elements.scheduleTimeInput) setScheduleTimeInputValue(draft.time || "20:00");
   if (elements.scheduleEnabledToggle) {
     elements.scheduleEnabledToggle.classList.toggle("active", draft.enabled !== false);
     elements.scheduleEnabledToggle.textContent = draft.enabled === false ? "Disabled" : "Enabled";
@@ -3016,6 +3147,7 @@ function openScheduleOverlay() {
 }
 
 function closeScheduleOverlay() {
+  closeScheduleTimePicker();
   commitScheduleDraft({ toast: false, render: false });
   setOverlayOpen(elements.scheduleOverlay, false);
 }
@@ -8299,7 +8431,23 @@ function bindEvents() {
   elements.scheduleDeleteButton?.addEventListener("click", deleteSelectedSchedule);
   elements.scheduleEnabledToggle?.addEventListener("click", toggleScheduleEnabled);
   elements.scheduleNameInput?.addEventListener("input", updateScheduleDraftFromInputs);
-  elements.scheduleTimeInput?.addEventListener("input", updateScheduleDraftFromInputs);
+  elements.scheduleTimeInput?.addEventListener("pointerdown", openScheduleTimePicker);
+  elements.scheduleTimeInput?.addEventListener("click", openScheduleTimePicker);
+  elements.scheduleTimeInput?.addEventListener("keydown", (event) => {
+    if (["Enter", " "].includes(event.key)) openScheduleTimePicker(event);
+  });
+  elements.scheduleTimePickerClose?.addEventListener("click", closeScheduleTimePicker);
+  elements.scheduleTimePickerCancel?.addEventListener("click", closeScheduleTimePicker);
+  elements.scheduleTimePickerApply?.addEventListener("click", applyScheduleTimePicker);
+  elements.scheduleTimePickerOverlay?.addEventListener("click", (event) => {
+    if (event.target.closest("[data-close-schedule-time]")) { closeScheduleTimePicker(); return; }
+    const adjust = event.target.closest("[data-schedule-time-adjust]");
+    if (adjust) { adjustScheduleTimePickerPart(adjust.dataset.scheduleTimeAdjust, Number(adjust.dataset.delta || 0)); return; }
+    const meridiem = event.target.closest("[data-schedule-time-meridiem]");
+    if (meridiem) { setScheduleTimePickerMeridiem(meridiem.dataset.scheduleTimeMeridiem); return; }
+    const minute = event.target.closest("[data-schedule-minute]");
+    if (minute) setScheduleTimePickerMinute(Number(minute.dataset.scheduleMinute || 0));
+  });
   elements.scheduleList?.addEventListener("click", (event) => {
     const row = event.target.closest("[data-schedule-id]");
     if (row) selectSchedule(row.dataset.scheduleId);
@@ -8745,7 +8893,13 @@ function bindEvents() {
     if (event.key === "ArrowLeft") goRelative(-1);
     if (event.key === "+" || event.key === "=") adjustSetpoint(1);
     if (event.key === "-" || event.key === "_") adjustSetpoint(-1);
-    if (event.key === "Escape") { closeSettingsCodePrompt(); closeRoomControlCodePrompt(); closeSettings(); closeEntityPicker(); closeAudioEntityPicker(); closeAlarmKeypad(); closeAlarmArmOptions(); closeLightColorPicker(); closeThermostatInfo(); closeAutoConfirmOverlay(); closeScheduleOverlay(); }
+    if (event.key === "Escape") {
+      if (elements.scheduleTimePickerOverlay?.classList.contains("open")) {
+        closeScheduleTimePicker();
+        return;
+      }
+      closeSettingsCodePrompt(); closeRoomControlCodePrompt(); closeSettings(); closeEntityPicker(); closeAudioEntityPicker(); closeAlarmKeypad(); closeAlarmArmOptions(); closeLightColorPicker(); closeThermostatInfo(); closeAutoConfirmOverlay(); closeScheduleOverlay();
+    }
   });
 }
 
