@@ -28,6 +28,7 @@ const HA_ALARM_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
 const HA_DOOR_SYNC_INTERVAL_MS = 5000;
 const HA_PRESENCE_SYNC_INTERVAL_MS = 5000;
 const HA_PAUSE_FUNCTION_SYNC_INTERVAL_MS = 5000;
+const HA_PAUSE_FUNCTION_FAST_SYNC_INTERVAL_MS = 1000;
 const HA_WEATHER_SYNC_INTERVAL_MS = 60000;
 const HA_TEMP_SENSOR_SYNC_INTERVAL_MS = 5000;
 const LOCAL_THERMOSTAT_SYNC_INTERVAL_MS = 1000;
@@ -111,6 +112,7 @@ let haPresenceSyncInFlight = false;
 let haPresenceSyncLastError = "";
 let haPauseFunctionSyncInFlight = false;
 let haPauseFunctionSyncLastError = "";
+let lastPauseFunctionFastSyncAt = 0;
 let haWeatherSyncInFlight = false;
 let haWeatherSyncLastError = "";
 let haTempSensorSyncInFlight = false;
@@ -2559,13 +2561,19 @@ function normalizePauseFunctionEntry(entry = {}) {
   const entityId = String(entry?.entityId || entry?.entity_id || "").trim();
   if (!entityId || !entityId.includes(".")) return null;
   const domain = String(entry.domain || pauseFunctionDomainFromEntityId(entityId)).trim().toLowerCase();
+  const rawCurrentPosition = entry.currentPosition ?? entry.current_position;
+  const currentPosition = rawCurrentPosition === undefined || rawCurrentPosition === null || rawCurrentPosition === "" ? null : Number(rawCurrentPosition);
   return {
     entityId,
-    name: String(entry.name || entry.friendlyName || entry.haName || entityId).trim() || entityId,
+    name: String(entry.name || entry.friendlyName || entry.haName || entry.friendly_name || entityId).trim() || entityId,
     domain,
     deviceClass: String(entry.deviceClass || entry.device_class || "").trim().toLowerCase(),
     state: String(entry.state || "unknown").trim().toLowerCase(),
     openedAt: Math.max(0, Number(entry.openedAt || 0)),
+    lastChanged: String(entry.lastChanged || entry.last_changed || "").trim(),
+    lastUpdated: String(entry.lastUpdated || entry.last_updated || "").trim(),
+    currentPosition: Number.isFinite(currentPosition) ? currentPosition : null,
+    isClosed: typeof entry.isClosed === "boolean" ? entry.isClosed : (typeof entry.is_closed === "boolean" ? entry.is_closed : null),
   };
 }
 
@@ -2608,6 +2616,12 @@ function pauseFunctionSettingsSnapshot() {
       name: entry.name,
       domain: entry.domain,
       deviceClass: entry.deviceClass,
+      state: entry.state,
+      openedAt: Number(entry.openedAt || 0),
+      lastChanged: entry.lastChanged || "",
+      lastUpdated: entry.lastUpdated || "",
+      currentPosition: entry.currentPosition,
+      isClosed: entry.isClosed,
     })),
   };
 }
@@ -2632,9 +2646,25 @@ function pauseFunctionEntryName(entry = {}) {
   return String(entry.name || entry.entityId || "Entry").trim() || "Entry";
 }
 
+function pauseFunctionTimestampFromHa(value, now = Date.now()) {
+  const timestamp = Date.parse(String(value || ""));
+  return Number.isFinite(timestamp) && timestamp > 0 && timestamp <= now ? timestamp : 0;
+}
+
+function pauseFunctionOpenStartedAt(entry = {}, now = Date.now()) {
+  const existing = Number(entry.openedAt || 0);
+  if (Number.isFinite(existing) && existing > 0) return existing;
+  return pauseFunctionTimestampFromHa(entry.lastChanged, now)
+    || pauseFunctionTimestampFromHa(entry.lastUpdated, now)
+    || now;
+}
+
 function pauseFunctionStateLooksOpen(entry = {}) {
   const domain = String(entry.domain || pauseFunctionDomainFromEntityId(entry.entityId)).toLowerCase();
   const value = String(entry.state || "").trim().toLowerCase();
+  if (entry.isClosed === false) return true;
+  if (entry.isClosed === true && (!value || ["closed", "off"].includes(value))) return false;
+  if (domain === "cover" && Number.isFinite(Number(entry.currentPosition)) && Number(entry.currentPosition) > 0) return true;
   if (!value || ["unknown", "unavailable", "none", "null"].includes(value)) return false;
   if (domain === "cover") return ["open", "opening"].includes(value);
   return ["on", "open", "opening", "detected", "true", "active"].includes(value);
@@ -2646,7 +2676,7 @@ function getOpenPauseFunctionEntries(now = Date.now()) {
     const next = normalizePauseFunctionEntry(entry);
     if (!next) return null;
     const open = pauseFunctionStateLooksOpen(next);
-    next.openedAt = open ? Math.max(1, Number(entry.openedAt || now)) : 0;
+    next.openedAt = open ? pauseFunctionOpenStartedAt(next, now) : 0;
     return next;
   }).filter(Boolean);
   return pause.entries.filter(pauseFunctionStateLooksOpen);
@@ -3448,7 +3478,7 @@ async function pollHomeAssistantPauseFunction(options = {}) {
       const update = byId.get(entry.entityId);
       const merged = normalizePauseFunctionEntry({ ...entry, ...(update || {}) }) || entry;
       const open = pauseFunctionStateLooksOpen(merged);
-      const nextOpenedAt = open ? (Number(entry.openedAt || 0) || now) : 0;
+      const nextOpenedAt = open ? pauseFunctionOpenStartedAt({ ...merged, openedAt: entry.openedAt }, now) : 0;
       if (Number(merged.openedAt || 0) !== nextOpenedAt) merged.openedAt = nextOpenedAt;
       if (JSON.stringify(merged) !== JSON.stringify(entry)) changed = true;
       return merged;
@@ -4139,11 +4169,13 @@ function renderPauseFunctionStatus() {
 
 function shouldFastSyncPauseFunction() {
   const pause = getPauseFunction();
-  return Boolean(pause.entries.length && (pause.active || pause.entries.some(pauseFunctionStateLooksOpen)));
+  return Boolean(pause.entries.length);
 }
 
 function servicePauseFunctionCountdown() {
-  if (shouldFastSyncPauseFunction()) {
+  const now = Date.now();
+  if (shouldFastSyncPauseFunction() && now - lastPauseFunctionFastSyncAt >= HA_PAUSE_FUNCTION_FAST_SYNC_INTERVAL_MS) {
+    lastPauseFunctionFastSyncAt = now;
     pollHomeAssistantPauseFunction({ force: true });
   }
   evaluatePauseFunction({ toast: true });
@@ -4171,6 +4203,7 @@ function adjustPauseFunctionDuration(delta) {
 function upsertPauseFunctionEntry(entity = {}) {
   const normalized = normalizePauseFunctionEntry(entity);
   if (!normalized) return;
+  if (pauseFunctionStateLooksOpen(normalized)) normalized.openedAt = pauseFunctionOpenStartedAt(normalized);
   const pause = getPauseFunction();
   const existing = pause.entries.filter((entry) => entry.entityId !== normalized.entityId);
   pause.entries = [...existing, normalized];
