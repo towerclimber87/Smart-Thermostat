@@ -5361,13 +5361,19 @@ function renderRoomTabs() {
 function applyBlindVisualVars(card, position) {
   const pct = clamp(Number(position) || 0, 0, 100);
   const openRatio = pct / 100;
-  const angle = Math.round(openRatio * 68);
+  const closedRatio = 1 - openRatio;
+  const shadeHeight = Math.max(8, Math.min(100, (closedRatio * 100) + 6));
+  const louverAngle = Math.round(6 + openRatio * 18);
   card.style.setProperty("--blind-open", `${pct}%`);
+  card.style.setProperty("--blind-closed", `${100 - pct}%`);
   card.style.setProperty("--blind-open-ratio", openRatio.toFixed(3));
-  card.style.setProperty("--blind-slat-angle", `${angle}deg`);
-  card.style.setProperty("--blind-light", (0.16 + openRatio * 0.48).toFixed(3));
-  card.style.setProperty("--blind-shadow", (0.72 - openRatio * 0.42).toFixed(3));
-  card.style.setProperty("--blind-slat-height", `${(2.2 + (1 - openRatio) * 11).toFixed(1)}px`);
+  card.style.setProperty("--blind-closed-ratio", closedRatio.toFixed(3));
+  card.style.setProperty("--blind-shade-height", `${shadeHeight.toFixed(1)}%`);
+  card.style.setProperty("--blind-slat-angle", `${louverAngle}deg`);
+  card.style.setProperty("--blind-light", (0.26 + openRatio * 0.42).toFixed(3));
+  card.style.setProperty("--blind-shadow", (0.68 - openRatio * 0.34).toFixed(3));
+  card.style.setProperty("--blind-slat-height", `${(1.4 + closedRatio * 2.4).toFixed(1)}px`);
+  card.dataset.blindState = pct >= 98 ? "open" : pct <= 2 ? "closed" : "partial";
 }
 
 function renderBlinds() {
@@ -5385,8 +5391,8 @@ function renderBlinds() {
     card.dataset.blindCard = blind.id;
     card.dataset.roomKey = state.blinds.room;
     applyBlindVisualVars(card, blind.position);
-    const slatCount = 26;
-    const slats = Array.from({ length: slatCount }, (_, index) => `<span class="blind-slat" style="--slat-index:${index}; --slat-top:${4 + (index * (92 / (slatCount - 1)))}%"></span>`).join("");
+    const slatCount = 18;
+    const slats = Array.from({ length: slatCount }, (_, index) => `<span class="blind-slat" style="--slat-index:${index}; --slat-top:${8 + (index * (84 / (slatCount - 1)))}%"></span>`).join("");
     card.innerHTML = `
       <div class="blind-top">
         <div>
@@ -5395,8 +5401,12 @@ function renderBlinds() {
         <div class="blind-percent">${blind.position}%</div>
       </div>
       <button class="blind-action primary" data-blind-id="${blind.id}" data-action="open">Open</button>
-      <div class="shade-stage" data-blind-stage="${blind.id}" role="slider" aria-label="${blind.name} position" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${blind.position}" tabindex="0">
-        <div class="blind-window venetian-blinds" aria-hidden="true">${slats}</div>
+      <div class="shade-stage modern-shade-stage" data-blind-stage="${blind.id}" role="slider" aria-label="${blind.name} position" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${blind.position}" tabindex="0">
+        <div class="blind-window smart-shade-window" aria-hidden="true">
+          <div class="shade-glass"></div>
+          <div class="shade-sheet">${slats}</div>
+          <div class="shade-bottom-rail"></div>
+        </div>
       </div>
       <button class="blind-action close-blind" data-blind-id="${blind.id}" data-action="close">Close</button>
     `;
