@@ -468,6 +468,7 @@ const elements = {
   fanSummary: document.getElementById("fanSummary"),
   fanChip: document.getElementById("fanChip"),
   scheduleButton: document.getElementById("scheduleButton"),
+  schedulePresetBar: document.getElementById("schedulePresetBar"),
   scheduleOverlay: document.getElementById("scheduleOverlay"),
   scheduleClose: document.getElementById("scheduleClose"),
   scheduleAddButton: document.getElementById("scheduleAddButton"),
@@ -2624,6 +2625,7 @@ function renderThermostatPeople() {
     elements.coolLockToggle.setAttribute("aria-pressed", state.thermostat.coolLocked ? "true" : "false");
   }
   if (elements.scheduleOverlay?.classList.contains("open")) renderScheduleOverlay();
+  renderSchedulePresets();
 }
 
 function applyThermostatPresenceAutomation(options = {}) {
@@ -3014,6 +3016,7 @@ function addThermostatSchedule() {
   state.scheduleEditor.selectedId = schedule.id;
   state.scheduleEditor.draft = clone(schedule);
   renderScheduleOverlay();
+  renderSchedulePresets();
   saveConfig();
   showToast("Schedule added");
 }
@@ -3026,6 +3029,7 @@ function deleteSelectedSchedule() {
   state.scheduleEditor.selectedId = schedules[0].id;
   state.scheduleEditor.draft = clone(schedules[0]);
   renderScheduleOverlay();
+  renderSchedulePresets();
   saveConfig();
   showToast("Schedule deleted");
 }
@@ -3045,6 +3049,7 @@ function commitScheduleDraft(options = {}) {
   state.thermostat.schedules = normalizeThermostatSchedules(schedules);
   state.scheduleEditor.selectedId = normalized.id;
   state.scheduleEditor.draft = clone(normalized);
+  renderSchedulePresets();
   if (options.render !== false) renderScheduleOverlay();
   if (options.save !== false) saveConfig();
   if (options.toast) showToast("Schedule saved");
@@ -3121,6 +3126,54 @@ function renderSchedulePeople(draft) {
       </button>
     `;
   }).join("");
+}
+
+function scheduleApplyBlockedMessage(schedule, reason) {
+  const name = schedule?.name || "Schedule";
+  switch (reason) {
+    case "disabled": return `${name} is disabled`;
+    case "away": return `${name}: Away mode is active`;
+    case "condition": return `${name}: person condition not met`;
+    case "mode": return `${name}: select Cool, Heat, or Auto first`;
+    case "cool-locked": return `${name}: Cool is locked`;
+    case "heat-locked": return `${name}: Heat is locked`;
+    default: return `${name}: could not apply`;
+  }
+}
+
+function renderSchedulePresets() {
+  if (!elements.schedulePresetBar) return;
+  const schedules = getThermostatSchedules().filter((schedule) => schedule.enabled !== false);
+  if (!schedules.length) {
+    elements.schedulePresetBar.hidden = true;
+    elements.schedulePresetBar.innerHTML = "";
+    return;
+  }
+  const mode = scheduleApplyMode();
+  elements.schedulePresetBar.hidden = false;
+  elements.schedulePresetBar.innerHTML = schedules.slice(0, 8).map((schedule) => {
+    const conditionMet = scheduleConditionMet(schedule);
+    const setpoint = mode === "heat" ? schedule.heatSetpoint : schedule.coolSetpoint;
+    const detail = mode ? `${Math.round(Number(setpoint))}° ${titleCase(mode)}` : formatScheduleTime(schedule.time);
+    const waitingClass = conditionMet ? "" : " condition-waiting";
+    const title = conditionMet
+      ? `Apply ${schedule.name} now`
+      : `${schedule.name}: ${scheduleConditionSummary(schedule)}`;
+    return `
+      <button class="schedule-preset-btn${waitingClass}" type="button" data-schedule-preset-id="${escapeHtml(schedule.id)}" title="${escapeHtml(title)}">
+        <strong>${escapeHtml(schedule.name)}</strong>
+        <small>${escapeHtml(detail)}</small>
+      </button>
+    `;
+  }).join("");
+}
+
+function applySchedulePreset(scheduleId) {
+  const schedule = getThermostatSchedules().find((item) => item.id === scheduleId);
+  if (!schedule) return;
+  const result = applyThermostatSchedule(schedule);
+  if (!result.applied) showToast(scheduleApplyBlockedMessage(schedule, result.reason));
+  renderSchedulePresets();
 }
 
 function renderScheduleOverlay() {
@@ -8424,6 +8477,10 @@ function bindEvents() {
   elements.awayHomeButton?.addEventListener("click", setHomeMode);
   elements.fanChip?.addEventListener("click", cycleFanMode);
   elements.scheduleButton?.addEventListener("click", openScheduleOverlay);
+  elements.schedulePresetBar?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-schedule-preset-id]");
+    if (button) applySchedulePreset(button.dataset.schedulePresetId);
+  });
   elements.scheduleClose?.addEventListener("click", closeScheduleOverlay);
   document.querySelectorAll("[data-close-schedule]").forEach((el) => el.addEventListener("click", closeScheduleOverlay));
   elements.scheduleAddButton?.addEventListener("click", addThermostatSchedule);

@@ -13298,3 +13298,160 @@ body.booting .boot-overlay {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
+
+/* 2026-06-18 schedule corner launcher and quick presets */
+.thermostat-schedule-corner-btn {
+  position: absolute !important;
+  z-index: 32;
+  left: 0;
+  right: auto;
+  top: auto;
+  bottom: clamp(12px, 2vh, 22px);
+  transform: none !important;
+  width: 68px;
+  min-width: 68px;
+  height: 58px;
+  min-height: 58px;
+  padding: 0;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  cursor: pointer;
+  border-color: rgba(77,238,255,.26);
+  background: linear-gradient(135deg, rgba(77,238,255,.18), rgba(255,255,255,.06));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.14), 0 18px 42px rgba(0,0,0,.22), 0 0 26px rgba(77,238,255,.10);
+  pointer-events: auto;
+}
+.thermostat-schedule-corner-btn span {
+  display: none;
+}
+.thermostat-schedule-corner-btn strong {
+  margin: 0;
+  color: rgba(245,252,255,.98);
+  font-size: clamp(1.35rem, 2vw, 1.9rem);
+  line-height: 1;
+  letter-spacing: .02em;
+}
+.thermostat-schedule-corner-btn:hover,
+.thermostat-schedule-corner-btn:focus-visible {
+  border-color: rgba(77,238,255,.44);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.18), 0 18px 42px rgba(0,0,0,.22), 0 0 34px rgba(77,238,255,.18);
+}
+.schedule-preset-bar {
+  position: absolute;
+  z-index: 28;
+  left: clamp(84px, 5.4vw, 118px);
+  bottom: clamp(86px, 9.5vh, 112px);
+  width: min(650px, 46vw);
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
+  pointer-events: auto;
+}
+.schedule-preset-bar[hidden] {
+  display: none !important;
+}
+.schedule-preset-btn {
+  min-width: 86px;
+  max-width: 132px;
+  min-height: 38px;
+  display: grid;
+  align-content: center;
+  gap: 2px;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(255,255,255,.105), rgba(255,255,255,.04));
+  color: rgba(236,247,255,.94);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.12), 0 12px 28px rgba(0,0,0,.17);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  padding: 6px 13px;
+  text-align: center;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.schedule-preset-btn strong,
+.schedule-preset-btn small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.schedule-preset-btn strong {
+  font-size: clamp(.68rem, .82vw, .82rem);
+  line-height: 1;
+  font-weight: 1000;
+  letter-spacing: -.01em;
+}
+.schedule-preset-btn small {
+  color: rgba(202,221,238,.66);
+  font-size: .55rem;
+  line-height: 1;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.schedule-preset-btn.condition-waiting {
+  opacity: .58;
+  border-color: rgba(255,194,107,.22);
+}
+.schedule-preset-btn:hover,
+.schedule-preset-btn:focus-visible {
+  transform: translateY(-1px);
+  border-color: rgba(77,238,255,.34);
+  background: linear-gradient(135deg, rgba(77,238,255,.16), rgba(255,255,255,.06));
+}
+.thermostat-bottom-row {
+  grid-template-columns: minmax(250px, 342px) minmax(430px, 540px) minmax(154px, 220px) !important;
+}
+.bottom-left-cluster {
+  min-width: 0;
+}
+
+@media (max-width: 1200px) {
+  .schedule-preset-bar {
+    left: 82px;
+    width: min(540px, 52vw);
+    bottom: 82px;
+  }
+  .schedule-preset-btn {
+    min-width: 78px;
+    max-width: 116px;
+    padding-inline: 10px;
+  }
+}
+
+@media (max-width: 900px) {
+  .thermostat-schedule-corner-btn {
+    left: 0;
+    bottom: 10px;
+    width: 62px;
+    min-width: 62px;
+    height: 52px;
+    min-height: 52px;
+    display: inline-flex !important;
+  }
+  .schedule-preset-bar {
+    left: 72px;
+    right: 8px;
+    width: auto;
+    bottom: 68px;
+    gap: 6px;
+  }
+  .schedule-preset-btn {
+    min-width: 70px;
+    max-width: 98px;
+    min-height: 34px;
+    padding: 5px 8px;
+  }
+  .schedule-preset-btn strong {
+    font-size: .64rem;
+  }
+  .schedule-preset-btn small {
+    display: none;
+  }
+}

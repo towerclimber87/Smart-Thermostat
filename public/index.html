@@ -360,12 +360,15 @@
             <button id="tempUp" class="temp-step temp-right" aria-label="Increase setpoint">+</button>
           </div>
 
+          <button id="scheduleButton" class="floating-chip bottom-chip schedule-chip thermostat-schedule-corner-btn" type="button" aria-label="Open thermostat schedules">
+            <span>Schedule</span>
+            <strong>S</strong>
+          </button>
+
+          <div id="schedulePresetBar" class="schedule-preset-bar" aria-label="Schedule presets" hidden></div>
+
           <div class="thermostat-bottom-row">
             <div class="bottom-left-cluster" aria-label="Comfort shortcuts">
-              <button id="scheduleButton" class="floating-chip bottom-chip schedule-chip" type="button" aria-label="Open thermostat schedules">
-                <span>Schedule</span>
-                <strong>S</strong>
-              </button>
               <div id="humidityChip" class="floating-chip bottom-chip humidity-chip">
                 <span>Humidity</span>
                 <strong id="humidityValue">45%</strong>
