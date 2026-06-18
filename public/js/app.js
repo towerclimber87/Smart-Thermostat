@@ -6450,14 +6450,13 @@ function roomControlIconSvg(control) {
     const position = roomControlPositionPercent(control);
     const raised = position > 0;
     return roomControlGlyphSvg("bed", `
-      <path class="glyph-soft" d="M22 70h54M28 70v8M70 70v8"></path>
-      <path class="glyph-stroke" d="M21 64h52c5 0 8 3 8 8v1H21z"></path>
-      <path class="glyph-stroke" d="M21 64V39c0-4 3-7 7-7h7v32"></path>
-      <path class="glyph-fill" opacity="${raised ? ".34" : ".20"}" d="M35 46h17c4 0 7 3 7 7v11H35z"></path>
-      <path class="glyph-stroke" d="M35 64V46h17c4 0 7 3 7 7v11"></path>
-      <path class="glyph-soft" d="M29 43h6M42 54h11M62 55h12M27 59h49"></path>
-      <path class="glyph-stroke" opacity="${raised ? ".95" : ".45"}" d="M58 63c4-12 10-19 19-23"></path>
-      <circle class="glyph-dot" cx="77" cy="40" r="2.4"></circle>
+      <path class="glyph-soft" d="M22 72h54M27 72v7M70 72v7"></path>
+      <path class="glyph-stroke" d="M23 70V37c0-3 2-5 5-5s5 2 5 5v25"></path>
+      <path class="glyph-fill" opacity=".30" d="M33 49h18c3 0 5 2 5 5v8H33z"></path>
+      <path class="glyph-stroke" d="M34 49h16c3 0 6 3 6 6v7H34z"></path>
+      <path class="glyph-fill" opacity="${raised ? ".42" : ".20"}" d="M55 62l13-22 8 22z"></path>
+      <path class="glyph-stroke" d="M33 62h45c3 0 5 2 5 5v5H23v-5c0-3 2-5 5-5h27l13-22 8 22"></path>
+      <path class="glyph-soft" d="M39 56h12M59 58l9-15M76 62v10"></path>
     `);
   }
   if (!linked) {
