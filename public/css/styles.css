@@ -11618,7 +11618,7 @@ body.booting .boot-overlay {
 
 .thermostat-focus {
   min-height: clamp(390px, 52vh, 560px);
-  transform: translateY(clamp(-18px, -2vh, -32px));
+  transform: translateY(clamp(-64px, -5.6vh, -48px));
 }
 .thermo-dial.nest-dial {
   --dial-active: #0b8dff;
@@ -12013,7 +12013,7 @@ body.booting .boot-overlay {
   .boot-core { width: min(520px, 86vw); min-height: min(520px, 86vw); }
   .thermostat-focus {
     min-height: clamp(340px, 50vh, 470px);
-    transform: translateY(clamp(-10px, -1.4vh, -18px));
+    transform: translateY(clamp(-38px, -4.2vh, -26px));
   }
   .thermo-dial.nest-dial { width: min(78vw, 390px); }
 }
