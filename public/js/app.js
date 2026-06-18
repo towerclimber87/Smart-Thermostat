@@ -6450,13 +6450,14 @@ function roomControlIconSvg(control) {
     const position = roomControlPositionPercent(control);
     const raised = position > 0;
     return roomControlGlyphSvg("bed", `
-      <path class="glyph-soft" d="M23 69h52M28 69v9M68 69v9"></path>
-      <path class="glyph-stroke" d="M24 61h49c4 0 7 3 7 7v1H24z"></path>
-      <path class="glyph-fill" opacity="${raised ? ".34" : ".18"}" d="M24 51h31l19 10H24z"></path>
-      <path class="glyph-stroke" d="M24 61V42c0-5 4-9 9-9h10c5 0 9 4 9 9v19"></path>
-      <path class="glyph-stroke" d="M50 60l18-18 8 18"></path>
-      <path class="glyph-soft" d="M31 49h17M34 38h10M55 60l12-12"></path>
-      <circle class="glyph-dot" cx="70" cy="50" r="2.5"></circle>
+      <path class="glyph-soft" d="M22 70h54M28 70v8M70 70v8"></path>
+      <path class="glyph-stroke" d="M21 64h52c5 0 8 3 8 8v1H21z"></path>
+      <path class="glyph-stroke" d="M21 64V39c0-4 3-7 7-7h7v32"></path>
+      <path class="glyph-fill" opacity="${raised ? ".34" : ".20"}" d="M35 46h17c4 0 7 3 7 7v11H35z"></path>
+      <path class="glyph-stroke" d="M35 64V46h17c4 0 7 3 7 7v11"></path>
+      <path class="glyph-soft" d="M29 43h6M42 54h11M62 55h12M27 59h49"></path>
+      <path class="glyph-stroke" opacity="${raised ? ".95" : ".45"}" d="M58 63c4-12 10-19 19-23"></path>
+      <circle class="glyph-dot" cx="77" cy="40" r="2.4"></circle>
     `);
   }
   if (!linked) {
@@ -6634,6 +6635,11 @@ function roomControlBedSliderMarkup(control) {
   const disabled = (!control.haEntityId || normalizeRoomControlDomain(control.domain) !== "cover") ? "disabled" : "";
   return `
     <span class="room-control-bed-panel" data-room-control-bed-panel>
+      <span class="room-control-bed-scale" aria-hidden="true">
+        <span>100%</span>
+        <span>50%</span>
+        <span>0%</span>
+      </span>
       <span class="room-control-bed-slider-wrap">
         <input class="room-control-bed-slider" type="range" min="0" max="100" step="1" value="${position}" ${disabled} data-room-control-bed-slider data-room-control-id="${escapeHtml(control.id)}" aria-label="Set ${escapeHtml(roomControlDisplayName(control))} position" aria-orientation="vertical" />
       </span>

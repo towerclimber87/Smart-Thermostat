@@ -10903,3 +10903,169 @@ body[data-theme="christmas"] {
   width: clamp(116px, 13vh, 152px);
   height: 28px;
 }
+
+
+/* 2026-06-18 v6.3: modern full-height bed actuator card with right rail scale. */
+.room-control-card.room-control-bed-card {
+  --room-bed-track-length: clamp(176px, 21.5vh, 224px);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(64px, 5.5vw, 82px);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  column-gap: clamp(9px, .9vw, 14px);
+  row-gap: clamp(7px, .7vw, 11px);
+  align-items: stretch;
+  justify-content: stretch;
+  padding: clamp(12px, 1.05vw, 16px);
+  overflow: hidden;
+}
+.room-control-card.room-control-bed-card::after {
+  display: none;
+}
+.room-control-card.room-control-bed-card .room-control-card-top {
+  grid-column: 1;
+  grid-row: 1;
+  display: block;
+  min-width: 0;
+}
+.room-control-card.room-control-bed-card .room-control-power-shell {
+  width: clamp(58px, 4.65vw, 74px);
+  height: clamp(58px, 4.65vw, 74px);
+}
+.room-control-card.room-control-bed-card .room-control-copy {
+  grid-column: 1;
+  grid-row: 2;
+  align-self: start;
+  min-width: 0;
+  margin: 0;
+  padding-top: 3px;
+  padding-right: 4px;
+}
+.room-control-card.room-control-bed-card .room-control-copy strong {
+  font-size: clamp(1.05rem, 1.24vw, 1.38rem);
+  line-height: 1.06;
+  -webkit-line-clamp: 2;
+}
+.room-control-card.room-control-bed-card .room-control-copy small,
+.room-control-card.room-control-bed-card .room-control-copy em[data-room-control-hint] {
+  display: none !important;
+}
+.room-control-card.room-control-bed-card .room-control-state-pill {
+  position: absolute;
+  left: clamp(12px, 1.05vw, 16px);
+  bottom: clamp(12px, 1.05vw, 16px);
+  z-index: 3;
+  min-height: 28px;
+  padding: 0 12px;
+  border: 1px solid rgba(159,134,255,.26);
+  background: rgba(159,134,255,.16);
+  color: rgba(246,251,255,.92);
+  box-shadow: 0 10px 22px rgba(0,0,0,.20), inset 0 1px 0 rgba(255,255,255,.12);
+}
+.room-control-card.room-control-bed-card .room-control-bed-panel {
+  grid-column: 2;
+  grid-row: 1 / -1;
+  align-self: stretch;
+  justify-self: stretch;
+  width: 100%;
+  height: 100%;
+  min-height: var(--room-bed-track-length);
+  margin: 0;
+  padding: clamp(7px, .75vw, 10px) clamp(2px, .25vw, 4px);
+  display: grid;
+  grid-template-columns: minmax(20px, .72fr) minmax(26px, 1fr);
+  column-gap: clamp(2px, .25vw, 5px);
+  align-items: stretch;
+  justify-items: center;
+  border: 1px solid rgba(159,134,255,.16);
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.075), rgba(255,255,255,.026)),
+    rgba(3,10,22,.20);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.10), 0 12px 28px rgba(0,0,0,.18);
+}
+.room-control-card.room-control-bed-card .room-control-bed-scale {
+  height: 100%;
+  min-height: var(--room-bed-track-length);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-end;
+  padding: 2px 0;
+  color: rgba(217,229,245,.60);
+  font-size: clamp(.46rem, .47vw, .58rem);
+  font-weight: 950;
+  line-height: 1;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+}
+.room-control-card.room-control-bed-card .room-control-bed-scale span:nth-child(2) {
+  color: rgba(77,238,255,.62);
+}
+.room-control-card.room-control-bed-card .room-control-bed-slider-wrap {
+  position: relative;
+  width: clamp(28px, 2.2vw, 36px);
+  height: 100%;
+  min-height: var(--room-bed-track-length);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.room-control-card.room-control-bed-card .room-control-bed-slider-wrap::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 4px;
+  bottom: 4px;
+  width: 1px;
+  transform: translateX(-50%);
+  background: linear-gradient(180deg, rgba(255,255,255,.28), rgba(255,255,255,.06));
+  opacity: .58;
+}
+.room-control-card.room-control-bed-card .room-control-bed-slider-wrap::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 14px;
+  height: 1px;
+  transform: translate(-50%, -50%);
+  background: rgba(77,238,255,.34);
+  box-shadow: 0 calc(var(--room-bed-track-length) * -.45) 0 rgba(255,255,255,.14), 0 calc(var(--room-bed-track-length) * .45) 0 rgba(255,255,255,.14);
+}
+.room-control-card.room-control-bed-card .room-control-bed-slider {
+  width: var(--room-bed-track-length);
+  height: 30px;
+  margin: 0;
+  display: block;
+  transform: rotate(-90deg);
+  transform-origin: center center;
+  touch-action: none;
+  position: relative;
+  z-index: 2;
+}
+.room-control-card.room-control-bed-card .room-control-bed-slider::-webkit-slider-runnable-track {
+  height: 9px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(159,134,255,.98) 0 var(--range-fill), rgba(255,255,255,.16) var(--range-fill) 100%);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.18), 0 0 18px rgba(159,134,255,.10);
+}
+.room-control-card.room-control-bed-card .room-control-bed-slider::-webkit-slider-thumb {
+  width: 26px;
+  height: 26px;
+  margin-top: -8.5px;
+  background: linear-gradient(145deg, #ffffff, #dfe7ff);
+  box-shadow: 0 0 0 7px rgba(159,134,255,.14), 0 10px 24px rgba(0,0,0,.34), 0 0 18px rgba(77,238,255,.18);
+}
+.room-control-card.room-control-bed-card .room-control-bed-slider::-moz-range-track,
+.room-control-card.room-control-bed-card .room-control-bed-slider::-moz-range-progress {
+  height: 9px;
+}
+.room-control-card.room-control-bed-card .room-control-bed-slider::-moz-range-progress {
+  background: linear-gradient(90deg, rgba(159,134,255,.98), rgba(77,238,255,.82));
+}
+.room-control-card.room-control-bed-card .room-control-bed-slider::-moz-range-thumb {
+  width: 26px;
+  height: 26px;
+  background: linear-gradient(145deg, #ffffff, #dfe7ff);
+  box-shadow: 0 0 0 7px rgba(159,134,255,.14), 0 10px 24px rgba(0,0,0,.34), 0 0 18px rgba(77,238,255,.18);
+}
