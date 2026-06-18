@@ -11408,3 +11408,616 @@ body[data-theme="christmas"] {
     grid-template-columns: minmax(0, 1fr) clamp(58px, 22vw, 74px);
   }
 }
+
+/* 2026-06-17 v6.7 Nest-style environmental dial + Star Trek boot polish */
+.boot-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: grid;
+  place-items: center;
+  padding: clamp(28px, 5vw, 72px);
+  background:
+    radial-gradient(circle at 50% 43%, rgba(77,238,255,.20), transparent 28%),
+    radial-gradient(circle at 82% 15%, rgba(155,109,255,.18), transparent 34%),
+    linear-gradient(145deg, rgba(2,5,14,.98), rgba(5,12,24,.96));
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+  transition: opacity .42s ease, visibility .42s ease;
+}
+body.booting .boot-overlay {
+  opacity: 1;
+  pointer-events: auto;
+  visibility: visible;
+}
+.boot-core {
+  position: relative;
+  z-index: 2;
+  width: min(620px, 78vw);
+  min-height: min(620px, 78vw);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: clamp(12px, 1.6vw, 18px);
+  text-align: center;
+  color: rgba(248,252,255,.96);
+  background:
+    radial-gradient(circle at 50% 38%, rgba(42,154,255,.28), transparent 31%),
+    radial-gradient(circle at 50% 52%, rgba(4,10,22,.96), rgba(1,3,8,.99) 68%);
+  border: 1px solid rgba(255,255,255,.16);
+  box-shadow:
+    0 42px 110px rgba(0,0,0,.52),
+    inset 0 1px 0 rgba(255,255,255,.16),
+    inset 0 0 0 11px rgba(255,255,255,.035);
+  overflow: hidden;
+}
+.boot-core::after {
+  content: "";
+  position: absolute;
+  inset: 15%;
+  border-radius: 50%;
+  border: 1px solid rgba(77,238,255,.18);
+  box-shadow: inset 0 0 40px rgba(77,238,255,.05);
+  pointer-events: none;
+}
+.boot-ring {
+  position: absolute;
+  inset: 5.4%;
+  border-radius: 50%;
+  background:
+    repeating-conic-gradient(from 210deg, rgba(77,238,255,.72) 0 1.5deg, transparent 1.5deg 4.8deg),
+    conic-gradient(from 210deg, rgba(77,238,255,.62), rgba(155,109,255,.34), rgba(77,238,255,.62));
+  -webkit-mask: radial-gradient(circle, transparent 61%, #000 62% 73%, transparent 74%);
+  mask: radial-gradient(circle, transparent 61%, #000 62% 73%, transparent 74%);
+  animation: bootDialSpin 2.5s linear infinite;
+}
+.boot-ring span {
+  position: absolute;
+  left: 50%;
+  top: 4.5%;
+  width: 8px;
+  height: 46px;
+  border-radius: 999px;
+  transform: translateX(-50%);
+  background: rgba(255,255,255,.92);
+  box-shadow: 0 0 18px rgba(77,238,255,.35);
+}
+.boot-ring span:nth-child(2) { transform: translateX(-50%) rotate(122deg); transform-origin: 50% 310px; opacity: .55; }
+.boot-ring span:nth-child(3) { transform: translateX(-50%) rotate(238deg); transform-origin: 50% 310px; opacity: .36; }
+.boot-eyebrow {
+  position: relative;
+  z-index: 2;
+  color: rgba(77,238,255,.82);
+  font-size: clamp(.78rem, 1.08vw, 1.05rem);
+  font-weight: 950;
+  letter-spacing: .32em;
+  text-transform: uppercase;
+}
+.boot-core h2 {
+  position: relative;
+  z-index: 2;
+  max-width: 9ch;
+  font-size: clamp(3.3rem, 7.2vw, 7.2rem);
+  line-height: .82;
+  letter-spacing: -.09em;
+  text-shadow: 0 18px 52px rgba(0,0,0,.52), 0 0 28px rgba(77,238,255,.15);
+}
+.boot-status-line {
+  position: relative;
+  z-index: 2;
+  min-height: 54px;
+  display: inline-grid;
+  grid-template-columns: auto auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 0 18px;
+  border-radius: 999px;
+  color: rgba(224,238,250,.82);
+  background: rgba(255,255,255,.06);
+  border: 1px solid rgba(255,255,255,.13);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.10);
+  text-transform: uppercase;
+  letter-spacing: .12em;
+  font-size: clamp(.66rem, .78vw, .8rem);
+  font-weight: 950;
+}
+.boot-status-line strong { color: #ffffff; }
+.boot-status-line em { color: var(--green); font-style: normal; }
+.boot-lcars-frame {
+  position: absolute;
+  inset: clamp(22px, 3.4vw, 52px);
+  border-radius: clamp(28px, 4vw, 60px);
+  pointer-events: none;
+  opacity: .22;
+}
+.boot-lcars-block {
+  position: absolute;
+  border-radius: 999px;
+  background: rgba(77,238,255,.46);
+  box-shadow: 0 0 24px rgba(77,238,255,.14);
+}
+.boot-lcars-block-a { left: 0; top: 0; width: 34%; height: 18px; }
+.boot-lcars-block-b { right: 0; top: 0; width: 20%; height: 18px; background: rgba(155,109,255,.50); }
+.boot-lcars-block-c { left: 0; bottom: 0; width: 21%; height: 18px; background: rgba(255,173,92,.54); }
+.boot-lcars-block-d { right: 0; bottom: 0; width: 38%; height: 18px; }
+.app-shell[data-theme="star-trek"] .boot-overlay {
+  background:
+    radial-gradient(circle at 50% 44%, rgba(80,151,216,.16), transparent 33%),
+    linear-gradient(135deg, rgba(17,19,21,.99), rgba(4,5,6,.985));
+}
+.app-shell[data-theme="star-trek"] .boot-core {
+  border-radius: 32px;
+  width: min(760px, 84vw);
+  min-height: min(420px, 56vh);
+  background:
+    linear-gradient(90deg, rgba(226,161,58,.98) 0 18%, transparent 18% 20%, rgba(128,101,151,.92) 20% 28%, transparent 28% 31%, rgba(72,139,204,.92) 31% 100%),
+    linear-gradient(180deg, rgba(27,30,33,.98), rgba(5,6,7,.99));
+  background-blend-mode: soft-light, normal;
+  border: 2px solid rgba(218,177,111,.34);
+  box-shadow: 0 42px 110px rgba(0,0,0,.58), inset 0 1px 0 rgba(255,255,255,.08);
+}
+.app-shell[data-theme="star-trek"] .boot-core::before {
+  content: "";
+  position: absolute;
+  inset: 22px;
+  border-radius: 24px;
+  background:
+    linear-gradient(90deg, #d69b3c 0 15%, transparent 15% 17%, #7e73bb 17% 24%, transparent 24% 27%, #4c93cf 27% 100%);
+  opacity: .36;
+  -webkit-mask: linear-gradient(#000 0 0) top / 100% 18px no-repeat, linear-gradient(#000 0 0) bottom / 100% 18px no-repeat;
+  mask: linear-gradient(#000 0 0) top / 100% 18px no-repeat, linear-gradient(#000 0 0) bottom / 100% 18px no-repeat;
+}
+.app-shell[data-theme="star-trek"] .boot-core::after {
+  inset: 78px 42px;
+  border-radius: 18px;
+  border-color: rgba(229,161,58,.30);
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.7), 0 0 28px rgba(229,161,58,.05);
+}
+.app-shell[data-theme="star-trek"] .boot-ring {
+  inset: auto auto 28px 50%;
+  width: min(210px, 27vw);
+  height: min(210px, 27vw);
+  transform: translateX(-50%);
+  background:
+    repeating-conic-gradient(from 0deg, rgba(229,161,58,.88) 0 2deg, transparent 2deg 7deg),
+    conic-gradient(from 0deg, rgba(229,161,58,.88), rgba(116,169,219,.62), rgba(229,161,58,.88));
+  -webkit-mask: radial-gradient(circle, transparent 57%, #000 58% 72%, transparent 73%);
+  mask: radial-gradient(circle, transparent 57%, #000 58% 72%, transparent 73%);
+  opacity: .8;
+}
+.app-shell[data-theme="star-trek"] .boot-ring span { background: #f2bd4c; height: 32px; box-shadow: 0 0 16px rgba(229,161,58,.32); }
+.app-shell[data-theme="star-trek"] .boot-eyebrow {
+  color: #e5a13a;
+  font-family: "Arial Narrow", Impact, Inter, system-ui, sans-serif;
+  letter-spacing: .26em;
+}
+.app-shell[data-theme="star-trek"] .boot-core h2 {
+  max-width: 13ch;
+  color: #f1dec0;
+  font-family: "Arial Narrow", Impact, Inter, system-ui, sans-serif;
+  text-transform: uppercase;
+  font-size: clamp(2.8rem, 5.5vw, 5.8rem);
+  line-height: .88;
+  letter-spacing: -.055em;
+}
+.app-shell[data-theme="star-trek"] .boot-status-line {
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(20,25,29,.98), rgba(6,7,8,.98));
+  border-color: rgba(229,161,58,.32);
+  color: #e5a13a;
+}
+.app-shell[data-theme="star-trek"] .boot-status-line em { color: #86d071; }
+.app-shell[data-theme="star-trek"] .boot-lcars-frame { opacity: .72; }
+.app-shell[data-theme="star-trek"] .boot-lcars-block-a { background: #d69b3c; }
+.app-shell[data-theme="star-trek"] .boot-lcars-block-b { background: #c87544; }
+.app-shell[data-theme="star-trek"] .boot-lcars-block-c { background: #786cb0; }
+.app-shell[data-theme="star-trek"] .boot-lcars-block-d { background: #4d91ce; }
+@keyframes bootDialSpin { to { rotate: 360deg; } }
+
+.thermostat-focus {
+  min-height: clamp(390px, 52vh, 560px);
+}
+.thermo-dial.nest-dial {
+  --dial-active: #0b8dff;
+  --dial-active-2: #044fe0;
+  --dial-active-soft: rgba(67, 172, 255, .36);
+  --dial-span: rgba(72, 221, 255, .92);
+  --dial-span-soft: rgba(72, 221, 255, .28);
+  --dial-idle-tick: rgba(146, 190, 241, .24);
+  --dial-target-glow: rgba(72, 221, 255, .35);
+  --target-angle: var(--angle);
+  --current-angle: var(--angle);
+  --band-start: 0deg;
+  --band-end: var(--angle);
+  --target-deg: 0deg;
+  --current-deg: 0deg;
+  --target-x: var(--knob-x);
+  --target-y: var(--knob-y);
+  --target-label-x: var(--knob-x);
+  --target-label-y: var(--knob-y);
+  --current-x: 50%;
+  --current-y: 50%;
+  width: clamp(352px, 34vw, 500px);
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  background: none !important;
+  border: 0 !important;
+  outline: 0 !important;
+  isolation: isolate;
+  overflow: visible;
+  box-shadow:
+    0 0 0 13px rgba(255,255,255,.045),
+    0 44px 92px rgba(0,0,0,.38),
+    0 0 54px var(--dial-span-soft);
+  touch-action: none;
+}
+.thermo-dial.nest-dial.heat {
+  --dial-active: #ff554f;
+  --dial-active-2: #b71825;
+  --dial-active-soft: rgba(255,102,82,.34);
+  --dial-span: rgba(255,177,111,.92);
+  --dial-span-soft: rgba(255,115,88,.28);
+  --dial-idle-tick: rgba(255,202,176,.21);
+  --dial-target-glow: rgba(255,134,92,.36);
+}
+.thermo-dial.nest-dial.auto:not(.heat) {
+  --dial-active: #18bfff;
+  --dial-active-2: #4d6dff;
+  --dial-active-soft: rgba(101,210,255,.32);
+  --dial-span: rgba(185,134,255,.82);
+  --dial-span-soft: rgba(117,202,255,.22);
+}
+.app-shell.away-active .thermo-dial.nest-dial {
+  --dial-active: #a679ff;
+  --dial-active-2: #5430ce;
+  --dial-active-soft: rgba(185,134,255,.34);
+  --dial-span: rgba(221,191,255,.86);
+  --dial-span-soft: rgba(185,134,255,.25);
+  --dial-idle-tick: rgba(222,207,255,.22);
+  --dial-target-glow: rgba(185,134,255,.34);
+}
+.thermo-dial.nest-dial .dial-outer-glass,
+.thermo-dial.nest-dial .dial-tick-ring,
+.thermo-dial.nest-dial .dial-span-ring,
+.thermo-dial.nest-dial .dial-target-rail,
+.thermo-dial.nest-dial .dial-glow,
+.thermo-dial.nest-dial .dial-inner {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.thermo-dial.nest-dial .dial-outer-glass {
+  inset: -2.4%;
+  z-index: 0;
+  background:
+    radial-gradient(circle at 36% 17%, rgba(255,255,255,.24), transparent 20%),
+    radial-gradient(circle at 50% 48%, rgba(9,15,25,.72), rgba(1,3,7,.98) 72%),
+    linear-gradient(145deg, rgba(255,255,255,.16), rgba(255,255,255,.02));
+  box-shadow:
+    inset 0 0 0 1px rgba(255,255,255,.18),
+    inset 0 0 0 12px rgba(255,255,255,.025),
+    inset 0 -22px 54px rgba(0,0,0,.68);
+}
+.thermo-dial.nest-dial .dial-tick-ring {
+  inset: 7%;
+  z-index: 1;
+  background:
+    repeating-conic-gradient(from 225deg, var(--dial-idle-tick) 0 1.2deg, transparent 1.2deg 2.72deg);
+  -webkit-mask: radial-gradient(circle, transparent 56.2%, #000 57.2% 70.5%, transparent 71.4%);
+  mask: radial-gradient(circle, transparent 56.2%, #000 57.2% 70.5%, transparent 71.4%);
+  opacity: .96;
+}
+.thermo-dial.nest-dial .dial-target-rail {
+  inset: 7%;
+  z-index: 2;
+  background:
+    conic-gradient(from 225deg, var(--dial-active-soft) 0 var(--target-angle), transparent var(--target-angle) 360deg);
+  -webkit-mask: radial-gradient(circle, transparent 58%, #000 59% 70%, transparent 71.5%);
+  mask: radial-gradient(circle, transparent 58%, #000 59% 70%, transparent 71.5%);
+  filter: drop-shadow(0 0 12px var(--dial-target-glow));
+}
+.thermo-dial.nest-dial .dial-span-ring {
+  inset: 7%;
+  z-index: 3;
+  background:
+    conic-gradient(from 225deg, transparent 0 var(--band-start), var(--dial-span) var(--band-start) var(--band-end), transparent var(--band-end) 360deg);
+  -webkit-mask: radial-gradient(circle, transparent 55.4%, #000 56.4% 72.3%, transparent 73.2%);
+  mask: radial-gradient(circle, transparent 55.4%, #000 56.4% 72.3%, transparent 73.2%);
+  filter: drop-shadow(0 0 12px var(--dial-target-glow));
+  opacity: .98;
+}
+.thermo-dial.nest-dial .dial-glow {
+  inset: 15.6%;
+  z-index: 4;
+  background:
+    radial-gradient(circle at 44% 25%, rgba(255,255,255,.20), transparent 28%),
+    radial-gradient(circle at 50% 52%, var(--dial-active), var(--dial-active-2) 74%);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.20),
+    inset 0 -30px 54px rgba(0,0,0,.28),
+    0 0 42px var(--dial-span-soft);
+}
+.thermo-dial.nest-dial .dial-inner {
+  inset: 17%;
+  z-index: 6;
+  padding: clamp(20px, 2.6vw, 32px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+.thermo-dial.nest-dial .current-label {
+  color: rgba(255,255,255,.86);
+  font-size: clamp(.78rem, 1.05vw, 1.02rem);
+  font-weight: 900;
+  letter-spacing: .115em;
+  text-transform: uppercase;
+  text-shadow: 0 2px 14px rgba(0,0,0,.38);
+}
+.thermo-dial.nest-dial .current-temp {
+  margin-top: clamp(8px, 1.1vw, 14px);
+  color: #ffffff;
+  font-size: clamp(5.1rem, 8.4vw, 8.1rem);
+  line-height: .78;
+  font-weight: 1000;
+  letter-spacing: -.09em;
+  text-shadow: 0 10px 32px rgba(0,0,0,.32), 0 0 26px rgba(255,255,255,.12);
+}
+.thermo-dial.nest-dial .current-temp small {
+  font-size: .25em;
+  margin-left: 6px;
+  opacity: .88;
+}
+.thermo-dial.nest-dial .target-row {
+  margin-top: clamp(14px, 1.7vw, 22px);
+  min-height: 40px;
+  padding: 0 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border-radius: 999px;
+  color: rgba(255,255,255,.84);
+  background: rgba(0,0,0,.20);
+  border: 1px solid rgba(255,255,255,.14);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
+  font-size: clamp(.78rem, .92vw, .95rem);
+  font-weight: 850;
+  letter-spacing: .02em;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+.thermo-dial.nest-dial .target-row strong {
+  color: #ffffff;
+  font-size: 1.28em;
+  font-weight: 1000;
+  letter-spacing: -.035em;
+  font-variant-numeric: tabular-nums;
+}
+.thermo-dial.nest-dial .dial-knob {
+  position: absolute;
+  z-index: 8;
+  left: var(--target-x);
+  top: var(--target-y);
+  width: clamp(8px, .8vw, 12px);
+  height: clamp(40px, 4.3vw, 58px);
+  border-radius: 999px;
+  transform: translate(-50%, -50%) rotate(var(--target-deg));
+  background: linear-gradient(180deg, #ffffff, rgba(220,233,255,.94));
+  border: 1px solid rgba(255,255,255,.62);
+  box-shadow: 0 0 0 5px rgba(255,255,255,.06), 0 0 22px rgba(255,255,255,.22), 0 8px 18px rgba(0,0,0,.30);
+}
+.thermo-dial.nest-dial .dial-current-marker {
+  position: absolute;
+  z-index: 7;
+  left: var(--current-x);
+  top: var(--current-y);
+  width: clamp(12px, 1.2vw, 18px);
+  height: clamp(12px, 1.2vw, 18px);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: #ffffff;
+  border: 2px solid rgba(255,255,255,.88);
+  box-shadow: 0 0 0 5px rgba(255,255,255,.07), 0 0 18px var(--dial-target-glow), 0 7px 18px rgba(0,0,0,.30);
+}
+.thermo-dial.nest-dial .dial-target-badge {
+  position: absolute;
+  z-index: 9;
+  left: var(--target-label-x);
+  top: var(--target-label-y);
+  min-width: clamp(38px, 3.2vw, 50px);
+  min-height: clamp(34px, 2.9vw, 44px);
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  transform: translate(-50%, -50%);
+  color: #ffffff;
+  font-size: clamp(1.45rem, 2.1vw, 2.15rem);
+  line-height: 1;
+  font-weight: 950;
+  letter-spacing: -.055em;
+  text-shadow: 0 5px 14px rgba(0,0,0,.42);
+  background: rgba(1,6,16,.46);
+  border: 1px solid rgba(255,255,255,.12);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 0 18px var(--dial-target-glow);
+  pointer-events: none;
+}
+.thermo-dial.nest-dial .dial-range {
+  z-index: 9;
+  bottom: 8.8%;
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: rgba(232,243,255,.64);
+  background: rgba(0,0,0,.24);
+  border: 1px solid rgba(255,255,255,.08);
+  font-size: clamp(.76rem, .84vw, .95rem);
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+.thermo-dial.nest-dial .dial-range.min { left: 18.5%; }
+.thermo-dial.nest-dial .dial-range.max { right: 18.5%; }
+.thermo-dial.nest-dial.setpoint-preview .current-label { color: rgba(255,255,255,.92); }
+.thermo-dial.nest-dial.setpoint-preview .dial-target-badge { transform: translate(-50%, -50%) scale(1.06); }
+.thermo-dial.nest-dial.setpoint-preview .dial-knob { box-shadow: 0 0 0 8px rgba(255,255,255,.09), 0 0 28px var(--dial-target-glow), 0 10px 22px rgba(0,0,0,.34); }
+.thermostat-focus .temp-left { left: calc(50% - clamp(294px, 27vw, 440px)); }
+.thermostat-focus .temp-right { right: calc(50% - clamp(294px, 27vw, 440px)); }
+
+.app-shell[data-theme="star-trek"] .thermo-dial.nest-dial {
+  --dial-active: #1366e8;
+  --dial-active-2: #09255f;
+  --dial-active-soft: rgba(75,142,206,.42);
+  --dial-span: rgba(92,177,237,.96);
+  --dial-span-soft: rgba(92,177,237,.22);
+  --dial-idle-tick: rgba(201,151,76,.22);
+  --dial-target-glow: rgba(229,161,58,.34);
+  width: clamp(365px, 35vw, 520px);
+  box-shadow:
+    0 0 0 12px rgba(229,203,158,.035),
+    0 42px 92px rgba(0,0,0,.50),
+    0 0 42px rgba(75,142,206,.12);
+}
+.app-shell[data-theme="star-trek"] .thermo-dial.nest-dial.heat {
+  --dial-active: #c95a36;
+  --dial-active-2: #5a1c16;
+  --dial-active-soft: rgba(217,100,58,.36);
+  --dial-span: rgba(229,161,58,.96);
+  --dial-span-soft: rgba(217,100,58,.22);
+  --dial-idle-tick: rgba(229,161,58,.22);
+}
+.app-shell[data-theme="star-trek"].away-active .thermo-dial.nest-dial {
+  --dial-active: #8066c9;
+  --dial-active-2: #2a194f;
+  --dial-active-soft: rgba(128,102,201,.38);
+  --dial-span: rgba(206,166,242,.92);
+}
+.app-shell[data-theme="star-trek"] .thermo-dial.nest-dial::before,
+.app-shell[data-theme="star-trek"] .thermo-dial.nest-dial::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.app-shell[data-theme="star-trek"] .thermo-dial.nest-dial::before {
+  inset: -6.6%;
+  z-index: -1;
+  background:
+    conic-gradient(from 212deg,
+      #b14f32 0 4.2%, transparent 4.2% 6%,
+      #d27b30 6% 12%, transparent 12% 14%,
+      #e5a13a 14% 20%, transparent 20% 23%,
+      #4f8fbd 23% 35%, transparent 35% 65%,
+      #7f68a7 65% 73%, transparent 73% 76%,
+      #d27b30 76% 86%, transparent 86% 89%,
+      #4f8fbd 89% 100%);
+  -webkit-mask: radial-gradient(circle, transparent 72%, #000 73% 82%, transparent 83%);
+  mask: radial-gradient(circle, transparent 72%, #000 73% 82%, transparent 83%);
+  filter: drop-shadow(0 0 15px rgba(229,161,58,.10));
+}
+.app-shell[data-theme="star-trek"] .thermo-dial.nest-dial::after {
+  inset: -3.4%;
+  z-index: -1;
+  border: 2px solid rgba(229,203,158,.28);
+  box-shadow: inset 0 0 0 10px rgba(5,6,7,.66), 0 0 22px rgba(229,161,58,.06);
+}
+.app-shell[data-theme="star-trek"] .thermo-dial.nest-dial .dial-outer-glass {
+  background:
+    radial-gradient(circle at 36% 14%, rgba(255,232,186,.16), transparent 20%),
+    radial-gradient(circle at 50% 48%, rgba(11,13,15,.88), rgba(2,3,4,.99) 73%),
+    linear-gradient(145deg, rgba(229,203,158,.10), rgba(255,255,255,.01));
+  box-shadow: inset 0 0 0 2px rgba(36,28,18,.92), inset 0 0 0 13px rgba(229,203,158,.025), inset 0 -24px 55px rgba(0,0,0,.76);
+}
+.app-shell[data-theme="star-trek"] .thermo-dial.nest-dial .dial-tick-ring {
+  background:
+    repeating-conic-gradient(from 225deg, var(--dial-idle-tick) 0 1.5deg, transparent 1.5deg 3.4deg);
+  opacity: .98;
+}
+.app-shell[data-theme="star-trek"] .thermo-dial.nest-dial .dial-target-rail,
+.app-shell[data-theme="star-trek"] .thermo-dial.nest-dial .dial-span-ring {
+  filter: drop-shadow(0 0 10px rgba(92,177,237,.22));
+}
+.app-shell[data-theme="star-trek"] .thermo-dial.nest-dial .dial-glow {
+  background:
+    radial-gradient(circle at 42% 23%, rgba(255,255,255,.12), transparent 29%),
+    radial-gradient(circle at 50% 52%, var(--dial-active), var(--dial-active-2) 75%);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.12), inset 0 -30px 54px rgba(0,0,0,.38), 0 0 38px var(--dial-span-soft);
+}
+.app-shell[data-theme="star-trek"] .thermo-dial.nest-dial .dial-inner {
+  inset: 18.2%;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(229,203,158,.16), inset 0 -16px 36px rgba(0,0,0,.32) !important;
+}
+.app-shell[data-theme="star-trek"] .thermo-dial.nest-dial .current-label {
+  color: #f1c987;
+  font-family: "Arial Narrow", Impact, Inter, system-ui, sans-serif;
+  letter-spacing: .21em;
+  text-shadow: 0 2px 0 rgba(0,0,0,.45);
+}
+.app-shell[data-theme="star-trek"] .thermo-dial.nest-dial .current-temp {
+  color: #f5efe5;
+  font-family: "Arial Narrow", Impact, Inter, system-ui, sans-serif;
+  text-shadow: 0 3px 0 rgba(0,0,0,.58), 0 0 18px rgba(92,177,237,.13);
+}
+.app-shell[data-theme="star-trek"] .thermo-dial.nest-dial .target-row {
+  border-radius: 10px;
+  color: #e5a13a;
+  text-transform: uppercase;
+  letter-spacing: .12em;
+  background: linear-gradient(180deg, rgba(18,24,29,.84), rgba(5,7,9,.84));
+  border-color: rgba(229,161,58,.34);
+}
+.app-shell[data-theme="star-trek"] .thermo-dial.nest-dial .target-row strong { color: #ffffff; }
+.app-shell[data-theme="star-trek"] .thermo-dial.nest-dial .dial-knob {
+  background: linear-gradient(180deg, #fff4d6, #e5a13a 48%, #b76526);
+  border-color: rgba(255,224,153,.64);
+  box-shadow: 0 0 0 6px rgba(229,161,58,.12), 0 0 20px rgba(229,161,58,.25), 0 10px 20px rgba(0,0,0,.42);
+}
+.app-shell[data-theme="star-trek"] .thermo-dial.nest-dial .dial-current-marker {
+  background: #f1c987;
+  border-color: rgba(255,236,193,.86);
+  box-shadow: 0 0 0 5px rgba(229,161,58,.10), 0 0 17px rgba(229,161,58,.32), 0 7px 18px rgba(0,0,0,.34);
+}
+.app-shell[data-theme="star-trek"] .thermo-dial.nest-dial .dial-target-badge {
+  color: #f4dfb9;
+  font-family: "Arial Narrow", Impact, Inter, system-ui, sans-serif;
+  background: linear-gradient(180deg, rgba(28,31,35,.82), rgba(7,8,9,.86));
+  border-color: rgba(229,161,58,.28);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 0 17px rgba(229,161,58,.16);
+}
+.app-shell[data-theme="star-trek"] .thermo-dial.nest-dial .dial-range {
+  border-radius: 8px;
+  color: #d9b87c;
+  background: rgba(5,6,7,.76);
+  border-color: rgba(229,203,158,.16);
+}
+.app-shell[data-theme="star-trek"] .thermostat-focus .temp-step {
+  border-radius: 12px;
+  color: #e5a13a;
+  background: linear-gradient(180deg, #202326, #090a0b);
+  border-color: rgba(213,176,112,.30);
+}
+
+@media (max-width: 1200px) {
+  .thermo-dial.nest-dial { width: clamp(330px, 40vw, 440px); }
+  .thermostat-focus .temp-left { left: calc(50% - clamp(245px, 31vw, 340px)); }
+  .thermostat-focus .temp-right { right: calc(50% - clamp(245px, 31vw, 340px)); }
+}
+@media (max-width: 900px) {
+  .boot-core { width: min(520px, 86vw); min-height: min(520px, 86vw); }
+  .thermostat-focus { min-height: clamp(340px, 50vh, 470px); }
+  .thermo-dial.nest-dial { width: min(78vw, 390px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .boot-ring { animation: none; }
+  .boot-overlay,
+  .thermo-dial.nest-dial * { transition: none !important; }
+}
+.boot-lcars-label { display: none; }
+.app-shell[data-theme="star-trek"] .boot-generic-label { display: none; }
+.app-shell[data-theme="star-trek"] .boot-lcars-label { display: inline; }

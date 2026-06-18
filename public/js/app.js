@@ -422,6 +422,8 @@ const elements = {
   secondaryTempRow: document.getElementById("secondaryTempRow"),
   humidityValue: document.getElementById("humidityValue"),
   thermoDial: document.getElementById("thermoDial"),
+  dialTargetBadge: document.getElementById("dialTargetBadge"),
+  bootOverlay: document.getElementById("bootOverlay"),
   thermostatPanelLockButton: document.getElementById("thermostatPanelLockButton"),
   thermostatPanelLockLabel: document.getElementById("thermostatPanelLockLabel"),
   changeoverBypassButton: document.getElementById("changeoverBypassButton"),
@@ -3181,19 +3183,45 @@ function tempToDialSweep(temp) {
   return percent * DIAL_SWEEP_DEG;
 }
 
-function setDialVisual(temp) {
-  const sweep = tempToDialSweep(temp);
+function getDialPointForSweep(sweep, radius = 43) {
   const cssDeg = (DIAL_START_DEG + sweep) % 360;
   const radians = (cssDeg * Math.PI) / 180;
-  const radius = 43;
-  const knobX = 50 + radius * Math.sin(radians);
-  const knobY = 50 - radius * Math.cos(radians);
-  elements.thermoDial.style.setProperty("--angle", `${sweep}deg`);
-  elements.thermoDial.style.setProperty("--knob-x", `${knobX}%`);
-  elements.thermoDial.style.setProperty("--knob-y", `${knobY}%`);
+  return {
+    x: 50 + radius * Math.sin(radians),
+    y: 50 - radius * Math.cos(radians),
+    deg: cssDeg
+  };
+}
+
+function setDialVisual(targetTemp, currentTemp = targetTemp) {
+  const targetSweep = tempToDialSweep(targetTemp);
+  const currentSweep = tempToDialSweep(currentTemp);
+  const targetPoint = getDialPointForSweep(targetSweep, 43);
+  const currentPoint = getDialPointForSweep(currentSweep, 43.2);
+  const targetLabelPoint = getDialPointForSweep(targetSweep, 53.2);
+  const bandStart = Math.min(targetSweep, currentSweep);
+  const bandEnd = Math.max(targetSweep, currentSweep);
+  const bandMinimum = 4;
+  const visibleBandEnd = Math.max(bandEnd, bandStart + bandMinimum);
+
+  elements.thermoDial.style.setProperty("--angle", `${targetSweep}deg`);
+  elements.thermoDial.style.setProperty("--target-angle", `${targetSweep}deg`);
+  elements.thermoDial.style.setProperty("--current-angle", `${currentSweep}deg`);
+  elements.thermoDial.style.setProperty("--band-start", `${bandStart}deg`);
+  elements.thermoDial.style.setProperty("--band-end", `${Math.min(visibleBandEnd, DIAL_SWEEP_DEG)}deg`);
+  elements.thermoDial.style.setProperty("--target-deg", `${targetPoint.deg}deg`);
+  elements.thermoDial.style.setProperty("--current-deg", `${currentPoint.deg}deg`);
+  elements.thermoDial.style.setProperty("--knob-x", `${targetPoint.x}%`);
+  elements.thermoDial.style.setProperty("--knob-y", `${targetPoint.y}%`);
+  elements.thermoDial.style.setProperty("--target-x", `${targetPoint.x}%`);
+  elements.thermoDial.style.setProperty("--target-y", `${targetPoint.y}%`);
+  elements.thermoDial.style.setProperty("--target-label-x", `${targetLabelPoint.x}%`);
+  elements.thermoDial.style.setProperty("--target-label-y", `${targetLabelPoint.y}%`);
+  elements.thermoDial.style.setProperty("--current-x", `${currentPoint.x}%`);
+  elements.thermoDial.style.setProperty("--current-y", `${currentPoint.y}%`);
   elements.thermoDial.setAttribute("aria-valuemin", String(getModeLimits().min));
   elements.thermoDial.setAttribute("aria-valuemax", String(getModeLimits().max));
-  elements.thermoDial.setAttribute("aria-valuenow", String(Math.round(temp)));
+  elements.thermoDial.setAttribute("aria-valuenow", String(Math.round(targetTemp)));
 }
 
 function pointerToTemp(clientX, clientY) {
@@ -3424,7 +3452,7 @@ function renderThermostat() {
   if (autoSwitchChanged) saveConfig();
   const { min, max } = getModeLimits();
   const showingSetpoint = isSetpointPreviewActive();
-  const currentRounded = Math.round(t.currentTemp);
+  const currentRounded = Number.isFinite(Number(t.currentTemp)) ? Math.round(Number(t.currentTemp)) : "--";
   const currentDisplay = formatCurrentTemp(t.currentTemp);
   const targetRounded = Math.round(t.targetTemp);
   const outdoorRounded = Math.round(t.outdoorTemp);
@@ -3437,9 +3465,24 @@ function renderThermostat() {
   renderTemperatureAtmosphere(t.currentTemp);
   renderPanelLock();
 
-  elements.currentTemp.textContent = showingSetpoint ? targetRounded : currentDisplay;
+  const dialModeLabel = outputs.cool
+    ? "Cooling"
+    : outputs.heat
+      ? "Heating"
+      : outputs.coolingFanHold
+        ? "Fan Cooldown"
+        : outputs.fan
+          ? "Fan On"
+          : t.away
+            ? "Away"
+            : t.mode === "auto"
+              ? `Auto ${titleCase(controlMode === "locked" ? "locked" : controlMode)}`
+              : titleCase(controlMode === "locked" ? "locked" : t.mode);
+
+  elements.currentTemp.textContent = showingSetpoint ? targetRounded : currentRounded;
   elements.targetTemp.textContent = showingSetpoint ? currentDisplay : targetRounded;
-  if (elements.primaryTempLabel) elements.primaryTempLabel.textContent = showingSetpoint ? "Set Temp" : "Current";
+  if (elements.dialTargetBadge) elements.dialTargetBadge.textContent = String(targetRounded);
+  if (elements.primaryTempLabel) elements.primaryTempLabel.textContent = showingSetpoint ? "Set Temp" : dialModeLabel;
   if (elements.secondaryTempLabel) elements.secondaryTempLabel.textContent = showingSetpoint ? "Current" : "Set Temp";
   if (elements.headerCurrentTemp) elements.headerCurrentTemp.textContent = `${currentDisplay}°`;
   if (elements.headerSetTemp) elements.headerSetTemp.textContent = `${targetRounded}°`;
@@ -3473,7 +3516,7 @@ function renderThermostat() {
   elements.dialMinLabel.textContent = `${min}°`;
   elements.dialMaxLabel.textContent = `${max}°`;
 
-  setDialVisual(t.targetTemp);
+  setDialVisual(t.targetTemp, t.currentTemp);
   elements.thermoDial.classList.toggle("heat", controlMode === "heat");
   elements.thermoDial.classList.toggle("auto", t.mode === "auto");
   elements.thermoDial.classList.toggle("setpoint-preview", showingSetpoint);
@@ -8225,9 +8268,18 @@ function mockTrackProgress() {
   renderAudio();
 }
 
+function dismissBootOverlay(delay = 1800) {
+  window.setTimeout(() => {
+    document.body.classList.remove("booting");
+    document.body.classList.add("booted");
+    if (elements.bootOverlay) elements.bootOverlay.setAttribute("aria-hidden", "true");
+  }, delay);
+}
+
 async function init() {
   await loadSavedConfig();
   applyPanelTheme(state.theme, { save: false });
+  dismissBootOverlay(normalizePanelTheme(state.theme) === "star-trek" ? 2600 : 1200);
   renderScreenTimeoutSettings();
   syncAlarmFromConfig();
   syncDoorFromConfig();

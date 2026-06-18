@@ -7,7 +7,7 @@
   <title>Smart Thermostat</title>
   <link rel="stylesheet" href="./css/styles.css" />
 </head>
-<body>
+<body class="booting">
   <main id="app" class="app-shell" data-page="thermostat" aria-label="Smart Thermostat interface">
     <div class="ambient ambient-one"></div>
     <div class="ambient ambient-two"></div>
@@ -16,6 +16,30 @@
       <span class="climate-symbol climate-symbol-cold">❄</span>
       <span class="climate-symbol climate-symbol-hot">☀</span>
     </div>
+
+    <section id="bootOverlay" class="boot-overlay" aria-label="System startup" aria-live="polite">
+      <div class="boot-lcars-frame" aria-hidden="true">
+        <span class="boot-lcars-block boot-lcars-block-a"></span>
+        <span class="boot-lcars-block boot-lcars-block-b"></span>
+        <span class="boot-lcars-block boot-lcars-block-c"></span>
+        <span class="boot-lcars-block boot-lcars-block-d"></span>
+      </div>
+      <div class="boot-core">
+        <div class="boot-ring" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+        <p class="boot-eyebrow">Environmental Control</p>
+        <h2>Climate System Online</h2>
+        <div class="boot-status-line">
+          <span class="boot-generic-label">Core</span>
+          <span class="boot-lcars-label">LCARS</span>
+          <strong>Initializing</strong>
+          <em>Nominal</em>
+        </div>
+      </div>
+    </section>
 
     <section class="panel-controls" aria-label="Panel controls">
       <div id="tempMiniStatus" class="temp-mini-status" aria-label="Current thermostat summary">
@@ -315,11 +339,17 @@
           <div class="thermostat-focus">
             <button id="tempDown" class="temp-step temp-left" aria-label="Decrease setpoint">−</button>
 
-            <div id="thermoDial" class="thermo-dial" aria-label="Drag thermostat dial to change setpoint" role="slider" aria-valuemin="50" aria-valuemax="90" aria-valuenow="70" tabindex="0">
+            <div id="thermoDial" class="thermo-dial nest-dial" aria-label="Drag thermostat dial to change setpoint" role="slider" aria-valuemin="50" aria-valuemax="90" aria-valuenow="70" tabindex="0">
+              <div class="dial-outer-glass" aria-hidden="true"></div>
+              <div class="dial-tick-ring" aria-hidden="true"></div>
+              <div class="dial-span-ring" aria-hidden="true"></div>
+              <div class="dial-target-rail" aria-hidden="true"></div>
               <div class="dial-glow"></div>
+              <div class="dial-current-marker" aria-hidden="true"></div>
               <div class="dial-knob" aria-hidden="true"></div>
+              <div id="dialTargetBadge" class="dial-target-badge" aria-hidden="true">70</div>
               <div class="dial-inner">
-                <p id="primaryTempLabel" class="current-label">Current</p>
+                <p id="primaryTempLabel" class="current-label">Cooling</p>
                 <div class="current-temp"><span id="currentTemp">70</span><small>°F</small></div>
                 <div id="secondaryTempRow" class="target-row"><span id="secondaryTempLabel">Set to</span> <strong><span id="targetTemp">70</span>°</strong></div>
               </div>
