@@ -6142,8 +6142,10 @@ function renderRoomControlConfigList() {
       .map((count) => `<option value="${count}" ${room.controls.length === count ? "selected" : ""}>${count}</option>`)
       .join("");
     const controlInputs = room.controls.map((control, index) => {
+      const linkedType = roomControlTypeLabel(control);
+      const linkedText = linkedType ? `${linkedType} · ${control.haEntityId}` : control.haEntityId;
       const linkedMeta = control.haEntityId
-        ? `<small class="room-control-config-link">${escapeHtml(roomControlTypeLabel(control))} · ${escapeHtml(control.haEntityId)}</small>`
+        ? `<small class="room-control-config-link">${escapeHtml(linkedText)}</small>`
         : `<small class="room-control-config-link muted">Hold the room card to assign any HA entity</small>`;
       const bedSliderChecked = roomControlIsBedSlider(control) ? "checked" : "";
       return `
@@ -6236,7 +6238,7 @@ function roomControlRequiresCodeForAction(control, action) {
 }
 
 function roomControlTypeLabel(control) {
-  if (roomControlIsBedSlider(control)) return "Cover · Bed Slider";
+  if (roomControlIsBedSlider(control)) return "";
   const domain = normalizeRoomControlDomain(control?.domain, "entity");
   const deviceClass = normalizeRoomControlDeviceClass(control?.deviceClass);
   const visual = roomControlVisualKind(control);
@@ -6366,7 +6368,7 @@ function roomControlStateLabel(control) {
   const deviceClass = normalizeRoomControlDeviceClass(control.deviceClass);
   const rawState = String(control.state || (control.on ? "on" : "off")).toLowerCase();
   if (isRoomControlUnavailableState(rawState)) return prettifyRoomControlName(rawState);
-  if (roomControlIsBedSlider(control)) return `Bed · ${roomControlPositionPercent(control)}%`;
+  if (roomControlIsBedSlider(control)) return `${roomControlPositionPercent(control)}%`;
   if (domain === "cover") {
     const base = prettifyRoomControlName(rawState || (control.on ? "open" : "closed"));
     return control.currentPosition !== null && control.currentPosition !== undefined ? `${base} · ${control.currentPosition}%` : base;
@@ -6601,14 +6603,14 @@ function updateRoomControlCard(control) {
   const stateEl = card.querySelector("[data-room-control-state]");
   if (stateEl) stateEl.textContent = linked ? roomControlStateLabel(control) : "Assign";
   const domainEl = card.querySelector("[data-room-control-domain]");
-  if (domainEl) domainEl.textContent = linked ? roomControlTypeLabel(control) : "Unassigned";
+  if (domainEl) domainEl.textContent = bedSlider ? "" : (linked ? roomControlTypeLabel(control) : "Unassigned");
   const icon = card.querySelector("[data-room-control-icon]");
   if (icon) icon.innerHTML = roomControlIconSvg(control);
   const hint = card.querySelector("[data-room-control-hint]");
   if (hint) {
     const nextAction = roomControlActionForState(control);
     if (!linked) hint.textContent = "Hold to assign";
-    else if (bedSlider) hint.textContent = "Slide to adjust";
+    else if (bedSlider) hint.textContent = "";
     else if (statusOnly) hint.textContent = "Status only";
     else if (roomControlRequiresCodeForAction(control, nextAction)) hint.textContent = "Code required";
     else if (momentary) hint.textContent = "Tap to run";
@@ -6632,10 +6634,6 @@ function roomControlBedSliderMarkup(control) {
   const disabled = (!control.haEntityId || normalizeRoomControlDomain(control.domain) !== "cover") ? "disabled" : "";
   return `
     <span class="room-control-bed-panel" data-room-control-bed-panel>
-      <span class="room-control-bed-readout">
-        <strong data-room-control-bed-value>${position}%</strong>
-        <small>Bed Position</small>
-      </span>
       <input class="room-control-bed-slider" type="range" min="0" max="100" step="1" value="${position}" ${disabled} data-room-control-bed-slider data-room-control-id="${escapeHtml(control.id)}" aria-label="Set ${escapeHtml(roomControlDisplayName(control))} position" />
     </span>
   `;
@@ -6711,8 +6709,8 @@ function renderRoomControls() {
       </span>
       <span class="room-control-copy">
         <strong data-room-control-title title="${safeName}">${safeName}</strong>
-        <small data-room-control-domain>${control.haEntityId ? escapeHtml(roomControlTypeLabel(control)) : "Unassigned"}</small>
-        <em data-room-control-hint>${control.haEntityId ? escapeHtml(roomControlActionForState(control) || (roomControlIsStatusOnly(control) ? "Status only" : "Tap")) : "Hold to assign"}</em>
+        <small data-room-control-domain>${isBedSlider ? "" : (control.haEntityId ? escapeHtml(roomControlTypeLabel(control)) : "Unassigned")}</small>
+        <em data-room-control-hint>${isBedSlider ? "" : (control.haEntityId ? escapeHtml(roomControlActionForState(control) || (roomControlIsStatusOnly(control) ? "Status only" : "Tap")) : "Hold to assign")}</em>
       </span>
       ${isBedSlider ? roomControlBedSliderMarkup(control) : ""}
       <span class="sr-only">${safeControlId}</span>

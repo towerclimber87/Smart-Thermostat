@@ -10726,3 +10726,63 @@ body[data-theme="christmas"] {
   background: #f6fbff;
   box-shadow: 0 0 0 7px rgba(159,134,255,.14), 0 8px 18px rgba(0,0,0,.30);
 }
+
+/* 2026-06-18 v6.0: compact room bed slider card. */
+.room-control-card.room-control-bed-card {
+  justify-content: start;
+  gap: clamp(6px, .75vw, 10px);
+  padding: clamp(12px, 1.05vw, 16px);
+  padding-bottom: clamp(14px, 1.05vw, 18px);
+}
+.room-control-card.room-control-bed-card .room-control-card-top {
+  gap: 8px;
+}
+.room-control-card.room-control-bed-card .room-control-power-shell {
+  width: clamp(58px, 4.7vw, 74px);
+  height: clamp(58px, 4.7vw, 74px);
+}
+.room-control-card.room-control-bed-card .room-control-state-pill {
+  min-height: 24px;
+  padding: 0 10px;
+  font-size: .66rem;
+  letter-spacing: .10em;
+}
+.room-control-card.room-control-bed-card .room-control-copy {
+  gap: 0;
+  margin-top: -2px;
+}
+.room-control-card.room-control-bed-card .room-control-copy strong {
+  font-size: clamp(1.05rem, 1.28vw, 1.45rem);
+  line-height: 1;
+  -webkit-line-clamp: 2;
+}
+.room-control-card.room-control-bed-card .room-control-copy small,
+.room-control-card.room-control-bed-card .room-control-copy em[data-room-control-hint] {
+  display: none !important;
+}
+.room-control-card.room-control-bed-card .room-control-bed-panel {
+  display: block;
+  margin-top: auto;
+  padding: 8px 8px 10px;
+  border-radius: 16px;
+}
+.room-control-card.room-control-bed-card .room-control-bed-slider {
+  display: block;
+  height: 30px;
+}
+.room-control-card.room-control-bed-card .room-control-bed-slider::-webkit-slider-runnable-track {
+  height: 8px;
+}
+.room-control-card.room-control-bed-card .room-control-bed-slider::-webkit-slider-thumb {
+  width: 24px;
+  height: 24px;
+  margin-top: -8px;
+}
+.room-control-card.room-control-bed-card .room-control-bed-slider::-moz-range-track,
+.room-control-card.room-control-bed-card .room-control-bed-slider::-moz-range-progress {
+  height: 8px;
+}
+.room-control-card.room-control-bed-card .room-control-bed-slider::-moz-range-thumb {
+  width: 24px;
+  height: 24px;
+}
