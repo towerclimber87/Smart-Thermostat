@@ -382,6 +382,8 @@ const state = {
     name: "Door",
     state: "unassigned",
     deviceClass: "door",
+    lastChanged: "",
+    lastUpdated: "",
   },
   audio: {
     playing: false,
@@ -2666,19 +2668,55 @@ function pauseFunctionStateLooksOpen(entry = {}) {
   if (entry.isClosed === true && (!value || ["closed", "off"].includes(value))) return false;
   if (domain === "cover" && Number.isFinite(Number(entry.currentPosition)) && Number(entry.currentPosition) > 0) return true;
   if (!value || ["unknown", "unavailable", "none", "null"].includes(value)) return false;
-  if (domain === "cover") return ["open", "opening"].includes(value);
-  return ["on", "open", "opening", "detected", "true", "active"].includes(value);
+  if (domain === "cover") return ["open", "opened", "opening"].includes(value);
+  return ["on", "open", "opened", "opening", "detected", "true", "active"].includes(value);
+}
+
+function mergePauseFunctionEntryState(entry = {}, update = {}, now = Date.now()) {
+  const before = normalizePauseFunctionEntry(entry) || null;
+  const merged = normalizePauseFunctionEntry({ ...(before || {}), ...(update || {}) }) || before;
+  if (!merged) return null;
+  const open = pauseFunctionStateLooksOpen(merged);
+  merged.openedAt = open ? pauseFunctionOpenStartedAt({ ...merged, openedAt: before?.openedAt }, now) : 0;
+  return merged;
+}
+
+function pauseFunctionDoorMirrorPayload() {
+  const config = getDoorConfig();
+  const entityId = state.door.entityId || config?.entityId || "";
+  if (!entityId) return null;
+  const stateText = state.door.state || config?.state || "";
+  if (!stateText || String(stateText).toLowerCase() === "unassigned") return null;
+  return {
+    entityId,
+    name: state.door.name || config?.name || entityId,
+    domain: "binary_sensor",
+    deviceClass: state.door.deviceClass || config?.deviceClass || "door",
+    state: stateText,
+    lastChanged: state.door.lastChanged || config?.lastChanged || config?.last_changed || "",
+    lastUpdated: state.door.lastUpdated || config?.lastUpdated || config?.last_updated || "",
+  };
+}
+
+function mirrorDoorStateIntoPauseFunction(now = Date.now()) {
+  const doorPayload = pauseFunctionDoorMirrorPayload();
+  if (!doorPayload) return false;
+  const pause = getPauseFunction();
+  if (!pause.entries.length) return false;
+  let changed = false;
+  pause.entries = pause.entries.map((entry) => {
+    if (entry.entityId !== doorPayload.entityId) return entry;
+    const merged = mergePauseFunctionEntryState(entry, doorPayload, now) || entry;
+    if (JSON.stringify(merged) !== JSON.stringify(entry)) changed = true;
+    return merged;
+  });
+  return changed;
 }
 
 function getOpenPauseFunctionEntries(now = Date.now()) {
+  mirrorDoorStateIntoPauseFunction(now);
   const pause = getPauseFunction();
-  pause.entries = pause.entries.map((entry) => {
-    const next = normalizePauseFunctionEntry(entry);
-    if (!next) return null;
-    const open = pauseFunctionStateLooksOpen(next);
-    next.openedAt = open ? pauseFunctionOpenStartedAt(next, now) : 0;
-    return next;
-  }).filter(Boolean);
+  pause.entries = pause.entries.map((entry) => mergePauseFunctionEntryState(entry, {}, now)).filter(Boolean);
   return pause.entries.filter(pauseFunctionStateLooksOpen);
 }
 
@@ -3452,41 +3490,69 @@ async function pollHomeAssistantThermostatPeople(options = {}) {
   }
 }
 
+async function fetchPauseFunctionStatesViaLocalBackend(entries = []) {
+  const ha = state.integrations.homeAssistant || {};
+  const baseUrl = getHaBaseUrl();
+  if (!baseUrl || !ha.token) throw new Error("Missing Home Assistant URL or token");
+  const normalizedEntries = normalizePauseFunctionEntries(entries);
+  const binaryIds = normalizedEntries.filter((entry) => entry.domain === "binary_sensor").map((entry) => entry.entityId);
+  const coverIds = normalizedEntries.filter((entry) => entry.domain === "cover").map((entry) => entry.entityId);
+  const genericIds = normalizedEntries
+    .filter((entry) => !["binary_sensor", "cover"].includes(entry.domain))
+    .map((entry) => entry.entityId);
+  const requests = [];
+  const common = { method: "POST", headers: { "Content-Type": "application/json" } };
+  if (binaryIds.length) {
+    requests.push(fetchJsonWithTimeout("/api/ha/binary_sensor/states", {
+      ...common,
+      body: JSON.stringify({ url: baseUrl, token: ha.token, entityIds: binaryIds }),
+    }, 9000).then((payload) => payload.sensors || []));
+  }
+  if (coverIds.length) {
+    requests.push(fetchJsonWithTimeout("/api/ha/cover/states", {
+      ...common,
+      body: JSON.stringify({ url: baseUrl, token: ha.token, entityIds: coverIds }),
+    }, 9000).then((payload) => payload.covers || []));
+  }
+  if (genericIds.length) {
+    requests.push(fetchJsonWithTimeout("/api/ha/room/states", {
+      ...common,
+      body: JSON.stringify({ url: baseUrl, token: ha.token, entityIds: genericIds }),
+    }, 9000).then((payload) => payload.controls || []));
+  }
+  const groups = await Promise.all(requests);
+  return groups.flat();
+}
+
 async function pollHomeAssistantPauseFunction(options = {}) {
   const pause = getPauseFunction();
+  const now = Date.now();
   if (!pause.entries.length) {
     evaluatePauseFunction({ toast: false });
     return;
   }
   if (!options.force && document.visibilityState === "hidden") return;
-  if (haPauseFunctionSyncInFlight) return;
-  const ha = state.integrations.homeAssistant || {};
-  const baseUrl = getHaBaseUrl();
-  if (!baseUrl || !ha.token) return;
+  let changed = mirrorDoorStateIntoPauseFunction(now);
+  if (haPauseFunctionSyncInFlight) {
+    if (changed) evaluatePauseFunction({ toast: true });
+    return;
+  }
   haPauseFunctionSyncInFlight = true;
   try {
-    const payload = await fetchJsonWithTimeout("/api/ha/room/states", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: baseUrl, token: ha.token, entityIds: pause.entries.map((entry) => entry.entityId) }),
-    }, 9000);
-    const updates = payload.controls || [];
-    const byId = new Map(updates.map((entity) => [entity.entityId, entity]));
-    let changed = false;
-    const now = Date.now();
+    const updates = await fetchPauseFunctionStatesViaLocalBackend(pause.entries);
+    const byId = new Map((updates || []).map((entity) => [entity.entityId, entity]));
     pause.entries = pause.entries.map((entry) => {
-      const update = byId.get(entry.entityId);
-      const merged = normalizePauseFunctionEntry({ ...entry, ...(update || {}) }) || entry;
-      const open = pauseFunctionStateLooksOpen(merged);
-      const nextOpenedAt = open ? pauseFunctionOpenStartedAt({ ...merged, openedAt: entry.openedAt }, now) : 0;
-      if (Number(merged.openedAt || 0) !== nextOpenedAt) merged.openedAt = nextOpenedAt;
+      const update = byId.get(entry.entityId) || {};
+      const merged = mergePauseFunctionEntryState(entry, update, now) || entry;
       if (JSON.stringify(merged) !== JSON.stringify(entry)) changed = true;
       return merged;
     });
+    if (mirrorDoorStateIntoPauseFunction(now)) changed = true;
     if (changed) renderPauseFunctionStatus();
     evaluatePauseFunction({ toast: true });
     if (haPauseFunctionSyncLastError) haPauseFunctionSyncLastError = "";
   } catch (error) {
+    if (changed) evaluatePauseFunction({ toast: true });
     const message = error.message || String(error);
     if (message !== haPauseFunctionSyncLastError) {
       haPauseFunctionSyncLastError = message;
@@ -4174,6 +4240,7 @@ function shouldFastSyncPauseFunction() {
 
 function servicePauseFunctionCountdown() {
   const now = Date.now();
+  mirrorDoorStateIntoPauseFunction(now);
   if (shouldFastSyncPauseFunction() && now - lastPauseFunctionFastSyncAt >= HA_PAUSE_FUNCTION_FAST_SYNC_INTERVAL_MS) {
     lastPauseFunctionFastSyncAt = now;
     pollHomeAssistantPauseFunction({ force: true });
@@ -4206,7 +4273,9 @@ function upsertPauseFunctionEntry(entity = {}) {
   if (pauseFunctionStateLooksOpen(normalized)) normalized.openedAt = pauseFunctionOpenStartedAt(normalized);
   const pause = getPauseFunction();
   const existing = pause.entries.filter((entry) => entry.entityId !== normalized.entityId);
-  pause.entries = [...existing, normalized];
+  const now = Date.now();
+  const initial = mergePauseFunctionEntryState(normalized, {}, now) || normalized;
+  pause.entries = [...existing, initial];
   if (state.integrations?.homeAssistant) {
     const ha = state.integrations.homeAssistant;
     if (!Array.isArray(ha.pauseFunctionAvailableEntities)) ha.pauseFunctionAvailableEntities = [];
@@ -4788,6 +4857,8 @@ function applyDoorEntityState(entity = {}) {
   state.door.name = entity.name || config?.name || state.door.entityId || "Door";
   state.door.state = entity.state || config?.state || (state.door.entityId ? "unknown" : "unassigned");
   state.door.deviceClass = entity.deviceClass || config?.deviceClass || state.door.deviceClass || "door";
+  state.door.lastChanged = entity.lastChanged || entity.last_changed || config?.lastChanged || config?.last_changed || state.door.lastChanged || "";
+  state.door.lastUpdated = entity.lastUpdated || entity.last_updated || config?.lastUpdated || config?.last_updated || state.door.lastUpdated || "";
   if (state.integrations.homeAssistant.doorEntity && entity.entityId) {
     state.integrations.homeAssistant.doorEntity = {
       ...state.integrations.homeAssistant.doorEntity,
@@ -4795,6 +4866,8 @@ function applyDoorEntityState(entity = {}) {
       entityId: entity.entityId,
       name: entity.name || entity.entityId,
       deviceClass: entity.deviceClass || state.door.deviceClass || "door",
+      lastChanged: entity.lastChanged || entity.last_changed || state.door.lastChanged || "",
+      lastUpdated: entity.lastUpdated || entity.last_updated || state.door.lastUpdated || "",
     };
   }
 }
@@ -4806,6 +4879,8 @@ function syncDoorFromConfig() {
     state.door.name = "Door";
     state.door.state = "unassigned";
     state.door.deviceClass = "door";
+    state.door.lastChanged = "";
+    state.door.lastUpdated = "";
     return;
   }
   applyDoorEntityState(config);
@@ -4888,6 +4963,7 @@ async function pollHomeAssistantDoor(options = {}) {
       saveConfig();
     }
     renderDoorWidget();
+    if (mirrorDoorStateIntoPauseFunction()) evaluatePauseFunction({ toast: true });
     if (haDoorSyncLastError) haDoorSyncLastError = "";
   } catch (error) {
     const message = error.message || String(error);

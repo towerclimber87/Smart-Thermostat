@@ -411,13 +411,22 @@ def _normalize_pause_function_entry(entry: object) -> dict | None:
     if not entity_id or "." not in entity_id:
         return None
     domain = str(entry.get("domain") or _pause_function_domain_from_entity_id(entity_id)).strip().lower()
-    name = str(entry.get("name") or entry.get("friendlyName") or entry.get("haName") or entity_id).strip() or entity_id
+    name = str(entry.get("name") or entry.get("friendlyName") or entry.get("haName") or entry.get("friendly_name") or entity_id).strip() or entity_id
     state = str(entry.get("state") or "unknown").strip().lower()
     device_class = str(entry.get("deviceClass") or entry.get("device_class") or "").strip().lower()
     try:
         opened_at = max(0, int(float(entry.get("openedAt") or 0)))
     except (TypeError, ValueError):
         opened_at = 0
+    raw_position = entry.get("currentPosition", entry.get("current_position"))
+    current_position = None
+    if raw_position not in (None, ""):
+        try:
+            current_position = max(0, min(100, float(raw_position)))
+        except (TypeError, ValueError):
+            current_position = None
+    raw_is_closed = entry.get("isClosed", entry.get("is_closed"))
+    is_closed = raw_is_closed if isinstance(raw_is_closed, bool) else None
     return {
         "entityId": entity_id[:160],
         "name": name[:120],
@@ -425,6 +434,10 @@ def _normalize_pause_function_entry(entry: object) -> dict | None:
         "deviceClass": device_class[:60],
         "state": state[:80],
         "openedAt": opened_at,
+        "lastChanged": str(entry.get("lastChanged") or entry.get("last_changed") or "").strip()[:80],
+        "lastUpdated": str(entry.get("lastUpdated") or entry.get("last_updated") or "").strip()[:80],
+        "currentPosition": current_position,
+        "isClosed": is_closed,
     }
 
 
