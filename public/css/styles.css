@@ -11618,7 +11618,7 @@ body.booting .boot-overlay {
 
 .thermostat-focus {
   min-height: clamp(390px, 52vh, 560px);
-  transform: translateY(clamp(-64px, -5.6vh, -48px));
+  transform: translateY(clamp(-32px, -2vh, -18px));
 }
 .thermo-dial.nest-dial {
   --dial-active: #0b8dff;
@@ -12013,7 +12013,7 @@ body.booting .boot-overlay {
   .boot-core { width: min(520px, 86vw); min-height: min(520px, 86vw); }
   .thermostat-focus {
     min-height: clamp(340px, 50vh, 470px);
-    transform: translateY(clamp(-38px, -4.2vh, -26px));
+    transform: translateY(clamp(-18px, -1.4vh, -10px));
   }
   .thermo-dial.nest-dial { width: min(78vw, 390px); }
 }
@@ -12025,3 +12025,34 @@ body.booting .boot-overlay {
 .boot-lcars-label { display: none; }
 .app-shell[data-theme="star-trek"] .boot-generic-label { display: none; }
 .app-shell[data-theme="star-trek"] .boot-lcars-label { display: inline; }
+
+
+/* 2026-06-18 v7.0 thermostat dial alignment pass
+   Keep the status pill clear of the target marker, and only show the
+   floating target-number badge while the dial is actively being dragged. */
+.thermostat-topline .comfort-status {
+  position: relative;
+  z-index: 8;
+  transform: translateY(clamp(-58px, -4.8vh, -34px));
+  margin-bottom: clamp(-38px, -3.1vh, -22px);
+}
+
+.thermo-dial.nest-dial .dial-target-badge {
+  opacity: 0;
+  visibility: hidden;
+  transform: translate(-50%, -50%) scale(.88);
+  transition: opacity .14s ease, visibility .14s ease, transform .14s ease;
+}
+
+.thermo-dial.nest-dial.dial-adjusting .dial-target-badge {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+@media (max-width: 900px) {
+  .thermostat-topline .comfort-status {
+    transform: translateY(clamp(-34px, -3.1vh, -22px));
+    margin-bottom: clamp(-22px, -2vh, -12px);
+  }
+}

@@ -7435,12 +7435,14 @@ function bindThermostatDial() {
   elements.thermoDial.addEventListener("pointerdown", (event) => {
     if (event.button !== undefined && event.button !== 0) return;
     event.preventDefault(); event.stopPropagation(); dragging = true;
+    elements.thermoDial.classList.add("dial-adjusting");
     elements.thermoDial.setPointerCapture(event.pointerId); updateFromEvent(event);
   });
   elements.thermoDial.addEventListener("pointermove", (event) => { if (dragging) { event.preventDefault(); updateFromEvent(event); } });
   const finishDial = (event) => {
     if (!dragging) return;
     dragging = false;
+    elements.thermoDial.classList.remove("dial-adjusting");
     holdSetpointPreview();
     try { elements.thermoDial.releasePointerCapture(event.pointerId); } catch (_) {}
   };
