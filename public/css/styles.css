@@ -11186,3 +11186,225 @@ body[data-theme="christmas"] {
     grid-template-columns: minmax(0, 1fr) clamp(86px, 26vw, 112px);
   }
 }
+
+
+/* 2026-06-18 v6.5: restore normal card footprint and use a custom aligned vertical rail. */
+.room-control-card.room-control-bed-card {
+  --room-bed-thumb: clamp(28px, 2.45vw, 34px);
+  --room-bed-track-length: clamp(176px, calc(var(--room-control-card-height) - 58px), 218px);
+  grid-column: auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(62px, 5.15vw, 78px);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  column-gap: clamp(8px, .75vw, 12px);
+  row-gap: clamp(7px, .7vw, 10px);
+  align-items: stretch;
+  justify-content: stretch;
+  padding: clamp(13px, 1.05vw, 17px);
+  border-radius: 30px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 18% 12%, rgba(159,134,255,.16), transparent 34%),
+    radial-gradient(circle at 93% 50%, rgba(77,238,255,.10), transparent 44%),
+    linear-gradient(145deg, rgba(255,255,255,.095), rgba(255,255,255,.028));
+}
+.room-control-card.room-control-bed-card::after {
+  display: none;
+}
+.room-control-card.room-control-bed-card .room-control-card-top {
+  grid-column: 1;
+  grid-row: 1;
+  display: flex;
+  justify-content: flex-start;
+  min-width: 0;
+}
+.room-control-card.room-control-bed-card .room-control-power-shell {
+  width: clamp(58px, 4.7vw, 74px);
+  height: clamp(58px, 4.7vw, 74px);
+}
+.room-control-card.room-control-bed-card .room-control-copy {
+  grid-column: 1;
+  grid-row: 2;
+  align-self: start;
+  min-width: 0;
+  margin: 0;
+  padding-top: clamp(5px, .55vw, 9px);
+  padding-right: 2px;
+}
+.room-control-card.room-control-bed-card .room-control-copy strong {
+  max-width: 100%;
+  font-size: clamp(1.06rem, 1.28vw, 1.46rem);
+  line-height: 1.04;
+  letter-spacing: -.05em;
+  -webkit-line-clamp: 2;
+}
+.room-control-card.room-control-bed-card .room-control-copy small,
+.room-control-card.room-control-bed-card .room-control-copy em[data-room-control-hint] {
+  display: none !important;
+}
+.room-control-card.room-control-bed-card .room-control-state-pill {
+  position: absolute;
+  left: clamp(13px, 1.05vw, 17px);
+  bottom: clamp(13px, 1.05vw, 17px);
+  z-index: 4;
+  min-height: 30px;
+  padding: 0 13px;
+  border: 1px solid rgba(77,238,255,.24);
+  background: linear-gradient(135deg, rgba(159,134,255,.20), rgba(77,238,255,.12));
+  color: rgba(246,251,255,.94);
+  font-size: .72rem;
+  letter-spacing: .08em;
+  box-shadow: 0 10px 22px rgba(0,0,0,.20), inset 0 1px 0 rgba(255,255,255,.12);
+}
+.room-control-card.room-control-bed-card .room-control-bed-panel {
+  grid-column: 2;
+  grid-row: 1 / -1;
+  align-self: stretch;
+  justify-self: stretch;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  display: block;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.room-control-card.room-control-bed-card .room-control-bed-scale {
+  display: none !important;
+}
+.room-control-card.room-control-bed-card .room-control-bed-slider-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: var(--room-bed-track-length);
+  display: block;
+  border: 1px solid rgba(77,238,255,.14);
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at 50% 16%, rgba(77,238,255,.10), transparent 42%),
+    linear-gradient(180deg, rgba(255,255,255,.080), rgba(255,255,255,.025)),
+    rgba(3,10,22,.20);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.10), 0 12px 26px rgba(0,0,0,.16);
+  overflow: hidden;
+}
+.room-control-card.room-control-bed-card .room-control-bed-rail {
+  position: absolute;
+  left: 58%;
+  top: calc(var(--room-bed-thumb) / 2 + 2px);
+  bottom: calc(var(--room-bed-thumb) / 2 + 2px);
+  width: 10px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: rgba(255,255,255,.14);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.16), 0 0 18px rgba(77,238,255,.06);
+}
+.room-control-card.room-control-bed-card .room-control-bed-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  top: calc(100% - var(--room-bed-position, 0%));
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(77,238,255,.90), rgba(159,134,255,.95));
+  box-shadow: 0 0 18px rgba(77,238,255,.18);
+}
+.room-control-card.room-control-bed-card .room-control-bed-rail::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: var(--room-bed-position, 0%);
+  width: var(--room-bed-thumb);
+  height: var(--room-bed-thumb);
+  transform: translate(-50%, 50%);
+  border-radius: 50%;
+  background: linear-gradient(145deg, #ffffff, #dfe7ff);
+  box-shadow: 0 0 0 8px rgba(159,134,255,.14), 0 12px 28px rgba(0,0,0,.38), 0 0 20px rgba(77,238,255,.22);
+}
+.room-control-card.room-control-bed-card .room-control-bed-tick {
+  position: absolute;
+  left: -8px;
+  min-width: 28px;
+  transform: translate(-100%, -50%);
+  color: rgba(223,236,250,.70);
+  font-size: clamp(.50rem, .48vw, .62rem);
+  font-weight: 950;
+  line-height: 1;
+  letter-spacing: .02em;
+  text-align: right;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+.room-control-card.room-control-bed-card .room-control-bed-tick::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -16px;
+  width: 12px;
+  height: 1px;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: rgba(255,255,255,.18);
+}
+.room-control-card.room-control-bed-card .room-control-bed-tick-100 {
+  top: 0;
+}
+.room-control-card.room-control-bed-card .room-control-bed-tick-50 {
+  top: 50%;
+  color: rgba(77,238,255,.80);
+  text-shadow: 0 0 12px rgba(77,238,255,.18);
+}
+.room-control-card.room-control-bed-card .room-control-bed-tick-0 {
+  top: 100%;
+}
+.room-control-card.room-control-bed-card .room-control-bed-slider {
+  position: absolute;
+  left: 58%;
+  top: 50%;
+  z-index: 5;
+  width: var(--room-bed-track-length);
+  height: 48px;
+  margin: 0;
+  transform: translate(-50%, -50%) rotate(-90deg);
+  transform-origin: center center;
+  opacity: 0;
+  cursor: ns-resize;
+  touch-action: none;
+}
+.room-control-card.room-control-bed-card .room-control-bed-slider:disabled {
+  opacity: 0;
+  cursor: not-allowed;
+}
+.room-control-card.room-control-bed-card .room-control-bed-slider::-webkit-slider-runnable-track {
+  height: 48px;
+  background: transparent;
+  box-shadow: none;
+}
+.room-control-card.room-control-bed-card .room-control-bed-slider::-webkit-slider-thumb {
+  width: 48px;
+  height: 48px;
+  margin-top: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+.room-control-card.room-control-bed-card .room-control-bed-slider::-moz-range-track,
+.room-control-card.room-control-bed-card .room-control-bed-slider::-moz-range-progress {
+  height: 48px;
+  background: transparent;
+}
+.room-control-card.room-control-bed-card .room-control-bed-slider::-moz-range-thumb {
+  width: 48px;
+  height: 48px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+@media (max-width: 640px) {
+  .room-control-card.room-control-bed-card {
+    grid-column: auto;
+    grid-template-columns: minmax(0, 1fr) clamp(58px, 22vw, 74px);
+  }
+}

@@ -6450,13 +6450,13 @@ function roomControlIconSvg(control) {
     const position = roomControlPositionPercent(control);
     const raised = position > 0;
     return roomControlGlyphSvg("bed", `
-      <path class="glyph-soft" d="M22 72h54M27 72v7M70 72v7"></path>
-      <path class="glyph-stroke" d="M23 70V37c0-3 2-5 5-5s5 2 5 5v25"></path>
-      <path class="glyph-fill" opacity=".30" d="M33 49h18c3 0 5 2 5 5v8H33z"></path>
-      <path class="glyph-stroke" d="M34 49h16c3 0 6 3 6 6v7H34z"></path>
-      <path class="glyph-fill" opacity="${raised ? ".42" : ".20"}" d="M55 62l13-22 8 22z"></path>
-      <path class="glyph-stroke" d="M33 62h45c3 0 5 2 5 5v5H23v-5c0-3 2-5 5-5h27l13-22 8 22"></path>
-      <path class="glyph-soft" d="M39 56h12M59 58l9-15M76 62v10"></path>
+      <path class="glyph-soft" d="M21 73h56M27 73v7M71 73v7"></path>
+      <path class="glyph-stroke" d="M23 70V39c0-4 3-7 7-7s7 3 7 7v24"></path>
+      <rect class="glyph-fill" x="31" y="43" width="17" height="12" rx="4" opacity=".34"></rect>
+      <path class="glyph-fill" opacity="${raised ? ".44" : ".22"}" d="M49 63l18-23c2-3 7-2 8 2l8 21z"></path>
+      <path class="glyph-stroke" d="M23 63h28l16-23c2-3 7-2 8 2l8 21"></path>
+      <path class="glyph-stroke" d="M23 63h52c5 0 8 3 8 8v2H23z"></path>
+      <path class="glyph-soft" d="M31 63h18M56 58l11-15M76 63v9"></path>
     `);
   }
   if (!linked) {
@@ -6634,12 +6634,13 @@ function roomControlBedSliderMarkup(control) {
   const disabled = (!control.haEntityId || normalizeRoomControlDomain(control.domain) !== "cover") ? "disabled" : "";
   return `
     <span class="room-control-bed-panel" data-room-control-bed-panel>
-      <span class="room-control-bed-scale" aria-hidden="true">
-        <span>100%</span>
-        <span>50%</span>
-        <span>0%</span>
-      </span>
       <span class="room-control-bed-slider-wrap">
+        <span class="room-control-bed-rail" aria-hidden="true">
+          <span class="room-control-bed-fill"></span>
+          <span class="room-control-bed-tick room-control-bed-tick-100">100%</span>
+          <span class="room-control-bed-tick room-control-bed-tick-50">50%</span>
+          <span class="room-control-bed-tick room-control-bed-tick-0">0%</span>
+        </span>
         <input class="room-control-bed-slider" type="range" min="0" max="100" step="1" value="${position}" ${disabled} data-room-control-bed-slider data-room-control-id="${escapeHtml(control.id)}" aria-label="Set ${escapeHtml(roomControlDisplayName(control))} position" aria-orientation="vertical" />
       </span>
     </span>
