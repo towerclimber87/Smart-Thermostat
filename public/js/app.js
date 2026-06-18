@@ -8,7 +8,9 @@ const LEGACY_CONFIG_STORAGE_KEY = "smartThermostat.config.v2";
 const CONFIG_API_ENDPOINT = "/api/config";
 const HISTORY_API_ENDPOINT = "/api/history";
 const HA_SYNC_INTERVAL_MS = 5000;
-const HA_SYNC_AFTER_COMMAND_DELAYS = [900, 2400, 5200];
+const HA_SYNC_AFTER_COMMAND_DELAYS = [900, 2400, 5200, 9800, 18000];
+const BLIND_COMMAND_HOLD_MS = 90000;
+const BLIND_POSITION_TOLERANCE = 2;
 const HA_AUDIO_SYNC_INTERVAL_MS = 5000;
 const HA_AUDIO_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
 const HA_LIGHT_SYNC_INTERVAL_MS = 5000;
@@ -137,6 +139,7 @@ const AUTO_CHANGEOVER_MINUTES = 120;
 const MANUAL_CHANGEOVER_LOCKOUT_MINUTES = 10;
 const FAN_SEQUENCE = ["off", "on", "auto"];
 let lastBlindUserInteractionAt = 0;
+const blindCommandHolds = new Map();
 let lastAudioUserInteractionAt = 0;
 let lastLightUserInteractionAt = 0;
 let lastRoomControlUserInteractionAt = 0;
@@ -5358,6 +5361,57 @@ function renderRoomTabs() {
 }
 
 
+function getBlindEntityKey(blind) {
+  return blind?.haEntityId || blind?.id || "";
+}
+
+function clearBlindCommandHold(blind) {
+  const key = getBlindEntityKey(blind);
+  if (key) blindCommandHolds.delete(key);
+}
+
+function markBlindCommandHold(blind, targetPosition) {
+  const key = getBlindEntityKey(blind);
+  if (!key) return;
+  const target = clamp(Math.round(Number(targetPosition)), 0, 100);
+  blindCommandHolds.set(key, { target, until: Date.now() + BLIND_COMMAND_HOLD_MS });
+}
+
+function getBlindCommandHold(blind) {
+  const key = getBlindEntityKey(blind);
+  if (!key) return null;
+  const hold = blindCommandHolds.get(key);
+  if (!hold) return null;
+  if (Date.now() > hold.until) {
+    blindCommandHolds.delete(key);
+    return null;
+  }
+  return hold;
+}
+
+function isBlindCommandHoldResolved(blind, entity) {
+  const hold = getBlindCommandHold(blind);
+  if (!hold) return true;
+  const actualPosition = normalizeHaPosition(entity, hold.target);
+  if (Math.abs(actualPosition - hold.target) <= BLIND_POSITION_TOLERANCE) {
+    clearBlindCommandHold(blind);
+    return true;
+  }
+  return false;
+}
+
+function updateBlindVisualCard(card, blind) {
+  if (!card || !blind) return;
+  const position = clamp(Math.round(Number(blind.position) || 0), 0, 100);
+  applyBlindVisualVars(card, position);
+  const percent = card.querySelector(".blind-percent");
+  if (percent) percent.textContent = `${position}%`;
+  const stage = card.querySelector("[data-blind-stage]");
+  if (stage) stage.setAttribute("aria-valuenow", String(position));
+  card.classList.toggle("blind-pending", Boolean(getBlindCommandHold(blind)));
+}
+
+
 function applyBlindVisualVars(card, position) {
   const pct = clamp(Number(position) || 0, 0, 100);
   const openRatio = pct / 100;
@@ -5391,6 +5445,7 @@ function renderBlinds() {
     card.dataset.blindCard = blind.id;
     card.dataset.roomKey = state.blinds.room;
     applyBlindVisualVars(card, blind.position);
+    card.classList.toggle("blind-pending", Boolean(getBlindCommandHold(blind)));
     const slatCount = 18;
     const slats = Array.from({ length: slatCount }, (_, index) => `<span class="blind-slat" style="--slat-index:${index}; --slat-top:${8 + (index * (84 / (slatCount - 1)))}%"></span>`).join("");
     card.innerHTML = `
@@ -5419,12 +5474,9 @@ function setBlindPosition(blindId, position) {
   const room = getActiveRoom();
   const blind = room.blinds.find((item) => item.id === blindId);
   if (!blind) return;
-  blind.position = clamp(Number(position), 0, 100);
+  blind.position = clamp(Math.round(Number(position)), 0, 100);
   const card = document.querySelector(`[data-blind-card="${blindId}"]`);
-  if (!card) return;
-  applyBlindVisualVars(card, blind.position);
-  card.querySelector(".blind-percent").textContent = `${blind.position}%`;
-  card.querySelector("[data-blind-stage]").setAttribute("aria-valuenow", String(blind.position));
+  updateBlindVisualCard(card, blind);
   saveConfig();
 }
 
@@ -7093,11 +7145,18 @@ function findCoverEntity(entityId) {
 
 function applyEntityStateToBlind(blind, entity) {
   if (!blind || !entity) return;
-  blind.position = normalizeHaPosition(entity, blind.position);
   if (entity.name) {
     blind.haName = entity.name;
     blind.name = entity.name;
   }
+  const hold = getBlindCommandHold(blind);
+  if (hold && !isBlindCommandHoldResolved(blind, entity)) {
+    // Home Assistant can report the old physical position while the motor is still moving.
+    // Keep the UI at the requested target until the real cover catches up or the hold expires.
+    blind.position = hold.target;
+    return;
+  }
+  blind.position = normalizeHaPosition(entity, blind.position);
 }
 
 function syncLinkedBlindsFromCovers(covers = state.integrations.homeAssistant.coverEntities || [], options = {}) {
@@ -7222,7 +7281,10 @@ async function callCoverActionViaLocalBackend(entityId, action, position = null)
 async function sendBlindToHomeAssistant(blind, action, position = null) {
   if (!blind?.haEntityId) return null;
   const optimistic = action === "open" ? 100 : action === "close" ? 0 : position;
-  if (optimistic !== null && optimistic !== undefined) blind.position = clamp(Number(optimistic), 0, 100);
+  if (optimistic !== null && optimistic !== undefined) {
+    blind.position = clamp(Math.round(Number(optimistic)), 0, 100);
+    markBlindCommandHold(blind, blind.position);
+  }
   renderBlinds();
 
   try {
@@ -7239,8 +7301,10 @@ async function sendBlindToHomeAssistant(blind, action, position = null) {
     scheduleHaBlindSync();
     return entityState;
   } catch (error) {
+    clearBlindCommandHold(blind);
     addHaLog("error", `Cover ${action} failed`, `${blind.haEntityId}: ${error.message || error}`);
     showToast("Home Assistant cover command failed");
+    renderBlinds();
     return null;
   }
 }

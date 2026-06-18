@@ -12285,3 +12285,168 @@ body.booting .boot-overlay {
 .app-shell[data-theme="star-trek"] .screen-blinds .shade-bottom-rail {
   background: linear-gradient(90deg, rgba(255,171,46,.84), rgba(255,228,128,.96), rgba(113,216,255,.74));
 }
+
+/* 2026-06-17 v6.9 natural white shade redesign + no-jump target hold
+   The blind preview now reads as white roller/pleated shades over a warm window.
+   Sunlight only appears in the exposed portion as the shade opens. */
+.screen-blinds .blind-card {
+  border-color: rgba(255,255,255,.14);
+  background:
+    radial-gradient(circle at 22% 0%, rgba(255,235,185,.08), transparent 34%),
+    linear-gradient(180deg, rgba(255,255,255,.078), rgba(255,255,255,.030));
+}
+
+.screen-blinds .blind-percent {
+  color: #ffeebc;
+  text-shadow: 0 0 14px rgba(255,205,104,.20);
+}
+
+.screen-blinds .blind-card.blind-pending .blind-percent::after {
+  content: " moving";
+  margin-left: 6px;
+  color: rgba(255,238,188,.72);
+  font-size: .68em;
+  font-weight: 900;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.screen-blinds .blind-action.primary {
+  background: linear-gradient(135deg, #fff8df, #ffd36f);
+  color: #24170a;
+}
+
+.screen-blinds .close-blind {
+  background: linear-gradient(135deg, #f5f1e8, #c9c1b4);
+  color: #1a1713;
+}
+
+.screen-blinds .shade-stage.modern-shade-stage {
+  border-color: rgba(255,245,221,.13);
+  background:
+    radial-gradient(circle at 50% -6%, rgba(255,225,157,.16), transparent 42%),
+    linear-gradient(180deg, rgba(17, 21, 27, .98), rgba(5, 8, 13, .99)) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.12),
+    inset 0 0 0 8px rgba(0,0,0,.32),
+    0 18px 36px rgba(0,0,0,.27) !important;
+}
+
+.screen-blinds .shade-stage.modern-shade-stage::before {
+  inset: 11px;
+  border-radius: 18px;
+  background:
+    linear-gradient(128deg, rgba(255,255,255,.12), transparent 22%, transparent 68%, rgba(255,214,137,.08) 86%, transparent),
+    radial-gradient(circle at 50% 112%, rgba(255,214,137,.10), transparent 44%);
+  opacity: .74;
+}
+
+.screen-blinds .blind-window.smart-shade-window {
+  border-color: rgba(255,246,225,.16);
+  background:
+    radial-gradient(circle at 76% 26%, rgba(255,236,178, calc(.08 + var(--blind-open-ratio, .5) * .30)) 0 7%, transparent 30%),
+    linear-gradient(180deg, rgba(164, 189, 210, calc(.18 + var(--blind-open-ratio, .5) * .24)), rgba(73, 91, 108, calc(.18 + var(--blind-open-ratio, .5) * .18))),
+    linear-gradient(180deg, #283542, #111923) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.22),
+    inset 0 0 0 1px rgba(0,0,0,.38),
+    0 14px 28px rgba(0,0,0,.32) !important;
+}
+
+.screen-blinds .shade-glass {
+  background:
+    radial-gradient(circle at 78% 23%, rgba(255,239,188, calc(.10 + var(--blind-open-ratio, .5) * .32)), transparent 30%),
+    linear-gradient(118deg, transparent 0 38%, rgba(255,226,156, calc(var(--blind-open-ratio, .5) * .20)) 45%, transparent 56%),
+    linear-gradient(180deg, rgba(143, 171, 196, .42), rgba(10, 16, 23, .86)),
+    repeating-linear-gradient(to bottom, rgba(255,255,255,.030) 0 1px, transparent 1px 20px);
+}
+
+.screen-blinds .shade-glass::before {
+  background:
+    linear-gradient(108deg, rgba(255,255,255, calc(.08 + var(--blind-open-ratio, .5) * .08)), transparent 22%, transparent 56%, rgba(255,221,151, calc(var(--blind-open-ratio, .5) * .16)) 74%, transparent 90%),
+    linear-gradient(90deg, rgba(255,255,255,.05), transparent 20%, rgba(0,0,0,.16) 84%, rgba(255,255,255,.035));
+  opacity: calc(.22 + var(--blind-open-ratio, .5) * .48);
+}
+
+.screen-blinds .shade-sheet {
+  min-height: 9%;
+  border-radius: 16px 16px 12px 12px;
+  background:
+    linear-gradient(180deg, #fffaf0 0%, #efe6d5 56%, #d9ccba 100%),
+    repeating-linear-gradient(to bottom, rgba(170,151,122,.16) 0 1px, transparent 1px 12px);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.82),
+    inset 0 -18px 28px rgba(126,99,64,.13),
+    0 calc(7px + var(--blind-shadow, .5) * 9px) calc(16px + var(--blind-shadow, .5) * 16px) rgba(0,0,0, calc(.13 + var(--blind-shadow, .5) * .20));
+}
+
+.screen-blinds .shade-sheet::before {
+  background:
+    linear-gradient(90deg, rgba(255,255,255,.48), transparent 20%, rgba(183,164,137,.11) 52%, transparent 74%, rgba(124,93,56,.15)),
+    repeating-linear-gradient(90deg, rgba(174,154,122,.08) 0 1px, transparent 1px 16px),
+    repeating-linear-gradient(to bottom, rgba(142,117,79,.16) 0 1px, transparent 1px 12px);
+  opacity: .66;
+}
+
+.screen-blinds .shade-sheet::after {
+  background: linear-gradient(180deg, transparent, rgba(116,91,55,.14));
+}
+
+.screen-blinds .shade-sheet .blind-slat {
+  left: clamp(12px, .95vw, 18px);
+  right: clamp(12px, .95vw, 18px);
+  height: max(1px, var(--blind-slat-height, 2px));
+  background:
+    linear-gradient(90deg, transparent, rgba(255,255,255,.70) 14%, rgba(202,180,144,.28) 50%, rgba(255,255,255,.42) 86%, transparent) !important;
+  box-shadow: 0 1px 2px rgba(110,84,49,.16) !important;
+  opacity: calc(.24 + var(--blind-closed-ratio, .5) * .22) !important;
+}
+
+.screen-blinds .shade-bottom-rail {
+  height: clamp(8px, .85vh, 11px);
+  background: linear-gradient(180deg, #fffaf0, #d8c8ad 58%, #b9a27d);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.78),
+    0 0 18px rgba(255,217,151, calc(var(--blind-open-ratio, .5) * .18)),
+    0 10px 20px rgba(0,0,0,.23);
+}
+
+.screen-blinds .blind-card[data-blind-state="closed"] .shade-glass {
+  opacity: .20;
+}
+
+.screen-blinds .blind-card[data-blind-state="closed"] .shade-bottom-rail {
+  top: calc(100% - 6px);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.72),
+    0 6px 14px rgba(0,0,0,.20);
+}
+
+.screen-blinds .blind-card[data-blind-state="open"] .shade-sheet {
+  height: 9%;
+  background: linear-gradient(180deg, #fffaf0, #d7c5a8);
+}
+
+.screen-blinds .blind-card[data-blind-state="open"] .shade-bottom-rail {
+  top: 9%;
+}
+
+.screen-blinds .blind-card.blind-pending .shade-bottom-rail {
+  animation: blindPendingRailPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes blindPendingRailPulse {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.16); }
+}
+
+.app-shell[data-theme="star-trek"] .screen-blinds .shade-stage.modern-shade-stage {
+  border-color: rgba(255,208,117,.24);
+  background:
+    radial-gradient(circle at 50% -6%, rgba(255,198,83,.18), transparent 42%),
+    linear-gradient(180deg, rgba(20, 19, 23, .98), rgba(6, 7, 11, .99)) !important;
+}
+
+.app-shell[data-theme="star-trek"] .screen-blinds .shade-bottom-rail {
+  background: linear-gradient(180deg, #fff7dc, #ffc84f 58%, #9f6e16);
+}
