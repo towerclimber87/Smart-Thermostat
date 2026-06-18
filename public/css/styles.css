@@ -12450,3 +12450,229 @@ body.booting .boot-overlay {
 .app-shell[data-theme="star-trek"] .screen-blinds .shade-bottom-rail {
   background: linear-gradient(180deg, #fff7dc, #ffc84f 58%, #9f6e16);
 }
+
+/* 2026-06-17 v7.0 natural tilt-blind redesign
+   These blinds do not move up/down. The percentage now renders as slat tilt/light level:
+   closed = white slats shut with almost no sun, open = slats tilted with warm daylight coming through. */
+.screen-blinds .blind-card {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.075), rgba(255,255,255,.035)),
+    rgba(23, 25, 34, .88) !important;
+  border-color: rgba(255,255,255,.13) !important;
+  box-shadow: 0 18px 34px rgba(0,0,0,.24), inset 0 1px 0 rgba(255,255,255,.08) !important;
+}
+
+.screen-blinds .blind-action {
+  border: 1px solid rgba(255,255,255,.16) !important;
+  color: #33291b !important;
+  text-shadow: none !important;
+  box-shadow: 0 10px 18px rgba(0,0,0,.16), inset 0 1px 0 rgba(255,255,255,.42) !important;
+}
+
+.screen-blinds .blind-action.primary {
+  background: linear-gradient(180deg, #fff6df 0%, #f5d996 100%) !important;
+}
+
+.screen-blinds .close-blind {
+  background: linear-gradient(180deg, #fffdf7 0%, #d9cec0 100%) !important;
+}
+
+.screen-blinds .shade-stage.modern-shade-stage {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.025)),
+    #111720 !important;
+  border: 14px solid rgba(8, 13, 21, .96) !important;
+  border-radius: 16px !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(255,255,255,.09),
+    inset 0 0 38px rgba(0,0,0,.44),
+    0 14px 22px rgba(0,0,0,.28) !important;
+  overflow: hidden !important;
+}
+
+.screen-blinds .shade-stage.modern-shade-stage::before {
+  content: "" !important;
+  position: absolute !important;
+  inset: -10% !important;
+  pointer-events: none !important;
+  background:
+    radial-gradient(circle at 75% 18%, rgba(255,235,176, calc(var(--blind-room-glow, .2) * .35)), transparent 34%),
+    linear-gradient(180deg, rgba(255,255,255,.06), transparent 35%, rgba(0,0,0,.18)) !important;
+  opacity: 1 !important;
+  z-index: 1 !important;
+}
+
+.screen-blinds .blind-window.smart-shade-window,
+.screen-blinds .blind-window.smart-shade-window.tilt-shade-window {
+  position: absolute !important;
+  inset: 0 !important;
+  overflow: hidden !important;
+  border-radius: 4px !important;
+  background:
+    radial-gradient(circle at 74% 20%, rgba(255,231,163, calc(var(--blind-sun-opacity, 0) * .75)), transparent 34%),
+    linear-gradient(180deg, rgba(109,132,150,.36), rgba(42,55,68,.54)),
+    #18232e !important;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.07) !important;
+}
+
+.screen-blinds .blind-window.smart-shade-window::before,
+.screen-blinds .blind-window.smart-shade-window::after {
+  display: none !important;
+}
+
+.screen-blinds .shade-glass {
+  position: absolute !important;
+  inset: 0 !important;
+  height: auto !important;
+  background:
+    radial-gradient(circle at 74% 20%, rgba(255,236,174, calc(var(--blind-sun-opacity, 0) * .92)), transparent 27%),
+    linear-gradient(108deg, transparent 0 36%, rgba(255,226,145, calc(var(--blind-beam-opacity, 0) * .32)) 45%, transparent 61%),
+    linear-gradient(180deg, rgba(163,191,212,.34), rgba(71,88,105,.38)) !important;
+  opacity: calc(.34 + var(--blind-open-ratio, .5) * .46) !important;
+  z-index: 1 !important;
+}
+
+.screen-blinds .shade-glass::before {
+  content: "" !important;
+  position: absolute !important;
+  inset: 0 !important;
+  background:
+    linear-gradient(90deg, rgba(255,255,255,.10) 0 1px, transparent 1px calc(50% - 1px), rgba(255,255,255,.08) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px) 100%),
+    linear-gradient(180deg, rgba(255,255,255,.08), transparent 46%, rgba(0,0,0,.16)) !important;
+  opacity: .52 !important;
+}
+
+.screen-blinds .shade-sunwash {
+  position: absolute !important;
+  inset: -18% -35% -20% 18% !important;
+  background:
+    linear-gradient(112deg,
+      transparent 0 25%,
+      rgba(255,230,152, calc(var(--blind-beam-opacity, 0) * .28)) 34%,
+      rgba(255,242,203, calc(var(--blind-beam-opacity, 0) * .52)) 43%,
+      transparent 54% 100%) !important;
+  filter: blur(1px) !important;
+  opacity: 1 !important;
+  z-index: 2 !important;
+  pointer-events: none !important;
+}
+
+.screen-blinds .shade-sheet,
+.screen-blinds .shade-sheet.venetian-tilt-sheet,
+.screen-blinds .blind-card[data-blind-state="open"] .shade-sheet,
+.screen-blinds .blind-card[data-blind-state="closed"] .shade-sheet {
+  position: absolute !important;
+  left: 0 !important;
+  top: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: 0 !important;
+  overflow: hidden !important;
+  background:
+    linear-gradient(180deg, rgba(255,255,255, calc(.18 + var(--blind-closed-ratio, .5) * .26)), rgba(226,221,211, calc(.12 + var(--blind-closed-ratio, .5) * .22))) !important;
+  opacity: 1 !important;
+  transform: none !important;
+  box-shadow: none !important;
+  z-index: 4 !important;
+}
+
+.screen-blinds .shade-sheet::before,
+.screen-blinds .shade-sheet::after {
+  content: "" !important;
+  position: absolute !important;
+  inset: 0 !important;
+  pointer-events: none !important;
+}
+
+.screen-blinds .shade-sheet::before {
+  background:
+    linear-gradient(90deg, rgba(255,255,255,.28), transparent 12%, transparent 88%, rgba(0,0,0,.10)),
+    linear-gradient(180deg, rgba(255,255,255,.18), transparent 30%, rgba(0,0,0,.10)) !important;
+  opacity: calc(.62 - var(--blind-open-ratio, .5) * .18) !important;
+  z-index: 1 !important;
+}
+
+.screen-blinds .shade-sheet::after {
+  background:
+    linear-gradient(112deg,
+      transparent 0 32%,
+      rgba(255,231,158, calc(var(--blind-beam-opacity, 0) * .20)) 39%,
+      transparent 51% 100%) !important;
+  opacity: 1 !important;
+  z-index: 6 !important;
+}
+
+.screen-blinds .shade-sheet .blind-slat,
+.screen-blinds .blind-card[data-blind-state="open"] .shade-sheet .blind-slat,
+.screen-blinds .blind-card[data-blind-state="closed"] .shade-sheet .blind-slat {
+  display: block !important;
+  position: absolute !important;
+  left: 5% !important;
+  right: 5% !important;
+  width: 90% !important;
+  top: var(--slat-top, 50%) !important;
+  height: var(--blind-slat-height, 8px) !important;
+  border-radius: 999px !important;
+  background:
+    linear-gradient(180deg, #ffffff 0%, #f7f2e8 42%, #d7cbb9 100%) !important;
+  border: 1px solid rgba(255,255,255,.52) !important;
+  transform: translateY(-50%) perspective(170px) rotateX(var(--blind-slat-angle, 45deg)) !important;
+  transform-origin: center center !important;
+  box-shadow:
+    0 calc(2px + var(--blind-shadow, .5) * 5px) calc(4px + var(--blind-shadow, .5) * 8px) rgba(0,0,0, calc(.16 + var(--blind-shadow, .5) * .20)),
+    inset 0 1px 0 rgba(255,255,255,.80),
+    inset 0 -1px 1px rgba(112,88,54,.15) !important;
+  opacity: calc(.94 - var(--blind-open-ratio, .5) * .06) !important;
+  z-index: 5 !important;
+}
+
+.screen-blinds .shade-sheet .blind-slat::before {
+  content: "" !important;
+  position: absolute !important;
+  inset: 1px 7% auto 7% !important;
+  height: 1px !important;
+  border-radius: 999px !important;
+  background: rgba(255,255,255,.72) !important;
+  opacity: .82 !important;
+}
+
+.screen-blinds .shade-sheet .blind-slat::after {
+  content: "" !important;
+  position: absolute !important;
+  left: 2% !important;
+  right: 2% !important;
+  bottom: -4px !important;
+  height: 5px !important;
+  background: rgba(255,232,166, calc(var(--blind-beam-opacity, 0) * .24)) !important;
+  filter: blur(3px) !important;
+  opacity: 1 !important;
+}
+
+.screen-blinds .shade-bottom-rail,
+.screen-blinds .blind-card[data-blind-state="open"] .shade-bottom-rail,
+.screen-blinds .blind-card[data-blind-state="closed"] .shade-bottom-rail {
+  display: block !important;
+  position: absolute !important;
+  left: 4% !important;
+  right: 4% !important;
+  top: 6px !important;
+  bottom: auto !important;
+  width: auto !important;
+  height: 10px !important;
+  border-radius: 999px !important;
+  background: linear-gradient(180deg, #fffdf7, #cec2ad) !important;
+  border: 1px solid rgba(255,255,255,.42) !important;
+  box-shadow: 0 4px 9px rgba(0,0,0,.24), inset 0 1px 0 rgba(255,255,255,.75) !important;
+  opacity: .98 !important;
+  transform: none !important;
+  z-index: 7 !important;
+}
+
+.screen-blinds .blind-card[data-blind-state="closed"] .shade-glass,
+.screen-blinds .blind-card[data-blind-state="closed"] .shade-sunwash {
+  opacity: .12 !important;
+}
+
+.screen-blinds .blind-card.blind-pending .shade-bottom-rail {
+  animation: blindPendingRailPulse 1.2s ease-in-out infinite !important;
+}

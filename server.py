@@ -2013,6 +2013,7 @@ def _fetch_ha_covers(ha_url: str, token: str) -> list[dict]:
             "name": attrs.get("friendly_name") or entity_id,
             "state": item.get("state") or "unknown",
             "currentPosition": attrs.get("current_position"),
+            "currentTiltPosition": attrs.get("current_tilt_position"),
             "supportedFeatures": attrs.get("supported_features"),
         })
     covers.sort(key=lambda item: item["name"].lower())
@@ -2032,6 +2033,7 @@ def _fetch_ha_cover_states_for_entities(ha_url: str, token: str, entity_ids: lis
             "name": attrs.get("friendly_name") or entity_id,
             "state": item.get("state") or "unknown",
             "currentPosition": attrs.get("current_position"),
+            "currentTiltPosition": attrs.get("current_tilt_position"),
             "supportedFeatures": attrs.get("supported_features"),
         })
     by_id = {item["entityId"]: item for item in covers}
@@ -2959,6 +2961,7 @@ def _fetch_ha_state(ha_url: str, token: str, entity_id: str) -> dict:
         "name": attrs.get("friendly_name") or item.get("entity_id") or entity_id,
         "state": item.get("state") or "unknown",
         "currentPosition": attrs.get("current_position"),
+        "currentTiltPosition": attrs.get("current_tilt_position"),
         "supportedFeatures": attrs.get("supported_features"),
     }
 
@@ -2968,21 +2971,32 @@ def _call_cover_service(ha_url: str, token: str, entity_id: str, action: str, po
     if not entity_id.startswith("cover."):
         raise ValueError("Entity must be a cover.* entity")
 
+    action = (action or "").strip().lower()
     service_by_action = {
         "open": "open_cover",
         "close": "close_cover",
         "stop": "stop_cover",
         "position": "set_cover_position",
+        "open_tilt": "open_cover_tilt",
+        "close_tilt": "close_cover_tilt",
+        "stop_tilt": "stop_cover_tilt",
+        "tilt": "set_cover_tilt_position",
+        "set_tilt_position": "set_cover_tilt_position",
     }
     service = service_by_action.get(action)
     if not service:
         raise ValueError("Unsupported cover action")
 
     payload = {"entity_id": entity_id}
-    if action == "position":
+    position_value = None
+    if action in {"position", "tilt", "set_tilt_position"}:
         if position is None:
             raise ValueError("Missing position")
-        payload["position"] = max(0, min(100, int(position)))
+        position_value = max(0, min(100, int(position)))
+        if action == "position":
+            payload["position"] = position_value
+        else:
+            payload["tilt_position"] = position_value
 
     _ha_json_request(ha_url, token, "POST", f"/api/services/cover/{service}", payload)
     _invalidate_ha_state_cache(ha_url, token)
@@ -2990,8 +3004,10 @@ def _call_cover_service(ha_url: str, token: str, entity_id: str, action: str, po
         state = _fetch_ha_state(ha_url, token, entity_id)
     except Exception:
         # Some cover integrations update state slowly. Return an optimistic value so the UI changes immediately.
-        optimistic = 100 if action == "open" else 0 if action == "close" else position
+        optimistic = 100 if action in {"open", "open_tilt"} else 0 if action in {"close", "close_tilt"} else position_value
         state = {"entityId": entity_id, "name": entity_id, "state": action, "currentPosition": optimistic}
+        if action in {"open_tilt", "close_tilt", "tilt", "set_tilt_position"}:
+            state["currentTiltPosition"] = optimistic
     return state
 
 

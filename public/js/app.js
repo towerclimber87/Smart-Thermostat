@@ -11,6 +11,11 @@ const HA_SYNC_INTERVAL_MS = 5000;
 const HA_SYNC_AFTER_COMMAND_DELAYS = [900, 2400, 5200, 9800, 18000];
 const BLIND_COMMAND_HOLD_MS = 90000;
 const BLIND_POSITION_TOLERANCE = 2;
+const COVER_FEATURE_OPEN_TILT = 16;
+const COVER_FEATURE_CLOSE_TILT = 32;
+const COVER_FEATURE_STOP_TILT = 64;
+const COVER_FEATURE_SET_TILT_POSITION = 128;
+const COVER_TILT_FEATURE_MASK = COVER_FEATURE_OPEN_TILT | COVER_FEATURE_CLOSE_TILT | COVER_FEATURE_STOP_TILT | COVER_FEATURE_SET_TILT_POSITION;
 const HA_AUDIO_SYNC_INTERVAL_MS = 5000;
 const HA_AUDIO_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
 const HA_LIGHT_SYNC_INTERVAL_MS = 5000;
@@ -5416,17 +5421,22 @@ function applyBlindVisualVars(card, position) {
   const pct = clamp(Number(position) || 0, 0, 100);
   const openRatio = pct / 100;
   const closedRatio = 1 - openRatio;
-  const shadeHeight = Math.max(8, Math.min(100, (closedRatio * 100) + 6));
-  const louverAngle = Math.round(6 + openRatio * 18);
+  const slatAngle = Math.round(4 + openRatio * 68);
+  const slatHeight = 12.5 - (openRatio * 7.4);
+  const sunlight = openRatio * openRatio;
+
   card.style.setProperty("--blind-open", `${pct}%`);
   card.style.setProperty("--blind-closed", `${100 - pct}%`);
   card.style.setProperty("--blind-open-ratio", openRatio.toFixed(3));
   card.style.setProperty("--blind-closed-ratio", closedRatio.toFixed(3));
-  card.style.setProperty("--blind-shade-height", `${shadeHeight.toFixed(1)}%`);
-  card.style.setProperty("--blind-slat-angle", `${louverAngle}deg`);
-  card.style.setProperty("--blind-light", (0.26 + openRatio * 0.42).toFixed(3));
-  card.style.setProperty("--blind-shadow", (0.68 - openRatio * 0.34).toFixed(3));
-  card.style.setProperty("--blind-slat-height", `${(1.4 + closedRatio * 2.4).toFixed(1)}px`);
+  card.style.setProperty("--blind-shade-height", `100%`);
+  card.style.setProperty("--blind-slat-angle", `${slatAngle}deg`);
+  card.style.setProperty("--blind-light", (0.06 + sunlight * 0.94).toFixed(3));
+  card.style.setProperty("--blind-shadow", (0.66 - openRatio * 0.36).toFixed(3));
+  card.style.setProperty("--blind-slat-height", `${slatHeight.toFixed(1)}px`);
+  card.style.setProperty("--blind-sun-opacity", (sunlight * 0.82).toFixed(3));
+  card.style.setProperty("--blind-beam-opacity", (Math.max(0, openRatio - 0.12) * 0.58).toFixed(3));
+  card.style.setProperty("--blind-room-glow", (0.1 + sunlight * 0.55).toFixed(3));
   card.dataset.blindState = pct >= 98 ? "open" : pct <= 2 ? "closed" : "partial";
 }
 
@@ -5457,9 +5467,10 @@ function renderBlinds() {
       </div>
       <button class="blind-action primary" data-blind-id="${blind.id}" data-action="open">Open</button>
       <div class="shade-stage modern-shade-stage" data-blind-stage="${blind.id}" role="slider" aria-label="${blind.name} position" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${blind.position}" tabindex="0">
-        <div class="blind-window smart-shade-window" aria-hidden="true">
+        <div class="blind-window smart-shade-window tilt-shade-window" aria-hidden="true">
           <div class="shade-glass"></div>
-          <div class="shade-sheet">${slats}</div>
+          <div class="shade-sunwash"></div>
+          <div class="shade-sheet venetian-tilt-sheet">${slats}</div>
           <div class="shade-bottom-rail"></div>
         </div>
       </div>
@@ -7130,9 +7141,31 @@ function getHaBaseUrl() {
   return String(state.integrations.homeAssistant.url || "").replace(/\/+$/, "");
 }
 
+function hasValue(value) {
+  return value !== undefined && value !== null && value !== "";
+}
+
+function coverSupportsTilt(entity) {
+  if (!entity) return false;
+  if (hasValue(entity.currentTiltPosition)) return true;
+  const supportedFeatures = Number(entity.supportedFeatures || 0);
+  return Boolean(supportedFeatures & COVER_TILT_FEATURE_MASK);
+}
+
+function getBlindCoverEntity(blind) {
+  if (!blind?.haEntityId) return null;
+  return findCoverEntity(blind.haEntityId) || null;
+}
+
+function shouldUseTiltForBlind(blind, entity = null) {
+  return coverSupportsTilt(entity || getBlindCoverEntity(blind));
+}
+
 function normalizeHaPosition(entity, fallback = 50) {
+  const tiltRaw = entity?.currentTiltPosition;
+  if (coverSupportsTilt(entity) && hasValue(tiltRaw)) return clamp(Math.round(Number(tiltRaw)), 0, 100);
   const raw = entity?.currentPosition;
-  if (raw !== undefined && raw !== null && raw !== "") return clamp(Math.round(Number(raw)), 0, 100);
+  if (hasValue(raw)) return clamp(Math.round(Number(raw)), 0, 100);
   const coverState = String(entity?.state || "").toLowerCase();
   if (coverState === "open") return 100;
   if (coverState === "closed") return 0;
@@ -7255,6 +7288,20 @@ async function pollHomeAssistantLinkedCovers(options = {}) {
   }
 }
 
+function resolveBlindCoverCommand(blind, action, position = null) {
+  const entity = getBlindCoverEntity(blind);
+  if (!shouldUseTiltForBlind(blind, entity)) return { action, position };
+
+  const supportedFeatures = Number(entity?.supportedFeatures || 0);
+  const canOpenTilt = Boolean(supportedFeatures & COVER_FEATURE_OPEN_TILT);
+  const canCloseTilt = Boolean(supportedFeatures & COVER_FEATURE_CLOSE_TILT);
+
+  if (action === "position") return { action: "tilt", position };
+  if (action === "open") return canOpenTilt ? { action: "open_tilt", position: null } : { action: "tilt", position: 100 };
+  if (action === "close") return canCloseTilt ? { action: "close_tilt", position: null } : { action: "tilt", position: 0 };
+  return { action, position };
+}
+
 async function callCoverActionViaLocalBackend(entityId, action, position = null) {
   const ha = state.integrations.homeAssistant;
   const baseUrl = getHaBaseUrl();
@@ -7281,6 +7328,8 @@ async function callCoverActionViaLocalBackend(entityId, action, position = null)
 async function sendBlindToHomeAssistant(blind, action, position = null) {
   if (!blind?.haEntityId) return null;
   const optimistic = action === "open" ? 100 : action === "close" ? 0 : position;
+  const command = resolveBlindCoverCommand(blind, action, position);
+
   if (optimistic !== null && optimistic !== undefined) {
     blind.position = clamp(Math.round(Number(optimistic)), 0, 100);
     markBlindCommandHold(blind, blind.position);
@@ -7288,7 +7337,7 @@ async function sendBlindToHomeAssistant(blind, action, position = null) {
   renderBlinds();
 
   try {
-    const entityState = await callCoverActionViaLocalBackend(blind.haEntityId, action, position);
+    const entityState = await callCoverActionViaLocalBackend(blind.haEntityId, command.action, command.position);
     if (entityState?.entityId) {
       const existing = findCoverEntity(entityState.entityId);
       if (existing) Object.assign(existing, entityState);
@@ -7302,7 +7351,7 @@ async function sendBlindToHomeAssistant(blind, action, position = null) {
     return entityState;
   } catch (error) {
     clearBlindCommandHold(blind);
-    addHaLog("error", `Cover ${action} failed`, `${blind.haEntityId}: ${error.message || error}`);
+    addHaLog("error", `Cover ${command.action} failed`, `${blind.haEntityId}: ${error.message || error}`);
     showToast("Home Assistant cover command failed");
     renderBlinds();
     return null;
