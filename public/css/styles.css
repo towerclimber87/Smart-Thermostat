@@ -13458,7 +13458,12 @@ body.booting .boot-overlay {
 
 /* 2026-06-18 v7.5: Pause Function monitoring, countdown, and paused comfort overlay. */
 .pause-countdown-badge {
-  margin: 10px auto 0;
+  position: absolute;
+  left: 50%;
+  top: clamp(104px, 9.6vh, 128px);
+  transform: translate(-50%, -100%);
+  z-index: 9;
+  margin: 0;
   width: fit-content;
   max-width: min(720px, 78vw);
   min-height: 34px;
@@ -13473,6 +13478,7 @@ body.booting .boot-overlay {
   color: rgba(255, 247, 224, .96);
   box-shadow: inset 0 1px 0 rgba(255,255,255,.12), 0 12px 30px rgba(0,0,0,.20), 0 0 24px rgba(255,190,96,.10);
   backdrop-filter: blur(16px);
+  pointer-events: none;
 }
 .pause-countdown-badge[hidden] { display: none !important; }
 .pause-countdown-badge span {
@@ -13617,6 +13623,7 @@ body.booting .boot-overlay {
 }
 @media (max-width: 900px) {
   .pause-countdown-badge {
+    top: clamp(78px, 8vh, 102px);
     max-width: 86vw;
     gap: 7px;
   }

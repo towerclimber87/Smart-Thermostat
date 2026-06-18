@@ -4117,8 +4117,10 @@ function renderPauseFunctionStatus() {
     elements.pauseCountdownBadge.hidden = !showCountdown;
     elements.pauseCountdownBadge.setAttribute("aria-hidden", showCountdown ? "false" : "true");
   }
-  if (showCountdown && elements.pauseCountdownText) {
-    elements.pauseCountdownText.textContent = `${formatPauseFunctionEntryList(openEntries)} open • ${formatPauseFunctionCountdown(countdownRemaining)} to pause`;
+  if (elements.pauseCountdownText) {
+    elements.pauseCountdownText.textContent = showCountdown
+      ? `${formatPauseFunctionEntryList(openEntries)} open • ${formatPauseFunctionCountdown(countdownRemaining)} to pause`
+      : "";
   }
 
   if (elements.pauseFunctionOverlay) {
@@ -4133,6 +4135,18 @@ function renderPauseFunctionStatus() {
       : "Selected entries are being monitored.";
   }
   renderPauseFunctionSettings();
+}
+
+function shouldFastSyncPauseFunction() {
+  const pause = getPauseFunction();
+  return Boolean(pause.entries.length && (pause.active || pause.entries.some(pauseFunctionStateLooksOpen)));
+}
+
+function servicePauseFunctionCountdown() {
+  if (shouldFastSyncPauseFunction()) {
+    pollHomeAssistantPauseFunction({ force: true });
+  }
+  evaluatePauseFunction({ toast: true });
 }
 
 function setPauseFunctionDuration(value, options = {}) {
@@ -9446,7 +9460,7 @@ async function init() {
   setInterval(() => pollHomeAssistantDoor(), HA_DOOR_SYNC_INTERVAL_MS);
   setInterval(() => pollHomeAssistantThermostatPeople(), HA_PRESENCE_SYNC_INTERVAL_MS);
   setInterval(() => pollHomeAssistantPauseFunction(), HA_PAUSE_FUNCTION_SYNC_INTERVAL_MS);
-  setInterval(() => evaluatePauseFunction({ toast: true }), 1000);
+  setInterval(servicePauseFunctionCountdown, 1000);
   setInterval(() => pollHomeAssistantWeather(), HA_WEATHER_SYNC_INTERVAL_MS);
   setInterval(() => pollHomeAssistantCurrentTempSensor(), HA_TEMP_SENSOR_SYNC_INTERVAL_MS);
   pollHomeAssistantCurrentTempSensor({ force: true });
