@@ -12676,3 +12676,442 @@ body.booting .boot-overlay {
 .screen-blinds .blind-card.blind-pending .shade-bottom-rail {
   animation: blindPendingRailPulse 1.2s ease-in-out infinite !important;
 }
+
+/* 2026-06-18 thermostat schedule button and editor */
+.bottom-left-cluster {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: clamp(10px, 1vw, 16px);
+  min-width: 0;
+  justify-self: start;
+}
+.thermostat-bottom-row .schedule-chip {
+  width: 86px;
+  min-width: 76px;
+  justify-content: center;
+  text-align: center;
+  cursor: pointer;
+  border-color: rgba(77,238,255,.22);
+  background: linear-gradient(135deg, rgba(77,238,255,.16), rgba(255,255,255,.06));
+}
+.thermostat-bottom-row .schedule-chip span {
+  display: none;
+}
+.thermostat-bottom-row .schedule-chip strong {
+  margin: 0;
+  font-size: clamp(1.35rem, 2vw, 1.9rem);
+  line-height: 1;
+  letter-spacing: .02em;
+}
+.thermostat-bottom-row {
+  grid-template-columns: minmax(250px, 342px) minmax(430px, 540px) minmax(154px, 220px) !important;
+}
+.schedule-overlay {
+  z-index: 88;
+}
+.schedule-sheet {
+  position: relative;
+  width: min(1180px, calc(100vw - 20px));
+  height: min(720px, calc(100dvh - 20px));
+  max-height: calc(100dvh - 20px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+  overflow: hidden;
+  border-radius: 28px;
+  border: 1px solid rgba(255,255,255,.14);
+  background: linear-gradient(155deg, rgba(21,31,50,.96), rgba(8,13,27,.98));
+  box-shadow: 0 42px 96px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.09);
+  padding: clamp(12px, 1.2vw, 18px);
+}
+.schedule-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.schedule-header h2 {
+  margin: 0;
+  color: rgba(247,251,255,.98);
+  font-size: clamp(1.65rem, 2.55vw, 2.8rem);
+  line-height: .94;
+  letter-spacing: -.07em;
+}
+.schedule-layout {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(250px, .72fr) minmax(0, 1.28fr);
+  gap: 10px;
+}
+.schedule-list-panel,
+.schedule-editor-panel {
+  min-height: 0;
+  border-radius: 22px;
+  border: 1px solid rgba(255,255,255,.09);
+  background: rgba(255,255,255,.035);
+  padding: 10px;
+}
+.schedule-list-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 8px;
+}
+.schedule-panel-title,
+.schedule-editor-actions,
+.schedule-condition-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.schedule-panel-title strong {
+  color: rgba(246,251,255,.96);
+  font-size: .9rem;
+  font-weight: 950;
+  letter-spacing: .02em;
+}
+.schedule-add-btn,
+.schedule-save-btn,
+.schedule-delete-btn {
+  min-height: 42px;
+  border-radius: 14px;
+  padding: 0 16px;
+}
+.schedule-list {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  padding-right: 2px;
+}
+.schedule-row {
+  width: 100%;
+  min-height: 68px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(255,255,255,.09);
+  border-radius: 18px;
+  background: rgba(255,255,255,.045);
+  color: rgba(235,244,255,.92);
+  padding: 10px 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.schedule-row.active {
+  border-color: rgba(77,238,255,.42);
+  background: linear-gradient(135deg, rgba(77,238,255,.18), rgba(255,255,255,.06));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.12), 0 12px 28px rgba(77,238,255,.08);
+}
+.schedule-row.disabled {
+  opacity: .56;
+}
+.schedule-row span,
+.schedule-row strong,
+.schedule-row em,
+.schedule-row b {
+  min-width: 0;
+}
+.schedule-row strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(248,252,255,.98);
+  font-size: .94rem;
+  font-weight: 1000;
+}
+.schedule-row em {
+  display: block;
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(207,223,240,.68);
+  font-size: .72rem;
+  font-style: normal;
+  font-weight: 850;
+}
+.schedule-row b {
+  color: rgba(255,255,255,.98);
+  font-size: .98rem;
+  font-weight: 1000;
+  font-variant-numeric: tabular-nums;
+}
+.schedule-editor-panel {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 10px;
+  overflow: hidden;
+}
+.schedule-form-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(140px, .34fr) minmax(112px, auto);
+  gap: 8px;
+  align-items: end;
+}
+.schedule-field {
+  display: grid;
+  gap: 5px;
+  color: rgba(218,232,248,.7);
+  font-size: .67rem;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: .12em;
+}
+.schedule-field input {
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 15px;
+  background: rgba(0,0,0,.20);
+  color: rgba(248,252,255,.97);
+  padding: 0 14px;
+  font-size: 1.05rem;
+  font-weight: 900;
+  outline: none;
+}
+.schedule-field input:focus {
+  border-color: rgba(77,238,255,.46);
+  box-shadow: 0 0 0 3px rgba(77,238,255,.10);
+}
+.schedule-enabled-toggle {
+  min-height: 48px;
+  border: 1px solid rgba(255,255,255,.11);
+  border-radius: 15px;
+  background: rgba(255,255,255,.06);
+  color: rgba(237,246,255,.88);
+  font-weight: 950;
+  cursor: pointer;
+}
+.schedule-enabled-toggle.active {
+  color: #061b16;
+  background: linear-gradient(135deg, #84ffc9, #4deeff);
+  border-color: rgba(132,255,201,.4);
+}
+.schedule-setpoint-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.schedule-setpoint-card {
+  min-height: 90px;
+  display: grid;
+  align-content: center;
+  gap: 8px;
+  border-radius: 20px;
+  border: 1px solid rgba(255,255,255,.09);
+  background: rgba(0,0,0,.16);
+  padding: 12px;
+}
+.schedule-setpoint-card span {
+  color: rgba(218,232,248,.7);
+  font-size: .72rem;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: .11em;
+}
+.schedule-setpoint-card.cool {
+  box-shadow: inset 0 0 0 1px rgba(77,238,255,.08);
+}
+.schedule-setpoint-card.heat {
+  box-shadow: inset 0 0 0 1px rgba(255,141,93,.09);
+}
+.schedule-stepper {
+  display: grid;
+  grid-template-columns: 48px minmax(70px, 1fr) 48px;
+  align-items: center;
+  gap: 8px;
+}
+.schedule-stepper button {
+  width: 48px;
+  height: 44px;
+  border: 0;
+  border-radius: 14px;
+  background: rgba(255,255,255,.10);
+  color: white;
+  font-size: 1.45rem;
+  font-weight: 1000;
+  cursor: pointer;
+}
+.schedule-stepper strong {
+  color: rgba(248,252,255,.98);
+  text-align: center;
+  font-size: clamp(1.35rem, 2.6vw, 2.2rem);
+  line-height: 1;
+  font-weight: 1000;
+  font-variant-numeric: tabular-nums;
+}
+.schedule-condition-card {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 8px;
+  border-radius: 20px;
+  border: 1px solid rgba(255,255,255,.09);
+  background: rgba(0,0,0,.14);
+  padding: 12px;
+  overflow: hidden;
+}
+.schedule-condition-head span {
+  display: block;
+  color: rgba(218,232,248,.62);
+  font-size: .66rem;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: .12em;
+}
+.schedule-condition-head strong {
+  color: rgba(248,252,255,.96);
+  font-size: .96rem;
+  font-weight: 950;
+}
+.schedule-condition-head em {
+  max-width: 42%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(77,238,255,.90);
+  font-size: .76rem;
+  font-style: normal;
+  font-weight: 900;
+  text-align: right;
+}
+.schedule-person-chips {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+  gap: 8px;
+}
+.schedule-person-chip {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(255,255,255,.09);
+  border-radius: 16px;
+  background: rgba(255,255,255,.05);
+  color: rgba(238,247,255,.88);
+  padding: 8px 10px;
+  text-align: left;
+  cursor: pointer;
+}
+.schedule-person-chip.active {
+  border-color: rgba(77,238,255,.43);
+  background: linear-gradient(135deg, rgba(77,238,255,.18), rgba(132,255,201,.10));
+}
+.schedule-person-chip strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: .88rem;
+  font-weight: 1000;
+}
+.schedule-person-chip em {
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.08);
+  color: rgba(226,239,255,.82);
+  font-size: .66rem;
+  font-style: normal;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+.schedule-person-chip.home em {
+  background: rgba(116,255,187,.16);
+  color: rgba(153,255,208,.95);
+}
+.schedule-person-chip.away em {
+  background: rgba(255,194,107,.13);
+  color: rgba(255,215,145,.88);
+}
+.schedule-empty-people {
+  grid-column: 1 / -1;
+  min-height: 82px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed rgba(255,255,255,.13);
+  border-radius: 16px;
+  color: rgba(218,232,248,.66);
+  font-weight: 850;
+  text-align: center;
+  padding: 14px;
+}
+.schedule-editor-actions {
+  justify-content: flex-end;
+}
+.schedule-delete-btn {
+  background: rgba(255,91,91,.12);
+  color: rgba(255,214,214,.92);
+  border-color: rgba(255,91,91,.22);
+}
+.schedule-save-btn {
+  min-width: 170px;
+}
+
+@media (max-width: 1200px) {
+  .thermostat-bottom-row {
+    grid-template-columns: minmax(238px, 320px) minmax(390px, 1fr) minmax(144px, 188px) !important;
+  }
+  .thermostat-bottom-row .schedule-chip {
+    width: 74px;
+    min-width: 70px;
+  }
+}
+@media (max-width: 900px) {
+  .thermostat-bottom-row {
+    grid-template-columns: 1fr !important;
+  }
+  .bottom-left-cluster,
+  .thermostat-bottom-row .fan-chip {
+    display: none !important;
+  }
+  .schedule-layout,
+  .schedule-form-grid,
+  .schedule-setpoint-grid,
+  .schedule-person-chips {
+    grid-template-columns: 1fr;
+  }
+  .schedule-sheet {
+    width: calc(100vw - 12px);
+    height: calc(100dvh - 12px);
+    border-radius: 22px;
+    padding: 10px;
+  }
+  .schedule-condition-head {
+    align-items: flex-start;
+  }
+  .schedule-condition-head em {
+    max-width: 100%;
+  }
+}
+@media (max-width: 900px) {
+  .thermostat-bottom-row {
+    width: min(620px, 94vw);
+    grid-template-columns: 68px minmax(0, 1fr) !important;
+    gap: 10px;
+  }
+  .bottom-left-cluster {
+    display: flex !important;
+    justify-self: stretch;
+  }
+  .thermostat-bottom-row .humidity-chip,
+  .thermostat-bottom-row .fan-chip {
+    display: none !important;
+  }
+  .thermostat-bottom-row .schedule-chip {
+    display: flex !important;
+    width: 68px;
+    min-width: 68px;
+    min-height: 52px;
+    height: 52px;
+  }
+}

@@ -114,6 +114,7 @@ DEFAULT_THERMOSTAT = {
     "heatLocked": False,
     "coolLocked": False,
     "people": [],
+    "schedules": [],
     "autoActiveMode": "cool",
     "autoPendingMode": "",
     "autoLockoutUntil": 0,
@@ -321,6 +322,61 @@ def _normalize_person_entries(value: object) -> list[dict]:
         })
     return people
 
+def _normalize_schedule_time(value: object, fallback: str = "20:00") -> str:
+    text = str(value or "").strip()
+    parts = text.split(":")
+    if len(parts) != 2:
+        return fallback
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1])
+    except (TypeError, ValueError):
+        return fallback
+    hour = max(0, min(23, hour))
+    minute = max(0, min(59, minute))
+    return f"{hour:02d}:{minute:02d}"
+
+
+def _normalize_schedule_person_ids(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    ids: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        entity_id = str(item or "").strip()
+        if not entity_id or entity_id in seen:
+            continue
+        seen.add(entity_id)
+        ids.append(entity_id)
+    return ids
+
+
+def _normalize_schedule_entries(value: object) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    schedules: list[dict] = []
+    seen: set[str] = set()
+    for index, item in enumerate(value[:18]):
+        if not isinstance(item, dict):
+            continue
+        schedule_id = str(item.get("id") or f"schedule-{index + 1}").strip()[:80]
+        if not schedule_id or schedule_id in seen:
+            continue
+        seen.add(schedule_id)
+        name = str(item.get("name") or f"Schedule {index + 1}").strip()[:40] or f"Schedule {index + 1}"
+        schedules.append({
+            "id": schedule_id,
+            "name": name,
+            "enabled": not (item.get("enabled") is False),
+            "time": _normalize_schedule_time(item.get("time"), "20:00"),
+            "coolSetpoint": _intish(item.get("coolSetpoint", item.get("coolTarget", 68)), 68, 45, 95),
+            "heatSetpoint": _intish(item.get("heatSetpoint", item.get("heatTarget", 71)), 71, 45, 95),
+            "personEntityIds": _normalize_schedule_person_ids(item.get("personEntityIds", item.get("people", item.get("persons", [])))),
+            "lastTriggeredDate": str(item.get("lastTriggeredDate") or item.get("lastRunDate") or "").strip()[:16],
+        })
+    return schedules
+
+
 
 def _normalize_away_source(value: object) -> str:
     source = str(value or "").strip().lower()
@@ -470,6 +526,8 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             base["coolLocked"] = _boolish(source.get("coolLocked"))
         if "people" in source:
             base["people"] = _normalize_person_entries(source.get("people"))
+        if "schedules" in source:
+            base["schedules"] = _normalize_schedule_entries(source.get("schedules"))
 
         for key, fallback, minimum, maximum in (
             ("currentTemp", base["currentTemp"], -40, 130),
@@ -600,6 +658,7 @@ THERMOSTAT_PERSIST_KEYS = (
     "heatLocked",
     "coolLocked",
     "people",
+    "schedules",
     "autoActiveMode",
     "autoSwitchNotice",
     "autoSwitchHold",

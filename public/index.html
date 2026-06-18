@@ -361,9 +361,15 @@
           </div>
 
           <div class="thermostat-bottom-row">
-            <div id="humidityChip" class="floating-chip bottom-chip humidity-chip">
-              <span>Humidity</span>
-              <strong id="humidityValue">45%</strong>
+            <div class="bottom-left-cluster" aria-label="Comfort shortcuts">
+              <button id="scheduleButton" class="floating-chip bottom-chip schedule-chip" type="button" aria-label="Open thermostat schedules">
+                <span>Schedule</span>
+                <strong>S</strong>
+              </button>
+              <div id="humidityChip" class="floating-chip bottom-chip humidity-chip">
+                <span>Humidity</span>
+                <strong id="humidityValue">45%</strong>
+              </div>
             </div>
 
             <div class="mode-deck" aria-label="Thermostat mode controls">
@@ -385,6 +391,78 @@
               <strong>In Away Mode</strong>
               <em>Press to set Home</em>
             </button>
+          </section>
+
+          <section id="scheduleOverlay" class="settings-overlay schedule-overlay" aria-hidden="true">
+            <div class="settings-backdrop" data-close-schedule></div>
+            <aside class="schedule-sheet" role="dialog" aria-modal="true" aria-labelledby="scheduleTitle">
+              <div class="schedule-header">
+                <div>
+                  <p class="eyebrow">Thermostat</p>
+                  <h2 id="scheduleTitle">Schedule</h2>
+                </div>
+                <button id="scheduleClose" class="icon-button close" type="button" aria-label="Close schedules">×</button>
+              </div>
+
+              <div class="schedule-layout">
+                <section class="schedule-list-panel" aria-label="Saved schedules">
+                  <div class="schedule-panel-title">
+                    <strong>Auto-schedules</strong>
+                    <button id="scheduleAddButton" class="scene-btn schedule-add-btn" type="button">+ Add</button>
+                  </div>
+                  <div id="scheduleList" class="schedule-list"></div>
+                </section>
+
+                <section class="schedule-editor-panel" aria-label="Edit schedule">
+                  <div class="schedule-form-grid">
+                    <label class="schedule-field schedule-name-field">
+                      <span>Name</span>
+                      <input id="scheduleNameInput" type="text" maxlength="40" autocomplete="off" placeholder="Evening" />
+                    </label>
+                    <label class="schedule-field schedule-time-field">
+                      <span>Time</span>
+                      <input id="scheduleTimeInput" type="time" step="60" />
+                    </label>
+                    <button id="scheduleEnabledToggle" class="schedule-enabled-toggle" type="button" aria-pressed="true">Enabled</button>
+                  </div>
+
+                  <div class="schedule-setpoint-grid">
+                    <div class="schedule-setpoint-card cool">
+                      <span>Cool set point</span>
+                      <div class="schedule-stepper">
+                        <button type="button" data-schedule-step="cool" data-delta="-1" aria-label="Lower cool schedule set point">−</button>
+                        <strong><span id="scheduleCoolValue">68</span>°</strong>
+                        <button type="button" data-schedule-step="cool" data-delta="1" aria-label="Raise cool schedule set point">+</button>
+                      </div>
+                    </div>
+                    <div class="schedule-setpoint-card heat">
+                      <span>Heat set point</span>
+                      <div class="schedule-stepper">
+                        <button type="button" data-schedule-step="heat" data-delta="-1" aria-label="Lower heat schedule set point">−</button>
+                        <strong><span id="scheduleHeatValue">71</span>°</strong>
+                        <button type="button" data-schedule-step="heat" data-delta="1" aria-label="Raise heat schedule set point">+</button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="schedule-condition-card">
+                    <div class="schedule-condition-head">
+                      <div>
+                        <span>Condition</span>
+                        <strong>Run when selected person is home</strong>
+                      </div>
+                      <em id="scheduleConditionSummary">Always active</em>
+                    </div>
+                    <div id="schedulePersonChips" class="schedule-person-chips"></div>
+                  </div>
+
+                  <div class="schedule-editor-actions">
+                    <button id="scheduleDeleteButton" class="scene-btn schedule-delete-btn" type="button">Delete</button>
+                    <button id="scheduleSaveButton" class="scene-btn schedule-save-btn" type="button">Save Schedule</button>
+                  </div>
+                </section>
+              </div>
+            </aside>
           </section>
         </section>
       </article>

@@ -86,6 +86,7 @@ const MAX_SCREEN_TIMEOUT_MINUTES = 120;
 const SCREEN_TIMEOUT_CHECK_INTERVAL_MS = 5000;
 const HARDWARE_STATUS_INTERVAL_MS = 5000;
 const HISTORY_STATUS_INTERVAL_MS = 30000;
+const SCHEDULE_CHECK_INTERVAL_MS = 15000;
 let haSyncInFlight = false;
 let haSyncLastError = "";
 let haAudioSyncInFlight = false;
@@ -325,6 +326,7 @@ const state = {
     heatLocked: false,
     coolLocked: false,
     people: [],
+    schedules: [],
     autoActiveMode: "cool",
     autoPendingMode: "",
     autoLockoutUntil: 0,
@@ -344,6 +346,7 @@ const state = {
       auto: { min: 60, max: 80 },
     },
   },
+  scheduleEditor: { selectedId: "", draft: null },
   alarm: {
     entityId: "",
     name: "Alarm",
@@ -463,6 +466,20 @@ const elements = {
   safetyHighValue: document.getElementById("safetyHighValue"),
   fanSummary: document.getElementById("fanSummary"),
   fanChip: document.getElementById("fanChip"),
+  scheduleButton: document.getElementById("scheduleButton"),
+  scheduleOverlay: document.getElementById("scheduleOverlay"),
+  scheduleClose: document.getElementById("scheduleClose"),
+  scheduleAddButton: document.getElementById("scheduleAddButton"),
+  scheduleList: document.getElementById("scheduleList"),
+  scheduleNameInput: document.getElementById("scheduleNameInput"),
+  scheduleTimeInput: document.getElementById("scheduleTimeInput"),
+  scheduleEnabledToggle: document.getElementById("scheduleEnabledToggle"),
+  scheduleCoolValue: document.getElementById("scheduleCoolValue"),
+  scheduleHeatValue: document.getElementById("scheduleHeatValue"),
+  scheduleConditionSummary: document.getElementById("scheduleConditionSummary"),
+  schedulePersonChips: document.getElementById("schedulePersonChips"),
+  scheduleDeleteButton: document.getElementById("scheduleDeleteButton"),
+  scheduleSaveButton: document.getElementById("scheduleSaveButton"),
   relayFan: document.getElementById("relayFan"),
   relayHeat: document.getElementById("relayHeat"),
   relayCool: document.getElementById("relayCool"),
@@ -1050,13 +1067,14 @@ function buildSavedConfig() {
     heatLocked: Boolean(state.thermostat.heatLocked),
     coolLocked: Boolean(state.thermostat.coolLocked),
     people: normalizeThermostatPeople(state.thermostat.people),
+    schedules: normalizeThermostatSchedules(state.thermostat.schedules),
     autoActiveMode: state.thermostat.autoActiveMode,
     autoSwitchNotice: normalizeAutoSwitchNotice(state.thermostat.autoSwitchNotice),
     autoSwitchHold: normalizeAutoSwitchHold(state.thermostat.autoSwitchHold),
     limits: state.thermostat.limits,
   };
   return {
-    version: 18,
+    version: 19,
     theme: normalizePanelTheme(state.theme),
     screenTimeoutMinutes: normalizeScreenTimeoutMinutes(state.screenTimeoutMinutes),
     panelLock: { locked: Boolean(state.panelLock?.locked) },
@@ -1114,6 +1132,7 @@ function applySavedConfig(saved = {}) {
       heatLocked: Boolean(savedThermostat.heatLocked),
       coolLocked: Boolean(savedThermostat.coolLocked),
       people: normalizeThermostatPeople(savedThermostat.people || defaults.people),
+      schedules: normalizeThermostatSchedules(savedThermostat.schedules || defaults.schedules),
       away: Boolean(savedThermostat.away),
       awaySource: normalizeAwaySource(savedThermostat.awaySource),
       manualAwayPresenceLatch: normalizeManualAwayPresenceLatch(savedThermostat.manualAwayPresenceLatch),
@@ -2594,6 +2613,7 @@ function renderThermostatPeople() {
     elements.coolLockToggle.classList.toggle("active", Boolean(state.thermostat.coolLocked));
     elements.coolLockToggle.setAttribute("aria-pressed", state.thermostat.coolLocked ? "true" : "false");
   }
+  if (elements.scheduleOverlay?.classList.contains("open")) renderScheduleOverlay();
 }
 
 function applyThermostatPresenceAutomation(options = {}) {
@@ -2668,6 +2688,336 @@ function removeThermostatPerson(entityId) {
     saveConfig({ toast: true });
     showToast("Person removed");
   }
+}
+
+function scheduleId() {
+  return `schedule-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function normalizeScheduleTime(value, fallback = "20:00") {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(String(value || "").trim());
+  if (!match) return fallback;
+  const hour = clamp(Number(match[1]), 0, 23);
+  const minute = clamp(Number(match[2]), 0, 59);
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function normalizeSchedulePersonIds(value = []) {
+  const seen = new Set();
+  return (Array.isArray(value) ? value : [])
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .filter((entityId) => {
+      if (seen.has(entityId)) return false;
+      seen.add(entityId);
+      return true;
+    });
+}
+
+function normalizeThermostatSchedule(entry = {}, index = 0) {
+  const base = entry && typeof entry === "object" ? entry : {};
+  const id = String(base.id || "").trim() || scheduleId();
+  const name = String(base.name || `Schedule ${index + 1}`).trim().slice(0, 40) || `Schedule ${index + 1}`;
+  return {
+    id,
+    name,
+    enabled: base.enabled !== false,
+    time: normalizeScheduleTime(base.time, "20:00"),
+    coolSetpoint: clamp(Math.round(Number(base.coolSetpoint ?? base.coolTarget ?? 68)), ABS_MIN, ABS_MAX),
+    heatSetpoint: clamp(Math.round(Number(base.heatSetpoint ?? base.heatTarget ?? 71)), ABS_MIN, ABS_MAX),
+    personEntityIds: normalizeSchedulePersonIds(base.personEntityIds || base.people || base.persons),
+    lastTriggeredDate: String(base.lastTriggeredDate || base.lastRunDate || "").trim(),
+  };
+}
+
+function normalizeThermostatSchedules(schedules = []) {
+  const seen = new Set();
+  return (Array.isArray(schedules) ? schedules : [])
+    .map((schedule, index) => normalizeThermostatSchedule(schedule, index))
+    .filter((schedule) => {
+      if (!schedule.id || seen.has(schedule.id)) return false;
+      seen.add(schedule.id);
+      return true;
+    })
+    .slice(0, 18);
+}
+
+function defaultThermostatSchedule() {
+  const t = state.thermostat;
+  const now = new Date();
+  const nextHour = (now.getHours() + 1) % 24;
+  return normalizeThermostatSchedule({
+    id: scheduleId(),
+    name: "Evening",
+    enabled: true,
+    time: `${String(nextHour).padStart(2, "0")}:00`,
+    coolSetpoint: clamp(Math.round(Number(t.targetTemp || 68)), ABS_MIN, ABS_MAX),
+    heatSetpoint: clamp(Math.round(Number(t.targetTemp || 71)), ABS_MIN, ABS_MAX),
+    personEntityIds: [],
+    lastTriggeredDate: "",
+  }, 0);
+}
+
+function getThermostatSchedules() {
+  state.thermostat.schedules = normalizeThermostatSchedules(state.thermostat.schedules);
+  return state.thermostat.schedules;
+}
+
+function localDateKey(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function localTimeKey(date = new Date()) {
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function formatScheduleTime(value) {
+  const time = normalizeScheduleTime(value, "00:00");
+  const [hour, minute] = time.split(":").map(Number);
+  const date = new Date();
+  date.setHours(hour, minute, 0, 0);
+  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function getSchedulePersonLabel(entityId) {
+  const person = getThermostatPeople().find((item) => item.entityId === entityId);
+  return person?.name || entityId;
+}
+
+function schedulePersonState(entityId) {
+  return getThermostatPeople().find((person) => person.entityId === entityId)?.state || "unknown";
+}
+
+function scheduleConditionMet(schedule) {
+  const ids = normalizeSchedulePersonIds(schedule.personEntityIds);
+  if (!ids.length) return true;
+  return ids.every((entityId) => isPersonHomeState(schedulePersonState(entityId)));
+}
+
+function scheduleConditionSummary(schedule) {
+  const ids = normalizeSchedulePersonIds(schedule.personEntityIds);
+  if (!ids.length) return "Always active";
+  const names = ids.map(getSchedulePersonLabel).filter(Boolean);
+  if (!names.length) return "Missing person";
+  return `${names.join(", ")} home`;
+}
+
+function scheduleApplyMode() {
+  const t = state.thermostat;
+  const mode = t.mode === "auto" ? getNormalControlMode() : t.mode;
+  return ["cool", "heat"].includes(mode) ? mode : "";
+}
+
+function applyThermostatSchedule(schedule, options = {}) {
+  const normalized = normalizeThermostatSchedule(schedule);
+  if (!normalized.enabled) return { applied: false, reason: "disabled" };
+  if (state.thermostat.away) return { applied: false, reason: "away" };
+  if (!scheduleConditionMet(normalized)) return { applied: false, reason: "condition" };
+  const mode = scheduleApplyMode();
+  if (!mode) return { applied: false, reason: "mode" };
+  if (mode === "cool" && state.thermostat.coolLocked) return { applied: false, reason: "cool-locked" };
+  if (mode === "heat" && state.thermostat.heatLocked) return { applied: false, reason: "heat-locked" };
+  const sourceTarget = mode === "cool" ? normalized.coolSetpoint : normalized.heatSetpoint;
+  const limits = state.thermostat.limits?.[mode] || getModeLimits();
+  const nextTarget = clamp(Math.round(Number(sourceTarget)), limits.min ?? ABS_MIN, limits.max ?? ABS_MAX);
+  state.thermostat.targetTemp = nextTarget;
+  state.thermostat.lastComfortTarget = nextTarget;
+  clearAutoSwitchHold();
+  if (options.render !== false) renderThermostat();
+  if (options.save !== false) saveConfig();
+  if (options.toast !== false) showToast(`${normalized.name}: ${titleCase(mode)} set to ${nextTarget}°`);
+  return { applied: true, mode, target: nextTarget };
+}
+
+function checkThermostatSchedules() {
+  const schedules = getThermostatSchedules();
+  if (!schedules.length) return;
+  const now = new Date();
+  const dateKey = localDateKey(now);
+  const timeKey = localTimeKey(now);
+  let changed = false;
+  let applied = null;
+  schedules.forEach((schedule) => {
+    if (!schedule.enabled || schedule.lastTriggeredDate === dateKey || schedule.time !== timeKey) return;
+    schedule.lastTriggeredDate = dateKey;
+    changed = true;
+    const result = applyThermostatSchedule(schedule, { render: false, save: false, toast: false });
+    if (result.applied) applied = { schedule, result };
+  });
+  if (changed) {
+    renderThermostat();
+    saveConfig();
+    renderScheduleOverlay();
+    if (applied) showToast(`${applied.schedule.name}: ${titleCase(applied.result.mode)} set to ${applied.result.target}°`);
+  }
+}
+
+function ensureScheduleEditor() {
+  let schedules = getThermostatSchedules();
+  if (!schedules.length) {
+    schedules = [defaultThermostatSchedule()];
+    state.thermostat.schedules = schedules;
+  }
+  const selectedId = state.scheduleEditor.selectedId || schedules[0].id;
+  const selected = schedules.find((schedule) => schedule.id === selectedId) || schedules[0];
+  state.scheduleEditor.selectedId = selected.id;
+  if (!state.scheduleEditor.draft || state.scheduleEditor.draft.id !== selected.id) {
+    state.scheduleEditor.draft = clone(selected);
+  }
+  return state.scheduleEditor.draft;
+}
+
+function selectSchedule(scheduleId) {
+  commitScheduleDraft({ toast: false, render: false });
+  const schedule = getThermostatSchedules().find((item) => item.id === scheduleId);
+  if (!schedule) return;
+  state.scheduleEditor.selectedId = schedule.id;
+  state.scheduleEditor.draft = clone(schedule);
+  renderScheduleOverlay();
+}
+
+function addThermostatSchedule() {
+  commitScheduleDraft({ toast: false, render: false });
+  const schedules = getThermostatSchedules();
+  const schedule = defaultThermostatSchedule();
+  schedule.name = `Schedule ${schedules.length + 1}`;
+  schedules.push(schedule);
+  state.scheduleEditor.selectedId = schedule.id;
+  state.scheduleEditor.draft = clone(schedule);
+  renderScheduleOverlay();
+  saveConfig();
+  showToast("Schedule added");
+}
+
+function deleteSelectedSchedule() {
+  const selectedId = state.scheduleEditor.selectedId;
+  let schedules = getThermostatSchedules().filter((schedule) => schedule.id !== selectedId);
+  if (!schedules.length) schedules = [defaultThermostatSchedule()];
+  state.thermostat.schedules = schedules;
+  state.scheduleEditor.selectedId = schedules[0].id;
+  state.scheduleEditor.draft = clone(schedules[0]);
+  renderScheduleOverlay();
+  saveConfig();
+  showToast("Schedule deleted");
+}
+
+function commitScheduleDraft(options = {}) {
+  const draft = state.scheduleEditor.draft;
+  if (!draft) return null;
+  const normalized = normalizeThermostatSchedule(draft);
+  const schedules = getThermostatSchedules();
+  const index = schedules.findIndex((schedule) => schedule.id === normalized.id);
+  if (index >= 0) {
+    const existing = schedules[index];
+    if (existing.time !== normalized.time || existing.enabled !== normalized.enabled) normalized.lastTriggeredDate = "";
+    schedules[index] = normalized;
+  }
+  else schedules.push(normalized);
+  state.thermostat.schedules = normalizeThermostatSchedules(schedules);
+  state.scheduleEditor.selectedId = normalized.id;
+  state.scheduleEditor.draft = clone(normalized);
+  if (options.render !== false) renderScheduleOverlay();
+  if (options.save !== false) saveConfig();
+  if (options.toast) showToast("Schedule saved");
+  return normalized;
+}
+
+function updateScheduleDraftFromInputs() {
+  const draft = ensureScheduleEditor();
+  if (elements.scheduleNameInput) draft.name = elements.scheduleNameInput.value;
+  if (elements.scheduleTimeInput) draft.time = normalizeScheduleTime(elements.scheduleTimeInput.value, draft.time || "20:00");
+  return draft;
+}
+
+function adjustScheduleDraftSetpoint(kind, delta) {
+  const draft = updateScheduleDraftFromInputs();
+  const key = kind === "heat" ? "heatSetpoint" : "coolSetpoint";
+  draft[key] = clamp(Math.round(Number(draft[key] || (kind === "heat" ? 71 : 68)) + Number(delta || 0)), ABS_MIN, ABS_MAX);
+  renderScheduleOverlay();
+}
+
+function toggleScheduleEnabled() {
+  const draft = updateScheduleDraftFromInputs();
+  draft.enabled = !draft.enabled;
+  renderScheduleOverlay();
+}
+
+function toggleSchedulePerson(entityId) {
+  const draft = updateScheduleDraftFromInputs();
+  const ids = new Set(normalizeSchedulePersonIds(draft.personEntityIds));
+  if (ids.has(entityId)) ids.delete(entityId);
+  else ids.add(entityId);
+  draft.personEntityIds = Array.from(ids);
+  renderScheduleOverlay();
+}
+
+function renderScheduleList() {
+  if (!elements.scheduleList) return;
+  const schedules = getThermostatSchedules();
+  const selectedId = state.scheduleEditor.selectedId || schedules[0]?.id || "";
+  elements.scheduleList.innerHTML = schedules.map((schedule) => {
+    const condition = scheduleConditionSummary(schedule);
+    const activeClass = schedule.id === selectedId ? "active" : "";
+    const disabledClass = schedule.enabled ? "" : "disabled";
+    return `
+      <button class="schedule-row ${activeClass} ${disabledClass}" type="button" data-schedule-id="${escapeHtml(schedule.id)}">
+        <span>
+          <strong>${escapeHtml(schedule.name)}</strong>
+          <em>${escapeHtml(condition)}</em>
+        </span>
+        <b>${escapeHtml(formatScheduleTime(schedule.time))}</b>
+      </button>
+    `;
+  }).join("");
+}
+
+function renderSchedulePeople(draft) {
+  if (!elements.schedulePersonChips) return;
+  const people = getThermostatPeople();
+  const selected = new Set(normalizeSchedulePersonIds(draft.personEntityIds));
+  if (!people.length) {
+    elements.schedulePersonChips.innerHTML = `<div class="schedule-empty-people">Add people in Comfort Setup first, then select them here.</div>`;
+    return;
+  }
+  elements.schedulePersonChips.innerHTML = people.map((person) => {
+    const active = selected.has(person.entityId);
+    const home = isPersonHomeState(person.state);
+    const known = isKnownPresenceState(person.state);
+    return `
+      <button class="schedule-person-chip ${active ? "active" : ""} ${home ? "home" : known ? "away" : "unknown"}" type="button" data-schedule-person="${escapeHtml(person.entityId)}" aria-pressed="${active ? "true" : "false"}">
+        <strong>${escapeHtml(person.name || person.entityId)}</strong>
+        <em>${escapeHtml(formatPresenceState(person.state))}</em>
+      </button>
+    `;
+  }).join("");
+}
+
+function renderScheduleOverlay() {
+  if (!elements.scheduleOverlay) return;
+  const draft = ensureScheduleEditor();
+  renderScheduleList();
+  if (elements.scheduleNameInput && document.activeElement !== elements.scheduleNameInput) elements.scheduleNameInput.value = draft.name || "";
+  if (elements.scheduleTimeInput && document.activeElement !== elements.scheduleTimeInput) elements.scheduleTimeInput.value = normalizeScheduleTime(draft.time || "20:00");
+  if (elements.scheduleEnabledToggle) {
+    elements.scheduleEnabledToggle.classList.toggle("active", draft.enabled !== false);
+    elements.scheduleEnabledToggle.textContent = draft.enabled === false ? "Disabled" : "Enabled";
+    elements.scheduleEnabledToggle.setAttribute("aria-pressed", draft.enabled === false ? "false" : "true");
+  }
+  if (elements.scheduleCoolValue) elements.scheduleCoolValue.textContent = Math.round(Number(draft.coolSetpoint || 68));
+  if (elements.scheduleHeatValue) elements.scheduleHeatValue.textContent = Math.round(Number(draft.heatSetpoint || 71));
+  if (elements.scheduleConditionSummary) elements.scheduleConditionSummary.textContent = scheduleConditionSummary(draft);
+  renderSchedulePeople(draft);
+}
+
+function openScheduleOverlay() {
+  ensureScheduleEditor();
+  renderScheduleOverlay();
+  setOverlayOpen(elements.scheduleOverlay, true);
+}
+
+function closeScheduleOverlay() {
+  commitScheduleDraft({ toast: false, render: false });
+  setOverlayOpen(elements.scheduleOverlay, false);
 }
 
 function toggleThermostatEquipmentLock(kind) {
@@ -7941,6 +8291,27 @@ function bindEvents() {
   elements.awayToggle.addEventListener("click", toggleAway);
   elements.awayHomeButton?.addEventListener("click", setHomeMode);
   elements.fanChip?.addEventListener("click", cycleFanMode);
+  elements.scheduleButton?.addEventListener("click", openScheduleOverlay);
+  elements.scheduleClose?.addEventListener("click", closeScheduleOverlay);
+  document.querySelectorAll("[data-close-schedule]").forEach((el) => el.addEventListener("click", closeScheduleOverlay));
+  elements.scheduleAddButton?.addEventListener("click", addThermostatSchedule);
+  elements.scheduleSaveButton?.addEventListener("click", () => commitScheduleDraft({ toast: true }));
+  elements.scheduleDeleteButton?.addEventListener("click", deleteSelectedSchedule);
+  elements.scheduleEnabledToggle?.addEventListener("click", toggleScheduleEnabled);
+  elements.scheduleNameInput?.addEventListener("input", updateScheduleDraftFromInputs);
+  elements.scheduleTimeInput?.addEventListener("input", updateScheduleDraftFromInputs);
+  elements.scheduleList?.addEventListener("click", (event) => {
+    const row = event.target.closest("[data-schedule-id]");
+    if (row) selectSchedule(row.dataset.scheduleId);
+  });
+  elements.schedulePersonChips?.addEventListener("click", (event) => {
+    const chip = event.target.closest("[data-schedule-person]");
+    if (chip) toggleSchedulePerson(chip.dataset.schedulePerson);
+  });
+  elements.scheduleOverlay?.addEventListener("click", (event) => {
+    const step = event.target.closest("[data-schedule-step]");
+    if (step) adjustScheduleDraftSetpoint(step.dataset.scheduleStep, Number(step.dataset.delta || 0));
+  });
   elements.virtualTempSlider?.addEventListener("input", (event) => setVirtualCurrentTemp(event.target.value));
   elements.outdoorTempSlider?.addEventListener("input", (event) => setVirtualOutdoorTemp(event.target.value));
   elements.doorWidget?.addEventListener("click", () => {
@@ -8374,7 +8745,7 @@ function bindEvents() {
     if (event.key === "ArrowLeft") goRelative(-1);
     if (event.key === "+" || event.key === "=") adjustSetpoint(1);
     if (event.key === "-" || event.key === "_") adjustSetpoint(-1);
-    if (event.key === "Escape") { closeSettingsCodePrompt(); closeRoomControlCodePrompt(); closeSettings(); closeEntityPicker(); closeAudioEntityPicker(); closeAlarmKeypad(); closeAlarmArmOptions(); closeLightColorPicker(); closeThermostatInfo(); closeAutoConfirmOverlay(); }
+    if (event.key === "Escape") { closeSettingsCodePrompt(); closeRoomControlCodePrompt(); closeSettings(); closeEntityPicker(); closeAudioEntityPicker(); closeAlarmKeypad(); closeAlarmArmOptions(); closeLightColorPicker(); closeThermostatInfo(); closeAutoConfirmOverlay(); closeScheduleOverlay(); }
   });
 }
 
@@ -8427,6 +8798,8 @@ async function init() {
   setInterval(() => {
     if (state.currentPage === "thermostat") renderThermostat();
   }, 5000);
+  setInterval(() => checkThermostatSchedules(), SCHEDULE_CHECK_INTERVAL_MS);
+  checkThermostatSchedules();
   setInterval(() => fetchLocalThermostatStatus(), LOCAL_THERMOSTAT_SYNC_INTERVAL_MS);
   // The virtual temperature slider is now the temporary sensor input.
   // setInterval(mockSensorDrift, 4500);
