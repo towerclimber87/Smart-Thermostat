@@ -6150,7 +6150,7 @@ function renderRoomControlConfigList() {
         <label class="mini-field room-control-entry-field">Entry ${index + 1}
           <input type="text" value="${escapeHtml(control.name)}" data-room-control-name-input data-room-key="${escapeHtml(key)}" data-room-control-id="${escapeHtml(control.id)}" />
           ${linkedMeta}
-          <span class="room-control-special-toggle">
+          <span class="room-control-special-toggle" role="switch" tabindex="0" aria-checked="${bedSliderChecked ? "true" : "false"}" data-room-control-bed-slider-toggle-wrap data-room-key="${escapeHtml(key)}" data-room-control-id="${escapeHtml(control.id)}">
             <input type="checkbox" ${bedSliderChecked} data-room-control-bed-slider-toggle data-room-key="${escapeHtml(key)}" data-room-control-id="${escapeHtml(control.id)}" aria-label="Show ${escapeHtml(control.name)} as a bed slider" />
             <span class="room-control-special-dot" aria-hidden="true"></span>
             <span class="room-control-special-copy"><strong>Bed slider</strong><small>Bed icon with position slider for cover.* actuators</small></span>
@@ -7934,8 +7934,26 @@ function bindEvents() {
     if (bedToggle) setRoomControlBedSlider(bedToggle.dataset.roomKey, bedToggle.dataset.roomControlId, bedToggle.checked);
   });
   elements.roomControlConfigList?.addEventListener("click", (event) => {
+    const bedToggleWrap = event.target.closest("[data-room-control-bed-slider-toggle-wrap]");
+    if (bedToggleWrap) {
+      event.preventDefault();
+      event.stopPropagation();
+      const checkbox = bedToggleWrap.querySelector("[data-room-control-bed-slider-toggle]");
+      const currentlyChecked = checkbox ? checkbox.checked : bedToggleWrap.getAttribute("aria-checked") === "true";
+      setRoomControlBedSlider(bedToggleWrap.dataset.roomKey, bedToggleWrap.dataset.roomControlId, !currentlyChecked);
+      return;
+    }
     const deleteButton = event.target.closest("[data-delete-room-control-room]");
     if (deleteButton) deleteRoomControlRoom(deleteButton.dataset.deleteRoomControlRoom);
+  });
+  elements.roomControlConfigList?.addEventListener("keydown", (event) => {
+    const bedToggleWrap = event.target.closest("[data-room-control-bed-slider-toggle-wrap]");
+    if (!bedToggleWrap || ![" ", "Enter"].includes(event.key)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const checkbox = bedToggleWrap.querySelector("[data-room-control-bed-slider-toggle]");
+    const currentlyChecked = checkbox ? checkbox.checked : bedToggleWrap.getAttribute("aria-checked") === "true";
+    setRoomControlBedSlider(bedToggleWrap.dataset.roomKey, bedToggleWrap.dataset.roomControlId, !currentlyChecked);
   });
 
   document.querySelectorAll("[data-away-adjust]").forEach((button) => button.addEventListener("click", () => {
