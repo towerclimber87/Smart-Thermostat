@@ -388,7 +388,7 @@ const state = {
   roomControlCodePrompt: { roomKey: null, controlId: null, action: "", code: "", busy: false },
   audioEntityPicker: { kind: null, domain: null, entities: [], search: "" },
   diagnostics: { haLogs: [] },
-  systemInfo: { ipAddress: "", version: "", host: "", thermostatName: "", uptime: "", systemUptime: "", appUptime: "" },
+  systemInfo: { ipAddress: "", port: "", address: "", version: "", host: "", thermostatName: "", uptime: "", systemUptime: "", appUptime: "" },
   hardware: {
     loaded: false,
     gpio: { backend: "", available: false, error: "", source: "thermostat", activeLow: false },
@@ -1766,8 +1766,19 @@ async function fetchLocalThermostatStatus(options = {}) {
   }
 }
 
+function systemAddressWithPort() {
+  const rawAddress = String(state.systemInfo.address || "").trim();
+  if (rawAddress) return rawAddress;
+
+  const host = String(state.systemInfo.ipAddress || window.location.hostname || "").trim();
+  if (!host) return "Unavailable";
+
+  const rawPort = String(state.systemInfo.port || window.location.port || "").trim();
+  return rawPort ? `${host}:${rawPort}` : host;
+}
+
 function renderSystemInfo() {
-  const ip = state.systemInfo.ipAddress || window.location.hostname || "Unavailable";
+  const ip = systemAddressWithPort();
   const version = state.systemInfo.version || "Unavailable";
   const name = state.systemInfo.thermostatName || getThermostatName();
   if (elements.unitNameValue) elements.unitNameValue.textContent = name;
@@ -1786,6 +1797,8 @@ async function fetchSystemInfo() {
     const payload = await response.json();
     state.systemInfo = {
       ipAddress: payload.ipAddress || payload.ip || window.location.hostname || "",
+      port: payload.port || window.location.port || "",
+      address: payload.address || payload.hostWithPort || "",
       version: payload.version || "",
       host: payload.host || "",
       thermostatName: payload.thermostatName || payload.name || getThermostatName(),
@@ -1801,6 +1814,8 @@ async function fetchSystemInfo() {
     state.systemInfo = {
       ...state.systemInfo,
       ipAddress: state.systemInfo.ipAddress || window.location.hostname || "Unavailable",
+      port: state.systemInfo.port || window.location.port || "",
+      address: state.systemInfo.address || "",
       version: state.systemInfo.version || "Unavailable",
       thermostatName: state.systemInfo.thermostatName || getThermostatName(),
       uptime: state.systemInfo.uptime || "Unavailable",

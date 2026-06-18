@@ -1285,7 +1285,7 @@ def _throttled_status() -> str:
     return raw.replace("throttled=", "")
 
 
-def _system_info_payload() -> dict:
+def _system_info_payload(server_port: int | str | None = None) -> dict:
     thermostat = _read_thermostat_record()["thermostat"]
     thermostat_name = str(thermostat.get("name") or "IHA Thermostat").strip() or "IHA Thermostat"
     system_uptime_seconds = _system_uptime_seconds()
@@ -1298,9 +1298,17 @@ def _system_info_payload() -> dict:
     thermal_summary = "Unavailable"
     if cpu_temp_c is not None:
         thermal_summary = f"{cpu_temp_c:.1f}°C / {cpu_temp_f:.1f}°F • {throttled}"
+    ip_address = _local_ip_address()
+    try:
+        port_value = int(server_port) if server_port not in (None, "") else None
+    except (TypeError, ValueError):
+        port_value = None
+    address = f"{ip_address}:{port_value}" if port_value else ip_address
     return {
         "ok": True,
-        "ipAddress": _local_ip_address(),
+        "ipAddress": ip_address,
+        "port": port_value,
+        "address": address,
         "host": _local_host_name(),
         "version": _read_version_value(),
         "name": thermostat_name,
@@ -3001,7 +3009,8 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
         if path == "/api/health":
             return _json(self, 200, {"ok": True})
         if path == "/api/system/info":
-            return _json(self, 200, _system_info_payload())
+            server_port = getattr(self.server, "server_address", (None, None))[1]
+            return _json(self, 200, _system_info_payload(server_port))
         if path == "/api/hardware/status":
             return _json(self, 200, _hardware_status_payload(force_i2c=True))
         if path == "/api/history":
