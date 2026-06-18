@@ -43,6 +43,7 @@ const ALARM_AUTO_SUBMIT_LENGTH = 4;
 const DEFAULT_USER_ACCESS_CODE = "3762";
 const ROOM_CONTROL_CODE_MAX_LENGTH = 12;
 const ROOM_CONTROL_MAX_ENTRIES = 12;
+const ROOM_CONTROL_BED_SLIDER_HOLD_MS = 2200;
 const ALARM_ARM_AWAY_DELAY_SECONDS = 60;
 const ROOM_CONTROL_PICKER_DOMAINS = [
   "switch",
@@ -210,8 +211,8 @@ const defaultRoomControlConfig = {
     living: {
       label: "Living Room",
       controls: [
-        { id: "lr-control-1", name: "Entry 1", on: false, haEntityId: "", haName: "", domain: "switch", deviceClass: "", state: "off", currentPosition: null, supportedFeatures: 0, unitOfMeasurement: "", icon: "" },
-        { id: "lr-control-2", name: "Entry 2", on: false, haEntityId: "", haName: "", domain: "input_boolean", deviceClass: "", state: "off", currentPosition: null, supportedFeatures: 0, unitOfMeasurement: "", icon: "" },
+        { id: "lr-control-1", name: "Entry 1", on: false, haEntityId: "", haName: "", domain: "switch", deviceClass: "", state: "off", currentPosition: null, supportedFeatures: 0, unitOfMeasurement: "", icon: "", displayType: "" },
+        { id: "lr-control-2", name: "Entry 2", on: false, haEntityId: "", haName: "", domain: "input_boolean", deviceClass: "", state: "off", currentPosition: null, supportedFeatures: 0, unitOfMeasurement: "", icon: "", displayType: "" },
       ],
     },
   },
@@ -5971,6 +5972,30 @@ function normalizeRoomControlDeviceClass(value) {
   return String(value || "").trim().toLowerCase().replace(/\s+/g, "_");
 }
 
+function normalizeRoomControlDisplayType(value) {
+  const raw = String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (["bed", "bed_slider", "bedslider", "adjustable_bed", "actuator_bed"].includes(raw)) return "bed_slider";
+  return "";
+}
+
+function roomControlIsBedSlider(control) {
+  return normalizeRoomControlDisplayType(control?.displayType || control?.displayMode || control?.specialType || "") === "bed_slider";
+}
+
+function roomControlPositionPercent(control, fallback = 0) {
+  const raw = control?.currentPosition ?? control?.current_position;
+  if (raw !== null && raw !== undefined && raw !== "") {
+    const value = Number(raw);
+    if (Number.isFinite(value)) return clamp(Math.round(value), 0, 100);
+  }
+  if (normalizeRoomControlDomain(control?.domain) === "cover") {
+    const stateText = String(control?.state || "").toLowerCase();
+    if (["open", "opening"].includes(stateText)) return 100;
+    if (["closed", "closing"].includes(stateText)) return 0;
+  }
+  return clamp(Math.round(Number(fallback || (control?.on ? 100 : 0))), 0, 100);
+}
+
 function normalizeRoomControlRecord(control, roomKey = "room", index = 1) {
   if (!control || typeof control !== "object") return createRoomControl(roomKey, index);
   control.id = control.id || `${roomKey}-control-${Date.now().toString(36)}-${index}`;
@@ -5982,9 +6007,14 @@ function normalizeRoomControlRecord(control, roomKey = "room", index = 1) {
   control.state = String(control.state ?? (control.on ? "on" : "off")).toLowerCase();
   control.on = Boolean(control.on);
   control.currentPosition = control.currentPosition ?? control.current_position ?? null;
+  if (roomControlIsBedSlider(control) && control.currentPosition !== null && control.currentPosition !== undefined && control.currentPosition !== "") {
+    const positionValue = Number(control.currentPosition);
+    if (Number.isFinite(positionValue)) control.on = positionValue > 0;
+  }
   control.supportedFeatures = Number(control.supportedFeatures ?? control.supported_features ?? 0) || 0;
   control.unitOfMeasurement = control.unitOfMeasurement || control.unit_of_measurement || "";
   control.icon = control.icon || "";
+  control.displayType = normalizeRoomControlDisplayType(control.displayType || control.displayMode || control.specialType || "");
   control.defaultCode = String(control.defaultCode || control.code || "").replace(/\D/g, "").slice(0, ROOM_CONTROL_CODE_MAX_LENGTH);
   return control;
 }
@@ -6003,6 +6033,7 @@ function createRoomControl(roomKey, index) {
     supportedFeatures: 0,
     unitOfMeasurement: "",
     icon: "",
+    displayType: "",
     defaultCode: "",
   };
 }
@@ -6083,6 +6114,21 @@ function setRoomControlDefaultCode(roomKey, controlId, value) {
   updateRoomControlCard(control);
 }
 
+function setRoomControlBedSlider(roomKey, controlId, enabled) {
+  const room = state.roomControl.rooms[roomKey];
+  const control = room?.controls?.find((item) => item.id === controlId);
+  if (!control) return;
+  const nextType = enabled ? "bed_slider" : "";
+  if (normalizeRoomControlDisplayType(control.displayType) === nextType) return;
+  control.displayType = nextType;
+  if (enabled && control.haEntityId && normalizeRoomControlDomain(control.domain) !== "cover") {
+    showToast("Bed slider is meant for a cover.* entity");
+  }
+  saveConfig();
+  renderRoomControlConfigList();
+  renderRoomControls();
+}
+
 function renderRoomControlConfigList() {
   if (!elements.roomControlConfigList) return;
   elements.roomControlConfigList.innerHTML = "";
@@ -6099,10 +6145,16 @@ function renderRoomControlConfigList() {
       const linkedMeta = control.haEntityId
         ? `<small class="room-control-config-link">${escapeHtml(roomControlTypeLabel(control))} · ${escapeHtml(control.haEntityId)}</small>`
         : `<small class="room-control-config-link muted">Hold the room card to assign any HA entity</small>`;
+      const bedSliderChecked = roomControlIsBedSlider(control) ? "checked" : "";
       return `
         <label class="mini-field room-control-entry-field">Entry ${index + 1}
           <input type="text" value="${escapeHtml(control.name)}" data-room-control-name-input data-room-key="${escapeHtml(key)}" data-room-control-id="${escapeHtml(control.id)}" />
           ${linkedMeta}
+          <span class="room-control-special-toggle">
+            <input type="checkbox" ${bedSliderChecked} data-room-control-bed-slider-toggle data-room-key="${escapeHtml(key)}" data-room-control-id="${escapeHtml(control.id)}" aria-label="Show ${escapeHtml(control.name)} as a bed slider" />
+            <span class="room-control-special-dot" aria-hidden="true"></span>
+            <span class="room-control-special-copy"><strong>Bed slider</strong><small>Bed icon with position slider for cover.* actuators</small></span>
+          </span>
           <span class="room-control-code-label">Default Code <em>optional</em></span>
           <input class="room-control-code-input" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="${ROOM_CONTROL_CODE_MAX_LENGTH}" autocomplete="off" value="${escapeHtml(control.defaultCode || "")}" data-room-control-default-code-input data-room-key="${escapeHtml(key)}" data-room-control-id="${escapeHtml(control.id)}" aria-label="Default code for ${escapeHtml(control.name)}" />
         </label>
@@ -6158,6 +6210,7 @@ function normalizeRoomControlIcon(value) {
 }
 
 function roomControlVisualKind(control) {
+  if (roomControlIsBedSlider(control)) return "bed";
   const domain = normalizeRoomControlDomain(control?.domain, "entity");
   const deviceClass = normalizeRoomControlDeviceClass(control?.deviceClass);
   const icon = normalizeRoomControlIcon(control?.icon);
@@ -6183,6 +6236,7 @@ function roomControlRequiresCodeForAction(control, action) {
 }
 
 function roomControlTypeLabel(control) {
+  if (roomControlIsBedSlider(control)) return "Cover · Bed Slider";
   const domain = normalizeRoomControlDomain(control?.domain, "entity");
   const deviceClass = normalizeRoomControlDeviceClass(control?.deviceClass);
   const visual = roomControlVisualKind(control);
@@ -6312,6 +6366,7 @@ function roomControlStateLabel(control) {
   const deviceClass = normalizeRoomControlDeviceClass(control.deviceClass);
   const rawState = String(control.state || (control.on ? "on" : "off")).toLowerCase();
   if (isRoomControlUnavailableState(rawState)) return prettifyRoomControlName(rawState);
+  if (roomControlIsBedSlider(control)) return `Bed · ${roomControlPositionPercent(control)}%`;
   if (domain === "cover") {
     const base = prettifyRoomControlName(rawState || (control.on ? "open" : "closed"));
     return control.currentPosition !== null && control.currentPosition !== undefined ? `${base} · ${control.currentPosition}%` : base;
@@ -6358,6 +6413,7 @@ function roomControlStateLabel(control) {
 }
 
 function roomControlAriaAction(control) {
+  if (roomControlIsBedSlider(control)) return `Adjust ${roomControlDisplayName(control)} position`;
   const action = roomControlActionForState(control);
   if (!action) return `View ${roomControlDisplayName(control)}`;
   const label = {
@@ -6388,6 +6444,19 @@ function roomControlGlyphSvg(kind, innerSvg) {
 
 function roomControlIconSvg(control) {
   const linked = Boolean(control?.haEntityId);
+  if (roomControlIsBedSlider(control)) {
+    const position = roomControlPositionPercent(control);
+    const raised = position > 0;
+    return roomControlGlyphSvg("bed", `
+      <path class="glyph-soft" d="M23 69h52M28 69v9M68 69v9"></path>
+      <path class="glyph-stroke" d="M24 61h49c4 0 7 3 7 7v1H24z"></path>
+      <path class="glyph-fill" opacity="${raised ? ".34" : ".18"}" d="M24 51h31l19 10H24z"></path>
+      <path class="glyph-stroke" d="M24 61V42c0-5 4-9 9-9h10c5 0 9 4 9 9v19"></path>
+      <path class="glyph-stroke" d="M50 60l18-18 8 18"></path>
+      <path class="glyph-soft" d="M31 49h17M34 38h10M55 60l12-12"></path>
+      <circle class="glyph-dot" cx="70" cy="50" r="2.5"></circle>
+    `);
+  }
   if (!linked) {
     return roomControlGlyphSvg("assign", `
       <path class="glyph-stroke" d="M31 48h34M48 31v34"></path>
@@ -6508,6 +6577,8 @@ function updateRoomControlCard(control) {
   const statusOnly = linked && roomControlIsStatusOnly(control);
   const momentary = linked && roomControlIsMomentary(control);
   const unavailable = linked && isRoomControlUnavailableState(control.state);
+  const bedSlider = roomControlIsBedSlider(control);
+  const bedPosition = roomControlPositionPercent(control);
   card.classList.toggle("on", on);
   card.classList.toggle("off", !on);
   card.classList.toggle("linked", linked);
@@ -6515,6 +6586,9 @@ function updateRoomControlCard(control) {
   card.classList.toggle("status-only", statusOnly);
   card.classList.toggle("momentary", momentary);
   card.classList.toggle("unavailable", unavailable);
+  card.classList.toggle("bed-slider", bedSlider);
+  card.dataset.roomControlBedSlider = bedSlider ? "1" : "";
+  card.style.setProperty("--room-bed-position", `${bedPosition}%`);
   card.dataset.roomControlDomain = normalizeRoomControlDomain(control.domain || "switch");
   card.dataset.roomControlDeviceClass = normalizeRoomControlDeviceClass(control.deviceClass || "");
   card.dataset.roomControlVisual = roomControlVisualKind(control);
@@ -6534,13 +6608,72 @@ function updateRoomControlCard(control) {
   if (hint) {
     const nextAction = roomControlActionForState(control);
     if (!linked) hint.textContent = "Hold to assign";
+    else if (bedSlider) hint.textContent = "Slide to adjust";
     else if (statusOnly) hint.textContent = "Status only";
     else if (roomControlRequiresCodeForAction(control, nextAction)) hint.textContent = "Code required";
     else if (momentary) hint.textContent = "Tap to run";
     else hint.textContent = nextAction || "Tap";
   }
+  const bedRange = card.querySelector("[data-room-control-bed-slider]");
+  if (bedRange) {
+    if (document.activeElement !== bedRange) bedRange.value = String(bedPosition);
+    bedRange.disabled = !linked || normalizeRoomControlDomain(control.domain) !== "cover";
+    bedRange.setAttribute("aria-valuetext", `${bedPosition}% raised`);
+    setRangeVisual(bedRange);
+  }
+  const bedValue = card.querySelector("[data-room-control-bed-value]");
+  if (bedValue) bedValue.textContent = `${bedPosition}%`;
   card.setAttribute("aria-label", roomControlAriaAction(control));
   card.setAttribute("aria-pressed", on ? "true" : "false");
+}
+
+function roomControlBedSliderMarkup(control) {
+  const position = roomControlPositionPercent(control);
+  const disabled = (!control.haEntityId || normalizeRoomControlDomain(control.domain) !== "cover") ? "disabled" : "";
+  return `
+    <span class="room-control-bed-panel" data-room-control-bed-panel>
+      <span class="room-control-bed-readout">
+        <strong data-room-control-bed-value>${position}%</strong>
+        <small>Bed Position</small>
+      </span>
+      <input class="room-control-bed-slider" type="range" min="0" max="100" step="1" value="${position}" ${disabled} data-room-control-bed-slider data-room-control-id="${escapeHtml(control.id)}" aria-label="Set ${escapeHtml(roomControlDisplayName(control))} position" />
+    </span>
+  `;
+}
+
+function setRoomControlPositionState(control, position, options = {}) {
+  if (!control) return 0;
+  const nextPosition = clamp(Math.round(Number(position || 0)), 0, 100);
+  control.currentPosition = nextPosition;
+  control.on = nextPosition > 0;
+  control.state = nextPosition <= 0 ? "closed" : nextPosition >= 100 ? "open" : "open";
+  if (options.hold !== false) control.localHoldUntil = Date.now() + ROOM_CONTROL_BED_SLIDER_HOLD_MS;
+  updateRoomControlCard(control);
+  if (options.save) saveConfig();
+  return nextPosition;
+}
+
+function roomControlRequiresCodeForPosition(control, position) {
+  return roomControlHasDefaultCode(control) && Number(position) > 0;
+}
+
+function handleRoomControlBedSliderInput(slider, options = {}) {
+  if (!slider) return;
+  const control = findRoomControlInActiveRoom(slider.dataset.roomControlId);
+  if (!control) return;
+  const position = setRoomControlPositionState(control, slider.value, { save: Boolean(options.send) });
+  lastRoomControlUserInteractionAt = Date.now();
+  suppressRoomControlClickUntil = Date.now() + 900;
+  if (!options.send) return;
+  if (!control.haEntityId || normalizeRoomControlDomain(control.domain) !== "cover") {
+    showToast("Assign a cover.* entity to use the bed slider");
+    return;
+  }
+  if (roomControlRequiresCodeForPosition(control, position)) {
+    openRoomControlCodePrompt(control, "position", { position });
+    return;
+  }
+  sendRoomControlToHomeAssistant(control, "position", "", { position });
 }
 
 function renderRoomControls() {
@@ -6553,9 +6686,15 @@ function renderRoomControls() {
   elements.roomControlCards.style.setProperty("--room-control-columns", "6");
   controls.forEach((control, index) => {
     normalizeRoomControlRecord(control, state.roomControl.room, index + 1);
-    const card = document.createElement("button");
-    card.className = "room-control-card";
-    card.type = "button";
+    const isBedSlider = roomControlIsBedSlider(control);
+    const card = document.createElement(isBedSlider ? "div" : "button");
+    card.className = `room-control-card${isBedSlider ? " room-control-bed-card" : ""}`;
+    if (isBedSlider) {
+      card.tabIndex = 0;
+      card.setAttribute("role", "group");
+    } else {
+      card.type = "button";
+    }
     card.dataset.roomControlCard = control.id;
     card.dataset.roomControlToggle = "";
     card.dataset.roomControlId = control.id;
@@ -6575,6 +6714,7 @@ function renderRoomControls() {
         <small data-room-control-domain>${control.haEntityId ? escapeHtml(roomControlTypeLabel(control)) : "Unassigned"}</small>
         <em data-room-control-hint>${control.haEntityId ? escapeHtml(roomControlActionForState(control) || (roomControlIsStatusOnly(control) ? "Status only" : "Tap")) : "Hold to assign"}</em>
       </span>
+      ${isBedSlider ? roomControlBedSliderMarkup(control) : ""}
       <span class="sr-only">${safeControlId}</span>
     `;
     elements.roomControlCards.appendChild(card);
@@ -6583,7 +6723,7 @@ function renderRoomControls() {
 }
 
 function resetRoomControlCodePrompt() {
-  state.roomControlCodePrompt = { roomKey: null, controlId: null, action: "", code: "", busy: false };
+  state.roomControlCodePrompt = { roomKey: null, controlId: null, action: "", code: "", busy: false, position: null };
 }
 
 function getPromptedRoomControl() {
@@ -6592,9 +6732,9 @@ function getPromptedRoomControl() {
   return (room?.controls || []).find((item) => item.id === prompt.controlId) || null;
 }
 
-function openRoomControlCodePrompt(control, action) {
+function openRoomControlCodePrompt(control, action, options = {}) {
   if (!control?.id || !action) return;
-  state.roomControlCodePrompt = { roomKey: state.roomControl.room, controlId: control.id, action, code: "", busy: false };
+  state.roomControlCodePrompt = { roomKey: state.roomControl.room, controlId: control.id, action, code: "", busy: false, position: options.position ?? null };
   if (elements.roomControlCodeTitle) elements.roomControlCodeTitle.textContent = roomControlDisplayName(control);
   if (elements.roomControlCodeStatus) {
     elements.roomControlCodeStatus.textContent = "Enter default code.";
@@ -6647,7 +6787,7 @@ function submitRoomControlCode() {
   const entered = String(prompt.code || "").replace(/\D/g, "");
   if (!expected) {
     closeRoomControlCodePrompt();
-    performRoomControlAction(control, prompt.action, "");
+    performRoomControlAction(control, prompt.action, "", { position: prompt.position });
     return;
   }
   if (entered !== expected) {
@@ -6660,7 +6800,7 @@ function submitRoomControlCode() {
     return;
   }
   closeRoomControlCodePrompt();
-  performRoomControlAction(control, prompt.action, entered);
+  performRoomControlAction(control, prompt.action, entered, { position: prompt.position });
 }
 
 function setRoomControlPowerState(control, on, action = "") {
@@ -6691,9 +6831,14 @@ async function applyRoomControlAction(action) {
   await Promise.all(targets.map(({ control, haAction }) => sendRoomControlToHomeAssistant(control, haAction)));
 }
 
-function performRoomControlAction(control, action, code = "") {
+function performRoomControlAction(control, action, code = "", options = {}) {
   if (!control || !action) return;
   lastRoomControlUserInteractionAt = Date.now();
+  if (String(action).toLowerCase() === "position") {
+    const position = setRoomControlPositionState(control, options.position ?? control.currentPosition ?? 0, { save: true });
+    sendRoomControlToHomeAssistant(control, "position", code, { position });
+    return;
+  }
   setRoomControlPowerState(control, roomControlOptimisticOn(control, action), action);
   updateRoomControlCard(control);
   saveConfig();
@@ -6791,7 +6936,7 @@ async function pollHomeAssistantRoomControls(options = {}) {
   }
 }
 
-async function sendRoomControlToHomeAssistant(control, action = "toggle", code = "") {
+async function sendRoomControlToHomeAssistant(control, action = "toggle", code = "", options = {}) {
   if (!control?.haEntityId) return null;
   if (!action) return null;
   const ha = state.integrations.homeAssistant;
@@ -6802,7 +6947,14 @@ async function sendRoomControlToHomeAssistant(control, action = "toggle", code =
     const payload = await fetchJsonWithTimeout("/api/ha/room/action", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: baseUrl, token: ha.token, entityId: control.haEntityId, action, code: String(code || "").replace(/\D/g, "") }),
+      body: JSON.stringify({
+        url: baseUrl,
+        token: ha.token,
+        entityId: control.haEntityId,
+        action,
+        code: String(code || "").replace(/\D/g, ""),
+        position: Number.isFinite(Number(options.position)) ? clamp(Math.round(Number(options.position)), 0, 100) : undefined,
+      }),
     }, 9000);
     if (payload.control) {
       delete control.localHoldUntil;
@@ -7777,7 +7929,9 @@ function bindEvents() {
   });
   elements.roomControlConfigList?.addEventListener("change", (event) => {
     const countSelect = event.target.closest("[data-room-control-count-select]");
+    const bedToggle = event.target.closest("[data-room-control-bed-slider-toggle]");
     if (countSelect) setRoomControlCount(countSelect.dataset.roomKey, countSelect.value);
+    if (bedToggle) setRoomControlBedSlider(bedToggle.dataset.roomKey, bedToggle.dataset.roomControlId, bedToggle.checked);
   });
   elements.roomControlConfigList?.addEventListener("click", (event) => {
     const deleteButton = event.target.closest("[data-delete-room-control-room]");
@@ -7934,14 +8088,38 @@ function bindEvents() {
     setLightBrightness(slider.dataset.lightId, slider.value, { send: true });
   });
 
+  elements.roomControlCards?.addEventListener("pointerdown", (event) => {
+    if (!event.target.closest("[data-room-control-bed-slider]")) return;
+    suppressRoomControlClickUntil = Date.now() + 1200;
+    event.stopImmediatePropagation();
+  });
+  elements.roomControlCards?.addEventListener("input", (event) => {
+    const slider = event.target.closest("[data-room-control-bed-slider]");
+    if (!slider) return;
+    event.stopPropagation();
+    handleRoomControlBedSliderInput(slider, { send: false });
+  });
+  elements.roomControlCards?.addEventListener("change", (event) => {
+    const slider = event.target.closest("[data-room-control-bed-slider]");
+    if (!slider) return;
+    event.stopPropagation();
+    handleRoomControlBedSliderInput(slider, { send: true });
+  });
   elements.roomControlCards?.addEventListener("click", (event) => {
+    if (event.target.closest("[data-room-control-bed-slider]")) return;
     const card = event.target.closest("[data-room-control-card]");
     if (!card) return;
     event.preventDefault();
     if (Date.now() < suppressRoomControlClickUntil) return;
+    const control = findRoomControlInActiveRoom(card.dataset.roomControlCard);
+    if (roomControlIsBedSlider(control)) {
+      if (!control?.haEntityId) showToast("Hold the card to assign a cover entity");
+      return;
+    }
     toggleRoomControl(card.dataset.roomControlCard);
   });
   bindLongPress(elements.roomControlCards, (event) => {
+    if (event.target.closest("[data-room-control-bed-slider]")) return;
     const card = event.target.closest("[data-room-control-card]");
     if (!card) return;
     event.preventDefault();

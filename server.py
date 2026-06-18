@@ -2530,6 +2530,8 @@ def _room_control_service_for_action(domain: str, action: str) -> tuple[str, str
             "off": "close_cover",
             "stop": "stop_cover",
             "toggle": "toggle",
+            "position": "set_cover_position",
+            "set_position": "set_cover_position",
         }.get(action)
         return (domain, service) if service else None
 
@@ -2573,7 +2575,7 @@ def _room_control_service_for_action(domain: str, action: str) -> tuple[str, str
     return (domain, service) if service else None
 
 
-def _call_room_control_service(ha_url: str, token: str, entity_id: str, action: str, code: str | None = None) -> dict:
+def _call_room_control_service(ha_url: str, token: str, entity_id: str, action: str, code: str | None = None, position: int | float | str | None = None) -> dict:
     entity_id = (entity_id or "").strip()
     domain = _room_control_domain(entity_id)
     action = (action or "toggle").strip().lower()
@@ -2591,12 +2593,22 @@ def _call_room_control_service(ha_url: str, token: str, entity_id: str, action: 
     code_value = str(code or "").strip()
     if code_value and service_domain == "lock":
         service_payload["code"] = code_value
+    position_value: int | None = None
+    if service_domain == "cover" and service == "set_cover_position":
+        try:
+            position_value = max(0, min(100, int(round(float(position)))))
+        except (TypeError, ValueError):
+            raise ValueError("Missing cover position")
+        service_payload["position"] = position_value
     _ha_json_request(ha_url, token, "POST", f"/api/services/{service_domain}/{service}", service_payload)
     _invalidate_ha_state_cache(ha_url, token)
     try:
         item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
         if isinstance(item, dict):
             control = _normalize_generic_entity(item)
+            if position_value is not None:
+                control["currentPosition"] = position_value
+                control["state"] = "open" if position_value > 0 else "closed"
             control["actionApplied"] = True
             return control
     except Exception:
@@ -2613,8 +2625,13 @@ def _call_room_control_service(ha_url: str, token: str, entity_id: str, action: 
         "run": "on",
         "start": "cleaning",
         "return_to_base": "returning",
+        "position": "open" if (position_value or 0) > 0 else "closed",
+        "set_position": "open" if (position_value or 0) > 0 else "closed",
     }.get(action, "on")
-    return {"entityId": entity_id, "name": entity_id, "domain": domain, "state": optimistic, "actionApplied": True}
+    payload = {"entityId": entity_id, "name": entity_id, "domain": domain, "state": optimistic, "actionApplied": True}
+    if position_value is not None:
+        payload["currentPosition"] = position_value
+    return payload
 
 
 
@@ -3131,6 +3148,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                     payload.get("entityId", ""),
                     payload.get("action", "toggle"),
                     payload.get("code", ""),
+                    payload.get("position"),
                 )
                 return _json(self, 200, {"ok": True, "control": control})
 
