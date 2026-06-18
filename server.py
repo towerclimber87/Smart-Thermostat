@@ -1935,15 +1935,40 @@ def _fetch_update_payload() -> dict:
     }
 
 
+def _stable_panel_serial() -> str:
+    """Return a stable Home Assistant unique id for this wall panel."""
+    configured = os.environ.get("SMART_THERMOSTAT_SERIAL", "").strip()
+    if configured:
+        return configured
+
+    for machine_id_path in (Path("/etc/machine-id"), Path("/var/lib/dbus/machine-id")):
+        try:
+            machine_id = machine_id_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            machine_id = ""
+        if machine_id:
+            return f"iha-smart-thermostat-{machine_id[:12]}"
+
+    hostname = _local_host_name().strip() or socket.gethostname().strip()
+    if hostname:
+        safe_hostname = "".join(ch.lower() if ch.isalnum() else "-" for ch in hostname).strip("-")
+        if safe_hostname:
+            return f"iha-smart-thermostat-{safe_hostname}"
+
+    return "iha-smart-thermostat-local"
+
+
 def _discovery_payload() -> dict:
     status = _thermostat_status_payload()
     thermostat_name = str(status.get("name") or "IHA Thermostat").strip() or "IHA Thermostat"
+    serial = _stable_panel_serial()
     return {
         "ok": True,
         "name": thermostat_name,
         "thermostatName": thermostat_name,
         "friendly_name": thermostat_name,
-        "unique_id": "iha-smart-thermostat-local",
+        "serial": serial,
+        "unique_id": serial,
         "manufacturer": "IHA",
         "model": "Smart Thermostat Wall Panel",
         "sw_version": _read_version_value(),
