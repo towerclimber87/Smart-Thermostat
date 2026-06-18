@@ -27,6 +27,7 @@ const HA_ALARM_SYNC_INTERVAL_MS = 5000;
 const HA_ALARM_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
 const HA_DOOR_SYNC_INTERVAL_MS = 5000;
 const HA_PRESENCE_SYNC_INTERVAL_MS = 5000;
+const HA_PAUSE_FUNCTION_SYNC_INTERVAL_MS = 5000;
 const HA_WEATHER_SYNC_INTERVAL_MS = 60000;
 const HA_TEMP_SENSOR_SYNC_INTERVAL_MS = 5000;
 const LOCAL_THERMOSTAT_SYNC_INTERVAL_MS = 1000;
@@ -87,6 +88,9 @@ const SCREEN_TIMEOUT_CHECK_INTERVAL_MS = 5000;
 const HARDWARE_STATUS_INTERVAL_MS = 5000;
 const HISTORY_STATUS_INTERVAL_MS = 30000;
 const SCHEDULE_CHECK_INTERVAL_MS = 15000;
+const DEFAULT_PAUSE_FUNCTION_MINUTES = 5;
+const MIN_PAUSE_FUNCTION_MINUTES = 1;
+const MAX_PAUSE_FUNCTION_MINUTES = 60;
 let haSyncInFlight = false;
 let haSyncLastError = "";
 let haAudioSyncInFlight = false;
@@ -105,6 +109,8 @@ let haDoorSyncInFlight = false;
 let haDoorSyncLastError = "";
 let haPresenceSyncInFlight = false;
 let haPresenceSyncLastError = "";
+let haPauseFunctionSyncInFlight = false;
+let haPauseFunctionSyncLastError = "";
 let haWeatherSyncInFlight = false;
 let haWeatherSyncLastError = "";
 let haTempSensorSyncInFlight = false;
@@ -247,6 +253,7 @@ const defaultIntegrations = {
     lightAvailableEntities: [],
     roomAvailableEntities: [],
     personAvailableEntities: [],
+    pauseFunctionAvailableEntities: [],
   },
 };
 
@@ -338,6 +345,15 @@ const state = {
     equipmentLastCoolRunAt: 0,
     coolRelayWasOn: false,
     coolFanHoldUntil: 0,
+    pauseFunction: {
+      durationMinutes: DEFAULT_PAUSE_FUNCTION_MINUTES,
+      entries: [],
+      active: false,
+      pausedAt: 0,
+      previousTargetTemp: null,
+      previousLastComfortTarget: null,
+      activeEntityIds: [],
+    },
     autoSwitchNotice: { active: false, source: "", fromMode: "", toMode: "", switchTemp: 0, outdoorTemp: 0, coolTarget: 0, heatTarget: 0, createdAt: 0 },
     autoSwitchHold: { active: false, source: "", mode: "" },
     limits: {
@@ -441,6 +457,10 @@ const elements = {
   changeoverBypassButton: document.getElementById("changeoverBypassButton"),
   modeBadge: document.getElementById("modeBadge"),
   runtimeState: document.getElementById("runtimeState"),
+  pauseCountdownBadge: document.getElementById("pauseCountdownBadge"),
+  pauseCountdownText: document.getElementById("pauseCountdownText"),
+  pauseFunctionOverlay: document.getElementById("pauseFunctionOverlay"),
+  pauseFunctionMessage: document.getElementById("pauseFunctionMessage"),
   safetyWarningBanner: document.getElementById("safetyWarningBanner"),
   safetyWarningTitle: document.getElementById("safetyWarningTitle"),
   safetyWarningSetpoint: document.getElementById("safetyWarningSetpoint"),
@@ -542,6 +562,10 @@ const elements = {
   clearCurrentTempSensorButton: document.getElementById("clearCurrentTempSensorButton"),
   addThermostatPersonButton: document.getElementById("addThermostatPersonButton"),
   thermostatPeopleList: document.getElementById("thermostatPeopleList"),
+  pauseFunctionMinutesValue: document.getElementById("pauseFunctionMinutesValue"),
+  addPauseFunctionEntryButton: document.getElementById("addPauseFunctionEntryButton"),
+  pauseFunctionEntryList: document.getElementById("pauseFunctionEntryList"),
+  pauseFunctionSummary: document.getElementById("pauseFunctionSummary"),
   heatLockToggle: document.getElementById("heatLockToggle"),
   coolLockToggle: document.getElementById("coolLockToggle"),
   thermostatInfoButton: document.getElementById("thermostatInfoButton"),
@@ -1079,13 +1103,14 @@ function buildSavedConfig() {
     coolLocked: Boolean(state.thermostat.coolLocked),
     people: normalizeThermostatPeople(state.thermostat.people),
     schedules: normalizeThermostatSchedules(state.thermostat.schedules),
+    pauseFunction: pauseFunctionSettingsSnapshot(),
     autoActiveMode: state.thermostat.autoActiveMode,
     autoSwitchNotice: normalizeAutoSwitchNotice(state.thermostat.autoSwitchNotice),
     autoSwitchHold: normalizeAutoSwitchHold(state.thermostat.autoSwitchHold),
     limits: state.thermostat.limits,
   };
   return {
-    version: 19,
+    version: 20,
     theme: normalizePanelTheme(state.theme),
     screenTimeoutMinutes: normalizeScreenTimeoutMinutes(state.screenTimeoutMinutes),
     panelLock: { locked: Boolean(state.panelLock?.locked) },
@@ -1144,6 +1169,7 @@ function applySavedConfig(saved = {}) {
       coolLocked: Boolean(savedThermostat.coolLocked),
       people: normalizeThermostatPeople(savedThermostat.people || defaults.people),
       schedules: normalizeThermostatSchedules(savedThermostat.schedules || defaults.schedules),
+      pauseFunction: normalizePauseFunction({ ...(defaults.pauseFunction || {}), ...(savedThermostat.pauseFunction || {}) }),
       away: Boolean(savedThermostat.away),
       awaySource: normalizeAwaySource(savedThermostat.awaySource),
       manualAwayPresenceLatch: normalizeManualAwayPresenceLatch(savedThermostat.manualAwayPresenceLatch),
@@ -1164,6 +1190,11 @@ function applySavedConfig(saved = {}) {
       coolRelayWasOn: false,
       coolFanHoldUntil: 0,
     };
+    state.thermostat.pauseFunction.active = false;
+    state.thermostat.pauseFunction.pausedAt = 0;
+    state.thermostat.pauseFunction.previousTargetTemp = null;
+    state.thermostat.pauseFunction.previousLastComfortTarget = null;
+    state.thermostat.pauseFunction.activeEntityIds = [];
     state.thermostat.currentTempSource = String(state.thermostat.currentTempSource || "virtual");
     state.thermostat.currentTempSourceName = String(state.thermostat.currentTempSourceName || "Virtual Temp");
     state.thermostat.safetyLow = clamp(Math.round(Number(state.thermostat.safetyLow) || 55), ABS_MIN, ABS_MAX - 2);
@@ -1308,6 +1339,7 @@ function localThermostatPayload() {
       heatLocked: Boolean(state.thermostat.heatLocked),
       coolLocked: Boolean(state.thermostat.coolLocked),
       people: normalizeThermostatPeople(state.thermostat.people),
+      pauseFunction: pauseFunctionRuntimeSnapshot(),
       autoActiveMode: state.thermostat.autoActiveMode,
       autoPendingMode: state.thermostat.autoPendingMode,
       autoLockoutUntil: Number(state.thermostat.autoLockoutUntil || 0),
@@ -2512,6 +2544,134 @@ function normalizeThermostatPeople(people = []) {
     });
 }
 
+
+function pauseFunctionDomainFromEntityId(entityId = "") {
+  return String(entityId || "").split(".", 1)[0] || "";
+}
+
+function normalizePauseFunctionDuration(value, fallback = DEFAULT_PAUSE_FUNCTION_MINUTES) {
+  const next = Math.round(Number(value));
+  if (!Number.isFinite(next)) return clamp(Math.round(Number(fallback) || DEFAULT_PAUSE_FUNCTION_MINUTES), MIN_PAUSE_FUNCTION_MINUTES, MAX_PAUSE_FUNCTION_MINUTES);
+  return clamp(next, MIN_PAUSE_FUNCTION_MINUTES, MAX_PAUSE_FUNCTION_MINUTES);
+}
+
+function normalizePauseFunctionEntry(entry = {}) {
+  const entityId = String(entry?.entityId || entry?.entity_id || "").trim();
+  if (!entityId || !entityId.includes(".")) return null;
+  const domain = String(entry.domain || pauseFunctionDomainFromEntityId(entityId)).trim().toLowerCase();
+  return {
+    entityId,
+    name: String(entry.name || entry.friendlyName || entry.haName || entityId).trim() || entityId,
+    domain,
+    deviceClass: String(entry.deviceClass || entry.device_class || "").trim().toLowerCase(),
+    state: String(entry.state || "unknown").trim().toLowerCase(),
+    openedAt: Math.max(0, Number(entry.openedAt || 0)),
+  };
+}
+
+function normalizePauseFunctionEntries(entries = []) {
+  const seen = new Set();
+  return (Array.isArray(entries) ? entries : [])
+    .map(normalizePauseFunctionEntry)
+    .filter(Boolean)
+    .filter((entry) => {
+      if (seen.has(entry.entityId)) return false;
+      seen.add(entry.entityId);
+      return true;
+    });
+}
+
+function normalizePauseFunction(value = {}) {
+  const source = value && typeof value === "object" ? value : {};
+  return {
+    durationMinutes: normalizePauseFunctionDuration(source.durationMinutes ?? source.minutes ?? source.delayMinutes),
+    entries: normalizePauseFunctionEntries(source.entries || source.entities || []),
+    active: Boolean(source.active),
+    pausedAt: Math.max(0, Number(source.pausedAt || 0)),
+    previousTargetTemp: Number.isFinite(Number(source.previousTargetTemp)) ? Number(source.previousTargetTemp) : null,
+    previousLastComfortTarget: Number.isFinite(Number(source.previousLastComfortTarget)) ? Number(source.previousLastComfortTarget) : null,
+    activeEntityIds: normalizePresenceEntityList(source.activeEntityIds || []),
+  };
+}
+
+function getPauseFunction() {
+  state.thermostat.pauseFunction = normalizePauseFunction(state.thermostat.pauseFunction || {});
+  return state.thermostat.pauseFunction;
+}
+
+function pauseFunctionSettingsSnapshot() {
+  const pause = getPauseFunction();
+  return {
+    durationMinutes: normalizePauseFunctionDuration(pause.durationMinutes),
+    entries: normalizePauseFunctionEntries(pause.entries).map((entry) => ({
+      entityId: entry.entityId,
+      name: entry.name,
+      domain: entry.domain,
+      deviceClass: entry.deviceClass,
+    })),
+  };
+}
+
+function pauseFunctionRuntimeSnapshot() {
+  const pause = getPauseFunction();
+  return {
+    ...pauseFunctionSettingsSnapshot(),
+    active: Boolean(pause.active),
+    pausedAt: Math.max(0, Number(pause.pausedAt || 0)),
+    previousTargetTemp: Number.isFinite(Number(pause.previousTargetTemp)) ? Number(pause.previousTargetTemp) : null,
+    previousLastComfortTarget: Number.isFinite(Number(pause.previousLastComfortTarget)) ? Number(pause.previousLastComfortTarget) : null,
+    activeEntityIds: normalizePresenceEntityList(pause.activeEntityIds || []),
+  };
+}
+
+function isPauseFunctionActive() {
+  return Boolean(getPauseFunction().active);
+}
+
+function pauseFunctionEntryName(entry = {}) {
+  return String(entry.name || entry.entityId || "Entry").trim() || "Entry";
+}
+
+function pauseFunctionStateLooksOpen(entry = {}) {
+  const domain = String(entry.domain || pauseFunctionDomainFromEntityId(entry.entityId)).toLowerCase();
+  const value = String(entry.state || "").trim().toLowerCase();
+  if (!value || ["unknown", "unavailable", "none", "null"].includes(value)) return false;
+  if (domain === "cover") return ["open", "opening"].includes(value);
+  return ["on", "open", "opening", "detected", "true", "active"].includes(value);
+}
+
+function getOpenPauseFunctionEntries(now = Date.now()) {
+  const pause = getPauseFunction();
+  pause.entries = pause.entries.map((entry) => {
+    const next = normalizePauseFunctionEntry(entry);
+    if (!next) return null;
+    const open = pauseFunctionStateLooksOpen(next);
+    next.openedAt = open ? Math.max(1, Number(entry.openedAt || now)) : 0;
+    return next;
+  }).filter(Boolean);
+  return pause.entries.filter(pauseFunctionStateLooksOpen);
+}
+
+function getPauseFunctionExpiredEntries(now = Date.now()) {
+  const pause = getPauseFunction();
+  const thresholdMs = normalizePauseFunctionDuration(pause.durationMinutes) * 60000;
+  return getOpenPauseFunctionEntries(now).filter((entry) => Number(entry.openedAt || 0) && now - Number(entry.openedAt || 0) >= thresholdMs);
+}
+
+function formatPauseFunctionEntryList(entries = []) {
+  const names = entries.map(pauseFunctionEntryName).filter(Boolean);
+  if (!names.length) return "Selected entries";
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
+}
+
+function formatPauseFunctionCountdown(ms) {
+  const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
 function normalizeAwaySource(value) {
   const source = String(value || "").trim().toLowerCase();
   return ["manual", "presence"].includes(source) ? source : "";
@@ -3262,6 +3422,51 @@ async function pollHomeAssistantThermostatPeople(options = {}) {
   }
 }
 
+async function pollHomeAssistantPauseFunction(options = {}) {
+  const pause = getPauseFunction();
+  if (!pause.entries.length) {
+    evaluatePauseFunction({ toast: false });
+    return;
+  }
+  if (!options.force && document.visibilityState === "hidden") return;
+  if (haPauseFunctionSyncInFlight) return;
+  const ha = state.integrations.homeAssistant || {};
+  const baseUrl = getHaBaseUrl();
+  if (!baseUrl || !ha.token) return;
+  haPauseFunctionSyncInFlight = true;
+  try {
+    const payload = await fetchJsonWithTimeout("/api/ha/room/states", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: baseUrl, token: ha.token, entityIds: pause.entries.map((entry) => entry.entityId) }),
+    }, 9000);
+    const updates = payload.controls || [];
+    const byId = new Map(updates.map((entity) => [entity.entityId, entity]));
+    let changed = false;
+    const now = Date.now();
+    pause.entries = pause.entries.map((entry) => {
+      const update = byId.get(entry.entityId);
+      const merged = normalizePauseFunctionEntry({ ...entry, ...(update || {}) }) || entry;
+      const open = pauseFunctionStateLooksOpen(merged);
+      const nextOpenedAt = open ? (Number(entry.openedAt || 0) || now) : 0;
+      if (Number(merged.openedAt || 0) !== nextOpenedAt) merged.openedAt = nextOpenedAt;
+      if (JSON.stringify(merged) !== JSON.stringify(entry)) changed = true;
+      return merged;
+    });
+    if (changed) renderPauseFunctionStatus();
+    evaluatePauseFunction({ toast: true });
+    if (haPauseFunctionSyncLastError) haPauseFunctionSyncLastError = "";
+  } catch (error) {
+    const message = error.message || String(error);
+    if (message !== haPauseFunctionSyncLastError) {
+      haPauseFunctionSyncLastError = message;
+      addHaLog("warn", "Pause Function sync paused", message);
+    }
+  } finally {
+    haPauseFunctionSyncInFlight = false;
+  }
+}
+
 function getAutoLockoutMs() {
   const minutes = Math.max(AUTO_CHANGEOVER_MINUTES, Number(state.thermostat.autoChangeoverLockoutMinutes) || AUTO_CHANGEOVER_MINUTES);
   return minutes * 60 * 1000;
@@ -3712,7 +3917,7 @@ function getModeLimits() {
   const modeForLimits = normalMode === "locked" ? "auto" : normalMode;
   const limits = t.limits[modeForLimits] || t.limits.auto || t.limits.cool;
   const range = { min: limits.min, max: limits.max };
-  if (t.away) {
+  if (t.away || isPauseFunctionActive()) {
     const awayMode = getNormalControlMode();
     if (awayMode === "cool") range.max = Math.max(range.max, t.awayCool);
     if (awayMode === "heat") range.min = Math.min(range.min, t.awayHeat);
@@ -3789,6 +3994,193 @@ function applyAwayTarget() {
   else t.targetTemp = clamp(t.lastComfortTarget || t.targetTemp, ABS_MIN, ABS_MAX);
 }
 
+function applyPauseFunctionTarget() {
+  const t = state.thermostat;
+  const mode = getNormalControlMode();
+  if (mode === "heat") t.targetTemp = t.awayHeat;
+  else if (mode === "cool") t.targetTemp = t.awayCool;
+  else t.targetTemp = clamp(t.targetTemp, ABS_MIN, ABS_MAX);
+}
+
+function activatePauseFunction(triggeredEntries = []) {
+  const t = state.thermostat;
+  const pause = getPauseFunction();
+  if (!pause.active) {
+    pause.active = true;
+    pause.pausedAt = Date.now();
+    pause.previousTargetTemp = Number.isFinite(Number(t.targetTemp)) ? Number(t.targetTemp) : null;
+    pause.previousLastComfortTarget = Number.isFinite(Number(t.lastComfortTarget)) ? Number(t.lastComfortTarget) : pause.previousTargetTemp;
+  }
+  pause.activeEntityIds = normalizePresenceEntityList(triggeredEntries.map((entry) => entry.entityId));
+  applyPauseFunctionTarget();
+}
+
+function restorePauseFunctionTarget() {
+  const t = state.thermostat;
+  const pause = getPauseFunction();
+  const previousTarget = Number(pause.previousTargetTemp);
+  const previousLast = Number(pause.previousLastComfortTarget);
+  pause.active = false;
+  pause.pausedAt = 0;
+  pause.previousTargetTemp = null;
+  pause.previousLastComfortTarget = null;
+  pause.activeEntityIds = [];
+  const { min, max } = getModeLimits();
+  if (Number.isFinite(previousTarget)) t.targetTemp = clamp(Math.round(previousTarget), min, max);
+  if (Number.isFinite(previousLast)) t.lastComfortTarget = clamp(Math.round(previousLast), min, max);
+  else t.lastComfortTarget = t.targetTemp;
+}
+
+function evaluatePauseFunction(options = {}) {
+  const pause = getPauseFunction();
+  const now = Date.now();
+  let changed = false;
+  const openEntries = getOpenPauseFunctionEntries(now);
+  const expiredEntries = getPauseFunctionExpiredEntries(now);
+
+  if (!pause.entries.length) {
+    if (pause.active) {
+      restorePauseFunctionTarget();
+      changed = true;
+    }
+  } else if (pause.active) {
+    if (!openEntries.length) {
+      restorePauseFunctionTarget();
+      changed = true;
+      if (options.toast !== false) showToast("Pause Function restored");
+    } else {
+      const activeIds = normalizePresenceEntityList(openEntries.map((entry) => entry.entityId));
+      if (JSON.stringify(pause.activeEntityIds || []) !== JSON.stringify(activeIds)) {
+        pause.activeEntityIds = activeIds;
+        changed = true;
+      }
+      const beforeTarget = state.thermostat.targetTemp;
+      applyPauseFunctionTarget();
+      if (state.thermostat.targetTemp !== beforeTarget) changed = true;
+    }
+  } else if (expiredEntries.length) {
+    activatePauseFunction(expiredEntries);
+    changed = true;
+    if (options.toast !== false) showToast("Pause Function active");
+  }
+
+  renderPauseFunctionStatus();
+  if (changed && options.save !== false) {
+    if (options.render !== false) renderThermostat();
+    saveConfig({ toast: false });
+  }
+  return changed;
+}
+
+function renderPauseFunctionSettings() {
+  const pause = getPauseFunction();
+  if (elements.pauseFunctionMinutesValue) elements.pauseFunctionMinutesValue.textContent = String(normalizePauseFunctionDuration(pause.durationMinutes));
+  if (elements.pauseFunctionEntryList) {
+    elements.pauseFunctionEntryList.innerHTML = pause.entries.length ? pause.entries.map((entry) => {
+      const open = pauseFunctionStateLooksOpen(entry);
+      const stateLabel = entry.state && entry.state !== "unknown" ? titleCase(String(entry.state).replace(/_/g, " ")) : "Waiting";
+      const sub = `${entry.entityId}${entry.deviceClass ? ` · ${titleCase(entry.deviceClass)}` : ""}`;
+      return `
+        <div class="pause-function-entry ${open ? "open" : ""}" data-pause-entry-id="${escapeHtml(entry.entityId)}">
+          <div>
+            <strong>${escapeHtml(pauseFunctionEntryName(entry))}</strong>
+            <span>${escapeHtml(sub)}</span>
+          </div>
+          <em>${escapeHtml(stateLabel)}</em>
+          <button type="button" data-remove-pause-function-entry="${escapeHtml(entry.entityId)}" aria-label="Remove ${escapeHtml(pauseFunctionEntryName(entry))}">×</button>
+        </div>
+      `;
+    }).join("") : `<div class="pause-function-empty">No entries selected. Tap + Entry to add doors, windows, covers, or switches.</div>`;
+  }
+  if (elements.pauseFunctionSummary) {
+    const count = pause.entries.length;
+    const minutes = normalizePauseFunctionDuration(pause.durationMinutes);
+    elements.pauseFunctionSummary.textContent = count
+      ? `${count} entr${count === 1 ? "y" : "ies"} selected • pause after ${minutes} min open/on.`
+      : `Pause Function is off until at least one entry is selected.`;
+  }
+}
+
+function renderPauseFunctionStatus() {
+  const pause = getPauseFunction();
+  const now = Date.now();
+  const openEntries = getOpenPauseFunctionEntries(now);
+  const thresholdMs = normalizePauseFunctionDuration(pause.durationMinutes) * 60000;
+  const soonestOpenAt = openEntries.reduce((earliest, entry) => {
+    const openedAt = Number(entry.openedAt || 0);
+    return openedAt && (!earliest || openedAt < earliest) ? openedAt : earliest;
+  }, 0);
+  const countdownRemaining = soonestOpenAt ? Math.max(0, thresholdMs - (now - soonestOpenAt)) : 0;
+  const showCountdown = Boolean(openEntries.length && !pause.active && countdownRemaining > 0);
+
+  if (elements.pauseCountdownBadge) {
+    elements.pauseCountdownBadge.hidden = !showCountdown;
+    elements.pauseCountdownBadge.setAttribute("aria-hidden", showCountdown ? "false" : "true");
+  }
+  if (showCountdown && elements.pauseCountdownText) {
+    elements.pauseCountdownText.textContent = `${formatPauseFunctionEntryList(openEntries)} open • ${formatPauseFunctionCountdown(countdownRemaining)} to pause`;
+  }
+
+  if (elements.pauseFunctionOverlay) {
+    elements.pauseFunctionOverlay.classList.toggle("open", Boolean(pause.active));
+    elements.pauseFunctionOverlay.setAttribute("aria-hidden", pause.active ? "false" : "true");
+  }
+  if (elements.pauseFunctionMessage) {
+    const activeEntries = openEntries.length ? openEntries : pause.entries.filter((entry) => (pause.activeEntityIds || []).includes(entry.entityId));
+    const openForMs = Math.max(0, now - (soonestOpenAt || Number(pause.pausedAt || now)));
+    elements.pauseFunctionMessage.textContent = pause.active
+      ? `${formatPauseFunctionEntryList(activeEntries)} ${activeEntries.length === 1 ? "has" : "have"} been open/on for ${formatShortDuration(openForMs)}. Comfort is paused using the Away set points until the selected entries close.`
+      : "Selected entries are being monitored.";
+  }
+  renderPauseFunctionSettings();
+}
+
+function setPauseFunctionDuration(value, options = {}) {
+  const pause = getPauseFunction();
+  const next = normalizePauseFunctionDuration(value, pause.durationMinutes);
+  if (pause.durationMinutes === next) {
+    renderPauseFunctionStatus();
+    return;
+  }
+  pause.durationMinutes = next;
+  renderPauseFunctionStatus();
+  evaluatePauseFunction({ toast: options.toast, save: false, render: false });
+  saveConfig({ toast: false });
+  if (options.toast) showToast(`Pause after ${next} min`);
+}
+
+function adjustPauseFunctionDuration(delta) {
+  const pause = getPauseFunction();
+  setPauseFunctionDuration(normalizePauseFunctionDuration(pause.durationMinutes) + Number(delta || 0), { toast: true });
+}
+
+function upsertPauseFunctionEntry(entity = {}) {
+  const normalized = normalizePauseFunctionEntry(entity);
+  if (!normalized) return;
+  const pause = getPauseFunction();
+  const existing = pause.entries.filter((entry) => entry.entityId !== normalized.entityId);
+  pause.entries = [...existing, normalized];
+  if (state.integrations?.homeAssistant) {
+    const ha = state.integrations.homeAssistant;
+    if (!Array.isArray(ha.pauseFunctionAvailableEntities)) ha.pauseFunctionAvailableEntities = [];
+    ha.pauseFunctionAvailableEntities = [normalized, ...ha.pauseFunctionAvailableEntities.filter((entry) => entry.entityId !== normalized.entityId)].slice(0, 100);
+  }
+  renderPauseFunctionStatus();
+  saveConfig({ toast: false });
+  pollHomeAssistantPauseFunction({ force: true });
+  showToast("Pause entry added");
+}
+
+function removePauseFunctionEntry(entityId) {
+  const pause = getPauseFunction();
+  const target = String(entityId || "").trim();
+  pause.entries = pause.entries.filter((entry) => entry.entityId !== target);
+  if (pause.activeEntityIds?.includes(target)) pause.activeEntityIds = pause.activeEntityIds.filter((id) => id !== target);
+  evaluatePauseFunction({ toast: false, save: false, render: false });
+  renderPauseFunctionStatus();
+  saveConfig({ toast: false });
+}
+
 function isSetpointPreviewActive() {
   return Date.now() < setpointPreviewUntil;
 }
@@ -3841,6 +4233,12 @@ function cycleFanMode() {
 
 function setTargetTemp(temp, options = {}) {
   const t = state.thermostat;
+  if (isPauseFunctionActive() && !options.forcePause) {
+    applyPauseFunctionTarget();
+    renderThermostat();
+    showToast("Pause Function active until entries close");
+    return;
+  }
   if (options.preview) holdSetpointPreview();
   if (t.away && !options.keepAway) {
     t.away = false;
@@ -3993,6 +4391,7 @@ function renderThermostat() {
   normalizeThermostatModeForLocks();
   const autoSwitchChanged = applyAutoSwitch({ notify: true });
   if (autoSwitchChanged) saveConfig();
+  if (isPauseFunctionActive()) applyPauseFunctionTarget();
   const { min, max } = getModeLimits();
   const showingSetpoint = isSetpointPreviewActive();
   const currentRounded = Number.isFinite(Number(t.currentTemp)) ? Math.round(Number(t.currentTemp)) : "--";
@@ -4086,6 +4485,7 @@ function renderThermostat() {
   }
 
   renderAutoSwitchNotice();
+  renderPauseFunctionStatus();
 
   const action = outputs.cool ? "Cooling" : outputs.heat ? "Heating" : outputs.coolingFanHold ? "Fan Cooldown" : outputs.fan ? "Fan On" : (t.heatLocked && t.coolLocked ? "Heat/Cool Locked" : "Idle");
   const lockoutRemaining = Math.max(0, Number(t.autoLockoutUntil || 0) - now);
@@ -4093,6 +4493,8 @@ function renderThermostat() {
   const bypassState = getActiveChangeoverBypassState(now);
   if (outputs.safetyMode) {
     elements.runtimeState.textContent = `Safety ${titleCase(outputs.safetyMode)} • ${action}`;
+  } else if (isPauseFunctionActive()) {
+    elements.runtimeState.textContent = `Paused • ${action}`;
   } else if (t.away) {
     elements.runtimeState.textContent = `Away • ${action}`;
   } else if (t.mode === "auto" && t.autoPendingMode && lockoutRemaining > 0) {
@@ -4126,8 +4528,9 @@ function renderThermostat() {
   elements.awayToggle.classList.toggle("home-state", t.away);
   elements.awayToggle.textContent = t.away ? "Home" : "Away";
   if (elements.awayModeOverlay) {
-    elements.awayModeOverlay.classList.toggle("open", t.away);
-    elements.awayModeOverlay.setAttribute("aria-hidden", t.away ? "false" : "true");
+    const showAwayOverlay = t.away && !isPauseFunctionActive();
+    elements.awayModeOverlay.classList.toggle("open", showAwayOverlay);
+    elements.awayModeOverlay.setAttribute("aria-hidden", showAwayOverlay ? "false" : "true");
   }
 
   const visibleModeButtons = [];
@@ -4815,6 +5218,7 @@ function setAwayTemp(kind, delta) {
   if (kind === "heat") t.awayHeat = clamp(Math.round(t.awayHeat + delta), ABS_MIN, Math.min(72, t.awayCool - 1));
   if (kind === "cool") t.awayCool = clamp(Math.round(t.awayCool + delta), Math.max(72, t.awayHeat + 1), ABS_MAX);
   if (t.away) applyAwayTarget();
+  if (isPauseFunctionActive()) applyPauseFunctionTarget();
   renderThermostat();
   saveConfig();
 }
@@ -8275,6 +8679,7 @@ function getAudioPickerMeta(kind) {
   };
   if (kind === "thermostatPerson") return { domain: "person", title: "Add Person", help: "Select the Home Assistant person entry that should control Home/Away mode." };
   if (kind === "thermostatTemp") return { domain: "sensor", title: "Choose Current Temp Sensor", help: "Select the Home Assistant sensor used for the thermostat current room temperature. The virtual slider will temporarily override it for 2 minutes." };
+  if (kind === "pauseFunction") return { domain: "entity", domains: ["binary_sensor", "cover", "switch", "input_boolean"], title: "Add Pause Entry", help: "Select doors, windows, covers, switches, or input_booleans. Any selected entry that stays open/on past the delay will pause comfort." };
   if (kind === "light") return { domain: "light", title: "Assign Light", help: "Select the Home Assistant light entry for this slider." };
   return { domain: "", title: "Assign Entity", help: "Select the Home Assistant entity for this control." };
 }
@@ -8299,6 +8704,7 @@ function renderAudioEntityPicker() {
     .filter((entity) => scoreEntityForSearch(entity, search) > 0);
   if (elements.audioEntityPickerTitle) elements.audioEntityPickerTitle.textContent = getAudioPickerMeta(picker.kind).title;
   if (elements.audioEntityPickerHelp) elements.audioEntityPickerHelp.textContent = getAudioPickerMeta(picker.kind).help;
+  const selectedPauseIds = picker.kind === "pauseFunction" ? new Set(getPauseFunction().entries.map((entry) => entry.entityId)) : new Set();
   elements.audioEntityPickerList.innerHTML = entities.length ? entities.map((entity) => {
     const stateText = entity.state !== undefined && entity.state !== null ? String(entity.state) : "";
     let valueText = entity.domain === "number" && entity.value !== null && entity.value !== undefined ? `Value ${formatControlValue(entity.value)}` : stateText;
@@ -8308,11 +8714,12 @@ function renderAudioEntityPicker() {
       const stateLabel = stateText ? ` · ${prettifyRoomControlName(stateText)}` : "";
       valueText = `${domainLabel}${classLabel}${stateLabel}`;
     }
+    const selected = selectedPauseIds.has(entity.entityId);
     return `
-      <button class="audio-entity-row" data-audio-entity-id="${escapeHtml(entity.entityId)}">
-        <strong>${escapeHtml(entity.name || entity.entityId)}</strong>
+      <button class="audio-entity-row ${selected ? "selected" : ""}" data-audio-entity-id="${escapeHtml(entity.entityId)}">
+        <strong>${escapeHtml(entity.name || entity.entityId)}${selected ? " ✓" : ""}</strong>
         <span>${escapeHtml(entity.entityId)}</span>
-        <em>${escapeHtml(valueText || entity.domain || "")}</em>
+        <em>${escapeHtml(selected ? "Selected" : (valueText || entity.domain || ""))}</em>
       </button>
     `;
   }).join("") : `<div class="empty-state compact">No matching entities.</div>`;
@@ -8325,11 +8732,11 @@ async function openAudioEntityPicker(kind) {
   const meta = getAudioPickerMeta(kind);
   if (!meta.domain) return;
   if (kind === "light") readHaFieldsFromScreen("lights");
-  else if (!["alarm", "door", "roomControl", "thermostatPerson"].includes(kind)) readHaFieldsFromScreen("audio");
+  else if (!["alarm", "door", "roomControl", "thermostatPerson", "pauseFunction"].includes(kind)) readHaFieldsFromScreen("audio");
   if (!getHaBaseUrl() || !state.integrations.homeAssistant.token) {
-    showToast(["alarm", "door", "roomControl", "thermostatPerson", "thermostatTemp"].includes(kind) ? "Add Home Assistant config from Blinds, Audio, or Lights settings first" : "Add Home Assistant config first");
+    showToast(["alarm", "door", "roomControl", "thermostatPerson", "thermostatTemp", "pauseFunction"].includes(kind) ? "Add Home Assistant config from Blinds, Audio, or Lights settings first" : "Add Home Assistant config first");
     if (kind === "light") { openSettings(); showLightsHaView(); }
-    else if (!["alarm", "door", "roomControl", "thermostatPerson", "thermostatTemp"].includes(kind)) { openSettings(); showAudioHaView(); }
+    else if (!["alarm", "door", "roomControl", "thermostatPerson", "thermostatTemp", "pauseFunction"].includes(kind)) { openSettings(); showAudioHaView(); }
     return;
   }
   state.audioEntityPicker = { kind, domain: meta.domain, entities: [], search: "" };
@@ -8354,6 +8761,7 @@ async function openAudioEntityPicker(kind) {
     if (meta.domain === "binary_sensor") ha.doorAvailableEntities = entities;
     if (meta.domain === "light") ha.lightAvailableEntities = entities;
     if (meta.domain === "person") ha.personAvailableEntities = entities;
+    if (kind === "pauseFunction") ha.pauseFunctionAvailableEntities = entities;
     if (kind === "thermostatTemp") ha.currentTempAvailableEntities = entities;
     if (kind === "roomControl") ha.roomAvailableEntities = entities;
     renderAudioEntityPicker();
@@ -8426,6 +8834,11 @@ function selectAudioEntity(entityId) {
   }
   if (kind === "thermostatTemp") {
     assignCurrentTempSensor(entity);
+    return;
+  }
+  if (kind === "pauseFunction") {
+    upsertPauseFunctionEntry(entity);
+    renderAudioEntityPicker();
     return;
   }
   if (kind === "roomControl") {
@@ -8738,6 +9151,12 @@ function bindEvents() {
     adjustAutoSetting(kind, Number(delta));
   }));
   elements.addThermostatPersonButton?.addEventListener("click", () => openAudioEntityPicker("thermostatPerson"));
+  elements.addPauseFunctionEntryButton?.addEventListener("click", () => openAudioEntityPicker("pauseFunction"));
+  elements.pauseFunctionEntryList?.addEventListener("click", (event) => {
+    const removeButton = event.target.closest("[data-remove-pause-function-entry]");
+    if (removeButton) removePauseFunctionEntry(removeButton.dataset.removePauseFunctionEntry);
+  });
+  document.querySelectorAll("[data-pause-duration-adjust]").forEach((button) => button.addEventListener("click", () => adjustPauseFunctionDuration(Number(button.dataset.pauseDurationAdjust || 0))));
   elements.heatLockToggle?.addEventListener("click", () => toggleThermostatEquipmentLock("heat"));
   elements.coolLockToggle?.addEventListener("click", () => toggleThermostatEquipmentLock("cool"));
   elements.chooseCurrentTempSensorButton?.addEventListener("click", () => openAudioEntityPicker("thermostatTemp"));
@@ -8995,6 +9414,7 @@ async function init() {
   renderThermostat();
   renderCurrentTempSourceSettings();
   renderThermostatPeople();
+  renderPauseFunctionStatus();
   renderPanelLock();
   fetchLocalThermostatStatus({ force: true });
   pollHomeAssistantWeather({ force: true });
@@ -9025,6 +9445,8 @@ async function init() {
   setInterval(() => pollHomeAssistantAlarm(), HA_ALARM_SYNC_INTERVAL_MS);
   setInterval(() => pollHomeAssistantDoor(), HA_DOOR_SYNC_INTERVAL_MS);
   setInterval(() => pollHomeAssistantThermostatPeople(), HA_PRESENCE_SYNC_INTERVAL_MS);
+  setInterval(() => pollHomeAssistantPauseFunction(), HA_PAUSE_FUNCTION_SYNC_INTERVAL_MS);
+  setInterval(() => evaluatePauseFunction({ toast: true }), 1000);
   setInterval(() => pollHomeAssistantWeather(), HA_WEATHER_SYNC_INTERVAL_MS);
   setInterval(() => pollHomeAssistantCurrentTempSensor(), HA_TEMP_SENSOR_SYNC_INTERVAL_MS);
   pollHomeAssistantCurrentTempSensor({ force: true });
@@ -9032,6 +9454,7 @@ async function init() {
   pollHomeAssistantAlarm({ force: true });
   pollHomeAssistantDoor({ force: true });
   pollHomeAssistantThermostatPeople({ force: true });
+  pollHomeAssistantPauseFunction({ force: true });
 }
 
 init().catch((error) => {

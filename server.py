@@ -126,6 +126,15 @@ DEFAULT_THERMOSTAT = {
     "equipmentLastCoolRunAt": 0,
     "coolRelayWasOn": False,
     "coolFanHoldUntil": 0,
+    "pauseFunction": {
+        "durationMinutes": 5,
+        "entries": [],
+        "active": False,
+        "pausedAt": 0,
+        "previousTargetTemp": None,
+        "previousLastComfortTarget": None,
+        "activeEntityIds": [],
+    },
     "autoSwitchNotice": {"active": False, "source": "", "fromMode": "", "toMode": "", "switchTemp": 0, "outdoorTemp": 0, "coolTarget": 0, "heatTarget": 0, "createdAt": 0},
     "autoSwitchHold": {"active": False, "source": "", "mode": ""},
     "limits": {
@@ -162,6 +171,7 @@ DEFAULT_HOME_ASSISTANT_CONFIG = {
     "lightAvailableEntities": [],
     "roomAvailableEntities": [],
     "personAvailableEntities": [],
+    "pauseFunctionAvailableEntities": [],
 }
 
 
@@ -378,6 +388,85 @@ def _normalize_schedule_entries(value: object) -> list[dict]:
 
 
 
+
+def _pause_function_domain_from_entity_id(entity_id: object) -> str:
+    text = str(entity_id or "").strip()
+    return text.split(".", 1)[0].lower() if "." in text else ""
+
+
+def _normalize_pause_function_duration(value: object, fallback: int = 5) -> int:
+    try:
+        raw = int(round(float(value)))
+    except (TypeError, ValueError):
+        raw = fallback
+    return max(1, min(60, raw))
+
+
+def _normalize_pause_function_entry(entry: object) -> dict | None:
+    if isinstance(entry, str):
+        entry = {"entityId": entry}
+    if not isinstance(entry, dict):
+        return None
+    entity_id = str(entry.get("entityId") or entry.get("entity_id") or "").strip()
+    if not entity_id or "." not in entity_id:
+        return None
+    domain = str(entry.get("domain") or _pause_function_domain_from_entity_id(entity_id)).strip().lower()
+    name = str(entry.get("name") or entry.get("friendlyName") or entry.get("haName") or entity_id).strip() or entity_id
+    state = str(entry.get("state") or "unknown").strip().lower()
+    device_class = str(entry.get("deviceClass") or entry.get("device_class") or "").strip().lower()
+    try:
+        opened_at = max(0, int(float(entry.get("openedAt") or 0)))
+    except (TypeError, ValueError):
+        opened_at = 0
+    return {
+        "entityId": entity_id[:160],
+        "name": name[:120],
+        "domain": domain[:40],
+        "deviceClass": device_class[:60],
+        "state": state[:80],
+        "openedAt": opened_at,
+    }
+
+
+def _normalize_pause_function_entries(value: object) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    result: list[dict] = []
+    seen: set[str] = set()
+    for raw in value:
+        entry = _normalize_pause_function_entry(raw)
+        if not entry or entry["entityId"] in seen:
+            continue
+        seen.add(entry["entityId"])
+        result.append(entry)
+    return result
+
+
+def _normalize_pause_function(value: object) -> dict:
+    source = value if isinstance(value, dict) else {}
+    previous_target = None
+    try:
+        if source.get("previousTargetTemp") is not None:
+            previous_target = max(45, min(95, float(source.get("previousTargetTemp"))))
+    except (TypeError, ValueError):
+        previous_target = None
+    previous_last = None
+    try:
+        if source.get("previousLastComfortTarget") is not None:
+            previous_last = max(45, min(95, float(source.get("previousLastComfortTarget"))))
+    except (TypeError, ValueError):
+        previous_last = None
+    return {
+        "durationMinutes": _normalize_pause_function_duration(source.get("durationMinutes", source.get("minutes", source.get("delayMinutes", 5)))),
+        "entries": _normalize_pause_function_entries(source.get("entries", source.get("entities", []))),
+        "active": bool(source.get("active")),
+        "pausedAt": _number(source.get("pausedAt"), 0, 0, None),
+        "previousTargetTemp": previous_target,
+        "previousLastComfortTarget": previous_last,
+        "activeEntityIds": _normalize_presence_entity_list(source.get("activeEntityIds", [])),
+    }
+
+
 def _normalize_away_source(value: object) -> str:
     source = str(value or "").strip().lower()
     return source if source in {"manual", "presence"} else ""
@@ -528,6 +617,8 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             base["people"] = _normalize_person_entries(source.get("people"))
         if "schedules" in source:
             base["schedules"] = _normalize_schedule_entries(source.get("schedules"))
+        if "pauseFunction" in source:
+            base["pauseFunction"] = _normalize_pause_function(source.get("pauseFunction"))
 
         for key, fallback, minimum, maximum in (
             ("currentTemp", base["currentTemp"], -40, 130),
@@ -623,13 +714,22 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
         base["coolRelayWasOn"] = False
     base["awaySource"] = _normalize_away_source(base.get("awaySource"))
     base["manualAwayPresenceLatch"] = _normalize_manual_away_presence_latch(base.get("manualAwayPresenceLatch"))
+    base["pauseFunction"] = _normalize_pause_function(base.get("pauseFunction"))
+    if not base["pauseFunction"].get("entries"):
+        base["pauseFunction"]["active"] = False
+        base["pauseFunction"]["activeEntityIds"] = []
+    if not base["pauseFunction"].get("active"):
+        base["pauseFunction"]["pausedAt"] = 0
+        base["pauseFunction"]["previousTargetTemp"] = None
+        base["pauseFunction"]["previousLastComfortTarget"] = None
+        base["pauseFunction"]["activeEntityIds"] = []
     if not base["away"]:
         base["awaySource"] = ""
         base["manualAwayPresenceLatch"] = None
     elif base["awaySource"] != "manual":
         base["manualAwayPresenceLatch"] = None
     mode_limits = base["limits"].get(base["mode"], {"min": 45, "max": 95})
-    if not base["away"]:
+    if not base["away"] and not base.get("pauseFunction", {}).get("active"):
         base["targetTemp"] = _number(base["targetTemp"], 70, mode_limits.get("min"), mode_limits.get("max"))
         base["lastComfortTarget"] = _number(base["lastComfortTarget"], base["targetTemp"], mode_limits.get("min"), mode_limits.get("max"))
     return base
@@ -659,6 +759,7 @@ THERMOSTAT_PERSIST_KEYS = (
     "coolLocked",
     "people",
     "schedules",
+    "pauseFunction",
     "autoActiveMode",
     "autoSwitchNotice",
     "autoSwitchHold",

@@ -13455,3 +13455,172 @@ body.booting .boot-overlay {
     display: none;
   }
 }
+
+/* 2026-06-18 v7.5: Pause Function monitoring, countdown, and paused comfort overlay. */
+.pause-countdown-badge {
+  margin: 10px auto 0;
+  width: fit-content;
+  max-width: min(720px, 78vw);
+  min-height: 34px;
+  padding: 6px 13px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1px solid rgba(255, 206, 96, .34);
+  background: radial-gradient(circle at 18% 0%, rgba(255, 206, 96, .18), transparent 42%), rgba(12, 18, 32, .72);
+  color: rgba(255, 247, 224, .96);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.12), 0 12px 30px rgba(0,0,0,.20), 0 0 24px rgba(255,190,96,.10);
+  backdrop-filter: blur(16px);
+}
+.pause-countdown-badge[hidden] { display: none !important; }
+.pause-countdown-badge span {
+  color: rgba(255, 232, 180, .86);
+  text-transform: uppercase;
+  letter-spacing: .15em;
+  font-size: .58rem;
+  font-weight: 1000;
+}
+.pause-countdown-badge strong {
+  color: #fff;
+  font-size: .82rem;
+  font-weight: 950;
+  letter-spacing: -.01em;
+}
+.pause-function-overlay::before {
+  background:
+    radial-gradient(circle at 50% 40%, rgba(255, 190, 96, .28), transparent 33%),
+    rgba(2, 5, 12, .62);
+}
+.pause-function-card {
+  cursor: default;
+  border-color: rgba(255, 206, 96, .30);
+  background:
+    radial-gradient(circle at 78% 14%, rgba(255,255,255,.20), transparent 23%),
+    linear-gradient(145deg, rgba(255, 205, 111, .24), rgba(152, 88, 22, .24)),
+    rgba(10, 15, 30, .90);
+}
+.pause-function-card em {
+  width: min(520px, 90%);
+  color: rgba(255, 246, 225, .88);
+  font-size: clamp(1rem, 1.4vw, 1.28rem);
+  line-height: 1.35;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.pause-function-section {
+  align-content: start;
+}
+.pause-function-section .settings-hint {
+  margin-top: 4px;
+  font-size: .75rem;
+  line-height: 1.25;
+}
+.pause-function-delay-card strong {
+  min-width: 82px;
+}
+.pause-function-entry-list {
+  display: grid;
+  gap: 6px;
+  min-height: 38px;
+}
+.pause-function-empty {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  border-radius: 12px;
+  border: 1px dashed rgba(255,255,255,.13);
+  color: rgba(211,225,240,.72);
+  font-weight: 850;
+  font-size: .78rem;
+}
+.pause-function-entry {
+  min-height: 46px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 30px;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px 7px 11px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.09);
+  background: rgba(255,255,255,.045);
+}
+.pause-function-entry.open {
+  border-color: rgba(255, 190, 96, .34);
+  background: rgba(255, 190, 96, .075);
+}
+.pause-function-entry strong,
+.pause-function-entry span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pause-function-entry strong {
+  color: rgba(246,251,255,.96);
+  font-size: .85rem;
+  font-weight: 950;
+}
+.pause-function-entry span {
+  margin-top: 2px;
+  color: rgba(205,219,234,.62);
+  font-size: .68rem;
+  font-weight: 800;
+}
+.pause-function-entry em {
+  min-width: 48px;
+  min-height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,.08);
+  color: rgba(230,240,250,.82);
+  font-size: .66rem;
+  font-style: normal;
+  font-weight: 950;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.pause-function-entry.open em {
+  background: rgba(255, 190, 96, .16);
+  color: rgba(255, 237, 205, .96);
+}
+.pause-function-entry button {
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.07);
+  color: rgba(255,226,232,.94);
+  font-weight: 1000;
+}
+.audio-entity-row.selected {
+  border-color: rgba(77,238,255,.38);
+  background: linear-gradient(135deg, rgba(77,238,255,.16), rgba(255,255,255,.055));
+}
+.app-shell[data-theme="star-trek"] .pause-countdown-badge,
+.app-shell[data-theme="star-trek"] .pause-function-card,
+.app-shell[data-theme="star-trek"] .pause-function-entry {
+  border-radius: 10px;
+  border-width: 3px;
+  border-color: rgba(255,202,106,.86);
+}
+.app-shell[data-theme="christmas"] .pause-countdown-badge,
+.app-shell[data-theme="christmas"] .pause-function-card,
+.app-shell[data-theme="christmas"] .pause-function-entry.open {
+  border-color: rgba(255, 214, 112, .54);
+  box-shadow: 0 0 28px rgba(255, 214, 112, .14);
+}
+@media (max-width: 900px) {
+  .pause-countdown-badge {
+    max-width: 86vw;
+    gap: 7px;
+  }
+  .pause-countdown-badge span {
+    display: none;
+  }
+}

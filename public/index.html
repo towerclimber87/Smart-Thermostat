@@ -248,6 +248,10 @@
               <div class="outdoor-top-badge">Outdoor <strong id="outdoorTempTopValue">78°</strong><span class="outdoor-wind-badge">Wind <strong id="outdoorWindTopValue">-- mph</strong></span></div>
               <h1>Climate Control</h1>
             </div>
+            <div id="pauseCountdownBadge" class="pause-countdown-badge" aria-live="polite" aria-hidden="true" hidden>
+              <span>Pause Function</span>
+              <strong id="pauseCountdownText">Entries open • 5:00 to pause</strong>
+            </div>
             <div class="comfort-status" aria-live="polite">
               <span class="pulse-dot"></span>
               <strong id="runtimeState">Cooling</strong>
@@ -394,6 +398,14 @@
               <strong>In Away Mode</strong>
               <em>Press to set Home</em>
             </button>
+          </section>
+
+          <section id="pauseFunctionOverlay" class="away-mode-overlay pause-function-overlay" aria-hidden="true">
+            <div class="away-home-card pause-function-card" role="status" aria-live="assertive">
+              <span>Pause Function</span>
+              <strong>Comfort Paused</strong>
+              <em id="pauseFunctionMessage">Selected entries have been open/on. Comfort is paused until they close.</em>
+            </div>
           </section>
 
           <section id="scheduleOverlay" class="settings-overlay schedule-overlay" aria-hidden="true">
@@ -727,6 +739,25 @@
               <button id="addThermostatPersonButton" class="mini-add-person-button" type="button" aria-label="Add Home Assistant person">+ Person</button>
             </div>
             <div id="thermostatPeopleList" class="thermostat-people-list" aria-live="polite"></div>
+          </div>
+
+          <div class="settings-section pause-function-section">
+            <div class="thermostat-section-head">
+              <div>
+                <h3>Pause Function</h3>
+                <p id="pauseFunctionSummary" class="settings-hint">Pause Function is off until at least one entry is selected.</p>
+              </div>
+              <button id="addPauseFunctionEntryButton" class="mini-add-person-button" type="button" aria-label="Add Pause Function entry">+ Entry</button>
+            </div>
+            <div class="setpoint-card pause-function-delay-card">
+              <span>Pause After</span>
+              <div class="setpoint-controls">
+                <button data-pause-duration-adjust="-1" type="button" aria-label="Decrease pause delay">−</button>
+                <strong><span id="pauseFunctionMinutesValue">5</span> min</strong>
+                <button data-pause-duration-adjust="1" type="button" aria-label="Increase pause delay">+</button>
+              </div>
+            </div>
+            <div id="pauseFunctionEntryList" class="pause-function-entry-list" aria-live="polite"></div>
           </div>
 
           <div class="settings-section thermostat-theme-section">
