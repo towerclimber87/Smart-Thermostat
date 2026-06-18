@@ -6634,7 +6634,9 @@ function roomControlBedSliderMarkup(control) {
   const disabled = (!control.haEntityId || normalizeRoomControlDomain(control.domain) !== "cover") ? "disabled" : "";
   return `
     <span class="room-control-bed-panel" data-room-control-bed-panel>
-      <input class="room-control-bed-slider" type="range" min="0" max="100" step="1" value="${position}" ${disabled} data-room-control-bed-slider data-room-control-id="${escapeHtml(control.id)}" aria-label="Set ${escapeHtml(roomControlDisplayName(control))} position" />
+      <span class="room-control-bed-slider-wrap">
+        <input class="room-control-bed-slider" type="range" min="0" max="100" step="1" value="${position}" ${disabled} data-room-control-bed-slider data-room-control-id="${escapeHtml(control.id)}" aria-label="Set ${escapeHtml(roomControlDisplayName(control))} position" aria-orientation="vertical" />
+      </span>
     </span>
   `;
 }

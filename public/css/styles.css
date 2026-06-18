@@ -10786,3 +10786,69 @@ body[data-theme="christmas"] {
   width: 24px;
   height: 24px;
 }
+
+
+/* 2026-06-18 v6.1: switch the bed actuator control back to a vertical slider. */
+.room-control-card.room-control-bed-card {
+  justify-content: start;
+  gap: clamp(6px, .75vw, 10px);
+  padding: clamp(12px, 1.05vw, 16px);
+  padding-bottom: clamp(12px, 1.05vw, 16px);
+}
+.room-control-card.room-control-bed-card .room-control-copy {
+  gap: 0;
+  margin-top: -2px;
+}
+.room-control-card.room-control-bed-card .room-control-copy strong {
+  font-size: clamp(1.05rem, 1.28vw, 1.45rem);
+  line-height: 1.05;
+  -webkit-line-clamp: 2;
+}
+.room-control-card.room-control-bed-card .room-control-copy small,
+.room-control-card.room-control-bed-card .room-control-copy em[data-room-control-hint] {
+  display: none !important;
+}
+.room-control-card.room-control-bed-card .room-control-bed-panel {
+  flex: 1 1 auto;
+  min-height: clamp(120px, 14vh, 156px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: auto;
+  padding: 4px 0 2px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.room-control-card.room-control-bed-card .room-control-bed-slider-wrap {
+  width: 36px;
+  height: clamp(120px, 14vh, 156px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.room-control-card.room-control-bed-card .room-control-bed-slider {
+  width: clamp(120px, 14vh, 156px);
+  height: 28px;
+  margin: 0;
+  display: block;
+  transform: rotate(-90deg);
+  transform-origin: center center;
+  touch-action: none;
+}
+.room-control-card.room-control-bed-card .room-control-bed-slider::-webkit-slider-runnable-track {
+  height: 8px;
+}
+.room-control-card.room-control-bed-card .room-control-bed-slider::-webkit-slider-thumb {
+  width: 24px;
+  height: 24px;
+  margin-top: -8px;
+}
+.room-control-card.room-control-bed-card .room-control-bed-slider::-moz-range-track,
+.room-control-card.room-control-bed-card .room-control-bed-slider::-moz-range-progress {
+  height: 8px;
+}
+.room-control-card.room-control-bed-card .room-control-bed-slider::-moz-range-thumb {
+  width: 24px;
+  height: 24px;
+}
