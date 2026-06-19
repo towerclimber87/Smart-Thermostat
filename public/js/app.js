@@ -1085,10 +1085,13 @@ function serializeRoomControlConfig() {
   return copy;
 }
 
-function buildSavedConfig() {
-  const thermostatToSave = {
+function buildThermostatSettingsConfig() {
+  // Only long-term thermostat choices belong in panel-config.json.
+  // Live readings, relay outputs, HA weather values, auto-switch notices,
+  // lockout timers and onboard sensor fallback values are runtime state and
+  // are kept in RAM so outages do not churn the SD card.
+  return {
     name: state.thermostat.name || "IHA Thermostat",
-    currentTemp: state.thermostat.currentTemp,
     currentTempSource: state.thermostat.currentTempSource || "virtual",
     currentTempSourceName: state.thermostat.currentTempSourceName || "Virtual Temp",
     targetTemp: state.thermostat.targetTemp,
@@ -1102,10 +1105,6 @@ function buildSavedConfig() {
     awayCool: state.thermostat.awayCool,
     safetyLow: state.thermostat.safetyLow,
     safetyHigh: state.thermostat.safetyHigh,
-    humidity: state.thermostat.humidity,
-    outdoorTemp: state.thermostat.outdoorTemp,
-    outdoorWindSpeed: state.thermostat.outdoorWindSpeed,
-    outdoorWindUnit: state.thermostat.outdoorWindUnit || "mph",
     autoCoolOutdoorTarget: state.thermostat.autoCoolOutdoorTarget,
     autoHeatOutdoorTarget: state.thermostat.autoHeatOutdoorTarget,
     autoChangeoverLockoutMinutes: state.thermostat.autoChangeoverLockoutMinutes,
@@ -1117,10 +1116,12 @@ function buildSavedConfig() {
     schedules: normalizeThermostatSchedules(state.thermostat.schedules),
     pauseFunction: pauseFunctionSettingsSnapshot(),
     autoActiveMode: state.thermostat.autoActiveMode,
-    autoSwitchNotice: normalizeAutoSwitchNotice(state.thermostat.autoSwitchNotice),
-    autoSwitchHold: normalizeAutoSwitchHold(state.thermostat.autoSwitchHold),
     limits: state.thermostat.limits,
   };
+}
+
+function buildSavedConfig() {
+  const thermostatToSave = buildThermostatSettingsConfig();
   return {
     version: 20,
     theme: normalizePanelTheme(state.theme),
@@ -1345,7 +1346,15 @@ function localThermostatPayload() {
   const outputs = getThermostatOutputs({ recordRuntime: false });
   return {
     thermostat: {
-      ...buildSavedConfig().thermostat,
+      ...buildThermostatSettingsConfig(),
+      currentTemp: Number(state.thermostat.currentTemp || 0),
+      currentTempUpdatedAt: Number(state.thermostat.currentTempUpdatedAt || 0),
+      currentTempSource: state.thermostat.currentTempSource || "virtual",
+      currentTempSourceName: state.thermostat.currentTempSourceName || "Virtual Temp",
+      humidity: Number(state.thermostat.humidity || 0),
+      outdoorTemp: Number(state.thermostat.outdoorTemp || 0),
+      outdoorWindSpeed: Number(state.thermostat.outdoorWindSpeed || 0),
+      outdoorWindUnit: state.thermostat.outdoorWindUnit || "mph",
       away: Boolean(state.thermostat.away),
       preset_mode: state.thermostat.away ? "away" : "home",
       presetMode: state.thermostat.away ? "away" : "home",

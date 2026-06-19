@@ -221,22 +221,11 @@ def _migrate_panel_config(config: object) -> dict | None:
 
     if isinstance(migrated.get("thermostat"), dict):
         thermostat = _merge_thermostat_state(migrated["thermostat"])
-        # The panel config is long-term settings, not live relay/runtime state.
-        # Keep away because the UI intentionally persists Home/Away, but do not
-        # force old cooldown/lockout flags into the saved settings file.
-        for runtime_key in (
-            "autoPendingMode",
-            "autoLockoutUntil",
-            "manualLockoutUntil",
-            "lastHeatRunAt",
-            "lastCoolRunAt",
-            "equipmentLastHeatRunAt",
-            "equipmentLastCoolRunAt",
-            "coolRelayWasOn",
-            "coolFanHoldUntil",
-        ):
-            if runtime_key not in migrated["thermostat"]:
-                thermostat.pop(runtime_key, None)
+        # The panel config is long-term settings, not live thermostat state.
+        # Runtime readings, relay states, lockout timers, weather values and
+        # auto-switch notices stay in RAM so normal operation and Wi-Fi outages
+        # do not rewrite panel-config.json over and over.
+        thermostat = _thermostat_persist_payload(thermostat)
         migrated["thermostat"] = thermostat
 
     if isinstance(migrated.get("alarm"), dict):
@@ -795,6 +784,36 @@ THERMOSTAT_PERSIST_KEYS = (
     "limits",
 )
 
+THERMOSTAT_RUNTIME_KEYS = (
+    "currentTemp",
+    "currentTempUpdatedAt",
+    "humidity",
+    "outdoorTemp",
+    "outdoorWindSpeed",
+    "outdoorWindUnit",
+    "autoPendingMode",
+    "autoLockoutUntil",
+    "manualPendingMode",
+    "manualLockoutUntil",
+    "lastHeatRunAt",
+    "lastCoolRunAt",
+    "equipmentLastHeatRunAt",
+    "equipmentLastCoolRunAt",
+    "coolRelayWasOn",
+    "coolFanHoldUntil",
+    "autoSwitchNotice",
+    "autoSwitchHold",
+    "relays",
+    "relayFan",
+    "relayHeat",
+    "relayCool",
+    "hvacAction",
+    "hvac_action",
+    "safetyMode",
+    "presetMode",
+    "preset_mode",
+)
+
 
 def _thermostat_persist_payload(thermostat: dict) -> dict:
     """Return only long-term thermostat settings that are worth SD-card persistence.
@@ -863,12 +882,14 @@ def _read_thermostat_record() -> dict:
         return _deepcopy_json(_THERMOSTAT_RECORD_CACHE)
 
 
-def _write_thermostat_record(thermostat: dict, *, force: bool = False) -> dict:
+def _write_thermostat_record(thermostat: dict, *, force: bool = False, persist: bool = True) -> dict:
     """Update thermostat state in RAM and avoid SD writes for live runtime changes.
 
     Live readings, relay flags and lockout timers can change frequently. Those
     are kept in RAM for the local API and Home Assistant, while long-term
     thermostat choices still persist to the SD card when they actually change.
+    Pass persist=False for sensor/control-loop updates that must never touch
+    the SD card.
     """
     global _THERMOSTAT_RECORD_CACHE, _THERMOSTAT_RECORD_LAST_PERSIST_SIGNATURE, _THERMOSTAT_RECORD_DIRTY
     with _THERMOSTAT_RECORD_LOCK:
@@ -883,6 +904,8 @@ def _write_thermostat_record(thermostat: dict, *, force: bool = False) -> dict:
             "thermostat": merged,
         }
         _THERMOSTAT_RECORD_CACHE = record
+        if not persist:
+            return _deepcopy_json(record)
         signature = _thermostat_persist_signature(merged)
         should_write = force or signature != _THERMOSTAT_RECORD_LAST_PERSIST_SIGNATURE or not THERMOSTAT_STATE_FILE.exists()
         _THERMOSTAT_RECORD_DIRTY = should_write
@@ -1287,7 +1310,7 @@ def _config_backup_filename() -> str:
 def _config_export_payload(server_port: int | str | None = None) -> dict:
     _flush_thermostat_state_to_disk()
     panel_record = _read_panel_config_record()
-    thermostat_record = _read_thermostat_record()
+    thermostat_record = _thermostat_record_for_disk(_read_thermostat_record())
     exported_at = int(time.time())
     return {
         "ok": True,
@@ -2255,16 +2278,14 @@ def _apply_local_temperature_sensor_if_needed(record: dict) -> dict:
         return thermostat
     if not (-40.0 <= next_temp <= 130.0):
         return thermostat
-    source = str(thermostat.get("currentTempSource") or "").strip().lower()
     label = str(sensor.get("label") or "Onboard Temp Sensor").strip() or "Onboard Temp Sensor"
-    next_source = "onboard" if source in LOCAL_TEMP_SOURCE_NAMES else "onboard-fallback"
     updated = dict(thermostat)
     updated["currentTemp"] = next_temp
     updated["currentTempUpdatedAt"] = int(now)
-    updated["currentTempSource"] = next_source
-    updated["currentTempSourceName"] = label
+    updated["runtimeTempSource"] = "onboard"
+    updated["runtimeTempSourceName"] = label
     if updated != thermostat:
-        _write_thermostat_record(updated)
+        _write_thermostat_record(updated, persist=False)
     return updated
 
 
