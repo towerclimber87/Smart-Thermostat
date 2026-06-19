@@ -4,7 +4,6 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WEB_SERVICE_NAME="smart-thermostat-web.service"
 KIOSK_SERVICE_NAME="smart-thermostat-kiosk.service"
-NATIVE_SERVICE_NAME="smart-thermostat-native.service"
 UPDATE_AGENT_SERVICE_NAME="smart-thermostat-update-agent.service"
 NETWORK_WATCHDOG_SERVICE_NAME="smart-thermostat-network-watchdog.service"
 
@@ -33,7 +32,6 @@ install_packages() {
     openbox
     dbus-x11
     unclutter
-    python3-tk
   )
 
   if apt-cache show wlr-randr >/dev/null 2>&1; then
@@ -55,13 +53,12 @@ install_packages() {
     fi
   done
 
-  # Chromium is no longer required for the wall display.  Keep it optional so
-  # existing browser-kiosk installs can still be serviced, but do not make the
-  # appliance depend on it.
   if apt-cache show chromium-browser >/dev/null 2>&1; then
     packages+=(chromium-browser)
   elif apt-cache show chromium >/dev/null 2>&1; then
     packages+=(chromium)
+  else
+    echo "WARNING: Could not find chromium-browser or chromium in apt. Install Chromium before enabling kiosk mode." >&2
   fi
 
   sudo apt-get install -y "${packages[@]}"
@@ -158,9 +155,7 @@ EOF_REBOOT_HELPER
   sudo tee /etc/sudoers.d/smart-thermostat-panel >/dev/null <<EOF_SUDOERS
 Cmnd_Alias SMART_THERMOSTAT_REBOOT = /usr/local/sbin/smart-thermostat-reboot, /usr/bin/systemctl reboot, /bin/systemctl reboot, ${systemctl_bin} reboot, /usr/sbin/reboot, /sbin/reboot, /usr/bin/reboot
 Cmnd_Alias SMART_THERMOSTAT_WEB_RESTART = /usr/bin/systemctl restart ${WEB_SERVICE_NAME}, /bin/systemctl restart ${WEB_SERVICE_NAME}, ${systemctl_bin} restart ${WEB_SERVICE_NAME}
-Cmnd_Alias SMART_THERMOSTAT_NATIVE_RESTART = /usr/bin/systemctl restart ${NATIVE_SERVICE_NAME}, /bin/systemctl restart ${NATIVE_SERVICE_NAME}, ${systemctl_bin} restart ${NATIVE_SERVICE_NAME}
-Cmnd_Alias SMART_THERMOSTAT_DISPLAY_RESTART = /usr/bin/systemctl restart ${WEB_SERVICE_NAME} ${NATIVE_SERVICE_NAME}, /bin/systemctl restart ${WEB_SERVICE_NAME} ${NATIVE_SERVICE_NAME}, ${systemctl_bin} restart ${WEB_SERVICE_NAME} ${NATIVE_SERVICE_NAME}
-${INSTALL_USER} ALL=(root) NOPASSWD: SMART_THERMOSTAT_REBOOT, SMART_THERMOSTAT_WEB_RESTART, SMART_THERMOSTAT_NATIVE_RESTART, SMART_THERMOSTAT_DISPLAY_RESTART
+${INSTALL_USER} ALL=(root) NOPASSWD: SMART_THERMOSTAT_REBOOT, SMART_THERMOSTAT_WEB_RESTART
 EOF_SUDOERS
   sudo chmod 440 /etc/sudoers.d/smart-thermostat-panel
   sudo visudo -cf /etc/sudoers.d/smart-thermostat-panel >/dev/null
@@ -174,13 +169,12 @@ if getent group i2c >/dev/null 2>&1; then
   sudo usermod -aG i2c "${INSTALL_USER}" || true
 fi
 enable_i2c
-chmod +x "${PROJECT_DIR}/scripts/install-pi.sh" "${PROJECT_DIR}/scripts/kiosk-launch.sh" "${PROJECT_DIR}/scripts/kiosk-xinit.sh" "${PROJECT_DIR}/scripts/native-launch.sh" "${PROJECT_DIR}/scripts/native-xinit.sh" "${PROJECT_DIR}/scripts/appliance-mode.sh" "${PROJECT_DIR}/scripts/configure-pi-display.sh" "${PROJECT_DIR}/scripts/network_watchdog.py" 2>/dev/null || true
+chmod +x "${PROJECT_DIR}/scripts/install-pi.sh" "${PROJECT_DIR}/scripts/kiosk-launch.sh" "${PROJECT_DIR}/scripts/kiosk-xinit.sh" "${PROJECT_DIR}/scripts/configure-pi-display.sh" "${PROJECT_DIR}/scripts/network_watchdog.py" 2>/dev/null || true
 install_xorg_kiosk_permissions
 install_appliance_boot_mode
 
 install_service "${WEB_SERVICE_NAME}"
 install_service "${KIOSK_SERVICE_NAME}"
-install_service "${NATIVE_SERVICE_NAME}"
 install_service "${UPDATE_AGENT_SERVICE_NAME}"
 install_service "${NETWORK_WATCHDOG_SERVICE_NAME}"
 
@@ -213,33 +207,18 @@ EOF_KIOSK
   sudo chmod 600 /etc/smart-thermostat/kiosk.env
 fi
 
-if [[ ! -f /etc/smart-thermostat/native.env ]]; then
-  sudo tee /etc/smart-thermostat/native.env >/dev/null <<'EOF_NATIVE'
-SMART_THERMOSTAT_API=http://127.0.0.1:8080
-SMART_NATIVE_HEALTH_TIMEOUT_SECONDS=75
-SMART_NATIVE_ROTATION=left
-SMART_NATIVE_TOUCH_MATRIX=-1 0 1 0 -1 1 0 0 1
-SMART_NATIVE_POLL_MS=1500
-SMART_NATIVE_SLOW_POLL_MS=8000
-SMART_NATIVE_THERMOSTAT_ONLY=0
-SMART_NATIVE_VISUAL_MODE=web_parity
-EOF_NATIVE
-  sudo chmod 600 /etc/smart-thermostat/native.env
-fi
-
 install_sudoers
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now "${WEB_SERVICE_NAME}"
 sudo systemctl enable --now "${NETWORK_WATCHDOG_SERVICE_NAME}"
-sudo systemctl disable --now "${KIOSK_SERVICE_NAME}" >/dev/null 2>&1 || true
-sudo systemctl enable --now "${NATIVE_SERVICE_NAME}" || true
+sudo systemctl enable --now "${KIOSK_SERVICE_NAME}" || true
 if [[ -f "/etc/systemd/system/${UPDATE_AGENT_SERVICE_NAME}" ]]; then
   sudo systemctl enable --now "${UPDATE_AGENT_SERVICE_NAME}" || true
 fi
 
-echo "IHA web service, native thermostat display service, and network watchdog installed."
+echo "IHA web service, self-starting Chromium/Xorg kiosk service, and network watchdog installed."
 echo "Web UI: http://localhost:8080"
-echo "Native display service: sudo systemctl status ${NATIVE_SERVICE_NAME}"
+echo "Kiosk service: sudo systemctl status ${KIOSK_SERVICE_NAME}"
 echo "Waveshare 10.1 DSI rotation helper: sudo ${PROJECT_DIR}/scripts/configure-pi-display.sh 90"
 echo "Home Assistant discovery uses mDNS service _iha-thermostat._tcp.local."
