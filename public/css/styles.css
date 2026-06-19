@@ -13667,3 +13667,62 @@ body.booting .boot-overlay {
     display: none;
   }
 }
+
+/* 2026-06-19 v8.9: Raspberry Pi 3B kiosk performance profile.
+   The Pi 3B can peg the Chromium GPU/Xorg process when rotating an 800x1280
+   DSI panel and rendering large blur/glow layers.  This profile keeps the UI
+   premium-looking but removes the costly real-time compositing work so touch
+   page changes stay snappy. */
+body.pi-performance-mode,
+.app-shell.pi-performance-mode {
+  --shadow: 0 12px 28px rgba(0, 0, 0, 0.34);
+}
+.app-shell.pi-performance-mode .ambient,
+.app-shell.pi-performance-mode .climate-backdrop,
+.app-shell.pi-performance-mode .climate-symbol,
+.app-shell.pi-performance-mode .boot-ring {
+  display: none !important;
+}
+.app-shell.pi-performance-mode *,
+.app-shell.pi-performance-mode *::before,
+.app-shell.pi-performance-mode *::after {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  filter: none !important;
+  animation-duration: .001s !important;
+  animation-iteration-count: 1 !important;
+}
+.app-shell.pi-performance-mode .screen-track {
+  transition: transform 120ms ease-out !important;
+  will-change: transform;
+}
+.app-shell.pi-performance-mode .nav-pill,
+.app-shell.pi-performance-mode .clock,
+.app-shell.pi-performance-mode .icon-button,
+.app-shell.pi-performance-mode .panel-lock-button,
+.app-shell.pi-performance-mode .segment,
+.app-shell.pi-performance-mode .mode-button,
+.app-shell.pi-performance-mode .scene-btn,
+.app-shell.pi-performance-mode .blind-action,
+.app-shell.pi-performance-mode .room-tab,
+.app-shell.pi-performance-mode .temp-step,
+.app-shell.pi-performance-mode .transport {
+  transition: background-color 80ms linear, color 80ms linear, border-color 80ms linear, opacity 80ms linear !important;
+}
+.app-shell.pi-performance-mode .panel,
+.app-shell.pi-performance-mode .thermo-dial,
+.app-shell.pi-performance-mode .audio-main-card,
+.app-shell.pi-performance-mode .blind-card,
+.app-shell.pi-performance-mode .light-card,
+.app-shell.pi-performance-mode .room-control-card,
+.app-shell.pi-performance-mode .settings-sheet,
+.app-shell.pi-performance-mode .modal-card,
+.app-shell.pi-performance-mode .alarm-control-widget,
+.app-shell.pi-performance-mode .door-status-widget {
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.10), 0 8px 20px rgba(0,0,0,.22) !important;
+}
+.app-shell.pi-performance-mode .app-shell::before,
+.app-shell.pi-performance-mode::before,
+.app-shell.pi-performance-mode::after {
+  background-size: auto !important;
+}

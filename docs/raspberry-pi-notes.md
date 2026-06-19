@@ -167,3 +167,23 @@ Check logs with:
 ```bash
 journalctl -u smart-thermostat-kiosk.service -n 120 --no-pager
 ```
+
+## 2026-06-19 Pi 3B kiosk performance profile
+
+For the Waveshare 10.1 inch DSI panel on Raspberry Pi 3B, the kiosk now defaults to a Pi performance profile:
+
+- X11 rotates the portrait-native DSI panel to landscape with `xrandr --fb 1280x800 --output DSI-1 --mode 800x1280 --rotate left`.
+- The Goodix touchscreen is calibrated against the rotated panel by selecting the `slave pointer` Goodix device and applying `Coordinate Transformation Matrix -1 0 1 0 -1 1 0 0 1`.
+- Chromium defaults to low-power software-friendly flags instead of forcing GPU rasterization. This avoids the Chromium GPU process pegging the Pi 3B CPU when Xorg is rotating the display.
+- The web app enables `.pi-performance-mode`, which removes expensive blur/filter/ambient layers and shortens page transitions so tab changes respond quickly on the wall panel.
+- Home Assistant and local polling timers are staggered so several sync jobs do not fire on the exact same millisecond every 5 seconds.
+
+Optional overrides in `/etc/smart-thermostat/kiosk.env`:
+
+```bash
+SMART_KIOSK_LOW_POWER_MODE=1
+SMART_KIOSK_ROTATION=left
+SMART_KIOSK_TOUCH_MATRIX="-1 0 1 0 -1 1 0 0 1"
+```
+
+Set `SMART_KIOSK_ROTATION=none` only for debugging an unrotated panel.
