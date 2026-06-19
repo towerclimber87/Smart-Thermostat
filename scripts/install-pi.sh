@@ -27,6 +27,10 @@ install_packages() {
     python3
     python3-zeroconf
     x11-xserver-utils
+    xserver-xorg
+    xinit
+    openbox
+    dbus-x11
     unclutter
   )
 
@@ -114,6 +118,15 @@ enable_i2c() {
   fi
 }
 
+install_xorg_kiosk_permissions() {
+  if [[ -d /etc/X11 ]]; then
+    sudo tee /etc/X11/Xwrapper.config >/dev/null <<'EOF_XWRAPPER'
+allowed_users=anybody
+needs_root_rights=yes
+EOF_XWRAPPER
+  fi
+}
+
 install_sudoers() {
   local systemctl_bin
   systemctl_bin="$(command -v systemctl || echo /usr/bin/systemctl)"
@@ -146,7 +159,8 @@ if getent group i2c >/dev/null 2>&1; then
   sudo usermod -aG i2c "${INSTALL_USER}" || true
 fi
 enable_i2c
-chmod +x "${PROJECT_DIR}/scripts/install-pi.sh" "${PROJECT_DIR}/scripts/kiosk-launch.sh" "${PROJECT_DIR}/scripts/configure-pi-display.sh" "${PROJECT_DIR}/scripts/network_watchdog.py" 2>/dev/null || true
+chmod +x "${PROJECT_DIR}/scripts/install-pi.sh" "${PROJECT_DIR}/scripts/kiosk-launch.sh" "${PROJECT_DIR}/scripts/kiosk-xinit.sh" "${PROJECT_DIR}/scripts/configure-pi-display.sh" "${PROJECT_DIR}/scripts/network_watchdog.py" 2>/dev/null || true
+install_xorg_kiosk_permissions
 
 install_service "${WEB_SERVICE_NAME}"
 install_service "${KIOSK_SERVICE_NAME}"
@@ -169,9 +183,9 @@ if [[ ! -f /etc/smart-thermostat/kiosk.env ]]; then
 SMART_THERMOSTAT_URL=http://127.0.0.1:8080
 SMART_KIOSK_PROFILE_DIR=/tmp/smart-thermostat-chromium-profile
 SMART_KIOSK_CACHE_DIR=/tmp/smart-thermostat-chromium-cache
-SMART_KIOSK_HEALTH_TIMEOUT_SECONDS=45
+SMART_KIOSK_HEALTH_TIMEOUT_SECONDS=75
 # auto, wayland, or x11. Auto lets the launcher use Wayland when the desktop exposes it.
-SMART_KIOSK_OZONE_PLATFORM=auto
+SMART_KIOSK_OZONE_PLATFORM=x11
 # Optional extra Chromium flags. Example:
 # SMART_KIOSK_EXTRA_FLAGS=--force-device-scale-factor=1
 SMART_KIOSK_EXTRA_FLAGS=
@@ -189,12 +203,7 @@ if [[ -f "/etc/systemd/system/${UPDATE_AGENT_SERVICE_NAME}" ]]; then
   sudo systemctl enable --now "${UPDATE_AGENT_SERVICE_NAME}" || true
 fi
 
-if systemctl get-default | grep -q '^multi-user.target$'; then
-  echo "NOTE: this Pi is set to boot to console. Kiosk mode needs the graphical desktop target."
-  echo "Run: sudo systemctl set-default graphical.target"
-fi
-
-echo "IHA web service, Chromium kiosk service, and network watchdog installed."
+echo "IHA web service, self-starting Chromium/Xorg kiosk service, and network watchdog installed."
 echo "Web UI: http://localhost:8080"
 echo "Kiosk service: sudo systemctl status ${KIOSK_SERVICE_NAME}"
 echo "Waveshare 10.1 DSI rotation helper: sudo ${PROJECT_DIR}/scripts/configure-pi-display.sh 90"

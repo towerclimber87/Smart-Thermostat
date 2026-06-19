@@ -8,6 +8,16 @@ HEALTH_TIMEOUT_SECONDS="${SMART_KIOSK_HEALTH_TIMEOUT_SECONDS:-45}"
 EXTRA_FLAGS="${SMART_KIOSK_EXTRA_FLAGS:-}"
 OZONE_PLATFORM="${SMART_KIOSK_OZONE_PLATFORM:-auto}"
 
+ensure_runtime_dir() {
+  local runtime_dir="${XDG_RUNTIME_DIR:-}"
+  if [[ -z "${runtime_dir}" || ! -d "${runtime_dir}" || ! -w "${runtime_dir}" ]]; then
+    runtime_dir="/tmp/smart-thermostat-runtime-$(id -u)"
+    mkdir -p "${runtime_dir}"
+    chmod 700 "${runtime_dir}"
+    export XDG_RUNTIME_DIR="${runtime_dir}"
+  fi
+}
+
 find_chromium() {
   if command -v chromium-browser >/dev/null 2>&1; then
     command -v chromium-browser
@@ -49,7 +59,7 @@ PY
 }
 
 wait_for_display() {
-  export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  ensure_runtime_dir
   export XAUTHORITY="${XAUTHORITY:-/home/${USER}/.Xauthority}"
 
   local started
@@ -106,6 +116,7 @@ prepare_display() {
 }
 
 main() {
+  ensure_runtime_dir
   wait_for_panel
   prepare_display
 

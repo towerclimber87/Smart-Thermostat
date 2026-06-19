@@ -1,7 +1,8 @@
 [Unit]
 Description=IHA Chromium kiosk display
-After=graphical.target smart-thermostat-web.service
-Wants=graphical.target smart-thermostat-web.service
+After=systemd-user-sessions.service smart-thermostat-web.service
+Wants=smart-thermostat-web.service
+Conflicts=getty@tty7.service
 
 [Service]
 Type=simple
@@ -9,11 +10,14 @@ User=__USER__
 WorkingDirectory=__PROJECT_DIR__
 Environment=DISPLAY=:0
 Environment=XAUTHORITY=/home/__USER__/.Xauthority
-Environment=XDG_RUNTIME_DIR=/run/user/__UID__
+Environment=XDG_RUNTIME_DIR=/tmp/smart-thermostat-runtime-__UID__
 EnvironmentFile=-/etc/smart-thermostat/kiosk.env
-ExecStart=__PROJECT_DIR__/scripts/kiosk-launch.sh
+ExecStart=__PROJECT_DIR__/scripts/kiosk-xinit.sh
 Restart=always
-RestartSec=2
+RestartSec=3
+TTYPath=/dev/tty7
+StandardOutput=journal
+StandardError=journal
 
 [Install]
-WantedBy=graphical.target
+WantedBy=multi-user.target

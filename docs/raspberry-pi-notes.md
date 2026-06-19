@@ -151,3 +151,19 @@ vcgencmd get_throttled
 ## Notes on power/heat
 
 The kiosk intentionally avoids Electron and keeps Chromium stripped down. Do not disable GPU acceleration unless you see display artifacts, because software rendering usually increases CPU load and heat. If the wall case gets warm, verify the HAT fan is running and confirm the screen brightness/backlight setting on the display hardware.
+
+## Kiosk boot note
+
+Version 8.8 starts its own minimal Xorg/Openbox kiosk session from systemd. It no longer depends on the Pi being logged into the full graphical desktop. If the panel only shows the normal Raspberry Pi splash screen, reinstall this version and restart the kiosk service:
+
+```bash
+cd ~/Smart-Thermostat-Development
+./scripts/install-pi.sh
+sudo systemctl restart smart-thermostat-web.service smart-thermostat-kiosk.service
+```
+
+Check logs with:
+
+```bash
+journalctl -u smart-thermostat-kiosk.service -n 120 --no-pager
+```
