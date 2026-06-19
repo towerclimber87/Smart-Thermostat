@@ -24,7 +24,7 @@ from urllib import request, error
 
 try:
     import tkinter as tk
-    from tkinter import font as tkfont
+    from tkinter import font as tkfont, filedialog
 except Exception as exc:  # pragma: no cover
     raise SystemExit(
         "python3-tk is required for the native thermostat display. "
@@ -36,7 +36,7 @@ VERSION_FILE = ROOT / "VERSION"
 DEFAULT_API_BASE = os.environ.get("SMART_THERMOSTAT_API", "http://127.0.0.1:8080").rstrip("/")
 POLL_MS = int(os.environ.get("SMART_NATIVE_POLL_MS", "1500"))
 SLOW_POLL_MS = int(os.environ.get("SMART_NATIVE_SLOW_POLL_MS", "8000"))
-THERMOSTAT_ONLY = os.environ.get("SMART_NATIVE_THERMOSTAT_ONLY", "1").strip().lower() not in {"0", "false", "no", "off"}
+THERMOSTAT_ONLY = os.environ.get("SMART_NATIVE_THERMOSTAT_ONLY", "0").strip().lower() not in {"0", "false", "no", "off"}
 VISUAL_MODE = os.environ.get("SMART_NATIVE_VISUAL_MODE", "web_parity").strip().lower()
 BG = "#121820"
 BG_2 = "#171d27"
@@ -162,6 +162,7 @@ class NativeThermostatApp:
         self.locked = False
         self.modal: str | None = None
         self.modal_data: dict[str, Any] = {}
+        self.schedule_shortcuts_open = True
         self.code_buffer = ""
         self.status: dict[str, Any] = {}
         self.thermostat: dict[str, Any] = {}
@@ -365,6 +366,8 @@ class NativeThermostatApp:
         self.canvas.configure(bg=BG)
         self.draw_background()
         self.draw_header()
+        if not THERMOSTAT_ONLY:
+            self.draw_top_nav()
         if THERMOSTAT_ONLY and self.page != "thermostat":
             self.page = "thermostat"
         if self.page == "thermostat":
@@ -379,8 +382,7 @@ class NativeThermostatApp:
             self.draw_room_controls()
         else:
             self.draw_thermostat()
-        if not THERMOSTAT_ONLY:
-            self.draw_bottom_nav()
+        # Top navigation owns page switching in the native appliance UI.
         if self.last_error:
             self.text(self.sx(20), self.sy(770), self.last_error[:120], 11, RED, anchor="w")
         if self.toast and time.time() < self.toast_until:
@@ -422,6 +424,21 @@ class NativeThermostatApp:
         self.circle_button(1210, 47, 20, "i", lambda: self.open_info(), fill="#123144", outline="#2c6a82", color=CYAN_2, size=18)
         self.circle_button(1248, 47, 20, "⚙", lambda: self.open_settings(), fill="#242b34", outline="#3b4551", color=MUTED, size=15)
 
+
+    def draw_top_nav(self) -> None:
+        pages = [("blinds", "Blinds"), ("audio", "Audio"), ("thermostat", "Thermostat"), ("lights", "Lights"), ("room", "Room")]
+        w, h, gap = 118, 36, 10
+        total = w * len(pages) + gap * (len(pages) - 1)
+        x = (1280 - total) // 2
+        y = 29
+        for page, label in pages:
+            active = self.page == page
+            fill = "#45c8f6" if active else "#202833"
+            outline = "#7de7ff" if active else "#3b4654"
+            color = BLACK if active else TEXT
+            self.button(self.sx(x), self.sy(y), self.sx(x+w), self.sy(y+h), label, lambda p=page: self.set_page(p), fill=fill, outline=outline, text=color, tag=f"nav:{page}")
+            x += w + gap
+
     def draw_bottom_nav(self) -> None:
         pages = [("thermostat", "Thermostat"), ("blinds", "Blinds"), ("audio", "Audio"), ("lights", "Lights"), ("room", "Room")]
         w = 230
@@ -432,6 +449,9 @@ class NativeThermostatApp:
             self.button(x1, y1, x2, y2, label, lambda p=page: self.set_page(p), fill=fill, text=TEXT)
 
     def set_page(self, page: str) -> None:
+        if self.locked and page != self.page:
+            self.show_toast("Panel locked")
+            return
         self.page = page
         self.draw()
 
@@ -468,8 +488,9 @@ class NativeThermostatApp:
         self.draw_status_tile(1020, 412, 150, 112, "Alarmo", self.alarm_label(), "shield", GREEN, lambda: self.open_alarm())
         self.draw_virtual_outputs(relays, current)
 
-        # Bottom controls: schedule shortcut, humidity, modes, fan.
-        self.circle_button(54, 708, 24, "S", lambda: self.show_toast("Schedule shortcuts are available from settings"), fill="#143543", outline="#276273", color=TEXT, size=22)
+        # Schedule preset shortcuts + bottom controls.
+        self.draw_schedule_preset_bar()
+        self.circle_button(54, 708, 24, "S", lambda: self.open_schedule(), fill="#143543", outline="#276273", color=TEXT, size=22)
         self.pill(self.sx(244), self.sy(686), self.sx(350), self.sy(732), f"HUMIDITY   {hum:.0f}%", fill="#242b34", outline="#3a444f", color=TEXT, size=15)
         self.segmented_control(500, 686, 360, 46, [("cool","Cool"),("heat","Heat"),("auto","Auto"),("away","Away")], "away" if away else mode, lambda v: self.toggle_away() if v == "away" else self.set_mode(v))
         self.segmented_control(888, 686, 152, 46, [("fan","Fan"),("auto", title_case(fan or "auto"))], "auto", lambda _v: self.set_fan("on" if fan != "on" else "auto"), label_first=True)
@@ -598,6 +619,41 @@ class NativeThermostatApp:
         self.button(self.sx(860), self.sy(610), self.sx(1115), self.sy(684), "Hardware", lambda: self.open_hardware(), fill="#12293a")
         self.button(self.sx(1135), self.sy(610), self.sx(1245), self.sy(684), "Lock" if not self.locked else "Unlock", lambda: self.toggle_lock(), fill="#12293a")
 
+
+    def get_schedules(self) -> list[dict[str, Any]]:
+        schedules = self.thermostat.get("schedules") or []
+        if not schedules and isinstance(self.config, dict):
+            schedules = (self.config.get("thermostat") or {}).get("schedules") or []
+        return [item for item in schedules if isinstance(item, dict)]
+
+    def schedule_detail(self, sched: dict[str, Any]) -> str:
+        mode = str(self.thermostat.get("mode", "cool")).lower()
+        if mode == "heat":
+            value = sched.get("heatSetpoint", sched.get("heatTarget"))
+            return f"{as_float(value, 71):.0f}° Heat" if value is not None else str(sched.get("time", ""))
+        value = sched.get("coolSetpoint", sched.get("coolTarget"))
+        return f"{as_float(value, 68):.0f}° Cool" if value is not None else str(sched.get("time", ""))
+
+    def draw_schedule_preset_bar(self) -> None:
+        schedules = [s for s in self.get_schedules() if s.get("enabled", True) is not False]
+        if not schedules:
+            return
+        # Matches the web preset strip: small named shortcuts above the bottom controls.
+        max_items = min(5, len(schedules))
+        w, h, gap = 156, 44, 10
+        total = w * max_items + gap * (max_items - 1)
+        x = (1280 - total) // 2
+        y = 622
+        for sched in schedules[:max_items]:
+            name = str(sched.get("name") or sched.get("label") or "Schedule")[:16]
+            detail = self.schedule_detail(sched)
+            x1,y1,x2,y2 = self.sx(x), self.sy(y), self.sx(x+w), self.sy(y+h)
+            self.buttons.append(ButtonSpec(x1,y1,x2,y2,name,lambda s=sched:self.apply_schedule(s),"#132c3e","#275774",TEXT))
+            self.round_rect(x1,y1,x2,y2,self.sy(12),"#132c3e","#275774",2)
+            self.text((x1+x2)//2, y1+self.sy(15), name, 12, TEXT, "bold")
+            self.text((x1+x2)//2, y1+self.sy(32), detail, 10, CYAN_2, "bold")
+            x += w + gap
+
     def draw_schedules(self) -> None:
         schedules = self.thermostat.get("schedules") or []
         if not schedules:
@@ -642,10 +698,18 @@ class NativeThermostatApp:
         self._run_busy("Pause", lambda: self.control({"pauseFunctionResumeMs": int(time.time()*1000) + 5*60*1000}))
 
     def apply_schedule(self, sched: dict[str, Any]) -> None:
-        target = sched.get("targetTemp") or sched.get("temperature") or sched.get("coolTarget") or sched.get("heatTarget")
+        mode = str(self.thermostat.get("mode", "cool")).lower()
+        target = None
+        if mode == "heat":
+            target = sched.get("heatSetpoint", sched.get("heatTarget"))
+        else:
+            target = sched.get("coolSetpoint", sched.get("coolTarget"))
+        if target is None:
+            target = sched.get("targetTemp") or sched.get("temperature")
         if target is None:
             self.show_toast("Schedule has no quick target")
             return
+        self.close_modal()
         self._run_busy("Schedule", lambda: self.control({"targetTemp": as_float(target, 70)}))
 
     def draw_blinds(self) -> None:
@@ -804,6 +868,9 @@ class NativeThermostatApp:
         else:
             self.locked = True; self.show_toast("Panel locked")
 
+    def open_schedule(self) -> None:
+        self.modal = "schedule"; self.modal_data = {}; self.draw()
+
     def open_alarm(self) -> None:
         self.modal = "alarm"; self.modal_data = {}; self.draw()
 
@@ -824,6 +891,8 @@ class NativeThermostatApp:
             self.draw_alarm_modal(x1,y1,x2,y2)
         elif self.modal == "hardware":
             self.draw_hardware_modal(x1,y1,x2,y2)
+        elif self.modal == "schedule":
+            self.draw_schedule_modal(x1,y1,x2,y2)
 
     def draw_info_modal(self, x1:int,y1:int,x2:int,y2:int) -> None:
         info = self.system_info or {}
@@ -838,8 +907,39 @@ class NativeThermostatApp:
         y = y1+self.sy(105)
         for line in lines:
             self.text(x1+self.sx(45), y, line, 19, MUTED, "bold", "w"); y += self.sy(38)
-        self.button(x1+self.sx(50), y2-self.sy(115), x1+self.sx(275), y2-self.sy(55), "Fetch Update", lambda: self.fetch_update(), fill="#17405a", text=CYAN)
-        self.button(x1+self.sx(295), y2-self.sy(115), x1+self.sx(520), y2-self.sy(55), "Restart", lambda: self.restart_panel(), fill="#402817", text=YELLOW)
+        self.button(x1+self.sx(40), y2-self.sy(118), x1+self.sx(215), y2-self.sy(58), "Fetch Update", lambda: self.fetch_update(), fill="#17405a", text=CYAN)
+        self.button(x1+self.sx(235), y2-self.sy(118), x1+self.sx(410), y2-self.sy(58), "Upload Config", lambda: self.upload_config(), fill="#163d2a", text=GREEN)
+        self.button(x1+self.sx(430), y2-self.sy(118), x1+self.sx(590), y2-self.sy(58), "Restart", lambda: self.restart_panel(), fill="#402817", text=YELLOW)
+        self.button(x2-self.sx(190), y2-self.sy(90), x2-self.sx(45), y2-self.sy(35), "Close", lambda: self.close_modal(), fill="#173246")
+
+
+    def draw_schedule_modal(self, x1:int,y1:int,x2:int,y2:int) -> None:
+        schedules = [s for s in self.get_schedules() if s.get("enabled", True) is not False]
+        self.text((x1+x2)//2, y1+self.sy(42), "Schedule Shortcuts", 30, TEXT, "bold")
+        self.text((x1+x2)//2, y1+self.sy(78), "Tap a schedule to apply its current mode setpoint now.", 14, MUTED, "bold")
+        if not schedules:
+            self.text((x1+x2)//2, y1+self.sy(180), "No saved schedules are currently available.", 20, MUTED, "bold")
+        else:
+            cols = 2
+            card_w, card_h = 295, 76
+            start_x = x1 + self.sx(82)
+            start_y = y1 + self.sy(120)
+            for idx, sched in enumerate(schedules[:8]):
+                col = idx % cols
+                row = idx // cols
+                bx = start_x + self.sx(col * (card_w + 34))
+                by = start_y + self.sy(row * (card_h + 20))
+                name = str(sched.get("name") or sched.get("label") or "Schedule")[:26]
+                detail = self.schedule_detail(sched)
+                xA,yA,xB,yB = bx,by,bx+self.sx(card_w),by+self.sy(card_h)
+                self.buttons.append(ButtonSpec(xA,yA,xB,yB,name,lambda s=sched:self.apply_schedule(s),"#132c3e","#2a6485",TEXT))
+                self.round_rect(xA,yA,xB,yB,self.sy(16),"#132c3e","#2a6485",2)
+                self.text(xA+self.sx(20), yA+self.sy(25), name, 17, TEXT, "bold", "w")
+                detail_parts = []
+                if sched.get("time"):
+                    detail_parts.append(str(sched.get("time")))
+                detail_parts.append(detail)
+                self.text(xA+self.sx(20), yA+self.sy(52), "  •  ".join(detail_parts), 13, CYAN_2, "bold", "w")
         self.button(x2-self.sx(190), y2-self.sy(90), x2-self.sx(45), y2-self.sy(35), "Close", lambda: self.close_modal(), fill="#173246")
 
     def draw_code_modal(self, x1:int,y1:int,x2:int,y2:int) -> None:
@@ -934,6 +1034,36 @@ class NativeThermostatApp:
                 raise RuntimeError(result.get("error", "Update failed"))
             return result.get("message", "Update complete")
         self._run_busy("Update", run)
+
+
+    def upload_config(self) -> None:
+        def choose_and_upload() -> str:
+            # Tk file dialog must run on the UI thread.  This method is called from a button handler,
+            # then the actual upload runs in the normal background worker.
+            return ""
+        try:
+            filename = filedialog.askopenfilename(
+                parent=self.root,
+                title="Upload Smart Thermostat Config",
+                filetypes=(("JSON config", "*.json"), ("All files", "*.*")),
+            )
+        except Exception as exc:
+            self.show_toast(f"File picker failed: {exc}")
+            return
+        if not filename:
+            return
+        path = Path(filename)
+        def run() -> str:
+            try:
+                backup = json.loads(path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                raise RuntimeError(f"Could not read config JSON: {exc}") from exc
+            result = self.api.post("/api/system/config-import", {"backup": backup}, timeout=30)
+            if not result.get("ok"):
+                raise RuntimeError(result.get("error", "Config upload failed"))
+            self.fetch_slow()
+            return result.get("message", "Config uploaded. Settings restored.")
+        self._run_busy("Upload Config", run)
 
     def restart_panel(self) -> None:
         self._run_busy("Restart", lambda: self._post_message("/api/system/reboot", {}))
