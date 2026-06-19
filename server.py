@@ -2421,11 +2421,22 @@ def _run_git_command(args: list[str]) -> subprocess.CompletedProcess[str]:
 
 
 def _schedule_service_restart() -> None:
-    service_name = os.environ.get("SMART_THERMOSTAT_SERVICE", "smart-thermostat-web.service")
+    services_raw = os.environ.get(
+        "SMART_THERMOSTAT_RESTART_SERVICES",
+        os.environ.get("SMART_THERMOSTAT_SERVICE", "smart-thermostat-web.service"),
+    )
+    services = [item.strip() for item in services_raw.replace(";", ",").split(",") if item.strip()]
+    if not services:
+        services = ["smart-thermostat-web.service"]
 
     def _restart() -> None:
+        # Give the HTTP response time to leave the process before restarting.
         time.sleep(1.5)
-        subprocess.run(["sudo", "systemctl", "restart", service_name], check=False)
+        for service_name in services:
+            subprocess.run(["sudo", "-n", "systemctl", "restart", service_name], check=False)
+            # When restarting the API service itself first, give systemd a brief
+            # moment before restarting the display client that consumes it.
+            time.sleep(0.6)
 
     threading.Thread(target=_restart, daemon=True).start()
 

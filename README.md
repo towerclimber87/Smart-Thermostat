@@ -118,3 +118,26 @@ HVAC / sensors / blinds / audio bridge
 ```
 
 Home Assistant should eventually be an integration layer, not the required path for local thermostat changes.
+
+
+## Native appliance display
+
+Version 10 adds a native Raspberry Pi touchscreen client for the wall thermostat. The web server remains the local API/control engine and Home Assistant proxy, but the wall display is now `smart-thermostat-native.service` instead of the Chromium kiosk. This keeps GitHub Fetch Update, config storage, Home Assistant discovery, GPIO control, and the browser-accessible web UI while removing Chromium from the on-device display path.
+
+Install or repair native appliance mode with:
+
+```bash
+cd ~/Smart-Thermostat-Development
+chmod +x scripts/*.sh
+./scripts/install-pi.sh
+```
+
+For a quick repair without package install:
+
+```bash
+cd ~/Smart-Thermostat-Development
+chmod +x scripts/*.sh
+./scripts/appliance-mode.sh
+```
+
+See `docs/native-appliance.md` for details.
