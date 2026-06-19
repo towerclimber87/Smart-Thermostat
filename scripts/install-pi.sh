@@ -127,6 +127,16 @@ EOF_XWRAPPER
   fi
 }
 
+install_appliance_boot_mode() {
+  # This controller is a thermostat appliance: no LightDM/labwc desktop should
+  # compete with the kiosk for the display.  Keep the packages available for X,
+  # but disable graphical login and let smart-thermostat-kiosk own tty7.
+  sudo systemctl disable --now display-manager.service >/dev/null 2>&1 || true
+  sudo systemctl disable --now lightdm.service >/dev/null 2>&1 || true
+  sudo systemctl disable --now gdm.service >/dev/null 2>&1 || true
+  sudo systemctl set-default multi-user.target >/dev/null 2>&1 || true
+}
+
 install_sudoers() {
   local systemctl_bin
   systemctl_bin="$(command -v systemctl || echo /usr/bin/systemctl)"
@@ -161,6 +171,7 @@ fi
 enable_i2c
 chmod +x "${PROJECT_DIR}/scripts/install-pi.sh" "${PROJECT_DIR}/scripts/kiosk-launch.sh" "${PROJECT_DIR}/scripts/kiosk-xinit.sh" "${PROJECT_DIR}/scripts/configure-pi-display.sh" "${PROJECT_DIR}/scripts/network_watchdog.py" 2>/dev/null || true
 install_xorg_kiosk_permissions
+install_appliance_boot_mode
 
 install_service "${WEB_SERVICE_NAME}"
 install_service "${KIOSK_SERVICE_NAME}"
@@ -186,6 +197,9 @@ SMART_KIOSK_CACHE_DIR=/tmp/smart-thermostat-chromium-cache
 SMART_KIOSK_HEALTH_TIMEOUT_SECONDS=75
 # auto, wayland, or x11. Auto lets the launcher use Wayland when the desktop exposes it.
 SMART_KIOSK_OZONE_PLATFORM=x11
+SMART_KIOSK_LOW_POWER_MODE=1
+SMART_KIOSK_ROTATION=left
+SMART_KIOSK_TOUCH_MATRIX=-1 0 1 0 -1 1 0 0 1
 # Optional extra Chromium flags. Example:
 # SMART_KIOSK_EXTRA_FLAGS=--force-device-scale-factor=1
 SMART_KIOSK_EXTRA_FLAGS=

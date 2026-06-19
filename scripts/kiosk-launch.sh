@@ -22,6 +22,10 @@ ensure_runtime_dir() {
 }
 
 find_chromium() {
+  if [[ -x /usr/lib/chromium/chromium ]]; then
+    echo /usr/lib/chromium/chromium
+    return 0
+  fi
   if command -v chromium-browser >/dev/null 2>&1; then
     command -v chromium-browser
     return 0

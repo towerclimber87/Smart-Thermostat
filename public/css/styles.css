@@ -13726,3 +13726,47 @@ body.pi-performance-mode,
 .app-shell.pi-performance-mode::after {
   background-size: auto !important;
 }
+
+
+/* 2026-06-19 v9.0: thermostat appliance profile.
+   This wall panel is being deployed as a thermostat-only appliance.  Keep the
+   non-thermostat pages out of layout/compositing entirely so Chromium does not
+   spend CPU painting off-screen Blinds/Audio/Lights/Room content. */
+body.thermostat-appliance-mode .top-nav,
+.app-shell.thermostat-appliance-mode .top-nav {
+  display: none !important;
+}
+.app-shell.thermostat-appliance-mode .screen-track {
+  width: 100% !important;
+  transform: none !important;
+  transition: none !important;
+  will-change: auto !important;
+}
+.app-shell.thermostat-appliance-mode .screen {
+  display: none !important;
+  width: 100% !important;
+}
+.app-shell.thermostat-appliance-mode .screen-thermostat {
+  display: block !important;
+  content-visibility: visible !important;
+}
+.app-shell.thermostat-appliance-mode .screen-blinds,
+.app-shell.thermostat-appliance-mode .screen-audio,
+.app-shell.thermostat-appliance-mode .screen-lights,
+.app-shell.thermostat-appliance-mode .screen-room {
+  content-visibility: hidden !important;
+  contain: strict !important;
+}
+.app-shell.thermostat-appliance-mode .temp-mini-status {
+  display: none !important;
+}
+.app-shell.thermostat-appliance-mode .panel-controls {
+  grid-template-columns: auto 1fr auto;
+}
+.app-shell.thermostat-appliance-mode .thermostat-stage,
+.app-shell.thermostat-appliance-mode .panel,
+.app-shell.thermostat-appliance-mode .thermo-dial,
+.app-shell.thermostat-appliance-mode .alarm-control-widget,
+.app-shell.thermostat-appliance-mode .door-status-widget {
+  transform: translateZ(0);
+}
