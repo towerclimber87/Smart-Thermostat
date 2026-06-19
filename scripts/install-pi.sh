@@ -27,16 +27,8 @@ install_packages() {
     python3
     python3-zeroconf
     x11-xserver-utils
-    xserver-xorg
-    xinit
-    openbox
-    dbus-x11
     unclutter
   )
-
-  if apt-cache show wlr-randr >/dev/null 2>&1; then
-    packages+=(wlr-randr)
-  fi
 
   local optional_hardware_packages=(
     python3-gpiozero
@@ -118,25 +110,6 @@ enable_i2c() {
   fi
 }
 
-install_xorg_kiosk_permissions() {
-  if [[ -d /etc/X11 ]]; then
-    sudo tee /etc/X11/Xwrapper.config >/dev/null <<'EOF_XWRAPPER'
-allowed_users=anybody
-needs_root_rights=yes
-EOF_XWRAPPER
-  fi
-}
-
-install_appliance_boot_mode() {
-  # This controller is a thermostat appliance: no LightDM/labwc desktop should
-  # compete with the kiosk for the display.  Keep the packages available for X,
-  # but disable graphical login and let smart-thermostat-kiosk own tty7.
-  sudo systemctl disable --now display-manager.service >/dev/null 2>&1 || true
-  sudo systemctl disable --now lightdm.service >/dev/null 2>&1 || true
-  sudo systemctl disable --now gdm.service >/dev/null 2>&1 || true
-  sudo systemctl set-default multi-user.target >/dev/null 2>&1 || true
-}
-
 install_sudoers() {
   local systemctl_bin
   systemctl_bin="$(command -v systemctl || echo /usr/bin/systemctl)"
@@ -169,9 +142,7 @@ if getent group i2c >/dev/null 2>&1; then
   sudo usermod -aG i2c "${INSTALL_USER}" || true
 fi
 enable_i2c
-chmod +x "${PROJECT_DIR}/scripts/install-pi.sh" "${PROJECT_DIR}/scripts/kiosk-launch.sh" "${PROJECT_DIR}/scripts/kiosk-xinit.sh" "${PROJECT_DIR}/scripts/configure-pi-display.sh" "${PROJECT_DIR}/scripts/network_watchdog.py" 2>/dev/null || true
-install_xorg_kiosk_permissions
-install_appliance_boot_mode
+chmod +x "${PROJECT_DIR}/scripts/install-pi.sh" "${PROJECT_DIR}/scripts/kiosk-launch.sh" "${PROJECT_DIR}/scripts/network_watchdog.py" 2>/dev/null || true
 
 install_service "${WEB_SERVICE_NAME}"
 install_service "${KIOSK_SERVICE_NAME}"
@@ -194,12 +165,9 @@ if [[ ! -f /etc/smart-thermostat/kiosk.env ]]; then
 SMART_THERMOSTAT_URL=http://127.0.0.1:8080
 SMART_KIOSK_PROFILE_DIR=/tmp/smart-thermostat-chromium-profile
 SMART_KIOSK_CACHE_DIR=/tmp/smart-thermostat-chromium-cache
-SMART_KIOSK_HEALTH_TIMEOUT_SECONDS=75
+SMART_KIOSK_HEALTH_TIMEOUT_SECONDS=45
 # auto, wayland, or x11. Auto lets the launcher use Wayland when the desktop exposes it.
-SMART_KIOSK_OZONE_PLATFORM=x11
-SMART_KIOSK_LOW_POWER_MODE=1
-SMART_KIOSK_ROTATION=left
-SMART_KIOSK_TOUCH_MATRIX=-1 0 1 0 -1 1 0 0 1
+SMART_KIOSK_OZONE_PLATFORM=auto
 # Optional extra Chromium flags. Example:
 # SMART_KIOSK_EXTRA_FLAGS=--force-device-scale-factor=1
 SMART_KIOSK_EXTRA_FLAGS=
@@ -212,13 +180,17 @@ install_sudoers
 sudo systemctl daemon-reload
 sudo systemctl enable --now "${WEB_SERVICE_NAME}"
 sudo systemctl enable --now "${NETWORK_WATCHDOG_SERVICE_NAME}"
-sudo systemctl enable --now "${KIOSK_SERVICE_NAME}" || true
+sudo systemctl enable "${KIOSK_SERVICE_NAME}"
 if [[ -f "/etc/systemd/system/${UPDATE_AGENT_SERVICE_NAME}" ]]; then
   sudo systemctl enable --now "${UPDATE_AGENT_SERVICE_NAME}" || true
 fi
 
-echo "IHA web service, self-starting Chromium/Xorg kiosk service, and network watchdog installed."
+if systemctl get-default | grep -q '^multi-user.target$'; then
+  echo "NOTE: this Pi is set to boot to console. Kiosk mode needs the graphical desktop target."
+  echo "Run: sudo systemctl set-default graphical.target"
+fi
+
+echo "IHA web service, Chromium kiosk service, and network watchdog installed."
 echo "Web UI: http://localhost:8080"
-echo "Kiosk service: sudo systemctl status ${KIOSK_SERVICE_NAME}"
-echo "Waveshare 10.1 DSI rotation helper: sudo ${PROJECT_DIR}/scripts/configure-pi-display.sh 90"
+echo "Kiosk service: sudo systemctl start ${KIOSK_SERVICE_NAME}"
 echo "Home Assistant discovery uses mDNS service _iha-thermostat._tcp.local."

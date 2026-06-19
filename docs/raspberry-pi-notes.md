@@ -25,7 +25,7 @@ From the project folder:
 
 ```bash
 cd ~/Smart-Thermostat-Development
-chmod +x scripts/install-pi.sh scripts/kiosk-launch.sh scripts/configure-pi-display.sh scripts/network_watchdog.py
+chmod +x scripts/install-pi.sh scripts/kiosk-launch.sh scripts/network_watchdog.py
 ./scripts/install-pi.sh
 sudo reboot
 ```
@@ -95,28 +95,7 @@ sudo systemctl restart smart-thermostat-kiosk.service
 
 ## Touch/display orientation
 
-The Waveshare 10.1-DSI-TOUCH-A is an 800×1280 portrait-native DSI panel. The intended thermostat wall layout is landscape, so configure the Pi display and touch matrix together:
-
-```bash
-cd ~/Smart-Thermostat-Development
-sudo ./scripts/configure-pi-display.sh 90
-sudo reboot
-```
-
-If the picture is upside-down for the way the panel is mounted, use 270 instead:
-
-```bash
-sudo ./scripts/configure-pi-display.sh 270
-sudo reboot
-```
-
-The helper updates the Raspberry Pi boot config with the Waveshare DSI overlay, adds the DSI rotation command to `cmdline.txt`, and writes a libinput touch calibration rule so taps line up with the rotated picture. It also saves timestamped backups of the boot files before editing them.
-
-The settings written by the helper are also recorded here for troubleshooting:
-
-```bash
-cat /etc/smart-thermostat/display.env
-```
+The attached DSI screen is portrait-native. The UI is designed to work in either orientation, but the intended thermostat wall layout is landscape. Configure display rotation at the OS display level after the screen is attached. Keep the app URL the same.
 
 ## Home Assistant traffic optimization
 
@@ -151,39 +130,3 @@ vcgencmd get_throttled
 ## Notes on power/heat
 
 The kiosk intentionally avoids Electron and keeps Chromium stripped down. Do not disable GPU acceleration unless you see display artifacts, because software rendering usually increases CPU load and heat. If the wall case gets warm, verify the HAT fan is running and confirm the screen brightness/backlight setting on the display hardware.
-
-## Kiosk boot note
-
-Version 8.8 starts its own minimal Xorg/Openbox kiosk session from systemd. It no longer depends on the Pi being logged into the full graphical desktop. If the panel only shows the normal Raspberry Pi splash screen, reinstall this version and restart the kiosk service:
-
-```bash
-cd ~/Smart-Thermostat-Development
-./scripts/install-pi.sh
-sudo systemctl restart smart-thermostat-web.service smart-thermostat-kiosk.service
-```
-
-Check logs with:
-
-```bash
-journalctl -u smart-thermostat-kiosk.service -n 120 --no-pager
-```
-
-## 2026-06-19 Pi 3B kiosk performance profile
-
-For the Waveshare 10.1 inch DSI panel on Raspberry Pi 3B, the kiosk now defaults to a Pi performance profile:
-
-- X11 rotates the portrait-native DSI panel to landscape with `xrandr --fb 1280x800 --output DSI-1 --mode 800x1280 --rotate left`.
-- The Goodix touchscreen is calibrated against the rotated panel by selecting the `slave pointer` Goodix device and applying `Coordinate Transformation Matrix -1 0 1 0 -1 1 0 0 1`.
-- Chromium defaults to low-power software-friendly flags instead of forcing GPU rasterization. This avoids the Chromium GPU process pegging the Pi 3B CPU when Xorg is rotating the display.
-- The web app enables `.pi-performance-mode`, which removes expensive blur/filter/ambient layers and shortens page transitions so tab changes respond quickly on the wall panel.
-- Home Assistant and local polling timers are staggered so several sync jobs do not fire on the exact same millisecond every 5 seconds.
-
-Optional overrides in `/etc/smart-thermostat/kiosk.env`:
-
-```bash
-SMART_KIOSK_LOW_POWER_MODE=1
-SMART_KIOSK_ROTATION=left
-SMART_KIOSK_TOUCH_MATRIX="-1 0 1 0 -1 1 0 0 1"
-```
-
-Set `SMART_KIOSK_ROTATION=none` only for debugging an unrotated panel.

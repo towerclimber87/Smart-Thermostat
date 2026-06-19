@@ -7,8 +7,7 @@ const DIAL_START_DEG = 225;
 const LEGACY_CONFIG_STORAGE_KEY = "smartThermostat.config.v2";
 const CONFIG_API_ENDPOINT = "/api/config";
 const HISTORY_API_ENDPOINT = "/api/history";
-const THERMOSTAT_APPLIANCE_MODE = true;
-const HA_SYNC_INTERVAL_MS = 300000;
+const HA_SYNC_INTERVAL_MS = 5000;
 const HA_SYNC_AFTER_COMMAND_DELAYS = [900, 2400, 5200, 9800, 18000];
 const BLIND_COMMAND_HOLD_MS = 90000;
 const BLIND_POSITION_TOLERANCE = 2;
@@ -17,11 +16,11 @@ const COVER_FEATURE_CLOSE_TILT = 32;
 const COVER_FEATURE_STOP_TILT = 64;
 const COVER_FEATURE_SET_TILT_POSITION = 128;
 const COVER_TILT_FEATURE_MASK = COVER_FEATURE_OPEN_TILT | COVER_FEATURE_CLOSE_TILT | COVER_FEATURE_STOP_TILT | COVER_FEATURE_SET_TILT_POSITION;
-const HA_AUDIO_SYNC_INTERVAL_MS = 300000;
+const HA_AUDIO_SYNC_INTERVAL_MS = 5000;
 const HA_AUDIO_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
-const HA_LIGHT_SYNC_INTERVAL_MS = 300000;
+const HA_LIGHT_SYNC_INTERVAL_MS = 5000;
 const HA_LIGHT_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
-const HA_ROOM_SYNC_INTERVAL_MS = 300000;
+const HA_ROOM_SYNC_INTERVAL_MS = 5000;
 const HA_ROOM_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
 const INACTIVE_PAGE_SYNC_INTERVAL_MS = 5 * 60 * 1000;
 const HA_ALARM_SYNC_INTERVAL_MS = 5000;
@@ -32,7 +31,7 @@ const HA_PAUSE_FUNCTION_SYNC_INTERVAL_MS = 5000;
 const HA_PAUSE_FUNCTION_FAST_SYNC_INTERVAL_MS = 1000;
 const HA_WEATHER_SYNC_INTERVAL_MS = 60000;
 const HA_TEMP_SENSOR_SYNC_INTERVAL_MS = 5000;
-const LOCAL_THERMOSTAT_SYNC_INTERVAL_MS = 2500;
+const LOCAL_THERMOSTAT_SYNC_INTERVAL_MS = 1000;
 const VIRTUAL_TEMP_OVERRIDE_MS = 2 * 60 * 1000;
 const LOCAL_THERMOSTAT_PUSH_DEBOUNCE_MS = 300;
 const LIGHT_COLOR_PRESETS = [
@@ -87,8 +86,8 @@ const DEFAULT_SCREEN_TIMEOUT_MINUTES = 5;
 const MIN_SCREEN_TIMEOUT_MINUTES = 1;
 const MAX_SCREEN_TIMEOUT_MINUTES = 120;
 const SCREEN_TIMEOUT_CHECK_INTERVAL_MS = 5000;
-const HARDWARE_STATUS_INTERVAL_MS = 30000;
-const HISTORY_STATUS_INTERVAL_MS = 300000;
+const HARDWARE_STATUS_INTERVAL_MS = 5000;
+const HISTORY_STATUS_INTERVAL_MS = 30000;
 const SCHEDULE_CHECK_INTERVAL_MS = 15000;
 const DEFAULT_PAUSE_FUNCTION_MINUTES = 5;
 const PAUSE_FUNCTION_RESUME_MS = 5 * 60 * 1000;
@@ -303,7 +302,7 @@ const AUDIO_PRESETS = {
 };
 
 const state = {
-  pages: THERMOSTAT_APPLIANCE_MODE ? ["thermostat"] : ["blinds", "audio", "thermostat", "lights", "room"],
+  pages: ["blinds", "audio", "thermostat", "lights", "room"],
   currentPage: "thermostat",
   panelLock: { locked: false },
   userAccessCode: DEFAULT_USER_ACCESS_CODE,
@@ -2026,12 +2025,10 @@ function renderImportedPanelConfig() {
   renderPanelLock();
   renderDoorWidget();
   renderAlarmWidget();
-  if (!THERMOSTAT_APPLIANCE_MODE) {
-    renderAudio();
-    renderBlinds();
-    renderLights();
-    renderRoomControls();
-  }
+  renderAudio();
+  renderBlinds();
+  renderLights();
+  renderRoomControls();
   renderSystemInfo();
 }
 
@@ -2611,7 +2608,6 @@ function guardPanelLockedNavigation(targetPage, options = {}) {
 }
 
 function gotoPage(pageName, options = {}) {
-  if (THERMOSTAT_APPLIANCE_MODE && pageName !== "thermostat") pageName = "thermostat";
   if (!state.pages.includes(pageName)) return;
   if (guardPanelLockedNavigation(pageName, options)) return;
   const previousPage = state.currentPage;
@@ -9909,43 +9905,8 @@ function dismissBootOverlay(delay = 1800) {
   }, delay);
 }
 
-
-function scheduleRepeating(callback, intervalMs, initialDelayMs = 0) {
-  const run = () => {
-    try {
-      const result = callback();
-      if (result && typeof result.catch === "function") {
-        result.catch((error) => console.warn("Scheduled task failed", error));
-      }
-    } catch (error) {
-      console.warn("Scheduled task failed", error);
-    }
-  };
-  window.setTimeout(() => {
-    run();
-    window.setInterval(run, intervalMs);
-  }, Math.max(0, Number(initialDelayMs) || 0));
-}
-
-function applyKioskPerformanceMode() {
-  // The Pi 3B kiosk needs the UI to prioritize touch latency over expensive
-  // glass/blur effects.  Keep this class on by default for wall-panel builds.
-  elements.app?.classList.add("pi-performance-mode");
-  document.body.classList.add("pi-performance-mode");
-}
-
-function applyThermostatApplianceMode() {
-  if (!THERMOSTAT_APPLIANCE_MODE) return;
-  state.pages = ["thermostat"];
-  state.currentPage = "thermostat";
-  elements.app?.classList.add("thermostat-appliance-mode");
-  document.body.classList.add("thermostat-appliance-mode");
-}
-
 async function init() {
   await loadSavedConfig();
-  applyKioskPerformanceMode();
-  applyThermostatApplianceMode();
   applyPanelTheme(state.theme, { save: false });
   dismissBootOverlay(normalizePanelTheme(state.theme) === "star-trek" ? 2600 : 1200);
   renderScreenTimeoutSettings();
@@ -9962,47 +9923,37 @@ async function init() {
   pollHomeAssistantWeather({ force: true });
   renderDoorWidget();
   renderAlarmWidget();
-  if (!THERMOSTAT_APPLIANCE_MODE) {
-    renderAudio();
-    renderBlinds();
-    renderLights();
-    renderRoomControls();
-  }
+  renderAudio();
+  renderBlinds();
+  renderLights();
+  renderRoomControls();
   gotoPage("thermostat");
-  scheduleRepeating(updateClock, 1000, 0);
-  scheduleRepeating(() => {
+  setInterval(updateClock, 1000);
+  setInterval(() => {
     if (state.currentPage === "thermostat") renderThermostat();
-  }, 5000, 750);
-  scheduleRepeating(() => checkThermostatSchedules(), SCHEDULE_CHECK_INTERVAL_MS, 900);
+  }, 5000);
+  setInterval(() => checkThermostatSchedules(), SCHEDULE_CHECK_INTERVAL_MS);
   checkThermostatSchedules();
-  scheduleRepeating(() => fetchLocalThermostatStatus(), LOCAL_THERMOSTAT_SYNC_INTERVAL_MS, 250);
+  setInterval(() => fetchLocalThermostatStatus(), LOCAL_THERMOSTAT_SYNC_INTERVAL_MS);
   // The virtual temperature slider is now the temporary sensor input.
-  // scheduleRepeating(mockSensorDrift, 4500, 1800);
-  if (!THERMOSTAT_APPLIANCE_MODE) {
-    scheduleRepeating(mockTrackProgress, 1200, 600);
-    scheduleRepeating(() => fetchHistoryStatus(), HISTORY_STATUS_INTERVAL_MS, 3500);
-    scheduleRepeating(() => pollHomeAssistantLinkedCovers(), HA_SYNC_INTERVAL_MS, 1800);
-    scheduleRepeating(() => pollHomeAssistantMediaPlayer(), HA_AUDIO_SYNC_INTERVAL_MS, 2300);
-    scheduleRepeating(() => pollHomeAssistantLights(), HA_LIGHT_SYNC_INTERVAL_MS, 2800);
-    scheduleRepeating(() => pollHomeAssistantRoomControls(), HA_ROOM_SYNC_INTERVAL_MS, 3300);
-  }
-  scheduleRepeating(() => maybeApplyScreenTimeout(), SCREEN_TIMEOUT_CHECK_INTERVAL_MS, 1500);
-  if (!THERMOSTAT_APPLIANCE_MODE) {
-    scheduleRepeating(() => fetchHardwareStatus(), HARDWARE_STATUS_INTERVAL_MS, 2000);
-  }
-  scheduleRepeating(() => pollHomeAssistantAlarm(), HA_ALARM_SYNC_INTERVAL_MS, 3800);
-  scheduleRepeating(() => pollHomeAssistantDoor(), HA_DOOR_SYNC_INTERVAL_MS, 4300);
-  scheduleRepeating(() => pollHomeAssistantThermostatPeople(), HA_PRESENCE_SYNC_INTERVAL_MS, 4800);
-  scheduleRepeating(() => pollHomeAssistantPauseFunction(), HA_PAUSE_FUNCTION_SYNC_INTERVAL_MS, 5300);
-  scheduleRepeating(servicePauseFunctionCountdown, 1000, 100);
-  scheduleRepeating(() => pollHomeAssistantWeather(), HA_WEATHER_SYNC_INTERVAL_MS, 7000);
-  scheduleRepeating(() => pollHomeAssistantCurrentTempSensor(), HA_TEMP_SENSOR_SYNC_INTERVAL_MS, 5800);
+  // setInterval(mockSensorDrift, 4500);
+  setInterval(mockTrackProgress, 1200);
+  setInterval(() => maybeApplyScreenTimeout(), SCREEN_TIMEOUT_CHECK_INTERVAL_MS);
+  setInterval(() => fetchHardwareStatus(), HARDWARE_STATUS_INTERVAL_MS);
+  setInterval(() => fetchHistoryStatus(), HISTORY_STATUS_INTERVAL_MS);
+  setInterval(() => pollHomeAssistantLinkedCovers(), HA_SYNC_INTERVAL_MS);
+  setInterval(() => pollHomeAssistantMediaPlayer(), HA_AUDIO_SYNC_INTERVAL_MS);
+  setInterval(() => pollHomeAssistantLights(), HA_LIGHT_SYNC_INTERVAL_MS);
+  setInterval(() => pollHomeAssistantRoomControls(), HA_ROOM_SYNC_INTERVAL_MS);
+  setInterval(() => pollHomeAssistantAlarm(), HA_ALARM_SYNC_INTERVAL_MS);
+  setInterval(() => pollHomeAssistantDoor(), HA_DOOR_SYNC_INTERVAL_MS);
+  setInterval(() => pollHomeAssistantThermostatPeople(), HA_PRESENCE_SYNC_INTERVAL_MS);
+  setInterval(() => pollHomeAssistantPauseFunction(), HA_PAUSE_FUNCTION_SYNC_INTERVAL_MS);
+  setInterval(servicePauseFunctionCountdown, 1000);
+  setInterval(() => pollHomeAssistantWeather(), HA_WEATHER_SYNC_INTERVAL_MS);
+  setInterval(() => pollHomeAssistantCurrentTempSensor(), HA_TEMP_SENSOR_SYNC_INTERVAL_MS);
   pollHomeAssistantCurrentTempSensor({ force: true });
-  if (!THERMOSTAT_APPLIANCE_MODE) {
-    pollHomeAssistantMediaPlayer({ force: true, controls: true }).then(() => maybeApplyStartupDefaultScreen()).catch(() => maybeApplyStartupDefaultScreen());
-  } else {
-    maybeApplyStartupDefaultScreen();
-  }
+  pollHomeAssistantMediaPlayer({ force: true, controls: true }).then(() => maybeApplyStartupDefaultScreen()).catch(() => maybeApplyStartupDefaultScreen());
   pollHomeAssistantAlarm({ force: true });
   pollHomeAssistantDoor({ force: true });
   pollHomeAssistantThermostatPeople({ force: true });

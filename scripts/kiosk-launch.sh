@@ -7,25 +7,8 @@ CACHE_DIR="${SMART_KIOSK_CACHE_DIR:-/tmp/smart-thermostat-chromium-cache}"
 HEALTH_TIMEOUT_SECONDS="${SMART_KIOSK_HEALTH_TIMEOUT_SECONDS:-45}"
 EXTRA_FLAGS="${SMART_KIOSK_EXTRA_FLAGS:-}"
 OZONE_PLATFORM="${SMART_KIOSK_OZONE_PLATFORM:-auto}"
-LOW_POWER_MODE="${SMART_KIOSK_LOW_POWER_MODE:-1}"
-DISPLAY_ROTATION="${SMART_KIOSK_ROTATION:-left}"
-TOUCH_MATRIX="${SMART_KIOSK_TOUCH_MATRIX:--1 0 1 0 -1 1 0 0 1}"
-
-ensure_runtime_dir() {
-  local runtime_dir="${XDG_RUNTIME_DIR:-}"
-  if [[ -z "${runtime_dir}" || ! -d "${runtime_dir}" || ! -w "${runtime_dir}" ]]; then
-    runtime_dir="/tmp/smart-thermostat-runtime-$(id -u)"
-    mkdir -p "${runtime_dir}"
-    chmod 700 "${runtime_dir}"
-    export XDG_RUNTIME_DIR="${runtime_dir}"
-  fi
-}
 
 find_chromium() {
-  if [[ -x /usr/lib/chromium/chromium ]]; then
-    echo /usr/lib/chromium/chromium
-    return 0
-  fi
   if command -v chromium-browser >/dev/null 2>&1; then
     command -v chromium-browser
     return 0
@@ -66,7 +49,7 @@ PY
 }
 
 wait_for_display() {
-  ensure_runtime_dir
+  export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
   export XAUTHORITY="${XAUTHORITY:-/home/${USER}/.Xauthority}"
 
   local started
@@ -107,36 +90,6 @@ wait_for_display() {
   done
 }
 
-
-apply_x11_display_calibration() {
-  [[ -n "${DISPLAY:-}" ]] || return 0
-
-  # The Waveshare 10.1" DSI panel is native portrait.  Our wall layout is
-  # landscape counterclockwise, so rotate at the X11 layer after X starts.
-  if command -v xrandr >/dev/null 2>&1 && [[ "${DISPLAY_ROTATION}" != "none" ]]; then
-    case "${DISPLAY_ROTATION}" in
-      left|right|inverted|normal)
-        xrandr --fb 1280x800 --output DSI-1 --mode 800x1280 --rotate "${DISPLAY_ROTATION}" >/dev/null 2>&1 || true
-        ;;
-    esac
-  fi
-
-  # xinput sees the Goodix device twice: one pointer and one keyboard entry.
-  # Only the slave pointer entry accepts the Coordinate Transformation Matrix.
-  if command -v xinput >/dev/null 2>&1 && [[ -n "${TOUCH_MATRIX}" ]]; then
-    local touch_id=""
-    local attempt
-    for attempt in 1 2 3 4 5 6 7 8 9 10; do
-      touch_id="$(xinput list 2>/dev/null | awk '/Goodix Capacitive TouchScreen/ && /slave[[:space:]]+pointer/ { for (i=1; i<=NF; i++) if ($i ~ /^id=/) { sub(/^id=/, "", $i); print $i; exit } }')"
-      if [[ -n "${touch_id}" ]]; then
-        # shellcheck disable=SC2086
-        xinput set-prop "${touch_id}" "Coordinate Transformation Matrix" ${TOUCH_MATRIX} >/dev/null 2>&1 && break
-      fi
-      sleep 1
-    done
-  fi
-}
-
 prepare_display() {
   wait_for_display
 
@@ -146,8 +99,6 @@ prepare_display() {
     xset s noblank >/dev/null 2>&1 || true
   fi
 
-  apply_x11_display_calibration
-
   if [[ -n "${DISPLAY:-}" ]] && command -v unclutter >/dev/null 2>&1; then
     pkill -u "${USER}" -x unclutter >/dev/null 2>&1 || true
     unclutter -idle 0.25 -root >/dev/null 2>&1 &
@@ -155,7 +106,6 @@ prepare_display() {
 }
 
 main() {
-  ensure_runtime_dir
   wait_for_panel
   prepare_display
 
@@ -196,21 +146,9 @@ main() {
     "--overscroll-history-navigation=0"
     "--autoplay-policy=no-user-gesture-required"
     "--check-for-update-interval=31536000"
+    "--enable-gpu-rasterization"
+    "--enable-zero-copy"
   )
-
-  if [[ "${LOW_POWER_MODE}" == "1" || "${LOW_POWER_MODE}" == "true" || "${LOW_POWER_MODE}" == "yes" ]]; then
-    flags+=(
-      "--disable-gpu"
-      "--disable-gpu-compositing"
-      "--disable-gpu-rasterization"
-      "--disable-accelerated-2d-canvas"
-      "--disable-webgl"
-      "--disable-3d-apis"
-      "--disable-smooth-scrolling"
-      "--renderer-process-limit=2"
-      "--process-per-site"
-    )
-  fi
 
   if [[ "${OZONE_PLATFORM}" == "wayland" ]] || { [[ "${OZONE_PLATFORM}" == "auto" ]] && [[ -n "${WAYLAND_DISPLAY:-}" ]]; }; then
     flags+=("--ozone-platform=wayland")
