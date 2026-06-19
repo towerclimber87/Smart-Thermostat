@@ -122,6 +122,7 @@ let localThermostatSyncInFlight = false;
 let localThermostatPushTimer = null;
 let localThermostatPushInFlight = false;
 let localThermostatLastError = "";
+let manualAutoSwitchTimer = null;
 let hardwareStatusInFlight = false;
 let hardwareLastError = "";
 let historyStatusInFlight = false;
@@ -152,6 +153,7 @@ const AUDIO_TONE_SETTLE_MS = 1500;
 const SETPOINT_PREVIEW_MS = 2000;
 const AUTO_CHANGEOVER_MINUTES = 120;
 const MANUAL_CHANGEOVER_LOCKOUT_MINUTES = 10;
+const MANUAL_AUTO_SWITCH_ACK_DELAY_MS = 3000;
 const FAN_SEQUENCE = ["off", "on", "auto"];
 let lastBlindUserInteractionAt = 0;
 const blindCommandHolds = new Map();
@@ -1765,7 +1767,15 @@ function applyLocalThermostatState(remote = {}) {
     const modeMap = { heat_cool: "auto", auto: "auto", cool: "cool", heat: "heat" };
     const next = modeMap[String(incomingMode).toLowerCase()] || "";
     const unlocked = getAllowedThermostatMode(next, t.mode);
-    if (unlocked && t.mode !== unlocked) { t.mode = unlocked; changed = true; }
+    if (unlocked && t.mode !== unlocked) {
+      t.mode = unlocked;
+      changed = true;
+      if (source.autoSwitchHold === undefined && unlocked !== "auto") {
+        changed = applyManualAutoSwitchHoldForMode(unlocked, { clearNotice: true }) || changed;
+      } else if (unlocked === "auto") {
+        changed = clearAutoSwitchHold() || clearAutoSwitchNotice() || changed;
+      }
+    }
   }
 
   const incomingFan = source.fan_mode || source.fanMode || source.fan;
@@ -3801,7 +3811,7 @@ function emptyAutoSwitchNotice() {
 }
 
 function emptyAutoSwitchHold() {
-  return { active: false, source: "", mode: "" };
+  return { active: false, source: "", mode: "", until: 0, reason: "" };
 }
 
 function normalizeAutoSwitchNotice(value = {}) {
@@ -3833,7 +3843,11 @@ function normalizeAutoSwitchHold(value = {}) {
   const source = ["auto", "manual"].includes(String(value.source || "").toLowerCase()) ? String(value.source || "").toLowerCase() : "";
   const mode = normalizePendingMode(value.mode);
   const active = Boolean(value.active && source && mode);
-  return active ? { active: true, source, mode } : emptyAutoSwitchHold();
+  if (!active) return emptyAutoSwitchHold();
+  const reason = ["ack", "revert"].includes(String(value.reason || "").toLowerCase()) ? String(value.reason || "").toLowerCase() : "";
+  let until = Number(value.until || value.expiresAt || 0);
+  if (source === "manual" && reason !== "revert" && (!Number.isFinite(until) || until <= 0)) until = 1;
+  return { active: true, source, mode, until: Number.isFinite(until) && until > 0 ? until : 0, reason };
 }
 
 function getAutoSwitchTemperature() {
@@ -3858,13 +3872,67 @@ function getAutoSwitchSignal() {
 function clearAutoSwitchHold() {
   const current = normalizeAutoSwitchHold(state.thermostat.autoSwitchHold);
   state.thermostat.autoSwitchHold = emptyAutoSwitchHold();
+  if (current.active) cancelManualAutoSwitchTimer();
   return current.active;
+}
+
+function cancelManualAutoSwitchTimer() {
+  if (!manualAutoSwitchTimer) return;
+  window.clearTimeout(manualAutoSwitchTimer);
+  manualAutoSwitchTimer = null;
+}
+
+function scheduleManualAutoSwitchCheck(until = 0) {
+  const expiresAt = Number(until || 0);
+  cancelManualAutoSwitchTimer();
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return;
+  manualAutoSwitchTimer = window.setTimeout(() => {
+    manualAutoSwitchTimer = null;
+    const changed = applyAutoSwitch({ notify: true });
+    renderThermostat();
+    if (changed) saveConfig();
+  }, Math.max(0, expiresAt - Date.now()) + 50);
 }
 
 function clearAutoSwitchNotice() {
   const current = normalizeAutoSwitchNotice(state.thermostat.autoSwitchNotice);
   state.thermostat.autoSwitchNotice = emptyAutoSwitchNotice();
   return current.active;
+}
+
+function setAutoSwitchHold(nextHold) {
+  const normalized = normalizeAutoSwitchHold(nextHold);
+  const before = JSON.stringify(normalizeAutoSwitchHold(state.thermostat.autoSwitchHold));
+  state.thermostat.autoSwitchHold = normalized;
+  if (normalized.active && normalized.source === "manual" && normalized.until > Date.now()) {
+    scheduleManualAutoSwitchCheck(normalized.until);
+  } else {
+    cancelManualAutoSwitchTimer();
+  }
+  return before !== JSON.stringify(normalized);
+}
+
+function applyManualAutoSwitchHoldForMode(mode, options = {}) {
+  const requestedMode = normalizePendingMode(mode);
+  let changed = false;
+  if (options.clearNotice !== false) changed = clearAutoSwitchNotice() || changed;
+  if (!requestedMode || !modeIsAvailableForAutoSwitch(requestedMode)) {
+    return clearAutoSwitchHold() || changed;
+  }
+
+  const signal = getAutoSwitchSignal();
+  if (signal && signal !== requestedMode) {
+    const delayMs = clamp(Number(options.delayMs || MANUAL_AUTO_SWITCH_ACK_DELAY_MS), 0, 10000);
+    return setAutoSwitchHold({
+      active: true,
+      source: "manual",
+      mode: requestedMode,
+      until: Date.now() + delayMs,
+      reason: "ack",
+    }) || changed;
+  }
+
+  return clearAutoSwitchHold() || changed;
 }
 
 function recordAutoSwitchNotice(source, fromMode, toMode) {
@@ -3907,6 +3975,7 @@ function clampTargetToCurrentModeLimits() {
 
 function applyAutoSwitch(options = {}) {
   const t = state.thermostat;
+  const now = Date.now();
   let changed = false;
   const signal = getAutoSwitchSignal();
   let hold = normalizeAutoSwitchHold(t.autoSwitchHold);
@@ -3922,8 +3991,9 @@ function applyAutoSwitch(options = {}) {
   }
 
   if (hold.active && hold.source === "manual" && t.mode !== "auto") {
-    if (signal === hold.mode) {
+    if (!signal || signal === hold.mode) {
       t.autoSwitchHold = emptyAutoSwitchHold();
+      cancelManualAutoSwitchTimer();
       changed = true;
     } else {
       if (t.mode !== hold.mode) {
@@ -3933,7 +4003,14 @@ function applyAutoSwitch(options = {}) {
         else clampTargetToCurrentModeLimits();
         changed = true;
       }
-      return changed;
+      if (!hold.until || now < hold.until) {
+        if (hold.until) scheduleManualAutoSwitchCheck(hold.until);
+        return changed;
+      }
+      t.autoSwitchHold = emptyAutoSwitchHold();
+      cancelManualAutoSwitchTimer();
+      hold = t.autoSwitchHold;
+      changed = true;
     }
   }
 
@@ -4041,7 +4118,7 @@ function revertAutoSwitchNotice() {
     if (t.away) applyAwayTarget();
     else clampTargetToCurrentModeLimits();
   }
-  t.autoSwitchHold = { active: true, source: notice.source, mode: notice.fromMode };
+  setAutoSwitchHold({ active: true, source: notice.source, mode: notice.fromMode, reason: "revert" });
   t.autoSwitchNotice = emptyAutoSwitchNotice();
   closeAutoSwitchOverlay();
   renderThermostat();
@@ -4140,7 +4217,7 @@ function getAutoControlMode(now = Date.now(), options = {}) {
   let hold = normalizeAutoSwitchHold(t.autoSwitchHold);
   if (hold.active && hold.source === "auto") {
     const signal = getAutoSwitchSignal();
-    if (!modeIsAvailableForAutoSwitch(hold.mode) || signal === hold.mode) {
+    if (!modeIsAvailableForAutoSwitch(hold.mode) || !signal || signal === hold.mode) {
       t.autoSwitchHold = emptyAutoSwitchHold();
       hold = t.autoSwitchHold;
     } else {
@@ -5587,8 +5664,13 @@ function setMode(mode, options = {}) {
     return;
   }
   t.mode = getAllowedThermostatMode(mode, t.mode);
-  clearAutoSwitchHold();
-  applyAutoSwitch({ notify: true });
+  if (t.mode === "auto") {
+    clearAutoSwitchNotice();
+    clearAutoSwitchHold();
+  } else {
+    applyManualAutoSwitchHoldForMode(t.mode, { clearNotice: true });
+  }
+  applyAutoSwitch({ notify: false });
   if (t.away) {
     applyAwayTarget();
   } else {
