@@ -1,0 +1,1297 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#050812" />
+  <title>Smart Thermostat</title>
+  <link rel="stylesheet" href="./css/styles.css" />
+</head>
+<body class="booting">
+  <main id="app" class="app-shell pi-performance-mode" data-page="thermostat" aria-label="Smart Thermostat interface">
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+    <div class="ambient ambient-three"></div>
+    <div class="climate-backdrop" aria-hidden="true">
+      <span class="climate-symbol climate-symbol-cold">❄</span>
+      <span class="climate-symbol climate-symbol-hot">☀</span>
+    </div>
+
+    <section id="bootOverlay" class="boot-overlay" aria-label="System startup" aria-live="polite">
+      <div class="boot-lcars-frame" aria-hidden="true">
+        <span class="boot-lcars-block boot-lcars-block-a"></span>
+        <span class="boot-lcars-block boot-lcars-block-b"></span>
+        <span class="boot-lcars-block boot-lcars-block-c"></span>
+        <span class="boot-lcars-block boot-lcars-block-d"></span>
+      </div>
+      <div class="boot-core">
+        <div class="boot-ring" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+        <p class="boot-eyebrow">Environmental Control</p>
+        <h2>Climate System Online</h2>
+        <div class="boot-status-line">
+          <span class="boot-generic-label">Core</span>
+          <span class="boot-lcars-label">LCARS</span>
+          <strong>Initializing</strong>
+          <em>Nominal</em>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel-controls" aria-label="Panel controls">
+      <div id="tempMiniStatus" class="temp-mini-status" aria-label="Current thermostat summary">
+        <div class="temp-mini-pill current">
+          <span id="headerCurrentTemp">70°</span>
+          <small>Current</small>
+        </div>
+        <div id="headerSetPill" class="temp-mini-pill set cool">
+          <span id="headerSetTemp">70°</span>
+          <small>Set</small>
+        </div>
+      </div>
+      <button id="thermostatPanelLockButton" class="panel-lock-button unlocked" type="button" aria-pressed="false" aria-label="Lock thermostat page navigation">
+        <span class="panel-lock-icon" aria-hidden="true">
+          <svg viewBox="0 0 64 64" focusable="false">
+            <path class="lock-shackle closed" d="M20 28v-7c0-8 5.2-13 12-13s12 5 12 13v7"></path>
+            <path class="lock-shackle open" d="M20 28v-7c0-8 5.2-13 12-13 5.8 0 10.5 3.7 11.7 9.8"></path>
+            <rect class="lock-body" x="14" y="27" width="36" height="26" rx="8"></rect>
+            <path class="lock-key" d="M32 36v8"></path>
+          </svg>
+        </span>
+        <span id="thermostatPanelLockLabel">Unlocked</span>
+      </button>
+      <button id="changeoverBypassButton" class="changeover-bypass-button" type="button" hidden aria-hidden="true" aria-label="Bypass equipment changeover delay">Bypass</button>
+      <nav class="top-nav" aria-label="Screen navigation">
+        <button class="nav-pill" data-goto="blinds">Blinds</button>
+        <button class="nav-pill" data-goto="audio">Audio</button>
+        <button class="nav-pill active" data-goto="thermostat">Thermostat</button>
+        <button class="nav-pill" data-goto="lights">Lights</button>
+        <button class="nav-pill" data-goto="room">Room</button>
+      </nav>
+      <div class="status-cluster">
+        <div id="clock" class="clock">--:--</div>
+        <button id="thermostatInfoButton" class="panel-info-button" type="button" aria-label="Panel information">i</button>
+        <button id="settingsButton" class="icon-button" aria-label="Open settings">⚙</button>
+      </div>
+    </section>
+
+    <section id="screenTrack" class="screen-track" aria-live="polite">
+      <article class="screen screen-blinds" data-screen="blinds" aria-label="Blinds controls">
+        <section class="panel blinds-panel">
+          <div class="blinds-title-row">
+            <div class="panel-heading vertical">
+              <p class="eyebrow">Shade Control</p>
+              <h2 id="blindRoomTitle">Living Room</h2>
+            </div>
+            <div id="roomTabs" class="room-tabs top-room-tabs" role="tablist" aria-label="Blind rooms"></div>
+          </div>
+
+          <div class="blind-command-row centered-actions">
+            <div class="room-actions centered-room-actions">
+              <button class="scene-btn room-open" data-blind-action="open-room">Open Room</button>
+              <button class="scene-btn room-close" data-blind-action="close-room">Close Room</button>
+            </div>
+          </div>
+
+          <div id="blindCards" class="blind-cards blind-columns"></div>
+        </section>
+      </article>
+
+      <article class="screen screen-audio" data-screen="audio" aria-label="Audio controls">
+        <section class="audio-stage panel">
+          <div class="audio-shell">
+            <div class="audio-main-card">
+              <div class="audio-preset-grid" aria-label="Audio presets">
+                  <button class="audio-preset-button movie" data-audio-preset="movie" type="button" aria-label="Apply movie mode audio preset">
+                    <span class="preset-icon" aria-hidden="true">
+                      <svg viewBox="0 0 64 64" focusable="false">
+                        <circle cx="24" cy="24" r="16"></circle>
+                        <circle cx="24" cy="24" r="5"></circle>
+                        <circle cx="24" cy="10" r="3"></circle>
+                        <circle cx="38" cy="24" r="3"></circle>
+                        <circle cx="24" cy="38" r="3"></circle>
+                        <circle cx="10" cy="24" r="3"></circle>
+                        <path d="M36 36l18 11V25L36 36z"></path>
+                        <path d="M8 54h46"></path>
+                      </svg>
+                    </span>
+                    <strong>Movie Mode</strong>
+                  </button>
+                  <button class="audio-preset-button show" data-audio-preset="show" type="button" aria-label="Apply show mode audio preset">
+                    <span class="preset-icon" aria-hidden="true">
+                      <svg viewBox="0 0 64 64" focusable="false">
+                        <path d="M14 48c8-8 28-8 36 0"></path>
+                        <path d="M18 40c7-5 21-5 28 0"></path>
+                        <path d="M23 31c4-3 14-3 18 0"></path>
+                        <rect x="24" y="8" width="16" height="22" rx="8"></rect>
+                        <path d="M32 30v14"></path>
+                        <path d="M22 54h20"></path>
+                      </svg>
+                    </span>
+                    <strong>Show Mode</strong>
+                  </button>
+                  <button class="audio-preset-button volume40" data-audio-preset="volume40" type="button" aria-label="Apply 40 percent volume audio preset">
+                    <span class="preset-icon" aria-hidden="true">
+                      <svg viewBox="0 0 64 64" focusable="false">
+                        <path d="M10 39H22L38 51V13L22 25H10z"></path>
+                        <path d="M45 24c3 4 3 12 0 16"></path>
+                        <path d="M51 17c7 8 7 22 0 30"></path>
+                        <text x="32" y="39">40</text>
+                      </svg>
+                    </span>
+                    <strong>40% Volume</strong>
+                  </button>
+                  <button class="audio-preset-button max" data-audio-preset="max" type="button" aria-label="Apply maximum audio preset">
+                    <span class="preset-icon" aria-hidden="true">
+                      <svg viewBox="0 0 64 64" focusable="false">
+                        <path d="M10 40H22L39 53V11L22 24H10z"></path>
+                        <path d="M47 20c5 6 5 18 0 24"></path>
+                        <path d="M54 13c9 11 9 27 0 38"></path>
+                        <path d="M18 10l5 8"></path>
+                        <path d="M30 6l2 10"></path>
+                        <path d="M43 9l-4 9"></path>
+                      </svg>
+                    </span>
+                    <strong>Max</strong>
+                  </button>
+              </div>
+              <div id="albumArt" class="audio-art" aria-hidden="true">
+                <div id="albumInitials" class="audio-art-initials">♪</div>
+              </div>
+              <div class="audio-now">
+                <p class="eyebrow">Now Playing</p>
+                <h2 id="trackTitle">Select Audio Device</h2>
+                <p id="trackArtist" class="audio-artist">Open settings to choose a media player.</p>
+                <p id="trackAlbum" class="audio-album"></p>
+                <div class="audio-progress-wrap" aria-hidden="true">
+                  <div class="progress-bar audio-progress"><span id="trackProgress"></span></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="audio-side-card">
+              <div class="audio-device-head">
+                <div class="audio-device-name-block">
+                  <h3 id="audioPlayerName">No device selected</h3>
+                  <span id="audioDeviceState" class="audio-state-pill">Idle</span>
+                </div>
+
+                <div id="audioSourceCard" class="audio-source-card compact-source" hidden>
+                  <label for="audioSourceSelect">Source <strong id="audioSourceValue">—</strong></label>
+                  <select id="audioSourceSelect" aria-label="Audio source"></select>
+                </div>
+              </div>
+
+              <div class="audio-action-row">
+                <button id="subwooferToggle" class="audio-feature-toggle" data-audio-switch="subwoofer" data-audio-picker="subwoofer" aria-label="Toggle subwoofer">
+                  <span class="feature-icon subwoofer-icon" aria-hidden="true">
+                    <svg viewBox="0 0 64 64" focusable="false">
+                      <rect class="cabinet" x="12" y="6" width="40" height="52" rx="8"></rect>
+                      <circle class="woofer-ring" cx="32" cy="36" r="15"></circle>
+                      <circle class="woofer-core" cx="32" cy="36" r="6"></circle>
+                      <circle class="tweeter" cx="32" cy="18" r="4"></circle>
+                    </svg>
+                  </span><strong>Sub</strong>
+                </button>
+                <div class="transport-controls media-transport">
+                  <button id="prevTrack" class="transport" aria-label="Previous track">⏮</button>
+                  <button id="playPause" class="transport primary" aria-label="Play or pause">▶</button>
+                  <button id="nextTrack" class="transport" aria-label="Next track">⏭</button>
+                </div>
+                <button id="surroundToggle" class="audio-feature-toggle" data-audio-switch="surround" data-audio-picker="surround" aria-label="Toggle surround sound">
+                  <span class="feature-icon surround-icon" aria-hidden="true">
+                    <svg viewBox="0 0 72 64" focusable="false">
+                      <circle class="listener" cx="36" cy="34" r="7"></circle>
+                      <path class="arc arc-left" d="M22 18c-8 5-13 11-13 18s5 13 13 18"></path>
+                      <path class="arc arc-right" d="M50 18c8 5 13 11 13 18s-5 13-13 18"></path>
+                      <rect class="speaker speaker-left" x="6" y="8" width="10" height="14" rx="3"></rect>
+                      <rect class="speaker speaker-right" x="56" y="8" width="10" height="14" rx="3"></rect>
+                      <rect class="speaker speaker-rear-left" x="10" y="46" width="10" height="12" rx="3"></rect>
+                      <rect class="speaker speaker-rear-right" x="52" y="46" width="10" height="12" rx="3"></rect>
+                    </svg>
+                  </span><strong>Surround</strong>
+                </button>
+              </div>
+
+              <div class="audio-volume-card">
+                <label for="volumeSlider">Volume <strong><span id="volumeValue">42</span>%</strong></label>
+                <input id="volumeSlider" type="range" min="0" max="100" value="42" />
+                <button id="projectorToggle" class="audio-projector-button" data-audio-switch="projector" data-audio-picker="projector" aria-label="Toggle projector">
+                  <span class="projector-icon" aria-hidden="true">
+                    <svg viewBox="0 0 72 42" focusable="false">
+                      <rect x="8" y="12" width="38" height="20" rx="5"></rect>
+                      <circle cx="52" cy="22" r="8"></circle>
+                      <path d="M18 34h20m-10 0v6"></path>
+                      <path class="beam" d="M61 18l9-5v18l-9-5"></path>
+                    </svg>
+                  </span>
+                </button>
+              </div>
+
+              <div class="audio-tone-grid">
+                <div class="tone-control" data-audio-picker="gain"><label for="gainSlider">Gain <strong id="gainValue">0</strong></label><input id="gainSlider" type="range" min="-10" max="10" value="0" /></div>
+                <div class="tone-control" data-audio-picker="bass"><label for="bassSlider">Bass <strong id="bassValue">2</strong></label><input id="bassSlider" type="range" min="-10" max="10" value="2" /></div>
+                <div class="tone-control" data-audio-picker="treble"><label for="trebleSlider">Treble <strong id="trebleValue">4</strong></label><input id="trebleSlider" type="range" min="-10" max="10" value="4" /></div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </article>
+
+      <article class="screen screen-thermostat" data-screen="thermostat" aria-label="Thermostat controls">
+        <section class="thermostat-stage">
+          <div class="thermostat-topline">
+            <div class="thermostat-title-block">
+              <div class="outdoor-top-badge">Outdoor <strong id="outdoorTempTopValue">78°</strong><span class="outdoor-wind-badge">Wind <strong id="outdoorWindTopValue">-- mph</strong></span></div>
+              <h1>Climate Control</h1>
+            </div>
+            <div id="pauseCountdownBadge" class="pause-countdown-badge" aria-live="polite" aria-hidden="true" hidden>
+              <span>Pause Function</span>
+              <strong id="pauseCountdownText">Entries open • 5:00 to pause</strong>
+            </div>
+            <div class="comfort-status" aria-live="polite">
+              <span class="pulse-dot"></span>
+              <strong id="runtimeState">Cooling</strong>
+            </div>
+          </div>
+
+          <aside class="virtual-thermostat-panel" aria-label="Virtual thermostat hardware simulator">
+            <div class="virtual-section">
+              <p class="virtual-title">Virtual Outputs</p>
+              <div class="relay-stack" aria-label="GPIO output placeholders">
+                <div id="relayFan" class="relay-pill" data-relay="fan">
+                  <span class="relay-dot" aria-hidden="true"></span>
+                  <strong>Fan</strong>
+                  <em>Off</em>
+                </div>
+                <div id="relayHeat" class="relay-pill" data-relay="heat">
+                  <span class="relay-dot" aria-hidden="true"></span>
+                  <strong>Heat</strong>
+                  <em>Off</em>
+                </div>
+                <div id="relayCool" class="relay-pill" data-relay="cool">
+                  <span class="relay-dot" aria-hidden="true"></span>
+                  <strong>Cool</strong>
+                  <em>Off</em>
+                </div>
+              </div>
+            </div>
+
+            <div class="virtual-section virtual-sensor-section">
+              <label class="virtual-sensor-label" for="virtualTempSlider">
+                <span>Virtual Temp</span>
+                <strong id="virtualTempValue">70°</strong>
+              </label>
+              <input id="virtualTempSlider" class="virtual-temp-slider" type="range" min="50" max="90" step="0.1" value="70" aria-label="Set virtual current temperature" />
+              <div class="virtual-temp-range" aria-hidden="true">
+                <span>50°</span>
+                <span>90°</span>
+              </div>
+              <p id="virtualTempOverrideStatus" class="virtual-temp-override-status">Manual test source</p>
+            </div>
+
+          </aside>
+
+          <div id="safetyWarningBanner" class="safety-warning-banner" aria-live="assertive" aria-hidden="true">
+            <span class="safety-warning-eyebrow">Warning</span>
+            <strong id="safetyWarningTitle">Safety Heat Engaged</strong>
+            <div class="safety-warning-readouts">
+              <span>Setpoint <b id="safetyWarningSetpoint">70°</b></span>
+              <span>Current <b id="safetyWarningCurrent">70°</b></span>
+            </div>
+          </div>
+
+          <button id="autoSwitchNotice" class="auto-switch-notice" type="button" hidden aria-hidden="true" aria-label="Auto-switch notice. Tap to review options.">
+            <span>Auto-switched</span>
+            <strong id="autoSwitchNoticeMode">To Cool</strong>
+            <em id="autoSwitchNoticeDetail">Inside 78°</em>
+          </button>
+
+          <button id="doorWidget" class="door-control-widget unlinked" type="button" aria-label="Door status. Tap or hold to assign Home Assistant binary sensor.">
+            <span class="door-alert-ring" aria-hidden="true"></span>
+            <span class="door-icon" aria-hidden="true">
+              <svg viewBox="0 0 74 74" focusable="false">
+                <path class="door-frame" d="M18 66V9h34v57"></path>
+                <path class="door-panel door-closed-panel" d="M27 63V15h24v48H27Z"></path>
+                <path class="door-panel door-open-panel" d="M27 62V16l25-6v58l-25-6Z"></path>
+                <circle class="door-knob" cx="45" cy="38" r="2.6"></circle>
+              </svg>
+            </span>
+            <span class="door-copy">
+              <strong id="doorWidgetTitle">Door</strong>
+              <em id="doorWidgetState">Tap to assign</em>
+            </span>
+          </button>
+
+          <button id="alarmWidget" class="alarm-control-widget unlinked" type="button" aria-label="Alarm status. Hold to assign Home Assistant alarm.">
+            <span class="alarm-orbit" aria-hidden="true"></span>
+            <span class="alarm-shield" aria-hidden="true">
+              <svg viewBox="0 0 64 72" focusable="false">
+                <path class="shield-body" d="M32 4 56 14v19c0 16.5-9.8 27.7-24 34C17.8 60.7 8 49.5 8 33V14L32 4Z"></path>
+                <path class="shield-core" d="M32 13 47 19v13.5c0 10.5-5.9 18-15 23-9.1-5-15-12.5-15-23V19l15-6Z"></path>
+              </svg>
+            </span>
+            <span class="alarm-copy">
+              <strong id="alarmWidgetTitle">Alarm</strong>
+              <em id="alarmWidgetState">Hold to assign</em>
+            </span>
+          </button>
+
+          <div class="thermostat-focus">
+            <button id="tempDown" class="temp-step temp-left" aria-label="Decrease setpoint">−</button>
+
+            <div id="thermoDial" class="thermo-dial nest-dial" aria-label="Drag thermostat dial to change setpoint" role="slider" aria-valuemin="50" aria-valuemax="90" aria-valuenow="70" tabindex="0">
+              <div class="dial-outer-glass" aria-hidden="true"></div>
+              <div class="dial-tick-ring" aria-hidden="true"></div>
+              <div class="dial-span-ring" aria-hidden="true"></div>
+              <div class="dial-target-rail" aria-hidden="true"></div>
+              <div class="dial-glow"></div>
+              <div class="dial-current-marker" aria-hidden="true"></div>
+              <div class="dial-knob" aria-hidden="true"></div>
+              <div id="dialTargetBadge" class="dial-target-badge" aria-hidden="true">70</div>
+              <div class="dial-inner">
+                <p id="primaryTempLabel" class="current-label">Cooling</p>
+                <div class="current-temp"><span id="currentTemp">70</span><small>°F</small></div>
+                <div id="secondaryTempRow" class="target-row"><span id="secondaryTempLabel">Set to</span> <strong><span id="targetTemp">70</span>°</strong></div>
+              </div>
+              <div id="dialMinLabel" class="dial-range min">65°</div>
+              <div id="dialMaxLabel" class="dial-range max">80°</div>
+            </div>
+
+            <button id="tempUp" class="temp-step temp-right" aria-label="Increase setpoint">+</button>
+          </div>
+
+          <button id="scheduleButton" class="floating-chip bottom-chip schedule-chip thermostat-schedule-corner-btn" type="button" aria-label="Open thermostat schedules">
+            <span>Schedule</span>
+            <strong>S</strong>
+          </button>
+
+          <div id="schedulePresetBar" class="schedule-preset-bar" aria-label="Schedule presets" hidden></div>
+
+          <div class="thermostat-bottom-row">
+            <div class="bottom-left-cluster" aria-label="Comfort shortcuts">
+              <div id="humidityChip" class="floating-chip bottom-chip humidity-chip">
+                <span>Humidity</span>
+                <strong id="humidityValue">45%</strong>
+              </div>
+            </div>
+
+            <div class="mode-deck" aria-label="Thermostat mode controls">
+              <button class="mode-button active" data-mode="cool">Cool</button>
+              <button class="mode-button" data-mode="heat">Heat</button>
+              <button class="mode-button" data-mode="auto">Auto</button>
+              <button id="awayToggle" class="mode-button away">Away</button>
+            </div>
+
+            <button id="fanChip" class="floating-chip bottom-chip fan-chip" type="button" aria-label="Change fan mode">
+              <span>Fan</span>
+              <strong id="fanSummary">Auto</strong>
+            </button>
+          </div>
+
+          <section id="awayModeOverlay" class="away-mode-overlay" aria-hidden="true">
+            <button id="awayHomeButton" class="away-home-card" type="button" aria-label="Set thermostat back to home mode">
+              <span>Away Mode</span>
+              <strong>In Away Mode</strong>
+              <em>Press to set Home</em>
+            </button>
+          </section>
+
+          <section id="pauseFunctionOverlay" class="away-mode-overlay pause-function-overlay" aria-hidden="true">
+            <div class="away-home-card pause-function-card" role="status" aria-live="assertive">
+              <span>Pause Function</span>
+              <strong>Comfort Paused</strong>
+              <em id="pauseFunctionMessage">Selected entries have been open/on. Close door to resume.</em>
+              <button id="pauseFunctionResumeButton" class="pause-function-resume-button" type="button">Resume 5 Minutes</button>
+            </div>
+          </section>
+
+          <section id="scheduleOverlay" class="settings-overlay schedule-overlay" aria-hidden="true">
+            <div class="settings-backdrop" data-close-schedule></div>
+            <aside class="schedule-sheet" role="dialog" aria-modal="true" aria-labelledby="scheduleTitle">
+              <div class="schedule-header">
+                <div>
+                  <p class="eyebrow">Thermostat</p>
+                  <h2 id="scheduleTitle">Schedule</h2>
+                </div>
+                <button id="scheduleClose" class="icon-button close" type="button" aria-label="Close schedules">×</button>
+              </div>
+
+              <div class="schedule-layout">
+                <section class="schedule-list-panel" aria-label="Saved schedules">
+                  <div class="schedule-panel-title">
+                    <strong>Auto-schedules</strong>
+                    <button id="scheduleAddButton" class="scene-btn schedule-add-btn" type="button">+ Add</button>
+                  </div>
+                  <div id="scheduleList" class="schedule-list"></div>
+                </section>
+
+                <section class="schedule-editor-panel" aria-label="Edit schedule">
+                  <div class="schedule-form-grid">
+                    <label class="schedule-field schedule-name-field">
+                      <span>Name</span>
+                      <input id="scheduleNameInput" type="text" maxlength="40" autocomplete="off" placeholder="Evening" />
+                    </label>
+                    <label class="schedule-field schedule-time-field">
+                      <span>Time</span>
+                      <input id="scheduleTimeInput" type="text" readonly autocomplete="off" inputmode="none" aria-haspopup="dialog" aria-controls="scheduleTimePickerOverlay" />
+                    </label>
+                    <button id="scheduleEnabledToggle" class="schedule-enabled-toggle" type="button" aria-pressed="true">Enabled</button>
+                  </div>
+
+                  <div class="schedule-setpoint-grid">
+                    <div class="schedule-setpoint-card cool">
+                      <span>Cool set point</span>
+                      <div class="schedule-stepper">
+                        <button type="button" data-schedule-step="cool" data-delta="-1" aria-label="Lower cool schedule set point">−</button>
+                        <strong><span id="scheduleCoolValue">68</span>°</strong>
+                        <button type="button" data-schedule-step="cool" data-delta="1" aria-label="Raise cool schedule set point">+</button>
+                      </div>
+                    </div>
+                    <div class="schedule-setpoint-card heat">
+                      <span>Heat set point</span>
+                      <div class="schedule-stepper">
+                        <button type="button" data-schedule-step="heat" data-delta="-1" aria-label="Lower heat schedule set point">−</button>
+                        <strong><span id="scheduleHeatValue">71</span>°</strong>
+                        <button type="button" data-schedule-step="heat" data-delta="1" aria-label="Raise heat schedule set point">+</button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="schedule-condition-card">
+                    <div class="schedule-condition-head">
+                      <div>
+                        <span>Condition</span>
+                        <strong>Run when selected person is home</strong>
+                      </div>
+                      <em id="scheduleConditionSummary">Always active</em>
+                    </div>
+                    <div id="schedulePersonChips" class="schedule-person-chips"></div>
+                  </div>
+
+                  <div class="schedule-editor-actions">
+                    <button id="scheduleDeleteButton" class="scene-btn schedule-delete-btn" type="button">Delete</button>
+                    <button id="scheduleSaveButton" class="scene-btn schedule-save-btn" type="button">Save Schedule</button>
+                  </div>
+                </section>
+              </div>
+            </aside>
+
+            <section id="scheduleTimePickerOverlay" class="schedule-time-picker-overlay" aria-hidden="true">
+              <div class="schedule-time-picker-backdrop" data-close-schedule-time></div>
+              <aside class="schedule-time-picker-sheet" role="dialog" aria-modal="true" aria-labelledby="scheduleTimePickerTitle">
+                <div class="schedule-time-picker-header">
+                  <div>
+                    <p class="eyebrow">Schedule Time</p>
+                    <h3 id="scheduleTimePickerTitle">Pick a time</h3>
+                  </div>
+                  <button id="scheduleTimePickerClose" class="icon-button close" type="button" aria-label="Close time picker">×</button>
+                </div>
+
+                <div class="schedule-time-preview" aria-live="polite">
+                  <span>Runs at</span>
+                  <strong id="scheduleTimePreview">8:00 PM</strong>
+                </div>
+
+                <div class="schedule-time-picker-controls">
+                  <div class="schedule-time-step-card">
+                    <span>Hour</span>
+                    <div class="schedule-time-stepper">
+                      <button type="button" data-schedule-time-adjust="hour" data-delta="-1" aria-label="Decrease hour">−</button>
+                      <strong id="scheduleTimeHourValue">8</strong>
+                      <button type="button" data-schedule-time-adjust="hour" data-delta="1" aria-label="Increase hour">+</button>
+                    </div>
+                  </div>
+
+                  <div class="schedule-time-step-card">
+                    <span>Minute</span>
+                    <div class="schedule-time-stepper">
+                      <button type="button" data-schedule-time-adjust="minute" data-delta="-1" aria-label="Decrease minute">−</button>
+                      <strong id="scheduleTimeMinuteValue">00</strong>
+                      <button type="button" data-schedule-time-adjust="minute" data-delta="1" aria-label="Increase minute">+</button>
+                    </div>
+                  </div>
+
+                  <div class="schedule-time-step-card schedule-time-ampm-card">
+                    <span>AM / PM</span>
+                    <div class="schedule-time-meridiem-group">
+                      <button type="button" data-schedule-time-meridiem="AM">AM</button>
+                      <button type="button" data-schedule-time-meridiem="PM">PM</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="schedule-minute-shortcuts" id="scheduleMinuteShortcuts" aria-label="Quick minute choices"></div>
+
+                <div class="schedule-time-picker-actions">
+                  <button id="scheduleTimePickerCancel" class="scene-btn" type="button">Cancel</button>
+                  <button id="scheduleTimePickerApply" class="scene-btn schedule-time-apply-btn" type="button">Set Time</button>
+                </div>
+              </aside>
+            </section>
+          </section>
+        </section>
+      </article>
+
+      <article class="screen screen-lights" data-screen="lights" aria-label="Lights controls">
+        <section class="lights-stage panel">
+          <div class="lights-head-row">
+            <div class="panel-heading vertical">
+              <p class="eyebrow">Light Control</p>
+              <h2 id="lightRoomTitle">Living Room</h2>
+            </div>
+            <div id="lightRoomTabs" class="room-tabs top-room-tabs light-room-tabs" role="tablist" aria-label="Light rooms"></div>
+          </div>
+
+          <div class="lights-summary-row light-room-actions-row">
+            <div class="room-actions centered-room-actions light-room-actions">
+              <button class="scene-btn room-open" data-light-action="on-room">Room On</button>
+              <button class="scene-btn room-close" data-light-action="off-room">Room Off</button>
+            </div>
+          </div>
+
+          <div id="lightCards" class="light-cards"></div>
+        </section>
+      </article>
+
+      <article class="screen screen-room" data-screen="room" aria-label="Room controls">
+        <section class="room-control-stage panel">
+          <div class="room-control-head-row">
+            <div class="panel-heading vertical">
+              <p class="eyebrow">Room Control</p>
+              <h2 id="roomControlRoomTitle">Living Room</h2>
+            </div>
+            <div id="roomControlTabs" class="room-tabs top-room-tabs room-control-tabs" role="tablist" aria-label="Room control rooms"></div>
+          </div>
+
+
+          <div id="roomControlCards" class="room-control-cards"></div>
+        </section>
+      </article>
+    </section>
+
+
+    <section id="autoSwitchOverlay" class="settings-overlay auto-switch-overlay" aria-hidden="true">
+      <div class="settings-backdrop" data-close-auto-switch></div>
+      <aside class="auto-switch-sheet" role="dialog" aria-modal="true" aria-labelledby="autoSwitchTitle">
+        <div class="auto-switch-head">
+          <div>
+            <p class="eyebrow">Room Temp Auto-Switch</p>
+            <h2 id="autoSwitchTitle">Auto-switched to Cool</h2>
+          </div>
+          <button id="autoSwitchClose" class="icon-button close" aria-label="Close auto-switch options">×</button>
+        </div>
+        <p id="autoSwitchMessage" class="auto-switch-message">Inside room temperature crossed an auto-switch target.</p>
+        <div class="auto-switch-actions">
+          <button id="autoSwitchRevertButton" class="scene-btn auto-switch-revert" type="button">Revert</button>
+          <button id="autoSwitchDismissButton" class="scene-btn auto-switch-dismiss" type="button">Dismiss</button>
+        </div>
+      </aside>
+    </section>
+
+    <section id="autoConfirmOverlay" class="settings-overlay auto-confirm-overlay" aria-hidden="true">
+      <div class="settings-backdrop" data-close-auto-confirm></div>
+      <aside class="auto-switch-sheet auto-confirm-sheet" role="dialog" aria-modal="true" aria-labelledby="autoConfirmTitle">
+        <div class="auto-switch-head">
+          <div>
+            <p class="eyebrow">Confirm Mode Change</p>
+            <h2 id="autoConfirmTitle">Switch to Auto?</h2>
+          </div>
+          <button id="autoConfirmClose" class="icon-button close" aria-label="Close auto confirmation">×</button>
+        </div>
+        <p class="auto-switch-message">Please confirm you want to switch to Auto.</p>
+        <div class="auto-switch-actions auto-confirm-actions">
+          <button id="autoConfirmCancelButton" class="scene-btn auto-confirm-cancel" type="button">Cancel</button>
+          <button id="autoConfirmSwitchButton" class="scene-btn auto-confirm-switch" type="button">Switch to Auto</button>
+        </div>
+      </aside>
+    </section>
+
+    <section id="settingsCodeOverlay" class="settings-overlay alarm-keypad-overlay settings-code-overlay" aria-hidden="true">
+      <div class="settings-backdrop" data-close-settings-code></div>
+      <aside class="alarm-keypad-sheet" role="dialog" aria-modal="true" aria-labelledby="settingsCodeTitle">
+        <div class="alarm-keypad-head">
+          <div>
+            <p class="eyebrow">Access</p>
+            <h2 id="settingsCodeTitle">Enter Code</h2>
+          </div>
+          <button id="settingsCodeClose" class="icon-button close" aria-label="Close access keypad">×</button>
+        </div>
+        <div id="settingsCodeStatus" class="alarm-keypad-status" aria-live="polite"></div>
+        <div id="settingsCodeDots" class="alarm-code-dots" aria-label="Entered access code"></div>
+        <div id="settingsCodeGrid" class="alarm-keypad-grid" aria-label="Access keypad">
+          <button data-settings-key="1">1</button>
+          <button data-settings-key="2">2</button>
+          <button data-settings-key="3">3</button>
+          <button data-settings-key="4">4</button>
+          <button data-settings-key="5">5</button>
+          <button data-settings-key="6">6</button>
+          <button data-settings-key="7">7</button>
+          <button data-settings-key="8">8</button>
+          <button data-settings-key="9">9</button>
+          <button data-settings-key="clear" class="alarm-key-muted">Clear</button>
+          <button data-settings-key="0">0</button>
+          <button data-settings-key="back" class="alarm-key-muted">⌫</button>
+        </div>
+      </aside>
+    </section>
+
+    <section id="settingsOverlay" class="settings-overlay" aria-hidden="true">
+      <div class="settings-backdrop" data-close-settings></div>
+      <aside id="settingsSheet" class="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+        <div class="settings-header">
+          <div>
+            <p id="settingsEyebrow" class="eyebrow">Panel Settings</p>
+            <h2 id="settingsTitle">Setup</h2>
+          </div>
+          <button id="settingsClose" class="icon-button close" aria-label="Close settings">×</button>
+        </div>
+
+        <div id="thermostatSettingsView" class="settings-view">
+          <div class="comfort-top-actions" aria-label="Comfort setup shortcuts">
+            <button id="openHardwareInfoButton" class="scene-btn hardware-info-launch" type="button">Hardware Information</button>
+            <button id="openHistoryButton" class="scene-btn history-info-launch" type="button">History</button>
+          </div>
+          <div class="settings-section">
+            <div><h3>Safety Range</h3></div>
+            <div class="settings-grid two-col">
+              <div class="setpoint-card"><span>Low Safety</span><div class="setpoint-controls"><button data-safety-adjust="low:-1">−</button><strong><span id="safetyLowValue">55</span>°</strong><button data-safety-adjust="low:1">+</button></div></div>
+              <div class="setpoint-card"><span>High Safety</span><div class="setpoint-controls"><button data-safety-adjust="high:-1">−</button><strong><span id="safetyHighValue">85</span>°</strong><button data-safety-adjust="high:1">+</button></div></div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div><h3>Away Temps</h3></div>
+            <div class="settings-grid two-col">
+              <div class="setpoint-card"><span>Heat Away</span><div class="setpoint-controls"><button data-away-adjust="heat:-1">−</button><strong><span id="awayHeatValue">55</span>°</strong><button data-away-adjust="heat:1">+</button></div></div>
+              <div class="setpoint-card"><span>Cool Away</span><div class="setpoint-controls"><button data-away-adjust="cool:-1">−</button><strong><span id="awayCoolValue">85</span>°</strong><button data-away-adjust="cool:1">+</button></div></div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div><h3>Comfort Limits</h3></div>
+            <div class="settings-grid two-col limits-grid">
+              <div class="limit-group">
+                <div class="limit-title">Cool Range</div>
+                <div class="setpoint-card"><span>Low Limit</span><div class="setpoint-controls"><button data-limit-adjust="cool:min:-1">−</button><strong><span id="coolMinValue">65</span>°</strong><button data-limit-adjust="cool:min:1">+</button></div></div>
+                <div class="setpoint-card"><span>High Limit</span><div class="setpoint-controls"><button data-limit-adjust="cool:max:-1">−</button><strong><span id="coolMaxValue">80</span>°</strong><button data-limit-adjust="cool:max:1">+</button></div></div>
+              </div>
+              <div class="limit-group">
+                <div class="limit-title">Heat Range</div>
+                <div class="setpoint-card"><span>Low Limit</span><div class="setpoint-controls"><button data-limit-adjust="heat:min:-1">−</button><strong><span id="heatMinValue">60</span>°</strong><button data-limit-adjust="heat:min:1">+</button></div></div>
+                <div class="setpoint-card"><span>High Limit</span><div class="setpoint-controls"><button data-limit-adjust="heat:max:-1">−</button><strong><span id="heatMaxValue">78</span>°</strong><button data-limit-adjust="heat:max:1">+</button></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-section current-temp-source-section">
+            <div>
+              <h3>Current Temperature Source</h3>
+              <p class="settings-hint">Choose the Home Assistant sensor used as the room temperature. Moving the virtual temp slider temporarily overrides this source for 2 minutes.</p>
+            </div>
+            <div class="current-temp-source-card">
+              <div class="current-temp-source-copy">
+                <strong id="currentTempSourceName">Virtual Temp</strong>
+                <span id="currentTempSourceId">No Home Assistant sensor selected</span>
+                <em id="currentTempSourceStatus">Using the virtual temp slider until a sensor is selected</em>
+              </div>
+              <div class="current-temp-source-actions">
+                <button id="chooseCurrentTempSensorButton" class="scene-btn choose-current-temp-sensor" type="button">Choose Sensor</button>
+                <button id="clearCurrentTempSensorButton" class="scene-btn clear-current-temp-sensor" type="button" hidden>Clear</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div><h3>Auto Mode (Room Temp Auto Switch Targets)</h3></div>
+            <div class="settings-grid two-col auto-settings-grid">
+              <div class="setpoint-card"><span>Cool Target</span><div class="setpoint-controls"><button data-auto-adjust="coolTarget:-1">−</button><strong><span id="autoCoolOutdoorTargetValue">70</span>°</strong><button data-auto-adjust="coolTarget:1">+</button></div></div>
+              <div class="setpoint-card"><span>Heat Target</span><div class="setpoint-controls"><button data-auto-adjust="heatTarget:-1">−</button><strong><span id="autoHeatOutdoorTargetValue">65</span>°</strong><button data-auto-adjust="heatTarget:1">+</button></div></div>
+              <div class="setpoint-card readout"><span>Changeover Lockout</span><div class="setpoint-controls lockout-readout"><strong id="autoLockoutValue">2 hr</strong></div></div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div><h3>Fan</h3></div>
+            <div class="segmented fan-segments" role="group" aria-label="Fan mode">
+              <button class="segment" data-fan="off">Off</button>
+              <button class="segment" data-fan="on">On</button>
+              <button class="segment active" data-fan="auto">Auto</button>
+            </div>
+            <div class="settings-grid two-col cooling-settings-grid">
+              <div class="setpoint-card"><span>Cool Fan Remain On</span><div class="setpoint-controls"><button data-auto-adjust="coolFanRemain:-1">−</button><strong><span id="coolFanRemainValue">2</span> min</strong><button data-auto-adjust="coolFanRemain:1">+</button></div></div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div><h3>Safety Controls</h3></div>
+            <div class="thermostat-lock-grid" aria-label="Equipment lockouts">
+              <button id="coolLockToggle" class="thermostat-lock-toggle" type="button" aria-pressed="false">Cool Lock</button>
+              <button id="heatLockToggle" class="thermostat-lock-toggle" type="button" aria-pressed="false">Heat Lock</button>
+            </div>
+          </div>
+
+          <div class="settings-section thermostat-presence-section">
+            <div class="thermostat-section-head">
+              <h3>Auto Away / Home</h3>
+              <button id="addThermostatPersonButton" class="mini-add-person-button" type="button" aria-label="Add Home Assistant person">+ Person</button>
+            </div>
+            <div id="thermostatPeopleList" class="thermostat-people-list" aria-live="polite"></div>
+          </div>
+
+          <div class="settings-section pause-function-section">
+            <div class="thermostat-section-head">
+              <div>
+                <h3>Pause Function</h3>
+                <p id="pauseFunctionSummary" class="settings-hint">Pause Function is off until at least one entry is selected.</p>
+              </div>
+              <button id="addPauseFunctionEntryButton" class="mini-add-person-button" type="button" aria-label="Add Pause Function entry">+ Entry</button>
+            </div>
+            <div class="setpoint-card pause-function-delay-card">
+              <span>Pause After</span>
+              <div class="setpoint-controls">
+                <button data-pause-duration-adjust="-1" type="button" aria-label="Decrease pause delay">−</button>
+                <strong><span id="pauseFunctionMinutesValue">5</span> min</strong>
+                <button data-pause-duration-adjust="1" type="button" aria-label="Increase pause delay">+</button>
+              </div>
+            </div>
+            <div id="pauseFunctionEntryList" class="pause-function-entry-list" aria-live="polite"></div>
+          </div>
+
+          <div class="settings-section thermostat-theme-section">
+            <div>
+              <h3>Theme</h3>
+              <p class="settings-hint">Choose the look used across all pages.</p>
+            </div>
+            <div class="theme-choice-grid" role="group" aria-label="Panel theme">
+              <button class="theme-choice-btn" data-theme-choice="regular" type="button" aria-pressed="true">
+                <strong>Regular</strong>
+                <span>Current glass-style theme</span>
+              </button>
+              <button class="theme-choice-btn" data-theme-choice="star-trek" type="button" aria-pressed="false">
+                <strong>Star Trek</strong>
+                <span>Retro bridge-console styling</span>
+              </button>
+              <button class="theme-choice-btn" data-theme-choice="christmas" type="button" aria-pressed="false">
+                <strong>Christmas</strong>
+                <span>Festive holiday styling</span>
+              </button>
+            </div>
+            <div class="screen-timeout-card">
+              <label class="screen-timeout-field">Screen Timeout
+                <input id="screenTimeoutMinutesInput" type="number" inputmode="numeric" pattern="[0-9]*" min="1" max="120" step="1" aria-label="Screen timeout in minutes" />
+              </label>
+              <p id="screenTimeoutSummary" class="settings-hint screen-timeout-summary">After 5 min inactive, return to Thermostat.</p>
+            </div>
+          </div>
+
+          <div class="settings-section alarm-code-section">
+            <div>
+              <h3>Security Code</h3>
+              <p class="settings-hint">User access opens panel menus. Disarm code is sent with alarm disarm commands.</p>
+            </div>
+            <div class="security-code-grid">
+              <div class="alarm-code-card">
+                <label class="alarm-code-field">User Access Code
+                  <input id="userAccessCodeInput" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" aria-label="Set user access code" />
+                </label>
+                <button id="saveUserAccessCodeButton" class="scene-btn secondary" type="button">Save Access</button>
+              </div>
+              <div class="alarm-code-card">
+                <label class="alarm-code-field">Disarm Code
+                  <input id="alarmDisarmCodeInput" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="off" aria-label="Set alarm disarm code" />
+                </label>
+                <button id="saveAlarmCodeButton" class="scene-btn secondary" type="button">Save Disarm</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-section thermostat-name-section">
+            <div>
+              <h3>Thermostat Name</h3>
+              <p class="settings-hint">This name appears in the panel info screen and Home Assistant discovery.</p>
+            </div>
+            <div class="thermostat-name-card">
+              <label class="thermostat-name-field">Name
+                <input id="thermostatNameInput" type="text" maxlength="80" autocomplete="off" aria-label="Set thermostat name" />
+              </label>
+              <button id="saveThermostatNameButton" class="scene-btn secondary" type="button">Save Name</button>
+            </div>
+          </div>
+        </div>
+
+
+        <div id="hardwareSettingsView" class="settings-view hardware-settings-view" hidden>
+          <div class="hardware-page-top">
+            <button id="backToComfortSetup" class="ghost-button" type="button">← Comfort Setup</button>
+            <button id="refreshHardwareButton" class="scene-btn secondary" type="button">Refresh Hardware</button>
+          </div>
+
+          <div class="hardware-layout">
+            <section class="hardware-card hardware-status-card">
+              <div class="hardware-card-head">
+                <div>
+                  <p class="eyebrow">GPIO Backend</p>
+                  <h3>Hardware Status</h3>
+                </div>
+                <span id="hardwareBackendStatus" class="hardware-status-pill">Loading…</span>
+              </div>
+              <div id="hardwareManualStatus" class="hardware-manual-status">Thermostat automation has relay control.</div>
+              <button id="releaseHardwareManualButton" class="scene-btn secondary release-hardware-control" type="button" disabled>Return Control to Thermostat</button>
+            </section>
+
+            <section class="hardware-card hardware-rgb-card">
+              <div class="hardware-card-head">
+                <div>
+                  <p class="eyebrow">GPIO 26 / Pin 37</p>
+                  <h3>Attached RGB</h3>
+                </div>
+                <button id="hardwareRgbPowerButton" class="hardware-power-button" type="button" aria-pressed="false">Off</button>
+              </div>
+              <div class="hardware-rgb-row">
+                <label class="hardware-color-field">Color
+                  <input id="hardwareRgbColorInput" type="color" value="#35eaff" aria-label="RGB LED color" />
+                </label>
+                <div id="hardwareRgbPresetGrid" class="hardware-rgb-presets" aria-label="RGB color presets">
+                  <button type="button" data-hardware-rgb-color="#35eaff" style="--swatch:#35eaff">Cyan</button>
+                  <button type="button" data-hardware-rgb-color="#3f7cff" style="--swatch:#3f7cff">Blue</button>
+                  <button type="button" data-hardware-rgb-color="#35e27a" style="--swatch:#35e27a">Green</button>
+                  <button type="button" data-hardware-rgb-color="#ff3b3b" style="--swatch:#ff3b3b">Red</button>
+                  <button type="button" data-hardware-rgb-color="#ff8a2a" style="--swatch:#ff8a2a">Orange</button>
+                  <button type="button" data-hardware-rgb-color="#ffffff" style="--swatch:#ffffff">White</button>
+                </div>
+              </div>
+              <div id="hardwareRgbStatus" class="hardware-note">RGB backend loading…</div>
+            </section>
+
+            <section class="hardware-card hardware-relay-card">
+              <div class="hardware-card-head">
+                <div>
+                  <p class="eyebrow">Manual Test</p>
+                  <h3>Relay Outputs</h3>
+                </div>
+              </div>
+              <div class="hardware-relay-grid">
+                <button type="button" class="hardware-relay-button" data-hardware-relay="fan" aria-pressed="false"><strong>Fan Relay</strong><span>GPIO 7 / Pin 26</span></button>
+                <button type="button" class="hardware-relay-button" data-hardware-relay="cool" aria-pressed="false"><strong>Cool Relay</strong><span>GPIO 8 / Pin 24</span></button>
+                <button type="button" class="hardware-relay-button" data-hardware-relay="heat" aria-pressed="false"><strong>Heat Relay</strong><span>GPIO 22 / Pin 15</span></button>
+              </div>
+              <div class="hardware-note warning">Manual relay testing stays active until you press Return Control to Thermostat.</div>
+            </section>
+
+            <section class="hardware-card hardware-i2c-card">
+              <div class="hardware-card-head">
+                <div>
+                  <p class="eyebrow">I2C Bus 1</p>
+                  <h3>Detected Addresses</h3>
+                </div>
+                <span class="hardware-pin-mini">SDA 3 • SCL 5</span>
+              </div>
+              <div id="i2cAddressList" class="i2c-address-list" aria-live="polite">
+                <div class="empty-state compact">Scanning I2C…</div>
+              </div>
+              <div id="i2cStatusLine" class="hardware-note">Waiting for scan.</div>
+            </section>
+
+            <section class="hardware-card hardware-pinout-card">
+              <div class="hardware-card-head">
+                <div>
+                  <p class="eyebrow">Pinned From Schematic</p>
+                  <h3>GPIO Map</h3>
+                </div>
+              </div>
+              <div class="hardware-pin-grid">
+                <div><strong>Heat Relay</strong><span>GPIO 22 • Pin 15 • R95 470Ω</span></div>
+                <div><strong>Cool Relay</strong><span>GPIO 8 • Pin 24 • R97 470Ω</span></div>
+                <div><strong>Fan Relay</strong><span>GPIO 7 • Pin 26 • R98 470Ω</span></div>
+                <div><strong>RGB / LED</strong><span>GPIO 26 • Pin 37</span></div>
+                <div><strong>I2C</strong><span>SDA GPIO 2 Pin 3 • SCL GPIO 3 Pin 5</span></div>
+                <div><strong>Power</strong><span>3.3V Pin 17 • 5V Pin 4 • GND Pin 6</span></div>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <div id="historySettingsView" class="settings-view history-settings-view" hidden>
+          <div class="history-page-top">
+            <button id="backToComfortSetupFromHistory" class="ghost-button" type="button">← Comfort Setup</button>
+            <button id="refreshHistoryButton" class="scene-btn secondary" type="button">Refresh History</button>
+          </div>
+
+          <div class="history-layout">
+            <section class="history-card history-date-card">
+              <div class="hardware-card-head">
+                <div>
+                  <p class="eyebrow">Daily Runtime</p>
+                  <h3>Choose Date</h3>
+                </div>
+              </div>
+              <div class="history-date-row">
+                <button id="historyPrevDayButton" class="ghost-button compact" type="button" aria-label="Previous day">‹</button>
+                <input id="historyDateInput" type="date" aria-label="History date" />
+                <button id="historyNextDayButton" class="ghost-button compact" type="button" aria-label="Next day">›</button>
+              </div>
+              <div id="historyWritePolicy" class="hardware-note">Active-day history is held in RAM and saved once per day.</div>
+            </section>
+
+            <section class="history-card history-summary-card">
+              <div class="hardware-card-head">
+                <div>
+                  <p class="eyebrow">Selected Day</p>
+                  <h3 id="historySelectedDateTitle">Today</h3>
+                </div>
+                <span id="historyUpdatedPill" class="hardware-status-pill">Loading…</span>
+              </div>
+              <div class="history-summary-grid">
+                <div class="history-total-card cool">
+                  <span>AC Runtime</span>
+                  <strong id="historyCoolTotal">0 min</strong>
+                  <em id="historyCoolCycles">0 cycles</em>
+                </div>
+                <div class="history-total-card heat">
+                  <span>Heat Runtime</span>
+                  <strong id="historyHeatTotal">0 min</strong>
+                  <em id="historyHeatCycles">0 cycles</em>
+                </div>
+                <div class="history-total-card fan">
+                  <span>Fan Runtime</span>
+                  <strong id="historyFanTotal">0 min</strong>
+                  <em id="historyFanCycles">0 cycles</em>
+                </div>
+              </div>
+            </section>
+
+            <section class="history-card history-timeline-card">
+              <div class="hardware-card-head">
+                <div>
+                  <p class="eyebrow">Event Timeline</p>
+                  <h3>Daily History</h3>
+                </div>
+              </div>
+              <div id="historyTimeline" class="history-timeline" aria-live="polite">
+                <div class="empty-state compact">Loading history…</div>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <div id="blindSettingsView" class="settings-view" hidden>
+          <div id="blindSetupView" class="settings-subview">
+            <div class="setup-actions-row">
+              <button id="addRoomButton" class="scene-btn room-open">Add Room</button>
+              <button id="openBlindHaConfig" class="scene-btn secondary">Home Assistant Config</button>
+            </div>
+            <div id="roomConfigList" class="room-config-list"></div>
+          </div>
+
+          <div id="blindHaView" class="settings-subview ha-config-subview" hidden>
+            <div class="ha-focus-top">
+              <button id="backToBlindSetup" class="ghost-button">← Blind Setup</button>
+            </div>
+            <div class="ha-config-layout">
+              <section class="ha-connect-card">
+                <div class="form-grid ha-form-grid">
+                  <label class="form-field">Home Assistant URL
+                    <input id="haUrlInput" type="text" autocomplete="off" spellcheck="false" />
+                  </label>
+                  <label class="form-field">Long-Lived Access Token
+                    <textarea id="haTokenInput" rows="3" spellcheck="false"></textarea>
+                  </label>
+                </div>
+                <div class="setup-actions-row compact-actions ha-action-grid">
+                  <button id="saveHaConfig" class="scene-btn room-open">Save</button>
+                  <button id="loadCoverEntities" class="scene-btn secondary">Load Covers</button>
+                  <button id="testHaConnection" class="scene-btn secondary subtle">Test</button>
+                  <button id="clearHaLog" class="scene-btn secondary subtle">Clear Log</button>
+                </div>
+                <div id="haStatusLine" class="ha-status-line">Ready.</div>
+                <div class="ha-diagnostics">
+                  <div class="ha-diag-head">
+                    <strong>Connection Log</strong>
+                    <span>Token hidden</span>
+                  </div>
+                  <div id="haLogList" class="ha-log-list"></div>
+                </div>
+              </section>
+
+              <section class="ha-entity-card">
+                <div class="ha-entity-head">
+                  <div>
+                    <p class="eyebrow">Cover Entities</p>
+                    <h3>Available Blinds</h3>
+                  </div>
+                  <span id="haEntityCount" class="entity-count-pill">0</span>
+                </div>
+                <div id="haCoverList" class="entity-list-preview"></div>
+              </section>
+            </div>
+          </div>
+        </div>
+
+        <div id="audioSettingsView" class="settings-view" hidden>
+          <div id="audioSetupView" class="settings-subview audio-setup-subview">
+            <section class="audio-setup-card compact-audio-setup">
+              <div>
+                <p class="eyebrow">Audio Setup</p>
+                <h3>Press and hold a control to assign it.</h3>
+              </div>
+              <button id="openAudioHaConfig" class="scene-btn secondary compact-config-button">Home Assistant Config</button>
+            </section>
+            <section class="audio-assignment-help">
+              <div><strong>Media card</strong><span>Hold to choose the media player.</span></div>
+              <div><strong>Gain / Bass / Treble</strong><span>Hold to assign number entries.</span></div>
+              <div><strong>Sub / Surround / Projector</strong><span>Hold to assign switch entries.</span></div>
+            </section>
+            <div id="mediaPlayerCount" class="hidden-count" hidden>0</div>
+            <div id="selectedMediaDeviceText" class="selected-device-line" hidden>No media player selected.</div>
+            <div id="mediaPlayerList" class="media-player-list" hidden></div>
+            <button id="loadMediaPlayers" class="hidden-loader" hidden>Load Media Devices</button>
+          </div>
+
+          <div id="audioHaView" class="settings-subview ha-config-subview audio-ha-subview" hidden>
+            <div class="ha-focus-top">
+              <button id="backToAudioSetup" class="ghost-button">← Audio Setup</button>
+            </div>
+            <section class="ha-connect-card audio-ha-card">
+              <div class="form-grid ha-form-grid">
+                <label class="form-field">Home Assistant URL
+                  <input id="audioHaUrlInput" type="text" autocomplete="off" spellcheck="false" />
+                </label>
+                <label class="form-field">Long-Lived Access Token
+                  <textarea id="audioHaTokenInput" rows="3" spellcheck="false"></textarea>
+                </label>
+              </div>
+              <div class="setup-actions-row compact-actions audio-ha-actions single-action">
+                <button id="saveAudioHaConfig" class="scene-btn room-open">Save</button>
+              </div>
+            </section>
+          </div>
+        </div>
+
+
+        <div id="lightsSettingsView" class="settings-view" hidden>
+          <div id="lightsSetupView" class="settings-subview lights-setup-subview">
+            <div class="setup-actions-row">
+              <button id="addLightRoomButton" class="scene-btn room-open">Add Room</button>
+              <button id="openLightHaConfig" class="scene-btn secondary">Home Assistant Config</button>
+            </div>
+            <div id="lightRoomConfigList" class="room-config-list light-room-config-list"></div>
+          </div>
+
+          <div id="lightsHaView" class="settings-subview ha-config-subview lights-ha-subview" hidden>
+            <div class="ha-focus-top">
+              <button id="backToLightsSetup" class="ghost-button">← Lights Setup</button>
+            </div>
+            <section class="ha-connect-card lights-ha-card">
+              <div class="form-grid ha-form-grid">
+                <label class="form-field">Home Assistant URL
+                  <input id="lightHaUrlInput" type="text" autocomplete="off" spellcheck="false" />
+                </label>
+                <label class="form-field">Long-Lived Access Token
+                  <textarea id="lightHaTokenInput" rows="3" spellcheck="false"></textarea>
+                </label>
+              </div>
+              <div class="setup-actions-row compact-actions audio-ha-actions single-action">
+                <button id="saveLightHaConfig" class="scene-btn room-open">Save</button>
+              </div>
+            </section>
+          </div>
+        </div>
+
+
+        <div id="roomControlSettingsView" class="settings-view" hidden>
+          <div id="roomControlSetupView" class="settings-subview room-control-setup-subview">
+            <div class="setup-actions-row">
+              <button id="addRoomControlRoomButton" class="scene-btn room-open">Add Room</button>
+            </div>
+            <p class="settings-hint room-control-ha-hint">Uses the saved Home Assistant URL/token. Long-press a Room control card to assign any Home Assistant entity. Optional default codes can protect locks, garage doors, buttons, and other open/run actions.</p>
+            <div id="roomControlConfigList" class="room-config-list room-control-config-list"></div>
+          </div>
+        </div>
+
+        <div id="settingsFooter" class="settings-footer">
+          <button id="settingsDone" class="scene-btn">Done</button>
+        </div>
+      </aside>
+    </section>
+
+    <section id="lightColorOverlay" class="settings-overlay light-color-overlay" aria-hidden="true">
+      <div class="settings-backdrop" data-close-light-color></div>
+      <aside class="light-color-sheet" role="dialog" aria-modal="true" aria-labelledby="lightColorPickerTitle">
+        <div class="settings-header compact-picker-header">
+          <div>
+            <p class="eyebrow">Color Control</p>
+            <h2 id="lightColorPickerTitle">Choose Color</h2>
+          </div>
+          <button id="lightColorPickerClose" class="icon-button close" aria-label="Close light color picker">×</button>
+        </div>
+        <div class="light-color-current">
+          <span id="lightColorPreview" aria-hidden="true"></span>
+          <strong id="lightColorName">Select a preset</strong>
+        </div>
+        <div id="lightColorPresetGrid" class="light-color-preset-grid" aria-label="Light color presets"></div>
+        <button class="scene-btn light-color-done" type="button" data-close-light-color>Done</button>
+      </aside>
+    </section>
+
+    <section id="thermostatInfoOverlay" class="settings-overlay thermostat-info-overlay" aria-hidden="true">
+      <div class="settings-backdrop" data-close-thermostat-info></div>
+      <aside class="panel-info-sheet" role="dialog" aria-modal="true" aria-labelledby="thermostatInfoTitle">
+        <div class="settings-header compact-picker-header">
+          <div>
+            <p class="eyebrow">Panel Information</p>
+            <h2 id="thermostatInfoTitle">Thermostat Info</h2>
+          </div>
+          <button id="thermostatInfoClose" class="icon-button close" aria-label="Close panel information">×</button>
+        </div>
+        <div class="panel-info-grid">
+          <div class="panel-info-row">
+            <span>Thermostat Name</span>
+            <strong id="unitNameValue">Loading…</strong>
+          </div>
+          <div class="panel-info-row">
+            <span>IP Address / Port</span>
+            <strong id="unitIpValue">Loading…</strong>
+          </div>
+          <div class="panel-info-row">
+            <span>Version</span>
+            <strong id="unitVersionValue">Loading…</strong>
+          </div>
+          <div class="panel-info-row">
+            <span>Uptime</span>
+            <strong id="unitUptimeValue">Loading…</strong>
+          </div>
+          <div class="panel-info-row">
+            <span>Thermal</span>
+            <strong id="unitThermalValue">Loading…</strong>
+          </div>
+          <div class="panel-info-actions">
+            <button id="fetchUpdateButton" class="scene-btn fetch-update-btn" type="button">Fetch Update</button>
+            <button id="restartServerButton" class="scene-btn restart-server-btn" type="button">Restart</button>
+            <button id="downloadConfigButton" class="scene-btn download-config-btn" type="button">Download Config</button>
+            <button id="uploadConfigButton" class="scene-btn upload-config-btn" type="button">Upload Config</button>
+            <input id="uploadConfigFileInput" type="file" accept="application/json,.json" hidden />
+          </div>
+          <p id="fetchUpdateStatus" class="fetch-update-status" aria-live="polite"></p>
+        </div>
+      </aside>
+    </section>
+
+    <section id="entityPickerOverlay" class="settings-overlay entity-overlay" aria-hidden="true">
+      <div class="settings-backdrop" data-close-entity-picker></div>
+      <aside class="settings-sheet entity-sheet" role="dialog" aria-modal="true" aria-labelledby="entityPickerTitle">
+        <div class="settings-header">
+          <div>
+            <p class="eyebrow">Home Assistant</p>
+            <h2 id="entityPickerTitle">Assign Blind</h2>
+          </div>
+          <button id="entityPickerClose" class="icon-button close" aria-label="Close entity picker">×</button>
+        </div>
+        <div class="entity-picker-help">Long-press a blind, then select the matching cover entity.</div>
+        <div id="entityPickerList" class="entity-picker-list"></div>
+      </aside>
+    </section>
+
+    <section id="audioEntityPickerOverlay" class="settings-overlay entity-overlay audio-picker-overlay" aria-hidden="true">
+      <div class="settings-backdrop" data-close-audio-entity-picker></div>
+      <aside class="settings-sheet entity-sheet audio-entity-sheet" role="dialog" aria-modal="true" aria-labelledby="audioEntityPickerTitle">
+        <div class="settings-header compact-picker-header">
+          <div>
+            <p id="audioEntityPickerEyebrow" class="eyebrow">Home Assistant</p>
+            <h2 id="audioEntityPickerTitle">Assign Audio Control</h2>
+          </div>
+          <button id="audioEntityPickerClose" class="icon-button close" aria-label="Close audio entity picker">×</button>
+        </div>
+        <label class="entity-search-field">
+          <span>Search</span>
+          <input id="audioEntitySearch" type="search" autocomplete="off" spellcheck="false" placeholder="Type to filter…" />
+        </label>
+        <div id="audioEntityPickerHelp" class="entity-picker-help">Choose the Home Assistant entity for this control.</div>
+        <div id="audioEntityPickerList" class="entity-picker-list audio-entity-picker-list"></div>
+      </aside>
+    </section>
+
+    <section id="alarmArmOverlay" class="settings-overlay alarm-arm-overlay" aria-hidden="true">
+      <div class="settings-backdrop" data-cancel-alarm-arm></div>
+      <aside class="alarm-arm-sheet" role="dialog" aria-modal="true" aria-labelledby="alarmArmTitle">
+        <p class="eyebrow">Security</p>
+        <h2 id="alarmArmTitle">Arm Alarm</h2>
+        <div id="alarmArmStatus" class="alarm-arm-status">Choose how you want to arm the system.</div>
+        <div id="alarmArmCountdown" class="alarm-arm-countdown" hidden>60</div>
+        <div id="alarmArmActions" class="alarm-arm-actions">
+          <button id="alarmArmHomeButton" class="alarm-arm-option home" type="button">Arm Home</button>
+          <button id="alarmArmCancelButton" class="alarm-arm-option cancel" type="button">Cancel</button>
+          <button id="alarmArmAwayButton" class="alarm-arm-option away" type="button">Arm Away</button>
+        </div>
+      </aside>
+    </section>
+
+
+    <section id="roomControlCodeOverlay" class="settings-overlay alarm-keypad-overlay room-control-code-overlay" aria-hidden="true">
+      <div class="settings-backdrop" data-close-room-control-code></div>
+      <aside class="alarm-keypad-sheet" role="dialog" aria-modal="true" aria-labelledby="roomControlCodeTitle">
+        <div class="alarm-keypad-head">
+          <div>
+            <p class="eyebrow">Room Access</p>
+            <h2 id="roomControlCodeTitle">Unlock</h2>
+          </div>
+          <button id="roomControlCodeClose" class="icon-button close" aria-label="Close room code keypad">×</button>
+        </div>
+        <div id="roomControlCodeStatus" class="alarm-keypad-status">Enter default code.</div>
+        <div id="roomControlCodeDots" class="alarm-code-dots" aria-label="Entered room access code"></div>
+        <div id="roomControlCodeGrid" class="alarm-keypad-grid" aria-label="Room access keypad">
+          <button data-room-control-code-key="1">1</button>
+          <button data-room-control-code-key="2">2</button>
+          <button data-room-control-code-key="3">3</button>
+          <button data-room-control-code-key="4">4</button>
+          <button data-room-control-code-key="5">5</button>
+          <button data-room-control-code-key="6">6</button>
+          <button data-room-control-code-key="7">7</button>
+          <button data-room-control-code-key="8">8</button>
+          <button data-room-control-code-key="9">9</button>
+          <button data-room-control-code-key="clear" class="alarm-key-muted">Clear</button>
+          <button data-room-control-code-key="0">0</button>
+          <button data-room-control-code-key="back" class="alarm-key-muted">⌫</button>
+        </div>
+      </aside>
+    </section>
+
+    <section id="alarmKeypadOverlay" class="settings-overlay alarm-keypad-overlay" aria-hidden="true">
+      <div class="settings-backdrop" data-close-alarm-keypad></div>
+      <aside class="alarm-keypad-sheet" role="dialog" aria-modal="true" aria-labelledby="alarmKeypadTitle">
+        <div class="alarm-keypad-head">
+          <div>
+            <p class="eyebrow">Security</p>
+            <h2 id="alarmKeypadTitle">Disarm Alarm</h2>
+          </div>
+          <button id="alarmKeypadClose" class="icon-button close" aria-label="Close alarm keypad">×</button>
+        </div>
+        <div id="alarmKeypadStatus" class="alarm-keypad-status">Enter code to disarm.</div>
+        <div id="alarmCodeDots" class="alarm-code-dots" aria-label="Entered alarm code"></div>
+        <div id="alarmKeypadGrid" class="alarm-keypad-grid" aria-label="Alarm keypad">
+          <button data-alarm-key="1">1</button>
+          <button data-alarm-key="2">2</button>
+          <button data-alarm-key="3">3</button>
+          <button data-alarm-key="4">4</button>
+          <button data-alarm-key="5">5</button>
+          <button data-alarm-key="6">6</button>
+          <button data-alarm-key="7">7</button>
+          <button data-alarm-key="8">8</button>
+          <button data-alarm-key="9">9</button>
+          <button data-alarm-key="clear" class="alarm-key-muted">Clear</button>
+          <button data-alarm-key="0">0</button>
+          <button data-alarm-key="back" class="alarm-key-muted">⌫</button>
+        </div>
+        <button id="alarmDisarmButton" class="scene-btn alarm-disarm-button" type="button">Disarm</button>
+      </aside>
+    </section>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </main>
+
+  <script src="./js/app.js"></script>
+</body>
+</html>

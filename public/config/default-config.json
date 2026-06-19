@@ -1,0 +1,151 @@
+{
+  "version": 6,
+  "blinds": {
+    "room": "living",
+    "rooms": {
+      "living": {
+        "label": "Living Room",
+        "blinds": [
+          {
+            "id": "lr-1",
+            "name": "Left Window",
+            "position": 65,
+            "haEntityId": "",
+            "haName": ""
+          },
+          {
+            "id": "lr-2",
+            "name": "Center Left",
+            "position": 65,
+            "haEntityId": "",
+            "haName": ""
+          },
+          {
+            "id": "lr-3",
+            "name": "Center Right",
+            "position": 73,
+            "haEntityId": "",
+            "haName": ""
+          },
+          {
+            "id": "lr-4",
+            "name": "Right Window",
+            "position": 65,
+            "haEntityId": "",
+            "haName": ""
+          }
+        ]
+      },
+      "kitchen": {
+        "label": "Kitchen",
+        "blinds": [
+          {
+            "id": "kit-1",
+            "name": "Sink Window",
+            "position": 45,
+            "haEntityId": "",
+            "haName": ""
+          },
+          {
+            "id": "kit-2",
+            "name": "Table Window",
+            "position": 55,
+            "haEntityId": "",
+            "haName": ""
+          },
+          {
+            "id": "kit-3",
+            "name": "Door Window",
+            "position": 75,
+            "haEntityId": "",
+            "haName": ""
+          }
+        ]
+      }
+    }
+  },
+  "integrations": {
+    "homeAssistant": {
+      "url": "",
+      "token": "",
+      "coverEntities": [],
+      "mediaPlayerEntities": [],
+      "selectedMediaPlayerId": "",
+      "audioControlEntities": {
+        "gain": null,
+        "bass": null,
+        "treble": null,
+        "subwoofer": null,
+        "surround": null,
+        "projector": null
+      },
+      "audioAvailableEntities": {
+        "mediaPlayers": [],
+        "numbers": [],
+        "switches": []
+      },
+      "lightAvailableEntities": [],
+      "weatherEntity": {
+        "entityId": "weather.home",
+        "name": "Home"
+      },
+      "weatherAvailableEntities": []
+    }
+  },
+  "lights": {
+    "room": "living",
+    "rooms": {
+      "living": {
+        "label": "Living Room",
+        "lights": [
+          {
+            "id": "ll-1",
+            "name": "Main Lights",
+            "brightness": 85,
+            "on": true,
+            "haEntityId": "",
+            "haName": ""
+          },
+          {
+            "id": "ll-2",
+            "name": "Accent Lights",
+            "brightness": 45,
+            "on": true,
+            "haEntityId": "",
+            "haName": ""
+          },
+          {
+            "id": "ll-3",
+            "name": "Lamp",
+            "brightness": 65,
+            "on": true,
+            "haEntityId": "",
+            "haName": ""
+          }
+        ]
+      },
+      "kitchen": {
+        "label": "Kitchen",
+        "lights": [
+          {
+            "id": "kl-1",
+            "name": "Ceiling",
+            "brightness": 80,
+            "on": true,
+            "haEntityId": "",
+            "haName": ""
+          },
+          {
+            "id": "kl-2",
+            "name": "Island",
+            "brightness": 55,
+            "on": true,
+            "haEntityId": "",
+            "haName": ""
+          }
+        ]
+      }
+    }
+  },
+  "screenTimeoutMinutes": 5
+}
