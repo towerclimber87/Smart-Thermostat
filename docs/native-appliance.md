@@ -58,3 +58,17 @@ cd ~/Smart-Thermostat-Development
 chmod +x scripts/*.sh
 ./scripts/appliance-mode.sh
 ```
+
+
+## 10.1 Visual-Parity Native UI
+
+Version 10.1 keeps the native no-Chromium appliance path, but redraws the thermostat screen to match the cleaner web Climate Control layout much more closely: large title, top status chips, center dial, mode/fan segmented controls, virtual outputs, Alarmo, Inside Doors, info/update, settings, and hardware modal access. The native app remains a lightweight Tk/canvas client talking to the existing local API so GitHub Fetch Update, Home Assistant proxying, state/config storage, GPIO/control loop, and remote updater behavior stay intact.
+
+The display service still applies the known Waveshare/Goodix setup before launching the app:
+
+```text
+SMART_NATIVE_ROTATION=left
+SMART_NATIVE_TOUCH_MATRIX=-1 0 1 0 -1 1 0 0 1
+SMART_NATIVE_THERMOSTAT_ONLY=1
+SMART_NATIVE_VISUAL_MODE=web_parity
+```
