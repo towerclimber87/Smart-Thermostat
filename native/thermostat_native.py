@@ -59,6 +59,12 @@ BLACK = "#000000"
 CARD_BORDER = "#35404d"
 SOFT_BORDER = "#28323f"
 DEFAULT_ACCESS_CODE = "3762"
+DEFAULT_NATIVE_SCHEDULES = [
+    {"id": "native-home", "name": "Home", "time": "06:00", "enabled": True, "coolSetpoint": 73, "heatSetpoint": 70, "personEntityIds": []},
+    {"id": "native-evening", "name": "Evening", "time": "18:00", "enabled": True, "coolSetpoint": 72, "heatSetpoint": 70, "personEntityIds": []},
+    {"id": "native-sleep", "name": "Sleep", "time": "22:30", "enabled": True, "coolSetpoint": 70, "heatSetpoint": 67, "personEntityIds": []},
+    {"id": "native-away", "name": "Away", "time": "08:00", "enabled": True, "coolSetpoint": 85, "heatSetpoint": 55, "personEntityIds": []},
+]
 
 
 def _version() -> str:
@@ -163,6 +169,7 @@ class NativeThermostatApp:
         self.locked = False
         self.modal: str | None = None
         self.modal_data: dict[str, Any] = {}
+        self.settings_tab = "comfort"
         self.schedule_shortcuts_open = True
         self.code_buffer = ""
         self.status: dict[str, Any] = {}
@@ -348,10 +355,10 @@ class NativeThermostatApp:
         self.toast = message
         self.toast_until = time.time() + seconds
 
-    def button(self, x1: int, y1: int, x2: int, y2: int, label: str, action: Callable[[], None], fill: str = PANEL_2, outline: str = "#2e465b", text: str = TEXT, tag: str = "") -> None:
+    def button(self, x1: int, y1: int, x2: int, y2: int, label: str, action: Callable[[], None], fill: str = PANEL_2, outline: str = "#2e465b", text: str = TEXT, tag: str = "", size: int = 18, radius: int = 16, border: int = 2) -> None:
         self.buttons.append(ButtonSpec(x1, y1, x2, y2, label, action, fill, outline, text, tag))
-        self.round_rect(x1, y1, x2, y2, 16, fill, outline, 2)
-        self.canvas.create_text((x1+x2)//2, (y1+y2)//2, text=label, fill=text, font=self.font(18, "bold"), justify="center")
+        self.round_rect(x1, y1, x2, y2, radius, fill, outline, border)
+        self.canvas.create_text((x1+x2)//2, (y1+y2)//2, text=label, fill=text, font=self.font(size, "bold"), justify="center")
 
     def round_rect(self, x1: int, y1: int, x2: int, y2: int, r: int, fill: str, outline: str = "", width: int = 1) -> None:
         # Canvas polygon with smoothed corners keeps drawing light on the Pi.
@@ -413,6 +420,12 @@ class NativeThermostatApp:
         self.text(self.sx(x+14), self.sy(y+11), label.upper(), 10, MUTED, "bold", "w")
         self.text(self.sx(x+w-10), self.sy(y+11), value, 13, TEXT, "bold", "e")
 
+    def small_button(self, x1:int, y1:int, x2:int, y2:int, label:str, action:Callable[[], None], fill:str=PANEL_2, outline:str="#2e465b", text:str=TEXT, size:int=12, tag:str="") -> None:
+        self.button(x1, y1, x2, y2, label, action, fill=fill, outline=outline, text=text, tag=tag, size=size, radius=max(6, (y2-y1)//3), border=1)
+
+    def icon_text(self, x:int, y:int, icon:str, size:int=34, fill:str=CYAN_2) -> None:
+        self.text(self.sx(x), self.sy(y), icon, size, fill, "bold")
+
     def circle_button(self, cx:int, cy:int, r:int, label:str, action:Callable[[], None], fill:str="#232a34", outline:str="#343e4a", color:str=TEXT, size:int=20) -> None:
         x1,y1,x2,y2 = self.sx(cx-r), self.sy(cy-r), self.sx(cx+r), self.sy(cy+r)
         self.buttons.append(ButtonSpec(x1,y1,x2,y2,label,action,fill,outline,color))
@@ -420,25 +433,35 @@ class NativeThermostatApp:
         self.text(self.sx(cx), self.sy(cy), label, size, color, "bold")
 
     def draw_header(self) -> None:
-        self.pill(self.sx(28), self.sy(32), self.sx(118), self.sy(62), "🔒  UNLOCKED" if not self.locked else "🔒  LOCKED", fill="#1c3133", outline="#306468", color="#b9fff3", size=10)
-        self.pill(self.sx(1118), self.sy(32), self.sx(1174), self.sy(62), time.strftime("%I:%M %p").lstrip("0"), fill="#2b3038", outline="#3d4551", color=TEXT, size=11)
-        self.circle_button(1210, 47, 20, "i", lambda: self.open_info(), fill="#123144", outline="#2c6a82", color=CYAN_2, size=18)
-        self.circle_button(1248, 47, 20, "⚙", lambda: self.open_settings(), fill="#242b34", outline="#3b4551", color=MUTED, size=15)
+        # Web-style top bar: lock chip is now an actual button and matches the browser UI spacing.
+        x1, y1, x2, y2 = self.sx(28), self.sy(32), self.sx(132), self.sy(62)
+        label = "🔒  LOCKED" if self.locked else "🔓  UNLOCKED"
+        self.buttons.append(ButtonSpec(x1, y1, x2, y2, label, self.toggle_lock, "#1c3133", "#306468", "#b9fff3", "panel-lock"))
+        self.round_rect(x1, y1, x2, y2, self.sy(15), "#1c3133", "#306468", 1)
+        self.text((x1+x2)//2, (y1+y2)//2, label, 9, "#b9fff3", "bold")
+        self.pill(self.sx(1120), self.sy(32), self.sx(1178), self.sy(62), time.strftime("%I:%M %p").lstrip("0"), fill="#2b3038", outline="#3d4551", color=TEXT, size=10)
+        self.circle_button(1212, 47, 18, "i", lambda: self.open_info(), fill="#123144", outline="#2c6a82", color=CYAN_2, size=16)
+        self.circle_button(1248, 47, 18, "⚙", lambda: self.open_settings(), fill="#242b34", outline="#3b4551", color=MUTED, size=14)
 
 
     def draw_top_nav(self) -> None:
+        # Compact web-style page tabs.  The old native build used oversized Tk buttons.
         pages = [("blinds", "Blinds"), ("audio", "Audio"), ("thermostat", "Thermostat"), ("lights", "Lights"), ("room", "Room")]
-        w, h, gap = 118, 36, 10
-        total = w * len(pages) + gap * (len(pages) - 1)
+        widths = {"blinds": 72, "audio": 72, "thermostat": 92, "lights": 72, "room": 72}
+        gap = 5
+        total = sum(widths[p] for p, _ in pages) + gap * (len(pages) - 1)
         x = (1280 - total) // 2
-        y = 29
+        y, h = 33, 30
+        self.round_rect(self.sx(x-8), self.sy(y-5), self.sx(x+total+8), self.sy(y+h+5), self.sy(16), "#232a34", "#3b4654", 1)
         for page, label in pages:
+            w = widths[page]
             active = self.page == page
-            fill = "#45c8f6" if active else "#202833"
-            outline = "#7de7ff" if active else "#3b4654"
-            color = BLACK if active else TEXT
-            self.button(self.sx(x), self.sy(y), self.sx(x+w), self.sy(y+h), label, lambda p=page: self.set_page(p), fill=fill, outline=outline, text=color, tag=f"nav:{page}")
+            fill = CYAN if active else "#252c36"
+            outline = "#73e4ff" if active else "#3a4552"
+            color = BLACK if active else "#d8dee7"
+            self.small_button(self.sx(x), self.sy(y), self.sx(x+w), self.sy(y+h), label, lambda p=page: self.set_page(p), fill=fill, outline=outline, text=color, size=11, tag=f"nav:{page}")
             x += w + gap
+
 
     def draw_bottom_nav(self) -> None:
         pages = [("thermostat", "Thermostat"), ("blinds", "Blinds"), ("audio", "Audio"), ("lights", "Lights"), ("room", "Room")]
@@ -468,62 +491,75 @@ class NativeThermostatApp:
         outdoor = as_float(t.get("outdoorTemp", t.get("outdoor_temperature", 0)), 0)
         wind = as_float(t.get("outdoorWindSpeed", t.get("outdoor_wind_speed", 0)), 0)
         hum = as_float(t.get("humidity", 0), 0)
-        action_label = "Cooling" if action == "cooling" or relays.get("cool") else "Heating" if action == "heating" or relays.get("heat") else "Idle"
-        action_color = CYAN if action_label == "Cooling" else RED if action_label == "Heating" else GREEN
+        if mode == "auto":
+            action_label = "Auto • Cool • Idle" if action in {"idle", "off"} else title_case(action)
+        else:
+            action_label = "Cooling" if action == "cooling" or relays.get("cool") else "Heating" if action == "heating" or relays.get("heat") else "Idle"
+        action_color = CYAN if "cool" in action_label.lower() else RED if "heat" in action_label.lower() else GREEN
 
-        # Status chips + title exactly in the cleaner web style.
+        # Web parity thermostat page, scaled down for the 10.1-inch Pi display.
         self.label_chip(60, 168, "Outdoor", f"{outdoor:.0f}°", 112)
         self.label_chip(180, 168, "Wind", f"{wind:.0f} mph", 104)
-        self.text(self.sx(60), self.sy(244), "Climate Control", 54, TEXT, "bold", "w")
-        self.pill(self.sx(604), self.sy(260), self.sx(676), self.sy(290), action_label, fill="#252b36", outline="#3a4351", color=TEXT, size=11, dot=action_color)
+        self.text(self.sx(58), self.sy(236), "Climate Control", 46, TEXT, "bold", "w")
 
-        # Center dial.
+        if mode == "auto":
+            self.round_rect(self.sx(110), self.sy(310), self.sx(260), self.sy(382), self.sy(14), "#06233d", "#1e78a8", 1)
+            self.text(self.sx(185), self.sy(326), "AUTO-SWITCHED", 8, CYAN_2, "bold")
+            self.text(self.sx(185), self.sy(350), "To Cool", 17, TEXT, "bold")
+            self.pill(self.sx(152), self.sy(364), self.sx(218), self.sy(384), f"INSIDE {current:.0f}°", fill="#1f3945", outline="#335d6e", color=TEXT, size=8)
+
+        self.pill(self.sx(575), self.sy(262), self.sx(705), self.sy(292), action_label, fill="#252b36", outline="#3a4351", color=TEXT, size=11, dot=action_color)
         self.draw_web_style_dial(current, target, action_label, action_color)
 
-        # Plus/minus controls.
-        self.circle_button(378, 446, 32, "−", lambda: self.change_target(-1), fill="#242b34", outline="#3a444f", color=TEXT, size=28)
-        self.circle_button(902, 446, 32, "+", lambda: self.change_target(1), fill="#242b34", outline="#3a444f", color=TEXT, size=27)
+        self.circle_button(378, 446, 31, "−", lambda: self.change_target(-1), fill="#242b34", outline="#3a444f", color=TEXT, size=26)
+        self.circle_button(902, 446, 31, "+", lambda: self.change_target(1), fill="#242b34", outline="#3a444f", color=TEXT, size=25)
 
-        # Left/right HA cards.
-        self.draw_status_tile(110, 412, 150, 112, "Inside Doors", self.door_label(), "door", GREEN if self.door_label().lower() == "closed" else RED, lambda: self.show_toast("Door status updated from Home Assistant"))
-        self.draw_status_tile(1020, 412, 150, 112, "Alarmo", self.alarm_label(), "shield", GREEN, lambda: self.open_alarm())
+        self.draw_status_tile(110, 398, 148, 100, "Inside Doors", self.door_label(), "door", GREEN if self.door_label().lower() == "closed" else RED, lambda: self.show_toast("Door status updated from Home Assistant"))
+        self.draw_status_tile(1020, 398, 148, 100, "Alarmo", self.alarm_label(), "shield", GREEN, lambda: self.open_alarm())
         self.draw_virtual_outputs(relays, current)
 
-        # Schedule preset shortcuts + bottom controls.
         self.draw_schedule_preset_bar()
-        self.circle_button(54, 708, 24, "S", lambda: self.open_schedule(), fill="#143543", outline="#276273", color=TEXT, size=22)
-        self.pill(self.sx(244), self.sy(686), self.sx(350), self.sy(732), f"HUMIDITY   {hum:.0f}%", fill="#242b34", outline="#3a444f", color=TEXT, size=15)
+        self.circle_button(54, 708, 23, "S", lambda: self.open_schedule(), fill="#143543", outline="#276273", color=TEXT, size=21)
+        self.pill(self.sx(244), self.sy(686), self.sx(350), self.sy(732), f"HUMIDITY   {hum:.0f}%", fill="#242b34", outline="#3a444f", color=TEXT, size=14)
         self.segmented_control(500, 686, 360, 46, [("cool","Cool"),("heat","Heat"),("auto","Auto"),("away","Away")], "away" if away else mode, lambda v: self.toggle_away() if v == "away" else self.set_mode(v))
         self.segmented_control(888, 686, 152, 46, [("fan","Fan"),("auto", title_case(fan or "auto"))], "auto", lambda _v: self.set_fan("on" if fan != "on" else "auto"), label_first=True)
 
+
     def draw_web_style_dial(self, current: float, target: float, action_label: str, action_color: str) -> None:
         cx, cy = self.sx(640), self.sy(430)
-        r = min(self.sx(172), self.sy(172))
-        self.canvas.create_oval(cx-r-16, cy-r-16, cx+r+16, cy+r+16, fill="#05080d", outline="#0b1118", width=3)
+        r = min(self.sx(152), self.sy(152))
+        self.canvas.create_oval(cx-r-14, cy-r-14, cx+r+14, cy+r+14, fill="#05080d", outline="#0b1118", width=3)
         self.canvas.create_oval(cx-r, cy-r, cx+r, cy+r, fill="#0b1118", outline="#161e28", width=2)
-        # Tick ring, intentionally simple and static for the Pi.
-        for i in range(96):
-            angle = math.radians(218 + i * 284 / 95)
-            length = 20 if i % 6 == 0 else 14
+        for i in range(92):
+            angle = math.radians(218 + i * 284 / 91)
+            length = 18 if i % 6 == 0 else 12
             col = "#4fbfee" if i < 38 else "#34404c"
             x1 = cx + math.cos(angle) * (r - length)
             y1 = cy + math.sin(angle) * (r - length)
             x2 = cx + math.cos(angle) * (r - 5)
             y2 = cy + math.sin(angle) * (r - 5)
             self.canvas.create_line(x1, y1, x2, y2, fill=col, width=2)
-        # White position markers like the web dial.
         for deg in (198, 248):
             a = math.radians(deg)
-            x1 = cx + math.cos(a) * (r - 12); y1 = cy + math.sin(a) * (r - 12)
-            x2 = cx + math.cos(a) * (r + 20); y2 = cy + math.sin(a) * (r + 20)
-            self.canvas.create_line(x1, y1, x2, y2, fill="#eaf0f5", width=6, capstyle="round")
+            x1 = cx + math.cos(a) * (r - 10); y1 = cy + math.sin(a) * (r - 10)
+            x2 = cx + math.cos(a) * (r + 16); y2 = cy + math.sin(a) * (r + 16)
+            self.canvas.create_line(x1, y1, x2, y2, fill="#eaf0f5", width=5, capstyle="round")
         inner = int(r * 0.62)
-        self.canvas.create_oval(cx-inner, cy-inner, cx+inner, cy+inner, fill=BLUE_DARK if action_label == "Cooling" else "#a23424" if action_label == "Heating" else "#116146", outline="")
-        self.text(cx, cy-self.sy(72), action_label.upper(), 14, "#dceaff", "bold")
-        self.text(cx, cy-self.sy(10), f"{current:.0f}°", 72, TEXT, "bold")
-        self.pill(cx-self.sx(58), cy+self.sy(62), cx+self.sx(58), cy+self.sy(96), f"Set Temp  {target:.0f}°", fill="#1456b5" if action_label == "Cooling" else "#203c49", outline="#1d6bd2", color=TEXT, size=12)
-        self.pill(cx-self.sx(154), cy+self.sy(142), cx-self.sx(108), cy+self.sy(168), "65°", fill="#090d13", outline="#111820", color=TEXT, size=12)
-        self.pill(cx+self.sx(108), cy+self.sy(142), cx+self.sx(154), cy+self.sy(168), "80°", fill="#090d13", outline="#111820", color=TEXT, size=12)
+        if "cool" in action_label.lower():
+            fill = BLUE_DARK
+        elif "heat" in action_label.lower():
+            fill = "#a23424"
+        elif action_label.lower() == "idle":
+            fill = "#0abf54"
+        else:
+            fill = "#116146"
+        self.canvas.create_oval(cx-inner, cy-inner, cx+inner, cy+inner, fill=fill, outline="")
+        self.text(cx, cy-self.sy(70), action_label.upper(), 12, "#dceaff", "bold")
+        self.text(cx, cy-self.sy(8), f"{current:.0f}°", 64, TEXT, "bold")
+        self.pill(cx-self.sx(54), cy+self.sy(58), cx+self.sx(54), cy+self.sy(88), f"Set Temp  {target:.0f}°", fill="#1456b5" if "cool" in action_label.lower() else "#203c49", outline="#1d6bd2", color=TEXT, size=11)
+        self.pill(cx-self.sx(142), cy+self.sy(124), cx-self.sx(98), cy+self.sy(148), "65°", fill="#090d13", outline="#111820", color=TEXT, size=11)
+        self.pill(cx+self.sx(98), cy+self.sy(124), cx+self.sx(142), cy+self.sy(148), "80°", fill="#090d13", outline="#111820", color=TEXT, size=11)
+
 
     def door_label(self) -> str:
         door = self.door_state or {}
@@ -537,16 +573,19 @@ class NativeThermostatApp:
     def draw_status_tile(self, x:int, y:int, w:int, h:int, title:str, state:str, icon:str, accent:str, action:Callable[[],None]) -> None:
         x1,y1,x2,y2 = self.sx(x), self.sy(y), self.sx(x+w), self.sy(y+h)
         self.buttons.append(ButtonSpec(x1,y1,x2,y2,title,action,"#06261f","#146455",TEXT))
-        self.round_rect(x1,y1,x2,y2,self.sy(22),"#071f1d","#146455",2)
-        self.canvas.create_oval(self.sx(x+45), self.sy(y+16), self.sx(x+105), self.sy(y+76), fill="#15312f", outline="#2a625d", width=1)
+        self.round_rect(x1,y1,x2,y2,self.sy(16),"#071f1d","#146455",2)
+        icx, icy = x + w//2, y + 30
+        self.canvas.create_oval(self.sx(icx-24), self.sy(icy-24), self.sx(icx+24), self.sy(icy+24), fill="#15312f", outline="#2a625d", width=1)
         if icon == "door":
-            self.canvas.create_rectangle(self.sx(x+62), self.sy(y+32), self.sx(x+88), self.sy(y+68), outline="#9ee9d1", width=2)
-            self.canvas.create_oval(self.sx(x+82), self.sy(y+50), self.sx(x+86), self.sy(y+54), fill="#9ee9d1", outline="")
+            self.canvas.create_rectangle(self.sx(icx-10), self.sy(icy-16), self.sx(icx+10), self.sy(icy+16), outline="#9ee9d1", width=2)
+            self.canvas.create_oval(self.sx(icx+6), self.sy(icy), self.sx(icx+10), self.sy(icy+4), fill="#9ee9d1", outline="")
         else:
-            pts=[self.sx(x+75),self.sy(y+28),self.sx(x+96),self.sy(y+38),self.sx(x+91),self.sy(y+62),self.sx(x+75),self.sy(y+74),self.sx(x+59),self.sy(y+62),self.sx(x+54),self.sy(y+38)]
+            pts=[self.sx(icx),self.sy(icy-18),self.sx(icx+18),self.sy(icy-8),self.sx(icx+14),self.sy(icy+14),self.sx(icx),self.sy(icy+24),self.sx(icx-14),self.sy(icy+14),self.sx(icx-18),self.sy(icy-8)]
             self.canvas.create_polygon(pts, fill="#2a8d61", outline="#9ee9d1", width=2)
-        self.text(self.sx(x+w//2), self.sy(y+82), title, 14, TEXT, "bold")
-        self.pill(self.sx(x+50), self.sy(y+96), self.sx(x+w-50), self.sy(y+118), state.upper(), fill="#163f33", outline="#1e6a52", color="#dbfff0", size=9)
+        self.text(self.sx(x+w//2), self.sy(y+66), title, 12, TEXT, "bold")
+        pill_w = min(w-44, 90)
+        self.pill(self.sx(x+(w-pill_w)//2), self.sy(y+80), self.sx(x+(w+pill_w)//2), self.sy(y+98), state.upper()[:13], fill="#163f33", outline="#1e6a52", color="#dbfff0", size=8)
+
 
     def draw_virtual_outputs(self, relays: dict[str, Any], current: float) -> None:
         x,y,w,h = 998, 218, 172, 112
@@ -622,10 +661,20 @@ class NativeThermostatApp:
 
 
     def get_schedules(self) -> list[dict[str, Any]]:
-        schedules = self.thermostat.get("schedules") or []
-        if not schedules and isinstance(self.config, dict):
-            schedules = (self.config.get("thermostat") or {}).get("schedules") or []
-        return [item for item in schedules if isinstance(item, dict)]
+        candidates: list[Any] = []
+        candidates.append(self.thermostat.get("schedules"))
+        if isinstance(self.config, dict):
+            candidates.append((self.config.get("thermostat") or {}).get("schedules") if isinstance(self.config.get("thermostat"), dict) else None)
+            candidates.append(self.config.get("schedules"))
+        for schedules in candidates:
+            if isinstance(schedules, list) and schedules:
+                return [item for item in schedules if isinstance(item, dict)]
+        # The last known config provided by the browser build did not contain schedule rows,
+        # so keep the front S shortcut useful instead of showing a dead/no-schedule screen.
+        if os.environ.get("SMART_NATIVE_FALLBACK_SCHEDULES", "1").strip().lower() not in {"0", "false", "no", "off"}:
+            return [dict(item) for item in DEFAULT_NATIVE_SCHEDULES]
+        return []
+
 
     def schedule_detail(self, sched: dict[str, Any]) -> str:
         mode = str(self.thermostat.get("mode", "cool")).lower()
@@ -639,21 +688,19 @@ class NativeThermostatApp:
         schedules = [s for s in self.get_schedules() if s.get("enabled", True) is not False]
         if not schedules:
             return
-        # Matches the web preset strip: small named shortcuts above the bottom controls.
         max_items = min(5, len(schedules))
-        w, h, gap = 156, 44, 10
+        w, h, gap = 132, 34, 8
         total = w * max_items + gap * (max_items - 1)
         x = (1280 - total) // 2
-        y = 622
+        y = 632
         for sched in schedules[:max_items]:
-            name = str(sched.get("name") or sched.get("label") or "Schedule")[:16]
-            detail = self.schedule_detail(sched)
+            name = str(sched.get("name") or sched.get("label") or "Schedule")[:13]
             x1,y1,x2,y2 = self.sx(x), self.sy(y), self.sx(x+w), self.sy(y+h)
             self.buttons.append(ButtonSpec(x1,y1,x2,y2,name,lambda s=sched:self.apply_schedule(s),"#132c3e","#275774",TEXT))
-            self.round_rect(x1,y1,x2,y2,self.sy(12),"#132c3e","#275774",2)
-            self.text((x1+x2)//2, y1+self.sy(15), name, 12, TEXT, "bold")
-            self.text((x1+x2)//2, y1+self.sy(32), detail, 10, CYAN_2, "bold")
+            self.round_rect(x1,y1,x2,y2,self.sy(10),"#132c3e","#275774",1)
+            self.text((x1+x2)//2, (y1+y2)//2, name, 11, TEXT, "bold")
             x += w + gap
+
 
     def draw_schedules(self) -> None:
         schedules = self.thermostat.get("schedules") or []
@@ -1045,7 +1092,12 @@ class NativeThermostatApp:
 
     def draw_modal(self) -> None:
         self.canvas.create_rectangle(0, 0, self.width, self.height, fill="#000000", stipple="gray50")
-        x1,y1,x2,y2 = self.sx(250), self.sy(120), self.sx(1030), self.sy(670)
+        if self.modal == "settings":
+            x1,y1,x2,y2 = self.sx(84), self.sy(76), self.sx(1196), self.sy(748)
+        elif self.modal == "alarm":
+            x1,y1,x2,y2 = self.sx(310), self.sy(150), self.sx(970), self.sy(650)
+        else:
+            x1,y1,x2,y2 = self.sx(250), self.sy(120), self.sx(1030), self.sy(670)
         self.round_rect(x1,y1,x2,y2,24,"#0b1620","#2b4d64",3)
         if self.modal == "info":
             self.draw_info_modal(x1,y1,x2,y2)
@@ -1059,6 +1111,7 @@ class NativeThermostatApp:
             self.draw_hardware_modal(x1,y1,x2,y2)
         elif self.modal == "schedule":
             self.draw_schedule_modal(x1,y1,x2,y2)
+
 
     def draw_info_modal(self, x1:int,y1:int,x2:int,y2:int) -> None:
         info = self.system_info or {}
@@ -1137,37 +1190,150 @@ class NativeThermostatApp:
 
     def draw_settings_modal(self, x1:int,y1:int,x2:int,y2:int) -> None:
         t = self.thermostat
-        self.text((x1+x2)//2, y1+self.sy(42), "Comfort Settings", 30, TEXT, "bold")
-        rows = [
-            ("Away Heat", "awayHeat", -1, 1),
-            ("Away Cool", "awayCool", -1, 1),
-            ("Safety Low", "safetyLow", -1, 1),
-            ("Safety High", "safetyHigh", -1, 1),
-            ("Fan Hold Min", "coolFanRemainOnMinutes", -1, 1),
-        ]
-        y=y1+self.sy(105)
-        for label,key,down,up in rows:
-            val = as_float(t.get(key), 0)
-            self.text(x1+self.sx(65),y+self.sy(25),label,18,MUTED,"bold","w")
-            self.button(x1+self.sx(340),y,x1+self.sx(405),y+self.sy(50),"−",lambda k=key,d=down:self.adjust_setting(k,d),fill="#173246")
-            self.text(x1+self.sx(470),y+self.sy(25),f"{val:.0f}",24,TEXT,"bold")
-            self.button(x1+self.sx(535),y,x1+self.sx(600),y+self.sy(50),"+",lambda k=key,u=up:self.adjust_setting(k,u),fill="#173246")
-            y += self.sy(62)
-        self.button(x2-self.sx(190), y2-self.sy(90), x2-self.sx(45), y2-self.sy(35), "Close", lambda: self.close_modal(), fill="#173246")
+        cfg = self.config if isinstance(self.config, dict) else {}
+        self.text(x1+self.sx(42), y1+self.sy(42), "Settings", 28, TEXT, "bold", "w")
+        self.text(x1+self.sx(42), y1+self.sy(74), "Native appliance settings mirror the old web panel sections.", 12, MUTED, "bold", "w")
+        tabs = [("comfort","Comfort"),("auto","Auto"),("equipment","Equipment"),("security","Security"),("ha","Home Assistant"),("display","Display")]
+        tx = x1 + self.sx(40)
+        ty = y1 + self.sy(96)
+        for key, label in tabs:
+            active = self.settings_tab == key
+            self.small_button(tx, ty, tx+self.sx(128), ty+self.sy(34), label, lambda k=key:self.set_settings_tab(k), fill=CYAN if active else "#202a36", outline="#6eeeff" if active else "#3a4552", text=BLACK if active else TEXT, size=10)
+            tx += self.sx(136)
+
+        sections: dict[str, list[dict[str, Any]]] = {
+            "comfort": [
+                {"label":"Target Temp", "key":"targetTemp", "kind":"number", "step":1},
+                {"label":"Away Heat", "key":"awayHeat", "kind":"number", "step":1},
+                {"label":"Away Cool", "key":"awayCool", "kind":"number", "step":1},
+                {"label":"Safety Low", "key":"safetyLow", "kind":"number", "step":1},
+                {"label":"Safety High", "key":"safetyHigh", "kind":"number", "step":1},
+                {"label":"Humidity Display", "key":"humidity", "kind":"read"},
+                {"label":"Outdoor Temp", "key":"outdoorTemp", "kind":"read"},
+                {"label":"Outdoor Wind", "key":"outdoorWindSpeed", "kind":"read"},
+            ],
+            "auto": [
+                {"label":"Auto Cool Target", "key":"autoCoolOutdoorTarget", "kind":"number", "step":1},
+                {"label":"Auto Heat Target", "key":"autoHeatOutdoorTarget", "kind":"number", "step":1},
+                {"label":"Auto Lockout Min", "key":"autoChangeoverLockoutMinutes", "kind":"number", "step":15},
+                {"label":"Manual Lockout Min", "key":"manualChangeoverLockoutMinutes", "kind":"number", "step":1},
+                {"label":"Auto Active Mode", "key":"autoActiveMode", "kind":"read"},
+                {"label":"Auto Pending Mode", "key":"autoPendingMode", "kind":"read"},
+                {"label":"Heat Lock", "key":"heatLocked", "kind":"bool"},
+                {"label":"Cool Lock", "key":"coolLocked", "kind":"bool"},
+            ],
+            "equipment": [
+                {"label":"Fan Mode", "key":"fan", "kind":"read"},
+                {"label":"Cool Fan Hold Min", "key":"coolFanRemainOnMinutes", "kind":"number", "step":1},
+                {"label":"Heat Last Run", "key":"equipmentLastHeatRunAt", "kind":"read"},
+                {"label":"Cool Last Run", "key":"equipmentLastCoolRunAt", "kind":"read"},
+                {"label":"Fan Relay", "key":"relayFan", "kind":"relay", "relay":"fan"},
+                {"label":"Heat Relay", "key":"relayHeat", "kind":"relay", "relay":"heat"},
+                {"label":"Cool Relay", "key":"relayCool", "kind":"relay", "relay":"cool"},
+                {"label":"Release Manual", "key":"relayRelease", "kind":"release"},
+            ],
+            "security": [
+                {"label":"Panel Code", "value": "****", "kind":"value"},
+                {"label":"Alarm Code", "value": "****" if (cfg.get("alarm") or {}).get("disarmCode") else "Not set", "kind":"value"},
+                {"label":"Panel Lock", "value": "Locked" if self.locked else "Unlocked", "kind":"lock"},
+                {"label":"Settings Protected", "value":"Enabled", "kind":"value"},
+                {"label":"Upload Config", "value":"Restore backup", "kind":"upload"},
+                {"label":"Fetch Update", "value":"GitHub Development", "kind":"update"},
+            ],
+            "ha": [
+                {"label":"HA URL", "value": (self._ha() or ("Not configured", ""))[0], "kind":"value"},
+                {"label":"Alarm Entity", "value": self._entity_label((cfg.get("integrations") or {}).get("homeAssistant", {}).get("alarmEntity")), "kind":"value"},
+                {"label":"Door Entity", "value": self._entity_label((cfg.get("integrations") or {}).get("homeAssistant", {}).get("doorEntity")), "kind":"value"},
+                {"label":"Weather Entity", "value": self._entity_label((cfg.get("integrations") or {}).get("homeAssistant", {}).get("weatherEntity")), "kind":"value"},
+                {"label":"Media Player", "value": str(((cfg.get("integrations") or {}).get("homeAssistant", {}) or {}).get("selectedMediaPlayerId", "")) or "Not selected", "kind":"value"},
+                {"label":"People", "value": str(len(t.get("people") or [])), "kind":"value"},
+            ],
+            "display": [
+                {"label":"Native Visual Mode", "value": VISUAL_MODE, "kind":"value"},
+                {"label":"Thermostat Only", "value": str(THERMOSTAT_ONLY), "kind":"value"},
+                {"label":"Fast Poll Ms", "value": str(POLL_MS), "kind":"value"},
+                {"label":"Slow Poll Ms", "value": str(SLOW_POLL_MS), "kind":"value"},
+                {"label":"Version", "value": _version(), "kind":"value"},
+                {"label":"Restart Panel", "value":"Restart services", "kind":"restart"},
+            ],
+        }
+        rows = sections.get(self.settings_tab, sections["comfort"])
+        grid_x = x1 + self.sx(44)
+        grid_y = y1 + self.sy(150)
+        card_w, card_h, gap_x, gap_y = 316, 64, 28, 14
+        for idx, item in enumerate(rows[:12]):
+            col = idx % 3
+            row = idx // 3
+            bx = grid_x + self.sx(col * (card_w + gap_x))
+            by = grid_y + self.sy(row * (card_h + gap_y))
+            self.draw_setting_card(bx, by, self.sx(card_w), self.sy(card_h), item)
+        self.button(x2-self.sx(180), y2-self.sy(72), x2-self.sx(36), y2-self.sy(28), "Close", lambda: self.close_modal(), fill="#173246", size=14)
+
+    def set_settings_tab(self, tab: str) -> None:
+        self.settings_tab = tab
+        self.draw()
+
+    def _entity_label(self, item: Any) -> str:
+        if isinstance(item, dict):
+            return str(item.get("name") or item.get("entityId") or item.get("entity_id") or "Not selected")[:34]
+        return str(item or "Not selected")[:34]
+
+    def draw_setting_card(self, x:int, y:int, w:int, h:int, item:dict[str, Any]) -> None:
+        self.round_rect(x,y,x+w,y+h,self.sy(12),"#18232d","#344250",1)
+        self.text(x+self.sx(14), y+self.sy(19), str(item.get("label","Setting")), 12, MUTED, "bold", "w")
+        kind = item.get("kind")
+        key = item.get("key")
+        if kind == "number":
+            val = as_float(self.thermostat.get(key), 0)
+            self.small_button(x+w-self.sx(104), y+self.sy(18), x+w-self.sx(70), y+self.sy(52), "−", lambda k=key,st=item.get("step",1): self.adjust_setting(k, -as_float(st,1)), fill="#173246", size=14)
+            self.text(x+w-self.sx(52), y+self.sy(36), f"{val:.0f}", 18, TEXT, "bold")
+            self.small_button(x+w-self.sx(34), y+self.sy(18), x+w-self.sx(2), y+self.sy(52), "+", lambda k=key,st=item.get("step",1): self.adjust_setting(k, as_float(st,1)), fill="#173246", size=14)
+        elif kind == "bool":
+            val = as_bool(self.thermostat.get(key))
+            self.small_button(x+w-self.sx(98), y+self.sy(18), x+w-self.sx(12), y+self.sy(52), "ON" if val else "OFF", lambda k=key: self.toggle_setting(k), fill="#164d3d" if val else "#40202a", text=TEXT, size=12)
+        elif kind == "relay":
+            self.small_button(x+w-self.sx(110), y+self.sy(18), x+w-self.sx(12), y+self.sy(52), "Pulse", lambda r=item.get("relay","fan"): self.relay(str(r)), fill="#173246", size=12)
+        elif kind == "release":
+            self.small_button(x+w-self.sx(120), y+self.sy(18), x+w-self.sx(12), y+self.sy(52), "Release", lambda: self.release_relays(), fill="#402817", text=YELLOW, size=12)
+        elif kind == "upload":
+            self.small_button(x+w-self.sx(120), y+self.sy(18), x+w-self.sx(12), y+self.sy(52), "Upload", lambda: self.upload_config(), fill="#163d2a", text=GREEN, size=12)
+        elif kind == "update":
+            self.small_button(x+w-self.sx(120), y+self.sy(18), x+w-self.sx(12), y+self.sy(52), "Fetch", lambda: self.fetch_update(), fill="#17405a", text=CYAN, size=12)
+        elif kind == "restart":
+            self.small_button(x+w-self.sx(120), y+self.sy(18), x+w-self.sx(12), y+self.sy(52), "Restart", lambda: self.restart_panel(), fill="#402817", text=YELLOW, size=12)
+        elif kind == "lock":
+            self.small_button(x+w-self.sx(120), y+self.sy(18), x+w-self.sx(12), y+self.sy(52), "Unlock" if self.locked else "Lock", lambda: self.toggle_lock(), fill="#173246", size=12)
+        else:
+            value = item.get("value", self.thermostat.get(key, ""))
+            self.text(x+w-self.sx(14), y+self.sy(42), str(value)[:28], 12, TEXT, "bold", "e")
+
 
     def adjust_setting(self, key: str, delta: float) -> None:
         value = as_float(self.thermostat.get(key), 0) + delta
         self.thermostat[key] = value
         self._run_busy("Setting", lambda k=key,v=value: self.control({k: v}))
 
+    def toggle_setting(self, key: str) -> None:
+        value = not as_bool(self.thermostat.get(key))
+        self.thermostat[key] = value
+        self._run_busy("Setting", lambda k=key,v=value: self.control({k: v}))
+
+    def release_relays(self) -> None:
+        self._run_busy("Release", lambda: self._post_message("/api/hardware/release", {}))
+
     def draw_alarm_modal(self, x1:int,y1:int,x2:int,y2:int) -> None:
-        self.text((x1+x2)//2, y1+self.sy(42), "Alarm", 30, TEXT, "bold")
-        state = title_case((self.alarm_state or {}).get("state", "Unknown"))
-        self.text((x1+x2)//2, y1+self.sy(100), state, 28, CYAN, "bold")
-        self.button(x1+self.sx(85), y1+self.sy(175), x1+self.sx(295), y1+self.sy(245), "Arm Home", lambda: self.alarm_action("arm_home"), fill="#173246")
-        self.button(x1+self.sx(330), y1+self.sy(175), x1+self.sx(540), y1+self.sy(245), "Arm Away", lambda: self.alarm_action("arm_away"), fill="#173246")
-        self.button(x1+self.sx(575), y1+self.sy(175), x1+self.sx(695), y1+self.sy(245), "Disarm", lambda: self.alarm_action("disarm"), fill="#40202a")
-        self.button(x2-self.sx(190), y2-self.sy(90), x2-self.sx(45), y2-self.sy(35), "Close", lambda: self.close_modal(), fill="#173246")
+        self.text((x1+x2)//2, y1+self.sy(42), "Alarmo", 30, TEXT, "bold")
+        state = title_case((self.alarm_state or {}).get("state", "Disarmed"))
+        self.canvas.create_oval((x1+x2)//2-self.sx(42), y1+self.sy(78), (x1+x2)//2+self.sx(42), y1+self.sy(162), fill="#143b33", outline="#2b7f66", width=2)
+        pts=[(x1+x2)//2,self.sy(y1+94),(x1+x2)//2+self.sx(28),self.sy(y1+108),(x1+x2)//2+self.sx(22),self.sy(y1+140),(x1+x2)//2,self.sy(y1+156),(x1+x2)//2-self.sx(22),self.sy(y1+140),(x1+x2)//2-self.sx(28),self.sy(y1+108)]
+        self.canvas.create_polygon(pts, fill="#2a8d61", outline="#9ee9d1", width=2)
+        self.pill((x1+x2)//2-self.sx(80), y1+self.sy(174), (x1+x2)//2+self.sx(80), y1+self.sy(204), state.upper(), fill="#163f33", outline="#1e6a52", color="#dbfff0", size=11)
+        self.text((x1+x2)//2, y1+self.sy(238), "Choose an alarm action", 14, MUTED, "bold")
+        self.button(x1+self.sx(58), y1+self.sy(280), x1+self.sx(230), y1+self.sy(342), "Arm Home", lambda: self.alarm_action("arm_home"), fill="#173246", size=14)
+        self.button(x1+self.sx(244), y1+self.sy(280), x1+self.sx(416), y1+self.sy(342), "Arm Away", lambda: self.alarm_action("arm_away"), fill="#173246", size=14)
+        self.button(x1+self.sx(430), y1+self.sy(280), x1+self.sx(602), y1+self.sy(342), "Disarm", lambda: self.alarm_action("disarm"), fill="#40202a", size=14)
+        self.button(x2-self.sx(170), y2-self.sy(72), x2-self.sx(36), y2-self.sy(28), "Close", lambda: self.close_modal(), fill="#173246", size=14)
+
 
     def alarm_action(self, action: str) -> None:
         ha = self._ha()

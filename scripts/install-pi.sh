@@ -4,6 +4,7 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WEB_SERVICE_NAME="smart-thermostat-web.service"
 KIOSK_SERVICE_NAME="smart-thermostat-kiosk.service"
+NATIVE_SERVICE_NAME="smart-thermostat-native.service"
 UPDATE_AGENT_SERVICE_NAME="smart-thermostat-update-agent.service"
 NETWORK_WATCHDOG_SERVICE_NAME="smart-thermostat-network-watchdog.service"
 
@@ -25,6 +26,7 @@ install_packages() {
     avahi-daemon
     git
     python3
+    python3-tk
     python3-zeroconf
     x11-xserver-utils
     unclutter
@@ -128,7 +130,8 @@ EOF_REBOOT_HELPER
   sudo tee /etc/sudoers.d/smart-thermostat-panel >/dev/null <<EOF_SUDOERS
 Cmnd_Alias SMART_THERMOSTAT_REBOOT = /usr/local/sbin/smart-thermostat-reboot, /usr/bin/systemctl reboot, /bin/systemctl reboot, ${systemctl_bin} reboot, /usr/sbin/reboot, /sbin/reboot, /usr/bin/reboot
 Cmnd_Alias SMART_THERMOSTAT_WEB_RESTART = /usr/bin/systemctl restart ${WEB_SERVICE_NAME}, /bin/systemctl restart ${WEB_SERVICE_NAME}, ${systemctl_bin} restart ${WEB_SERVICE_NAME}
-${INSTALL_USER} ALL=(root) NOPASSWD: SMART_THERMOSTAT_REBOOT, SMART_THERMOSTAT_WEB_RESTART
+Cmnd_Alias SMART_THERMOSTAT_NATIVE_RESTART = /usr/bin/systemctl restart ${NATIVE_SERVICE_NAME}, /bin/systemctl restart ${NATIVE_SERVICE_NAME}, ${systemctl_bin} restart ${NATIVE_SERVICE_NAME}
+${INSTALL_USER} ALL=(root) NOPASSWD: SMART_THERMOSTAT_REBOOT, SMART_THERMOSTAT_WEB_RESTART, SMART_THERMOSTAT_NATIVE_RESTART
 EOF_SUDOERS
   sudo chmod 440 /etc/sudoers.d/smart-thermostat-panel
   sudo visudo -cf /etc/sudoers.d/smart-thermostat-panel >/dev/null
@@ -142,10 +145,11 @@ if getent group i2c >/dev/null 2>&1; then
   sudo usermod -aG i2c "${INSTALL_USER}" || true
 fi
 enable_i2c
-chmod +x "${PROJECT_DIR}/scripts/install-pi.sh" "${PROJECT_DIR}/scripts/kiosk-launch.sh" "${PROJECT_DIR}/scripts/network_watchdog.py" 2>/dev/null || true
+chmod +x "${PROJECT_DIR}/scripts/install-pi.sh" "${PROJECT_DIR}/scripts/kiosk-launch.sh" "${PROJECT_DIR}/scripts/kiosk-xinit.sh" "${PROJECT_DIR}/scripts/native-launch.sh" "${PROJECT_DIR}/scripts/native-xinit.sh" "${PROJECT_DIR}/scripts/network_watchdog.py" 2>/dev/null || true
 
 install_service "${WEB_SERVICE_NAME}"
 install_service "${KIOSK_SERVICE_NAME}"
+install_service "${NATIVE_SERVICE_NAME}"
 install_service "${UPDATE_AGENT_SERVICE_NAME}"
 install_service "${NETWORK_WATCHDOG_SERVICE_NAME}"
 
@@ -175,12 +179,26 @@ EOF_KIOSK
   sudo chmod 600 /etc/smart-thermostat/kiosk.env
 fi
 
+sudo tee /etc/smart-thermostat/native.env >/dev/null <<'EOF_NATIVE'
+SMART_THERMOSTAT_API=http://127.0.0.1:8080
+SMART_NATIVE_HEALTH_TIMEOUT_SECONDS=75
+SMART_NATIVE_ROTATION=left
+SMART_NATIVE_TOUCH_MATRIX=-1 0 1 0 -1 1 0 0 1
+SMART_NATIVE_POLL_MS=1500
+SMART_NATIVE_SLOW_POLL_MS=8000
+SMART_NATIVE_THERMOSTAT_ONLY=0
+SMART_NATIVE_VISUAL_MODE=web_full_parity
+SMART_NATIVE_FALLBACK_SCHEDULES=1
+EOF_NATIVE
+sudo chmod 600 /etc/smart-thermostat/native.env
+
 install_sudoers
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now "${WEB_SERVICE_NAME}"
 sudo systemctl enable --now "${NETWORK_WATCHDOG_SERVICE_NAME}"
-sudo systemctl enable "${KIOSK_SERVICE_NAME}"
+sudo systemctl disable --now "${KIOSK_SERVICE_NAME}" >/dev/null 2>&1 || true
+sudo systemctl enable --now "${NATIVE_SERVICE_NAME}"
 if [[ -f "/etc/systemd/system/${UPDATE_AGENT_SERVICE_NAME}" ]]; then
   sudo systemctl enable --now "${UPDATE_AGENT_SERVICE_NAME}" || true
 fi
@@ -190,7 +208,7 @@ if systemctl get-default | grep -q '^multi-user.target$'; then
   echo "Run: sudo systemctl set-default graphical.target"
 fi
 
-echo "IHA web service, Chromium kiosk service, and network watchdog installed."
-echo "Web UI: http://localhost:8080"
-echo "Kiosk service: sudo systemctl start ${KIOSK_SERVICE_NAME}"
+echo "IHA web service, native appliance service, and network watchdog installed."
+echo "Web UI/API: http://localhost:8080"
+echo "Native service: sudo systemctl restart ${NATIVE_SERVICE_NAME}"
 echo "Home Assistant discovery uses mDNS service _iha-thermostat._tcp.local."

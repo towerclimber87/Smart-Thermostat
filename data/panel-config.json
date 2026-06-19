@@ -8917,11 +8917,87 @@
       "outdoorTemp": 40,
       "outdoorWindSpeed": 0,
       "outdoorWindUnit": "mph",
-      "targetTemp": 73
+      "targetTemp": 73,
+      "schedules": [
+        {
+          "id": "home",
+          "name": "Home",
+          "time": "06:00",
+          "enabled": true,
+          "coolSetpoint": 73,
+          "heatSetpoint": 70,
+          "personEntityIds": []
+        },
+        {
+          "id": "evening",
+          "name": "Evening",
+          "time": "18:00",
+          "enabled": true,
+          "coolSetpoint": 72,
+          "heatSetpoint": 70,
+          "personEntityIds": []
+        },
+        {
+          "id": "sleep",
+          "name": "Sleep",
+          "time": "22:30",
+          "enabled": true,
+          "coolSetpoint": 70,
+          "heatSetpoint": 67,
+          "personEntityIds": []
+        },
+        {
+          "id": "away",
+          "name": "Away",
+          "time": "08:00",
+          "enabled": true,
+          "coolSetpoint": 85,
+          "heatSetpoint": 55,
+          "personEntityIds": []
+        }
+      ]
     },
     "userAccessCode": "3762",
-    "version": 11
+    "version": 11,
+    "schedules": [
+      {
+        "id": "home",
+        "name": "Home",
+        "time": "06:00",
+        "enabled": true,
+        "coolSetpoint": 73,
+        "heatSetpoint": 70,
+        "personEntityIds": []
+      },
+      {
+        "id": "evening",
+        "name": "Evening",
+        "time": "18:00",
+        "enabled": true,
+        "coolSetpoint": 72,
+        "heatSetpoint": 70,
+        "personEntityIds": []
+      },
+      {
+        "id": "sleep",
+        "name": "Sleep",
+        "time": "22:30",
+        "enabled": true,
+        "coolSetpoint": 70,
+        "heatSetpoint": 67,
+        "personEntityIds": []
+      },
+      {
+        "id": "away",
+        "name": "Away",
+        "time": "08:00",
+        "enabled": true,
+        "coolSetpoint": 85,
+        "heatSetpoint": 55,
+        "personEntityIds": []
+      }
+    ]
   },
-  "updatedAt": 1781910985,
-  "version": 608
+  "updatedAt": "2026-06-19T23:43:05Z",
+  "version": 1781912585890
 }
