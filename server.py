@@ -30,6 +30,7 @@ DATA_DIR = ROOT / "data"
 VERSION_FILE = ROOT / "VERSION"
 THERMOSTAT_STATE_FILE = DATA_DIR / "thermostat-state.json"
 PANEL_CONFIG_FILE = DATA_DIR / "panel-config.json"
+DEFAULT_PANEL_CONFIG_FILE = PUBLIC / "config" / "default-config.json"
 HVAC_HISTORY_FILE = DATA_DIR / "hvac-history.json"
 APP_STARTED_AT = time.time()
 HA_STATES_CACHE_TTL_SECONDS = float(os.environ.get("SMART_THERMOSTAT_HA_STATES_CACHE_TTL_SECONDS", "1.0"))
@@ -241,6 +242,23 @@ def _migrate_panel_config(config: object) -> dict | None:
             integrations["homeAssistant"],
         )
         migrated["integrations"] = integrations
+
+    # Keep every UI path on the same access-code source.  Older configs did
+    # not persist this field because the browser UI used the hard-coded
+    # default.  Native mode reads the saved config too, so explicitly carry
+    # the long-standing code forward when a restored config is missing it.
+    saved_access_code = str(
+        migrated.get("userAccessCode")
+        or migrated.get("settingsAccessCode")
+        or ((migrated.get("security") or {}).get("userAccessCode") if isinstance(migrated.get("security"), dict) else "")
+        or "3762"
+    ).strip()
+    saved_access_code = "".join(ch for ch in saved_access_code if ch.isdigit())[:4] or "3762"
+    migrated["userAccessCode"] = saved_access_code
+    migrated["settingsAccessCode"] = saved_access_code
+    security = migrated.get("security") if isinstance(migrated.get("security"), dict) else {}
+    security["userAccessCode"] = saved_access_code
+    migrated["security"] = security
 
     return migrated
 
@@ -930,8 +948,44 @@ def _normalize_panel_config(config: object) -> dict | None:
     return _migrate_panel_config(config)
 
 
+def _read_default_panel_config_record() -> dict | None:
+    """Load the bundled known-good config if live data was deleted.
+
+    This is a safety net for appliance recovery: if data/panel-config.json is
+    missing or was wiped during manual file replacement, the panel can still
+    come back with the user's Home Assistant bindings, rooms, schedules and
+    access code from public/config/default-config.json.
+    """
+    if not DEFAULT_PANEL_CONFIG_FILE.exists():
+        return None
+    try:
+        raw = json.loads(DEFAULT_PANEL_CONFIG_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    version = 1
+    updated_at = 0
+    config = None
+    if isinstance(raw, dict):
+        version = int(raw.get("version", 1) or 1) if "config" in raw else 1
+        updated_at = int(raw.get("updatedAt", 0) or 0) if "config" in raw else 0
+        if isinstance(raw.get("config"), dict):
+            config = _normalize_panel_config(raw.get("config"))
+        elif any(key in raw for key in ("thermostat", "alarm", "blinds", "lights", "roomControl", "integrations")):
+            config = _normalize_panel_config(raw)
+
+    if not isinstance(config, dict):
+        return None
+    return {"version": version, "updatedAt": updated_at, "config": config}
+
+
 def _read_panel_config_record() -> dict:
     if not PANEL_CONFIG_FILE.exists():
+        fallback = _read_default_panel_config_record()
+        if fallback is not None:
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            _atomic_write_json(PANEL_CONFIG_FILE, fallback)
+            return fallback
         return {"version": 1, "updatedAt": 0, "config": None}
 
     try:
@@ -946,8 +1000,15 @@ def _read_panel_config_record() -> dict:
         version = int(raw.get("version", 1) or 1)
         updated_at = int(raw.get("updatedAt", 0) or 0)
         config = _normalize_panel_config(raw.get("config"))
-        if config is None and any(key in raw for key in ("thermostat", "alarm", "blinds", "lights", "integrations")):
+        if config is None and any(key in raw for key in ("thermostat", "alarm", "blinds", "lights", "roomControl", "integrations")):
             config = _normalize_panel_config(raw)
+
+    if config is None:
+        fallback = _read_default_panel_config_record()
+        if fallback is not None:
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            _atomic_write_json(PANEL_CONFIG_FILE, fallback)
+            return fallback
 
     return {"version": version, "updatedAt": updated_at, "config": config}
 
@@ -2421,11 +2482,22 @@ def _run_git_command(args: list[str]) -> subprocess.CompletedProcess[str]:
 
 
 def _schedule_service_restart() -> None:
-    service_name = os.environ.get("SMART_THERMOSTAT_SERVICE", "smart-thermostat-web.service")
+    services_raw = os.environ.get(
+        "SMART_THERMOSTAT_RESTART_SERVICES",
+        os.environ.get("SMART_THERMOSTAT_SERVICE", "smart-thermostat-web.service"),
+    )
+    services = [item.strip() for item in services_raw.replace(";", ",").split(",") if item.strip()]
+    if not services:
+        services = ["smart-thermostat-web.service"]
 
     def _restart() -> None:
+        # Give the HTTP response time to leave the process before restarting.
         time.sleep(1.5)
-        subprocess.run(["sudo", "systemctl", "restart", service_name], check=False)
+        for service_name in services:
+            subprocess.run(["sudo", "-n", "systemctl", "restart", service_name], check=False)
+            # When restarting the API service itself first, give systemd a brief
+            # moment before restarting the display client that consumes it.
+            time.sleep(0.6)
 
     threading.Thread(target=_restart, daemon=True).start()
 

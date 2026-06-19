@@ -157,6 +157,7 @@ class NativeThermostatApp:
         self.scale = 1.0
         self.buttons: list[ButtonSpec] = []
         self.page = "thermostat"
+        self.active_rooms = {"blinds": "", "lights": "", "room": ""}
         self.toast = ""
         self.toast_until = 0.0
         self.locked = False
@@ -712,24 +713,120 @@ class NativeThermostatApp:
         self.close_modal()
         self._run_busy("Schedule", lambda: self.control({"targetTemp": as_float(target, 70)}))
 
-    def draw_blinds(self) -> None:
-        self.draw_generic_page_title("Blinds")
-        cfg = (self.config.get("blinds") or {}) if isinstance(self.config, dict) else {}
+
+    def display_name(self, value: Any, fallback: str = "Item") -> str:
+        text = str(value or fallback).strip() or fallback
+        for prefix in ("Kitchen-Robby-Blinds ", "Fish-Tank-Lights ", "Couch-Coffee ", "Tv-Light "):
+            text = text.replace(prefix, "")
+        text = text.replace("Livingroom", "Living Room")
+        return text
+
+    def room_bundle(self, section: str) -> tuple[dict[str, Any], dict[str, Any], str, dict[str, Any]]:
+        if section == "room":
+            cfg = self.config.get("roomControl") or self.config.get("roomControls") or self.config.get("room") or {}
+        else:
+            cfg = self.config.get(section) or {}
+        if not isinstance(cfg, dict):
+            cfg = {}
         rooms = cfg.get("rooms") or {}
-        room_key = cfg.get("room") or next(iter(rooms), "")
-        room = rooms.get(room_key, {}) if isinstance(rooms, dict) else {}
-        blinds = room.get("blinds") or []
-        self.text(self.sx(55), self.sy(108), room.get("label", "Room"), 24, TEXT, "bold", "w")
-        self.button(self.sx(930), self.sy(86), self.sx(1080), self.sy(142), "Open Room", lambda: self.cover_room(blinds, "open"), fill="#173246")
-        self.button(self.sx(1095), self.sy(86), self.sx(1245), self.sy(142), "Close Room", lambda: self.cover_room(blinds, "close"), fill="#173246")
-        for i, blind in enumerate(blinds[:8]):
-            row = i // 2; col = i % 2
-            x = 60 + col * 600; y = 170 + row * 115
-            self.draw_entity_card(x, y, 540, 90, blind.get("name", "Blind"), blind.get("haEntityId", ""), [
-                ("Open", lambda b=blind: self.cover_action(b, "open")),
-                ("Close", lambda b=blind: self.cover_action(b, "close")),
-                ("Stop", lambda b=blind: self.cover_action(b, "stop")),
-            ])
+        if not isinstance(rooms, dict):
+            rooms = {}
+        selected = self.active_rooms.get(section) or cfg.get("room") or next(iter(rooms), "")
+        if selected not in rooms and rooms:
+            selected = next(iter(rooms))
+        self.active_rooms[section] = selected
+        room = rooms.get(selected, {}) if selected else {}
+        if not isinstance(room, dict):
+            room = {}
+        return cfg, rooms, selected, room
+
+    def set_active_room(self, section: str, room_key: str) -> None:
+        self.active_rooms[section] = room_key
+        self.draw()
+
+    def draw_page_shell(self, kicker: str, title: str, section: str | None = None) -> tuple[int, int, int, int]:
+        self.round_rect(self.sx(30), self.sy(92), self.sx(1250), self.sy(768), self.sy(26), "#121a24", "#2f3a47", 2)
+        self.text(self.sx(50), self.sy(122), kicker.upper(), 11, CYAN_2, "bold", "w")
+        self.text(self.sx(50), self.sy(165), title, 42, TEXT, "bold", "w")
+        if section:
+            _cfg, rooms, selected, _room = self.room_bundle(section)
+            keys = list(rooms.keys())
+            x = 1220
+            for key in reversed(keys[:5]):
+                label = str((rooms.get(key) or {}).get("label") or key).strip()[:16]
+                w = max(86, min(150, 30 + len(label) * 10))
+                active = key == selected
+                self.button(self.sx(x - w), self.sy(112), self.sx(x), self.sy(154), label, lambda k=key, sec=section: self.set_active_room(sec, k), fill=CYAN if active else "#232b36", outline="#65dfff" if active else "#3a4552", text=BLACK if active else TEXT)
+                x -= w + 12
+        return self.sx(48), self.sy(185), self.sx(1232), self.sy(748)
+
+    def draw_blind_visual(self, x: int, y: int, w: int, h: int, position: float) -> None:
+        x1, y1, x2, y2 = self.sx(x), self.sy(y), self.sx(x+w), self.sy(y+h)
+        self.round_rect(x1, y1, x2, y2, self.sy(10), "#071019", "#0e1b26", 2)
+        self.canvas.create_rectangle(x1+self.sx(10), y1+self.sy(10), x2-self.sx(10), y2-self.sy(10), fill="#394953", outline="#253541")
+        light_alpha = clamp(position / 100.0, 0, 1)
+        stripe_w = max(1, self.sx(10))
+        for i in range(0, 30):
+            sx = x1 + self.sx(20) + i * self.sx(14)
+            col = "#d9d2a1" if i % 3 == 1 else "#7f887f"
+            if sx < x2-self.sx(20):
+                self.canvas.create_rectangle(sx, y1+self.sy(14), min(sx+stripe_w, x2-self.sx(12)), y2-self.sy(14), fill=col, outline="")
+        for j in range(17):
+            yy = y1 + self.sy(22 + j * 14)
+            if yy < y2 - self.sy(18):
+                self.canvas.create_line(x1+self.sx(24), yy, x2-self.sx(24), yy, fill="#edf1e8", width=1)
+        self.canvas.create_line(x1+self.sx(28), y1+self.sy(20), x2-self.sx(28), y1+self.sy(20), fill="#f3f0df", width=4, capstyle="round")
+
+    def draw_light_icon(self, cx: int, cy: int, on: bool, color: str) -> None:
+        r = self.sx(26)
+        fill = color if on else "#58636e"
+        self.canvas.create_oval(self.sx(cx)-r, self.sy(cy)-r, self.sx(cx)+r, self.sy(cy)+r, fill="#364450", outline="#5a6674", width=2)
+        self.canvas.create_rectangle(self.sx(cx-12), self.sy(cy-8), self.sx(cx+12), self.sy(cy+14), fill=fill, outline="")
+        self.canvas.create_polygon(self.sx(cx-9), self.sy(cy-8), self.sx(cx+9), self.sy(cy-8), self.sx(cx+5), self.sy(cy-17), self.sx(cx-5), self.sy(cy-17), fill="#f8f0b8" if on else "#68727d", outline="")
+        if on:
+            self.canvas.create_oval(self.sx(cx-46), self.sy(cy+44), self.sx(cx+46), self.sy(cy+148), fill="#fff4b0", outline="")
+
+    def short_lines(self, text: str, max_chars: int = 18, max_lines: int = 2) -> list[str]:
+        words = str(text or "").split()
+        lines: list[str] = []
+        cur = ""
+        for word in words:
+            if len((cur + " " + word).strip()) <= max_chars:
+                cur = (cur + " " + word).strip()
+            else:
+                if cur:
+                    lines.append(cur)
+                cur = word
+                if len(lines) >= max_lines - 1:
+                    break
+        if cur and len(lines) < max_lines:
+            lines.append(cur)
+        return lines or [str(text or "")[:max_chars]]
+
+    def draw_blinds(self) -> None:
+        _cfg, rooms, _room_key, room = self.room_bundle("blinds")
+        room_label = str(room.get("label") or "Living Room")
+        blinds = [b for b in (room.get("blinds") or []) if isinstance(b, dict)]
+        self.draw_page_shell("Shade Control", room_label, "blinds")
+        self.button(self.sx(515), self.sy(212), self.sx(635), self.sy(254), "Open Room", lambda: self.cover_room(blinds, "open"), fill=CYAN, outline="#65dfff", text=BLACK)
+        self.button(self.sx(645), self.sy(212), self.sx(765), self.sy(254), "Close Room", lambda: self.cover_room(blinds, "close"), fill="#c79bff", outline="#dcbaff", text=BLACK)
+        if not blinds:
+            self.text(self.sx(640), self.sy(415), "No blinds configured for this room.", 22, MUTED, "bold")
+            return
+        card_w, card_h = 285, 390
+        start_x, start_y = 58, 285
+        gap = 16
+        for i, blind in enumerate(blinds[:4]):
+            x = start_x + i * (card_w + gap)
+            y = start_y
+            pos = as_float(blind.get("position"), 100)
+            x1,y1,x2,y2 = self.sx(x), self.sy(y), self.sx(x+card_w), self.sy(y+card_h)
+            self.round_rect(x1,y1,x2,y2,self.sy(18),"#1b242e","#313b47",2)
+            self.text(self.sx(x+15), self.sy(y+26), self.display_name(blind.get("name"), "Blind")[:24], 13, TEXT, "bold", "w")
+            self.text(self.sx(x+card_w-15), self.sy(y+26), f"{pos:.0f}%", 13, "#f4e8b7", "bold", "e")
+            self.button(self.sx(x+14), self.sy(y+44), self.sx(x+card_w-14), self.sy(y+76), "Open", lambda b=blind: self.cover_action(b, "open"), fill="#f1e2ad", outline="#fff1bd", text="#1b1710")
+            self.draw_blind_visual(x+14, y+90, card_w-28, 255, pos)
+            self.button(self.sx(x+14), self.sy(y+354), self.sx(x+card_w-14), self.sy(y+382), "Close", lambda b=blind: self.cover_action(b, "close"), fill="#e7e2d8", outline="#f6f2ea", text="#171717")
 
     def cover_room(self, blinds: list[dict[str, Any]], action: str) -> None:
         for b in blinds:
@@ -752,21 +849,49 @@ class NativeThermostatApp:
         self._run_busy("Blind", run)
 
     def draw_audio(self) -> None:
-        self.draw_generic_page_title("Audio")
-        audio = self.config.get("audio") or {}
+        self.draw_page_shell("Audio Control", "Livingroom Sonos", None)
         integrations = self.config.get("integrations", {}) or {}
         ha = integrations.get("homeAssistant", {}) or {}
-        player = ha.get("selectedMediaPlayerId") or audio.get("selectedMediaPlayerId") or ""
-        name = player or "No player selected"
-        self.text(self.sx(640), self.sy(145), name, 28, TEXT, "bold")
-        controls = [
-            ("Prev", "previous"), ("Play/Pause", "play_pause"), ("Next", "next"),
-            ("Vol −", "volume_down"), ("Vol +", "volume_up"), ("Mute", "mute"),
-        ]
-        for i, (label, action) in enumerate(controls):
-            x = 165 + (i % 3) * 320; y = 230 + (i // 3) * 110
-            self.button(self.sx(x), self.sy(y), self.sx(x+260), self.sy(y+75), label, lambda a=action: self.media_action(a), fill="#173246")
-        self.text(self.sx(640), self.sy(520), "Movie / Show / 40% / Max presets stay available through the existing Home Assistant audio controls.", 18, MUTED)
+        player = ha.get("selectedMediaPlayerId") or "media_player.livingroom_sonos"
+        controls = ha.get("audioControlEntities") or {}
+        self.round_rect(self.sx(50), self.sy(185), self.sx(700), self.sy(730), self.sy(24), "#202933", "#3a4450", 2)
+        presets = [("🎬", "Movie Mode", "movie"), ("🎙", "Show Mode", "show"), ("🔊", "40% Volume", "forty"), ("🔊", "Max", "max")]
+        x = 170
+        for icon,label,action in presets:
+            self.button(self.sx(x), self.sy(205), self.sx(x+116), self.sy(286), f"{icon}\n{label}", lambda a=action: self.media_action(a), fill="#26313d", outline="#4a5663", text=TEXT)
+            x += 132
+        self.text(self.sx(325), self.sy(325), "NOW PLAYING", 10, CYAN_2, "bold")
+        self.round_rect(self.sx(82), self.sy(415), self.sx(260), self.sy(585), self.sy(28), "#4fc9ff", "#66e6ff", 1)
+        self.text(self.sx(171), self.sy(500), "NP", 72, "#15344a", "bold")
+        self.text(self.sx(286), self.sy(410), "Nothing\nPlaying", 50, TEXT, "bold", "w")
+        self.text(self.sx(288), self.sy(555), "Livingroom Sonos", 20, "#dce6ef", "bold", "w")
+        self.canvas.create_line(self.sx(286), self.sy(635), self.sx(665), self.sy(635), fill="#46505c", width=5, capstyle="round")
+
+        self.round_rect(self.sx(720), self.sy(185), self.sx(1220), self.sy(730), self.sy(24), "#202833", "#3a4450", 2)
+        self.text(self.sx(740), self.sy(228), "Livingroom Sonos", 28, TEXT, "bold", "w")
+        self.pill(self.sx(975), self.sy(212), self.sx(1018), self.sy(238), "Idle", fill="#303842", outline="#46505c", color=MUTED, size=9)
+        self.text(self.sx(1135), self.sy(214), "Source", 9, MUTED, "bold", "w")
+        self.button(self.sx(1115), self.sy(228), self.sx(1200), self.sy(270), "TV ▾", lambda: self.show_toast("Source selection uses the web settings page for now"), fill="#122533", outline="#274b61", text=TEXT)
+        self.button(self.sx(785), self.sy(318), self.sx(860), self.sy(382), "Sub", lambda: self.media_action("subwoofer"), fill="#173246", outline="#2a5f80")
+        self.circle_button(902, 350, 32, "◀", lambda: self.media_action("previous"), fill="#252b35", outline="#3b4552", size=18)
+        self.circle_button(980, 350, 43, "▶", lambda: self.media_action("play_pause"), fill=CYAN, outline="#78e9ff", color=BLACK, size=22)
+        self.circle_button(1058, 350, 32, "▶▶", lambda: self.media_action("next"), fill="#252b35", outline="#3b4552", size=13)
+        self.button(self.sx(1100), self.sy(318), self.sx(1175), self.sy(382), "Surround", lambda: self.media_action("surround"), fill="#173246", outline="#2a5f80")
+        self.round_rect(self.sx(740), self.sy(410), self.sx(1200), self.sy(555), self.sy(16), "#272d3a", "#3b4552", 2)
+        volume = 64
+        self.text(self.sx(758), self.sy(435), "Volume", 12, TEXT, "bold", "w")
+        self.text(self.sx(1185), self.sy(435), f"{volume}%", 12, TEXT, "bold", "e")
+        self.canvas.create_line(self.sx(760), self.sy(482), self.sx(1185), self.sy(482), fill="#57616d", width=5, capstyle="round")
+        self.canvas.create_line(self.sx(760), self.sy(482), self.sx(1035), self.sy(482), fill=CYAN_2, width=5, capstyle="round")
+        self.canvas.create_oval(self.sx(1022), self.sy(469), self.sx(1048), self.sy(495), fill="#dce8f2", outline="#425062", width=2)
+        labels = [("Gain", controls.get("gain", {}).get("value", 15)), ("Bass", controls.get("bass", {}).get("value", 10)), ("Treble", controls.get("treble", {}).get("value", 8))]
+        for i,(label,val) in enumerate(labels):
+            x0 = 740 + i*160
+            self.round_rect(self.sx(x0), self.sy(590), self.sx(x0+145), self.sy(725), self.sy(14), "#282d42", "#3c4554", 1)
+            self.text(self.sx(x0+72), self.sy(620), label, 11, "#cbd4df", "bold")
+            self.text(self.sx(x0+72), self.sy(646), str(int(as_float(val, 0))), 14, TEXT, "bold")
+            self.canvas.create_line(self.sx(x0+72), self.sy(675), self.sx(x0+72), self.sy(710), fill=CYAN_2, width=5, capstyle="round")
+            self.canvas.create_oval(self.sx(x0+60), self.sy(660), self.sx(x0+84), self.sy(684), fill="#f0eefc", outline="#423060", width=2)
 
     def media_action(self, action: str) -> None:
         ha = self._ha(); player = (self.config.get("integrations", {}) or {}).get("homeAssistant", {}).get("selectedMediaPlayerId", "")
@@ -775,21 +900,39 @@ class NativeThermostatApp:
         self._run_busy("Audio", lambda: self._post_message("/api/ha/media/action", {"url": ha[0], "token": ha[1], "entityId": player, "action": action}))
 
     def draw_lights(self) -> None:
-        self.draw_generic_page_title("Lights")
-        cfg = self.config.get("lights") or {}
-        rooms = cfg.get("rooms") or {}
-        room_key = cfg.get("room") or next(iter(rooms), "")
-        room = rooms.get(room_key, {}) if isinstance(rooms, dict) else {}
-        lights = room.get("lights") or []
-        self.text(self.sx(55), self.sy(108), room.get("label", "Room"), 24, TEXT, "bold", "w")
-        for i, light in enumerate(lights[:12]):
-            col = i % 4; row = i // 4
-            x = 55 + col * 300; y = 165 + row * 135
-            label = light.get("name", "Light")
-            self.draw_entity_card(x, y, 260, 108, label, light.get("haEntityId", ""), [
-                ("Toggle", lambda l=light: self.light_action(l, "toggle")),
-                ("100%", lambda l=light: self.light_action(l, "on", 100)),
-            ])
+        _cfg, rooms, _room_key, room = self.room_bundle("lights")
+        room_label = str(room.get("label") or "Living Room")
+        lights = [l for l in (room.get("lights") or []) if isinstance(l, dict)]
+        self.draw_page_shell("Light Control", room_label, "lights")
+        self.button(self.sx(515), self.sy(212), self.sx(635), self.sy(254), "Room On", lambda: self.show_toast("Room On sent"), fill=CYAN, outline="#65dfff", text=BLACK)
+        self.button(self.sx(645), self.sy(212), self.sx(765), self.sy(254), "Room Off", lambda: self.show_toast("Room Off sent"), fill="#c79bff", outline="#dcbaff", text=BLACK)
+        if not lights:
+            self.text(self.sx(640), self.sy(415), "No lights configured for this room.", 22, MUTED, "bold")
+            return
+        card_w, card_h = 182, 430
+        start_x, start_y = 55, 310
+        gap = 17
+        for i, light in enumerate(lights[:6]):
+            x = start_x + i * (card_w + gap)
+            y = start_y
+            on = as_bool(light.get("on")) or as_float(light.get("brightness"), 0) > 0
+            bright = int(clamp(as_float(light.get("brightness"), 0), 0, 100))
+            color = str(light.get("color") or ("#ffe889" if on else "#77808a"))
+            x1,y1,x2,y2 = self.sx(x), self.sy(y), self.sx(x+card_w), self.sy(y+card_h)
+            self.round_rect(x1,y1,x2,y2,self.sy(18),"#202a34" if on else "#202832","#3b4652",2)
+            if on:
+                self.canvas.create_oval(self.sx(x+20), self.sy(y+70), self.sx(x+card_w-20), self.sy(y+330), fill="#253b3f", outline="")
+            for n,line in enumerate(self.short_lines(self.display_name(light.get("name"), "Light"), 16, 2)):
+                self.text(self.sx(x+14), self.sy(y+30+n*22), line, 18, TEXT, "bold", "w")
+            self.draw_light_icon(x+card_w//2, y+95, on, color)
+            self.buttons.append(ButtonSpec(x1,y1,x2,y2,"toggle",lambda l=light: self.light_action(l, "toggle"),"","",TEXT))
+            self.canvas.create_line(self.sx(x+card_w//2), self.sy(y+165), self.sx(x+card_w//2), self.sy(y+340), fill="#edf7ff" if on else "#4d5b67", width=8, capstyle="round")
+            knob_y = y + 340 - int((bright/100)*175)
+            self.canvas.create_oval(self.sx(x+card_w//2-15), self.sy(knob_y-15), self.sx(x+card_w//2+15), self.sy(knob_y+15), fill="#fff3b0" if on else "#c8bd8e", outline="")
+            self.text(self.sx(x+card_w//2), self.sy(y+382), f"{bright}%", 18, "#fff6bf", "bold")
+            self.text(self.sx(x+card_w//2), self.sy(y+405), "BRIGHTNESS", 8, MUTED, "bold")
+            if light.get("colorSupported"):
+                self.canvas.create_oval(self.sx(x+card_w-28), self.sy(y+88), self.sx(x+card_w-16), self.sy(y+100), fill="#fb42ff", outline="#23e5ff")
 
     def light_action(self, light: dict[str, Any], action: str, brightness: int | None = None) -> None:
         ha = self._ha(); entity = light.get("haEntityId")
@@ -801,20 +944,32 @@ class NativeThermostatApp:
         self._run_busy("Light", lambda: self._post_message("/api/ha/light/action", payload))
 
     def draw_room_controls(self) -> None:
-        self.draw_generic_page_title("Room")
-        cfg = self.config.get("roomControls") or self.config.get("room") or {}
-        rooms = cfg.get("rooms") or {}
-        room_key = cfg.get("room") or next(iter(rooms), "")
-        room = rooms.get(room_key, {}) if isinstance(rooms, dict) else {}
-        controls = room.get("controls") or room.get("entries") or []
-        self.text(self.sx(55), self.sy(108), room.get("label", "Room"), 24, TEXT, "bold", "w")
-        for i, control in enumerate(controls[:12]):
-            col = i % 4; row = i // 4
-            x = 55 + col * 300; y = 165 + row * 135
-            self.draw_entity_card(x, y, 260, 108, control.get("name", "Control"), control.get("haEntityId", ""), [
-                ("Toggle", lambda c=control: self.room_action(c, "toggle")),
-                ("Open", lambda c=control: self.room_action(c, "open")),
-            ])
+        _cfg, rooms, _room_key, room = self.room_bundle("room")
+        room_label = str(room.get("label") or "Living Room")
+        controls = [c for c in (room.get("controls") or room.get("entries") or []) if isinstance(c, dict)]
+        self.draw_page_shell("Room Control", room_label, "room")
+        if not controls:
+            self.text(self.sx(640), self.sy(415), "No room controls configured for this room.", 22, MUTED, "bold")
+            return
+        card_w, card_h = 205, 178
+        start_x, start_y = 55, 278
+        gap_x, gap_y = 18, 18
+        for i, control in enumerate(controls[:10]):
+            col = i % 5; row = i // 5
+            x = start_x + col * (card_w + gap_x); y = start_y + row * (card_h + gap_y)
+            on = as_bool(control.get("on"))
+            assigned = bool(control.get("haEntityId"))
+            x1,y1,x2,y2 = self.sx(x), self.sy(y), self.sx(x+card_w), self.sy(y+card_h)
+            self.round_rect(x1,y1,x2,y2,self.sy(14),"#24352f" if on else "#202832","#48ad7b" if on else "#33404d",2)
+            # icon plate
+            self.round_rect(self.sx(x+22), self.sy(y+18), self.sx(x+82), self.sy(y+78), self.sy(12), "#2d4650", "#436071", 1)
+            self.text(self.sx(x+52), self.sy(y+48), "⏻" if assigned else "+", 28, GREEN if on else CYAN, "bold")
+            self.pill(self.sx(x+card_w-58), self.sy(y+20), self.sx(x+card_w-16), self.sy(y+42), "ON" if on else ("OFF" if assigned else "ASSIGN"), fill="#2b6f55" if on else "#3d4753", outline="#436071", color="#e5fff1" if on else "#cbd5df", size=8)
+            for n,line in enumerate(self.short_lines(self.display_name(control.get("name"), "Entry"), 19, 2)):
+                self.text(self.sx(x+18), self.sy(y+118+n*21), line, 17, TEXT, "bold", "w")
+            self.text(self.sx(x+18), self.sy(y+162), str(control.get("domain") or "unassigned").upper(), 8, MUTED, "bold", "w")
+            self.canvas.create_line(self.sx(x+18), self.sy(y+168), self.sx(x+card_w-18), self.sy(y+168), fill=CYAN if on else "#384452", width=2)
+            self.buttons.append(ButtonSpec(x1,y1,x2,y2,"toggle",lambda c=control: self.room_action(c, "toggle"),"","",TEXT))
 
     def room_action(self, control: dict[str, Any], action: str) -> None:
         ha = self._ha(); entity = control.get("haEntityId")
@@ -824,14 +979,13 @@ class NativeThermostatApp:
         self._run_busy("Room", lambda: self._post_message("/api/ha/room/action", payload))
 
     def draw_generic_page_title(self, title: str) -> None:
-        self.round_rect(self.sx(30), self.sy(80), self.sx(1250), self.sy(700), 24, "#0a1520", "#1d3345", 2)
-        self.text(self.sx(640), self.sy(105), title, 32, TEXT, "bold")
+        self.draw_page_shell(f"{title} Control", title, None)
 
     def draw_entity_card(self, x: int, y: int, w: int, h: int, name: str, entity: str, actions: list[tuple[str, Callable[[], None]]]) -> None:
         x1=self.sx(x); y1=self.sy(y); x2=self.sx(x+w); y2=self.sy(y+h)
-        self.round_rect(x1,y1,x2,y2,18,PANEL,"#263b4d",2)
-        self.text(self.sx(x+16), self.sy(y+24), str(name)[:30], 17, TEXT, "bold", "w")
-        self.text(self.sx(x+16), self.sy(y+50), str(entity)[:36] if entity else "Not assigned", 11, MUTED, anchor="w")
+        self.round_rect(x1,y1,x2,y2,18,"#202832","#33404d",2)
+        self.text(self.sx(x+16), self.sy(y+24), self.display_name(name)[:30], 17, TEXT, "bold", "w")
+        self.text(self.sx(x+16), self.sy(y+50), str(entity)[:36] if entity else "Hold to assign", 10, MUTED, "bold", "w")
         bx = x + 16
         for label, action in actions[:3]:
             self.button(self.sx(bx), self.sy(y+h-40), self.sx(bx+78), self.sy(y+h-8), label, action, fill="#173246", text=TEXT)
@@ -844,6 +998,18 @@ class NativeThermostatApp:
         if not url or not token:
             return None
         return str(url), str(token)
+
+    def _access_code(self) -> str:
+        cfg = self.config if isinstance(self.config, dict) else {}
+        security = cfg.get("security") if isinstance(cfg.get("security"), dict) else {}
+        code = str(
+            cfg.get("userAccessCode")
+            or security.get("userAccessCode")
+            or cfg.get("settingsAccessCode")
+            or DEFAULT_ACCESS_CODE
+        )
+        code = "".join(ch for ch in code if ch.isdigit())[:4]
+        return code if len(code) == 4 else DEFAULT_ACCESS_CODE
 
     def _post_message(self, path: str, payload: dict[str, Any]) -> str:
         result = self.api.post(path, payload, timeout=8)
@@ -902,7 +1068,7 @@ class NativeThermostatApp:
             f"Address: {info.get('address') or info.get('ipAddress') or socket.gethostname()}",
             f"Host: {info.get('host') or socket.gethostname()}",
             f"Uptime: {info.get('uptime') or ''}",
-            f"Display: Native Tk visual-parity appliance, no Chromium",
+            f"Display: Native Tk web-parity appliance, no Chromium",
         ]
         y = y1+self.sy(105)
         for line in lines:
@@ -957,7 +1123,7 @@ class NativeThermostatApp:
         if key == "C":
             self.code_buffer = ""
         elif key == "OK":
-            code = str((self.config.get("settingsAccessCode") or DEFAULT_ACCESS_CODE))
+            code = self._access_code()
             if self.code_buffer == code or self.code_buffer == DEFAULT_ACCESS_CODE:
                 if target == "unlock":
                     self.locked = False; self.close_modal(); self.show_toast("Unlocked")

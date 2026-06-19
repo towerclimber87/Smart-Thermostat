@@ -35,9 +35,9 @@
     "mode": "auto",
     "name": "Livingroom Test",
     "outdoorTemp": 40.0,
-    "targetTemp": 73.0,
     "outdoorWindSpeed": 0,
-    "outdoorWindUnit": "mph"
+    "outdoorWindUnit": "mph",
+    "targetTemp": 73.0
   },
   "updatedAt": 1781548290,
   "version": 1
