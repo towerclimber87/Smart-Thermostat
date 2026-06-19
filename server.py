@@ -1222,6 +1222,115 @@ def _panel_config_payload() -> dict:
     }
 
 
+def _config_backup_filename() -> str:
+    thermostat = _read_thermostat_record()["thermostat"]
+    raw_name = str(thermostat.get("name") or "smart-thermostat").strip().lower()
+    safe_name = "".join(ch if ch.isalnum() else "-" for ch in raw_name).strip("-") or "smart-thermostat"
+    while "--" in safe_name:
+        safe_name = safe_name.replace("--", "-")
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return f"{safe_name}-config-{timestamp}.json"
+
+
+def _config_export_payload(server_port: int | str | None = None) -> dict:
+    _flush_thermostat_state_to_disk()
+    panel_record = _read_panel_config_record()
+    thermostat_record = _read_thermostat_record()
+    exported_at = int(time.time())
+    return {
+        "ok": True,
+        "exportType": "smart-thermostat-config-backup",
+        "exportVersion": 1,
+        "exportedAt": exported_at,
+        "exportedAtIso": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "appVersion": _read_version_value(),
+        "system": _system_info_payload(server_port),
+        "records": {
+            "panelConfig": panel_record,
+            "thermostatState": thermostat_record,
+        },
+        # Convenience copies make the file easy to inspect or import by hand.
+        "config": panel_record.get("config") or {},
+        "thermostat": thermostat_record.get("thermostat") or {},
+    }
+
+
+def _send_json_download(handler: BaseHTTPRequestHandler, filename: str, payload: dict) -> None:
+    body = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
+    safe_filename = filename.replace('"', "").replace("\r", "").replace("\n", "") or "smart-thermostat-config.json"
+    handler.send_response(200)
+    handler.send_header("Content-Type", "application/json; charset=utf-8")
+    handler.send_header("Content-Disposition", f'attachment; filename="{safe_filename}"')
+    handler.send_header("Content-Length", str(len(body)))
+    handler.send_header("Cache-Control", "no-store")
+    handler.send_header("Connection", "close")
+    handler.end_headers()
+    handler.close_connection = True
+    handler.wfile.write(body)
+
+
+def _extract_import_record(payload: object) -> tuple[dict | None, dict | None]:
+    if not isinstance(payload, dict):
+        return None, None
+    source = payload.get("backup", payload)
+    if not isinstance(source, dict):
+        return None, None
+
+    records = source.get("records") if isinstance(source.get("records"), dict) else {}
+    panel_record_source = records.get("panelConfig") or source.get("panelConfig")
+    thermostat_record_source = records.get("thermostatState") or source.get("thermostatState")
+
+    config = None
+    if isinstance(panel_record_source, dict):
+        if isinstance(panel_record_source.get("config"), dict):
+            config = panel_record_source.get("config")
+        elif any(key in panel_record_source for key in ("thermostat", "alarm", "blinds", "lights", "roomControl", "integrations")):
+            config = panel_record_source
+
+    if config is None and isinstance(source.get("config"), dict):
+        config = source.get("config")
+
+    # Allow importing a raw data/panel-config.json file or a copied config object.
+    if config is None and any(key in source for key in ("thermostat", "alarm", "blinds", "lights", "roomControl", "integrations")):
+        config = source
+
+    thermostat = None
+    if isinstance(thermostat_record_source, dict):
+        if isinstance(thermostat_record_source.get("thermostat"), dict):
+            thermostat = thermostat_record_source.get("thermostat")
+        elif any(key in thermostat_record_source for key in ("name", "targetTemp", "mode", "fan", "limits")):
+            thermostat = thermostat_record_source
+
+    if thermostat is None and isinstance(source.get("thermostat"), dict):
+        thermostat = source.get("thermostat")
+    if thermostat is None and isinstance(config, dict) and isinstance(config.get("thermostat"), dict):
+        thermostat = config.get("thermostat")
+
+    return config if isinstance(config, dict) else None, thermostat if isinstance(thermostat, dict) else None
+
+
+def _config_import_payload(payload: object) -> dict:
+    config, thermostat = _extract_import_record(payload)
+    if config is None:
+        return {"ok": False, "error": "The uploaded file does not contain a valid Smart Thermostat config."}
+
+    panel_record = _write_panel_config_record(config)
+    thermostat_record = None
+    if thermostat is not None:
+        thermostat_record = _write_thermostat_record(thermostat, force=True)
+    elif isinstance(panel_record.get("config"), dict) and isinstance(panel_record["config"].get("thermostat"), dict):
+        thermostat_record = _write_thermostat_record(panel_record["config"].get("thermostat"), force=True)
+
+    return {
+        "ok": True,
+        "message": "Config uploaded. Settings were restored on this panel.",
+        "version": panel_record["version"],
+        "updatedAt": panel_record["updatedAt"],
+        "config": panel_record["config"],
+        "thermostat": thermostat_record.get("thermostat") if isinstance(thermostat_record, dict) else None,
+    }
+
+
 def _thermostat_outputs(thermostat: dict) -> dict:
     mode = _allowed_mode_for_locks(_normalize_mode(thermostat.get("mode"), "cool"), thermostat, "cool")
     active_mode = thermostat.get("autoActiveMode") if mode == "auto" else mode
@@ -3225,6 +3334,9 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
         if path == "/api/system/info":
             server_port = getattr(self.server, "server_address", (None, None))[1]
             return _json(self, 200, _system_info_payload(server_port))
+        if path == "/api/system/config-export":
+            server_port = getattr(self.server, "server_address", (None, None))[1]
+            return _send_json_download(self, _config_backup_filename(), _config_export_payload(server_port))
         if path == "/api/hardware/status":
             return _json(self, 200, _hardware_status_payload(force_i2c=True))
         if path == "/api/history":
@@ -3256,7 +3368,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-import", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action"}:
             self.send_error(404, "Not found")
             return
 
@@ -3278,6 +3390,10 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
             if path == "/api/system/reboot":
                 result = _reboot_payload()
                 return _json(self, 200 if result.get("ok") else 500, result)
+
+            if path == "/api/system/config-import":
+                result = _config_import_payload(payload)
+                return _json(self, 200 if result.get("ok") else 400, result)
 
             if path == "/api/hardware/relay":
                 return _json(self, 200, _set_manual_relay(payload.get("relay", ""), bool(payload.get("on"))))

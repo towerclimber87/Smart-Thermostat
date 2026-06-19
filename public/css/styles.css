@@ -6136,7 +6136,7 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   }
 }
 
-/* 2026-06-15 local update/restart buttons in thermostat info popup */
+/* 2026-06-15 local update/restart/config backup buttons in thermostat info popup */
 .panel-info-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -6144,7 +6144,9 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   margin-top: 2px;
 }
 .fetch-update-btn,
-.restart-server-btn {
+.restart-server-btn,
+.download-config-btn,
+.upload-config-btn {
   width: 100%;
   min-height: 54px;
 }
@@ -6152,8 +6154,18 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   background: linear-gradient(135deg, rgba(255,190,96,.96), rgba(255,122,94,.94));
   color: #261008;
 }
+.download-config-btn {
+  background: linear-gradient(135deg, rgba(72, 205, 255, .96), rgba(90, 136, 255, .94));
+  color: #061528;
+}
+.upload-config-btn {
+  background: linear-gradient(135deg, rgba(126, 241, 170, .96), rgba(47, 199, 147, .94));
+  color: #061f16;
+}
 .fetch-update-btn:disabled,
-.restart-server-btn:disabled {
+.restart-server-btn:disabled,
+.download-config-btn:disabled,
+.upload-config-btn:disabled {
   opacity: .68;
   cursor: wait;
 }
@@ -6917,7 +6929,9 @@ h3 { font-size: clamp(1.3rem, 2.2vw, 2rem); letter-spacing: -.04em; }
   margin-top: 0;
 }
 .fetch-update-btn,
-.restart-server-btn {
+.restart-server-btn,
+.download-config-btn,
+.upload-config-btn {
   min-height: 44px;
   border-radius: 14px;
 }

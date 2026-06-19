@@ -582,6 +582,9 @@ const elements = {
   unitThermalValue: document.getElementById("unitThermalValue"),
   fetchUpdateButton: document.getElementById("fetchUpdateButton"),
   restartServerButton: document.getElementById("restartServerButton"),
+  downloadConfigButton: document.getElementById("downloadConfigButton"),
+  uploadConfigButton: document.getElementById("uploadConfigButton"),
+  uploadConfigFileInput: document.getElementById("uploadConfigFileInput"),
   fetchUpdateStatus: document.getElementById("fetchUpdateStatus"),
   dialMinLabel: document.getElementById("dialMinLabel"),
   dialMaxLabel: document.getElementById("dialMaxLabel"),
@@ -1914,9 +1917,150 @@ function setFetchUpdateStatus(message = "", level = "info") {
   elements.fetchUpdateStatus.dataset.level = level;
 }
 
+function setInfoActionButtonsDisabled(disabled, exceptElement = null) {
+  [elements.fetchUpdateButton, elements.restartServerButton, elements.downloadConfigButton, elements.uploadConfigButton].forEach((button) => {
+    if (!button || button === exceptElement) return;
+    button.disabled = Boolean(disabled);
+  });
+}
+
+function filenameFromContentDisposition(header = "") {
+  const match = String(header || "").match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i);
+  const raw = match ? (match[1] || match[2] || "") : "";
+  try { return decodeURIComponent(raw); } catch (_) { return raw; }
+}
+
+function defaultConfigDownloadName() {
+  const safeName = String(getThermostatName() || "smart-thermostat")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "smart-thermostat";
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  return `${safeName}-config-${timestamp}.json`;
+}
+
+async function saveConfigForBackup() {
+  clearTimeout(configSaveTimer);
+  configSaveTimer = null;
+  configSaveQueued = false;
+  await postConfigToServer(buildSavedConfig());
+  try { await pushLocalThermostatStatus(); } catch (_) { /* pushLocalThermostatStatus logs its own failures */ }
+}
+
+async function downloadPanelConfig() {
+  if (!elements.downloadConfigButton) return;
+  elements.downloadConfigButton.disabled = true;
+  setInfoActionButtonsDisabled(true, elements.downloadConfigButton);
+  setFetchUpdateStatus("Preparing config download…", "info");
+  try {
+    await saveConfigForBackup();
+    const response = await fetch(`/api/system/config-export?_=${Date.now()}`, { cache: "no-store" });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || `Download returned ${response.status}`);
+    }
+    const blob = await response.blob();
+    const filename = filenameFromContentDisposition(response.headers.get("Content-Disposition")) || defaultConfigDownloadName();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 30000);
+    setFetchUpdateStatus("Config downloaded. Keep this file private because it includes saved Home Assistant settings.", "success");
+    showToast("Config downloaded");
+  } catch (error) {
+    const message = error.message || String(error);
+    setFetchUpdateStatus(message, "error");
+    showToast("Config download failed");
+  } finally {
+    elements.downloadConfigButton.disabled = false;
+    setInfoActionButtonsDisabled(false);
+  }
+}
+
+function requestPanelConfigUpload() {
+  if (!elements.uploadConfigFileInput) return;
+  elements.uploadConfigFileInput.value = "";
+  elements.uploadConfigFileInput.click();
+}
+
+function renderImportedPanelConfig() {
+  applyPanelTheme(state.theme, { save: false });
+  renderPanelThemePicker();
+  renderScreenTimeoutSettings();
+  syncAlarmFromConfig();
+  syncDoorFromConfig();
+  renderThermostat();
+  renderCurrentTempSourceSettings();
+  renderThermostatPeople();
+  renderPauseFunctionSettings();
+  renderPauseFunctionStatus();
+  renderPanelLock();
+  renderDoorWidget();
+  renderAlarmWidget();
+  renderAudio();
+  renderBlinds();
+  renderLights();
+  renderRoomControls();
+  renderSystemInfo();
+}
+
+async function uploadPanelConfigFromFile(event) {
+  const file = event?.target?.files?.[0];
+  if (!file) return;
+  const confirmed = window.confirm("Upload this config and replace all saved settings on this panel?");
+  if (!confirmed) return;
+
+  elements.uploadConfigButton.disabled = true;
+  setInfoActionButtonsDisabled(true, elements.uploadConfigButton);
+  setFetchUpdateStatus("Uploading config…", "info");
+  try {
+    const text = await file.text();
+    let backup;
+    try {
+      backup = JSON.parse(text);
+    } catch (_) {
+      throw new Error("That file is not valid JSON.");
+    }
+    const response = await fetch(`/api/system/config-import?_=${Date.now()}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({ backup }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || `Upload returned ${response.status}`);
+    }
+
+    const importedConfig = payload.config && typeof payload.config === "object" ? payload.config : {};
+    const importedThermostat = payload.thermostat && typeof payload.thermostat === "object" ? payload.thermostat : null;
+    applySavedConfig(importedThermostat ? { ...importedConfig, thermostat: importedThermostat } : importedConfig);
+    renderImportedPanelConfig();
+    setFetchUpdateStatus(payload.message || "Config uploaded. Settings restored.", "success");
+    showToast("Config uploaded");
+    fetchLocalThermostatStatus({ force: true });
+    pollHomeAssistantWeather({ force: true });
+    pollHomeAssistantCurrentTempSensor({ force: true });
+  } catch (error) {
+    const message = error.message || String(error);
+    setFetchUpdateStatus(message, "error");
+    showToast("Config upload failed");
+  } finally {
+    if (elements.uploadConfigFileInput) elements.uploadConfigFileInput.value = "";
+    elements.uploadConfigButton.disabled = false;
+    setInfoActionButtonsDisabled(false);
+  }
+}
+
 async function fetchPanelUpdate() {
   if (!elements.fetchUpdateButton) return;
   elements.fetchUpdateButton.disabled = true;
+  setInfoActionButtonsDisabled(true, elements.fetchUpdateButton);
   setFetchUpdateStatus("Checking Development…", "info");
   try {
     const response = await fetch(`/api/system/fetch-update?_=${Date.now()}`, {
@@ -1942,6 +2086,7 @@ async function fetchPanelUpdate() {
   } finally {
     setTimeout(() => {
       if (elements.fetchUpdateButton) elements.fetchUpdateButton.disabled = false;
+      setInfoActionButtonsDisabled(false);
     }, 2000);
   }
 }
@@ -1951,7 +2096,7 @@ async function restartPanelServer() {
   const confirmed = window.confirm("Restart the LivingroomClimate server now?");
   if (!confirmed) return;
   elements.restartServerButton.disabled = true;
-  if (elements.fetchUpdateButton) elements.fetchUpdateButton.disabled = true;
+  setInfoActionButtonsDisabled(true, elements.restartServerButton);
   setFetchUpdateStatus("Restarting server…", "info");
   try {
     const response = await fetch(`/api/system/reboot?_=${Date.now()}`, {
@@ -1970,7 +2115,7 @@ async function restartPanelServer() {
     setFetchUpdateStatus(message, "error");
     showToast("Restart failed");
     elements.restartServerButton.disabled = false;
-    if (elements.fetchUpdateButton) elements.fetchUpdateButton.disabled = false;
+    setInfoActionButtonsDisabled(false);
   }
 }
 
@@ -9192,6 +9337,9 @@ function bindEvents() {
   elements.thermostatInfoClose?.addEventListener("click", closeThermostatInfo);
   elements.fetchUpdateButton?.addEventListener("click", fetchPanelUpdate);
   elements.restartServerButton?.addEventListener("click", restartPanelServer);
+  elements.downloadConfigButton?.addEventListener("click", downloadPanelConfig);
+  elements.uploadConfigButton?.addEventListener("click", requestPanelConfigUpload);
+  elements.uploadConfigFileInput?.addEventListener("change", uploadPanelConfigFromFile);
   document.querySelectorAll("[data-close-thermostat-info]").forEach((el) => el.addEventListener("click", closeThermostatInfo));
   elements.lightColorPickerClose?.addEventListener("click", closeLightColorPicker);
   document.querySelectorAll("[data-close-light-color]").forEach((el) => el.addEventListener("click", closeLightColorPicker));
