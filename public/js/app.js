@@ -2572,6 +2572,7 @@ function normalizePauseFunctionEntry(entry = {}) {
     deviceClass: String(entry.deviceClass || entry.device_class || "").trim().toLowerCase(),
     state: String(entry.state || "unknown").trim().toLowerCase(),
     openedAt: Math.max(0, Number(entry.openedAt || 0)),
+    pauseCountdownStartedAt: Math.max(0, Number(entry.pauseCountdownStartedAt || entry.pause_countdown_started_at || 0)),
     lastChanged: String(entry.lastChanged || entry.last_changed || "").trim(),
     lastUpdated: String(entry.lastUpdated || entry.last_updated || "").trim(),
     currentPosition: Number.isFinite(currentPosition) ? currentPosition : null,
@@ -2620,6 +2621,7 @@ function pauseFunctionSettingsSnapshot() {
       deviceClass: entry.deviceClass,
       state: entry.state,
       openedAt: Number(entry.openedAt || 0),
+      pauseCountdownStartedAt: Number(entry.pauseCountdownStartedAt || 0),
       lastChanged: entry.lastChanged || "",
       lastUpdated: entry.lastUpdated || "",
       currentPosition: entry.currentPosition,
@@ -2678,6 +2680,7 @@ function mergePauseFunctionEntryState(entry = {}, update = {}, now = Date.now())
   if (!merged) return null;
   const open = pauseFunctionStateLooksOpen(merged);
   merged.openedAt = open ? pauseFunctionOpenStartedAt({ ...merged, openedAt: before?.openedAt }, now) : 0;
+  merged.pauseCountdownStartedAt = open ? Math.max(0, Number(before?.pauseCountdownStartedAt || merged.pauseCountdownStartedAt || 0)) : 0;
   return merged;
 }
 
@@ -2720,10 +2723,39 @@ function getOpenPauseFunctionEntries(now = Date.now()) {
   return pause.entries.filter(pauseFunctionStateLooksOpen);
 }
 
-function getPauseFunctionExpiredEntries(now = Date.now()) {
+function thermostatIsActivelyConditioning(outputs = null) {
+  const currentOutputs = outputs || getThermostatOutputs();
+  return Boolean(currentOutputs?.heat || currentOutputs?.cool);
+}
+
+function syncPauseFunctionCountdownTimers(openEntries = [], activeConditioning = false, now = Date.now()) {
+  const pause = getPauseFunction();
+  const openIds = new Set(openEntries.map((entry) => entry.entityId));
+  let changed = false;
+  pause.entries = pause.entries.map((entry) => {
+    const isOpen = openIds.has(entry.entityId) && pauseFunctionStateLooksOpen(entry);
+    let nextStartedAt = Number(entry.pauseCountdownStartedAt || 0);
+    if (pause.active || !isOpen) {
+      nextStartedAt = 0;
+    } else if (activeConditioning) {
+      nextStartedAt = nextStartedAt > 0 ? nextStartedAt : now;
+    } else {
+      nextStartedAt = 0;
+    }
+    if (Number(entry.pauseCountdownStartedAt || 0) !== nextStartedAt) {
+      changed = true;
+      return { ...entry, pauseCountdownStartedAt: nextStartedAt };
+    }
+    return entry;
+  });
+  return changed;
+}
+
+function getPauseFunctionExpiredEntries(now = Date.now(), activeConditioning = thermostatIsActivelyConditioning()) {
   const pause = getPauseFunction();
   const thresholdMs = normalizePauseFunctionDuration(pause.durationMinutes) * 60000;
-  return getOpenPauseFunctionEntries(now).filter((entry) => Number(entry.openedAt || 0) && now - Number(entry.openedAt || 0) >= thresholdMs);
+  if (!activeConditioning || pause.active) return [];
+  return getOpenPauseFunctionEntries(now).filter((entry) => Number(entry.pauseCountdownStartedAt || 0) && now - Number(entry.pauseCountdownStartedAt || 0) >= thresholdMs);
 }
 
 function formatPauseFunctionEntryList(entries = []) {
@@ -4130,9 +4162,12 @@ function restorePauseFunctionTarget() {
 function evaluatePauseFunction(options = {}) {
   const pause = getPauseFunction();
   const now = Date.now();
+  const outputs = options.outputs || getThermostatOutputs();
+  const activeConditioning = thermostatIsActivelyConditioning(outputs);
   let changed = false;
   const openEntries = getOpenPauseFunctionEntries(now);
-  const expiredEntries = getPauseFunctionExpiredEntries(now);
+  if (syncPauseFunctionCountdownTimers(openEntries, activeConditioning, now)) changed = true;
+  const expiredEntries = getPauseFunctionExpiredEntries(now, activeConditioning);
 
   if (!pause.entries.length) {
     if (pause.active) {
@@ -4192,22 +4227,26 @@ function renderPauseFunctionSettings() {
     const count = pause.entries.length;
     const minutes = normalizePauseFunctionDuration(pause.durationMinutes);
     elements.pauseFunctionSummary.textContent = count
-      ? `${count} entr${count === 1 ? "y" : "ies"} selected • pause after ${minutes} min open/on.`
+      ? `${count} entr${count === 1 ? "y" : "ies"} selected • pause after ${minutes} min open/on while heating or cooling.`
       : `Pause Function is off until at least one entry is selected.`;
   }
 }
 
-function renderPauseFunctionStatus() {
+function renderPauseFunctionStatus(options = {}) {
   const pause = getPauseFunction();
   const now = Date.now();
-  const openEntries = getOpenPauseFunctionEntries(now);
+  const outputs = options.outputs || getThermostatOutputs();
+  const activeConditioning = thermostatIsActivelyConditioning(outputs);
+  let openEntries = getOpenPauseFunctionEntries(now);
   const thresholdMs = normalizePauseFunctionDuration(pause.durationMinutes) * 60000;
+  syncPauseFunctionCountdownTimers(openEntries, activeConditioning, now);
+  openEntries = getOpenPauseFunctionEntries(now);
   const soonestOpenAt = openEntries.reduce((earliest, entry) => {
-    const openedAt = Number(entry.openedAt || 0);
-    return openedAt && (!earliest || openedAt < earliest) ? openedAt : earliest;
+    const startedAt = Number(entry.pauseCountdownStartedAt || 0);
+    return startedAt && (!earliest || startedAt < earliest) ? startedAt : earliest;
   }, 0);
   const countdownRemaining = soonestOpenAt ? Math.max(0, thresholdMs - (now - soonestOpenAt)) : 0;
-  const showCountdown = Boolean(openEntries.length && !pause.active && countdownRemaining > 0);
+  const showCountdown = Boolean(openEntries.length && !pause.active && activeConditioning && countdownRemaining > 0);
 
   if (elements.pauseCountdownBadge) {
     elements.pauseCountdownBadge.hidden = !showCountdown;
@@ -4225,7 +4264,11 @@ function renderPauseFunctionStatus() {
   }
   if (elements.pauseFunctionMessage) {
     const activeEntries = openEntries.length ? openEntries : pause.entries.filter((entry) => (pause.activeEntityIds || []).includes(entry.entityId));
-    const openForMs = Math.max(0, now - (soonestOpenAt || Number(pause.pausedAt || now)));
+    const activeStartedAt = activeEntries.reduce((earliest, entry) => {
+      const openedAt = Number(entry.openedAt || 0);
+      return openedAt && (!earliest || openedAt < earliest) ? openedAt : earliest;
+    }, 0);
+    const openForMs = Math.max(0, now - (activeStartedAt || Number(pause.pausedAt || now)));
     elements.pauseFunctionMessage.textContent = pause.active
       ? `${formatPauseFunctionEntryList(activeEntries)} ${activeEntries.length === 1 ? "has" : "have"} been open/on for ${formatShortDuration(openForMs)}. Comfort is paused using the Away set points until the selected entries close.`
       : "Selected entries are being monitored.";
@@ -4601,7 +4644,7 @@ function renderThermostat() {
   }
 
   renderAutoSwitchNotice();
-  renderPauseFunctionStatus();
+  renderPauseFunctionStatus({ outputs });
 
   const action = outputs.cool ? "Cooling" : outputs.heat ? "Heating" : outputs.coolingFanHold ? "Fan Cooldown" : outputs.fan ? "Fan On" : (t.heatLocked && t.coolLocked ? "Heat/Cool Locked" : "Idle");
   const lockoutRemaining = Math.max(0, Number(t.autoLockoutUntil || 0) - now);
