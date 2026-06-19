@@ -34,6 +34,8 @@ HVAC_HISTORY_FILE = DATA_DIR / "hvac-history.json"
 APP_STARTED_AT = time.time()
 HA_STATES_CACHE_TTL_SECONDS = float(os.environ.get("SMART_THERMOSTAT_HA_STATES_CACHE_TTL_SECONDS", "1.0"))
 ACCESS_LOGS_ENABLED = os.environ.get("SMART_THERMOSTAT_ACCESS_LOGS", "0").strip().lower() in {"1", "true", "yes", "on"}
+HISTORY_PERSISTENCE_MODE = os.environ.get("SMART_THERMOSTAT_HISTORY_PERSISTENCE", "daily").strip().lower() or "daily"
+HISTORY_SAVE_ON_SHUTDOWN = os.environ.get("SMART_THERMOSTAT_HISTORY_SAVE_ON_SHUTDOWN", "0").strip().lower() in {"1", "true", "yes", "on"}
 MANUAL_CHANGEOVER_LOCKOUT_MINUTES = 10
 _HA_STATES_CACHE_LOCK = threading.Lock()
 _HA_STATES_CACHE: dict[tuple[str, str], tuple[float, list[dict]]] = {}
@@ -64,6 +66,15 @@ HARDWARE_POWER_PINS = {
 HARDWARE_RELAY_ACTIVE_LOW = os.environ.get("SMART_THERMOSTAT_RELAY_ACTIVE_LOW", "0").strip().lower() in {"1", "true", "yes", "on"}
 HARDWARE_I2C_BUS = int(os.environ.get("SMART_THERMOSTAT_I2C_BUS", "1"))
 HARDWARE_I2C_DEVICE = Path(f"/dev/i2c-{HARDWARE_I2C_BUS}")
+CONTROL_LOOP_ENABLED = os.environ.get("SMART_THERMOSTAT_CONTROL_LOOP", "1").strip().lower() not in {"0", "false", "no", "off"}
+CONTROL_LOOP_INTERVAL_SECONDS = max(1.0, float(os.environ.get("SMART_THERMOSTAT_CONTROL_LOOP_SECONDS", "2") or "2"))
+LOCAL_TEMP_SENSOR_ENABLED = os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_SENSOR", "auto").strip().lower() not in {"0", "false", "no", "off", "disabled"}
+LOCAL_TEMP_SENSOR_MODE = os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_MODE", "fallback").strip().lower() or "fallback"
+LOCAL_TEMP_SENSOR_POLL_SECONDS = max(2.0, float(os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_POLL_SECONDS", "5") or "5"))
+LOCAL_TEMP_SENSOR_STALE_SECONDS = max(15.0, float(os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_FALLBACK_AFTER_SECONDS", "60") or "60"))
+LOCAL_TEMP_SENSOR_ADDRESS = os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_I2C_ADDRESS", "").strip()
+LOCAL_TEMP_SENSOR_TYPE = os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_TYPE", "auto").strip().lower() or "auto"
+LOCAL_TEMP_SOURCE_NAMES = {"onboard", "local", "i2c", "hardware", "onboard-fallback"}
 
 _HARDWARE_LOCK = threading.RLock()
 _HARDWARE_RELAY_BACKEND = None
@@ -73,6 +84,10 @@ _HARDWARE_LAST_RELAY_SOURCE = "thermostat"
 _HARDWARE_MANUAL = {"active": False, "relays": {"fan": False, "heat": False, "cool": False}}
 _HARDWARE_RGB = {"on": False, "color": "#35eaff"}
 _HARDWARE_LAST_I2C_SCAN = {"at": 0.0, "payload": None}
+_LOCAL_TEMP_SENSOR_LOCK = threading.RLock()
+_LOCAL_TEMP_SENSOR_CACHE = {"at": 0.0, "payload": None}
+_CONTROL_LOOP_THREAD_STARTED = False
+_CONTROL_LOOP_STOP = threading.Event()
 
 
 def _json(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> None:
@@ -89,6 +104,7 @@ def _json(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> None:
 DEFAULT_THERMOSTAT = {
     "name": "IHA Thermostat",
     "currentTemp": 70,
+    "currentTempUpdatedAt": 0,
     "currentTempSource": "virtual",
     "currentTempSourceName": "Virtual Temp",
     "targetTemp": 70,
@@ -635,6 +651,7 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
 
         for key, fallback, minimum, maximum in (
             ("currentTemp", base["currentTemp"], -40, 130),
+            ("currentTempUpdatedAt", base.get("currentTempUpdatedAt", 0), 0, None),
             ("targetTemp", base["targetTemp"], 45, 95),
             ("lastComfortTarget", base["lastComfortTarget"], 45, 95),
             ("awayHeat", base["awayHeat"], 45, 72),
@@ -670,6 +687,8 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             base["targetTemp"] = _number(source.get("target_temperature"), base["targetTemp"], 45, 95)
         if "current_temperature" in source:
             base["currentTemp"] = _number(source.get("current_temperature"), base["currentTemp"], -40, 130)
+        if "currentTempUpdatedAt" in source or "current_temp_updated_at" in source:
+            base["currentTempUpdatedAt"] = _number(source.get("currentTempUpdatedAt", source.get("current_temp_updated_at")), base.get("currentTempUpdatedAt", 0), 0, None)
 
         if "autoActiveMode" in source:
             base["autoActiveMode"] = _normalize_mode(source.get("autoActiveMode"), base["autoActiveMode"])
@@ -772,12 +791,40 @@ THERMOSTAT_PERSIST_KEYS = (
     "coolLocked",
     "people",
     "schedules",
-    "pauseFunction",
     "autoActiveMode",
-    "autoSwitchNotice",
-    "autoSwitchHold",
     "limits",
 )
+
+
+def _thermostat_persist_payload(thermostat: dict) -> dict:
+    """Return only long-term thermostat settings that are worth SD-card persistence.
+
+    Live runtime fields such as current readings, auto-switch notices, relay
+    flags, lockout timers, and the active door/comfort pause state stay in RAM.
+    That keeps the controller working like a normal local thermostat during a
+    Wi-Fi outage without turning every sensor/update loop into an SD-card write.
+    """
+    safe = _merge_thermostat_state(thermostat)
+    persistent = {key: _deepcopy_json(safe.get(key)) for key in THERMOSTAT_PERSIST_KEYS}
+    pause = safe.get("pauseFunction") if isinstance(safe.get("pauseFunction"), dict) else {}
+    persistent["pauseFunction"] = {
+        "durationMinutes": _number(pause.get("durationMinutes"), 5, 1, 240),
+        "entries": _deepcopy_json(pause.get("entries") if isinstance(pause.get("entries"), list) else []),
+        "active": False,
+        "pausedAt": 0,
+        "previousTargetTemp": None,
+        "previousLastComfortTarget": None,
+        "activeEntityIds": [],
+    }
+    return persistent
+
+
+def _thermostat_record_for_disk(record: dict) -> dict:
+    return {
+        "version": int(record.get("version", 1) or 1),
+        "updatedAt": int(record.get("updatedAt", 0) or 0),
+        "thermostat": _thermostat_persist_payload(record.get("thermostat") or {}),
+    }
 
 
 def _atomic_write_json(path: Path, record: dict) -> None:
@@ -804,9 +851,7 @@ def _read_thermostat_record_from_disk() -> dict:
 
 
 def _thermostat_persist_signature(thermostat: dict) -> str:
-    safe = _merge_thermostat_state(thermostat)
-    persistent = {key: _deepcopy_json(safe.get(key)) for key in THERMOSTAT_PERSIST_KEYS}
-    return json.dumps(persistent, sort_keys=True, separators=(",", ":"))
+    return json.dumps(_thermostat_persist_payload(thermostat), sort_keys=True, separators=(",", ":"))
 
 
 def _read_thermostat_record() -> dict:
@@ -838,11 +883,11 @@ def _write_thermostat_record(thermostat: dict, *, force: bool = False) -> dict:
             "thermostat": merged,
         }
         _THERMOSTAT_RECORD_CACHE = record
-        _THERMOSTAT_RECORD_DIRTY = True
         signature = _thermostat_persist_signature(merged)
         should_write = force or signature != _THERMOSTAT_RECORD_LAST_PERSIST_SIGNATURE or not THERMOSTAT_STATE_FILE.exists()
+        _THERMOSTAT_RECORD_DIRTY = should_write
         if should_write:
-            _atomic_write_json(THERMOSTAT_STATE_FILE, record)
+            _atomic_write_json(THERMOSTAT_STATE_FILE, _thermostat_record_for_disk(record))
             _THERMOSTAT_RECORD_LAST_PERSIST_SIGNATURE = signature
             _THERMOSTAT_RECORD_DIRTY = False
         return _deepcopy_json(record)
@@ -853,7 +898,7 @@ def _flush_thermostat_state_to_disk() -> None:
     with _THERMOSTAT_RECORD_LOCK:
         if not _THERMOSTAT_RECORD_DIRTY or _THERMOSTAT_RECORD_CACHE is None:
             return
-        _atomic_write_json(THERMOSTAT_STATE_FILE, _THERMOSTAT_RECORD_CACHE)
+        _atomic_write_json(THERMOSTAT_STATE_FILE, _thermostat_record_for_disk(_THERMOSTAT_RECORD_CACHE))
         _THERMOSTAT_RECORD_LAST_PERSIST_SIGNATURE = _thermostat_persist_signature(_THERMOSTAT_RECORD_CACHE["thermostat"])
         _THERMOSTAT_RECORD_DIRTY = False
 
@@ -998,6 +1043,10 @@ def _load_hvac_history_archive_locked() -> dict:
     return _HVAC_HISTORY_ARCHIVE
 
 
+def _hvac_history_persistence_enabled() -> bool:
+    return HISTORY_PERSISTENCE_MODE not in {"0", "false", "no", "off", "ram", "memory", "none", "disabled"}
+
+
 def _save_hvac_history_archive_locked(include_current: bool = False) -> None:
     archive = _load_hvac_history_archive_locked()
     days = dict(archive.get("days") or {})
@@ -1009,10 +1058,11 @@ def _save_hvac_history_archive_locked(include_current: bool = False) -> None:
         "updatedAt": int(time.time()),
         "days": {key: days[key] for key in sorted_keys},
     }
-    _atomic_write_json(HVAC_HISTORY_FILE, record)
     archive["version"] = record["version"]
     archive["updatedAt"] = record["updatedAt"]
     archive["days"] = record["days"]
+    if _hvac_history_persistence_enabled():
+        _atomic_write_json(HVAC_HISTORY_FILE, record)
 
 
 def _ensure_hvac_history_current_locked(now_ms: int) -> dict:
@@ -1189,7 +1239,7 @@ def _hvac_history_payload(date_key: str | None = None) -> dict:
         },
         "periods": _hvac_history_periods(day, now_ms),
         "updatedAtMs": int(day.get("updatedAtMs") or now_ms),
-        "writePolicy": "Active-day history is held in RAM and written to the SD card when the day rolls over. A clean service stop also saves one final snapshot.",
+        "writePolicy": "Active-day history is held in RAM. By default, the SD card is written only when the day rolls over; clean shutdown snapshots are disabled. Set SMART_THERMOSTAT_HISTORY_SAVE_ON_SHUTDOWN=1 to save a final shutdown snapshot, or SMART_THERMOSTAT_HISTORY_PERSISTENCE=ram to keep history RAM-only.",
     }
 
 
@@ -1203,6 +1253,8 @@ def _hvac_history_dates_payload() -> dict:
 
 
 def _flush_hvac_history_to_disk() -> None:
+    if not HISTORY_SAVE_ON_SHUTDOWN:
+        return
     try:
         _refresh_hvac_history_now()
         with _HVAC_HISTORY_LOCK:
@@ -1394,6 +1446,8 @@ def _thermostat_status_payload() -> dict:
     thermostat_detail = {
         **thermostat,
         "current_temperature": thermostat["currentTemp"],
+        "currentTempUpdatedAt": thermostat.get("currentTempUpdatedAt", 0),
+        "current_temp_updated_at": thermostat.get("currentTempUpdatedAt", 0),
         "target_temperature": thermostat["targetTemp"],
         "temperature": thermostat["targetTemp"],
         "hvac_mode": hvac_mode,
@@ -1431,6 +1485,8 @@ def _thermostat_status_payload() -> dict:
         "currentTemp": thermostat["currentTemp"],
         "targetTemp": thermostat["targetTemp"],
         "current_temperature": thermostat["currentTemp"],
+        "currentTempUpdatedAt": thermostat.get("currentTempUpdatedAt", 0),
+        "current_temp_updated_at": thermostat.get("currentTempUpdatedAt", 0),
         "target_temperature": thermostat["targetTemp"],
         "temperature": thermostat["targetTemp"],
         "mode": thermostat["mode"],
@@ -2000,6 +2056,242 @@ def _scan_i2c_devices(force: bool = False) -> dict:
     return payload
 
 
+
+def _fahrenheit_from_celsius(value_c: float) -> float:
+    return value_c * 9.0 / 5.0 + 32.0
+
+
+def _parse_i2c_address(value: str) -> int | None:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return None
+    try:
+        return int(raw, 16 if raw.startswith("0x") else 10)
+    except ValueError:
+        return None
+
+
+def _read_hwmon_temperature_sensor() -> dict | None:
+    """Read kernel-exposed I2C/1-Wire ambient temperature sensors.
+
+    This intentionally avoids the Pi CPU thermal zone. It only looks under
+    /sys/bus/i2c and /sys/bus/w1 so it can be used as a room sensor fallback
+    when Home Assistant or Wi-Fi is down.
+    """
+    candidates: list[Path] = []
+    candidates.extend(Path("/sys/bus/i2c/devices").glob("*/hwmon/hwmon*/temp*_input"))
+    candidates.extend(Path("/sys/bus/w1/devices").glob("28-*/w1_slave"))
+
+    for path in candidates:
+        try:
+            if path.name == "w1_slave":
+                raw = path.read_text(encoding="utf-8")
+                if "YES" not in raw:
+                    continue
+                marker = "t="
+                if marker not in raw:
+                    continue
+                temp_c = float(raw.rsplit(marker, 1)[1].strip()) / 1000.0
+            else:
+                raw = path.read_text(encoding="utf-8").strip()
+                temp_c = float(raw) / 1000.0
+            if not (-40.0 <= temp_c <= 60.0):
+                continue
+            name_path = path.parent / "name"
+            try:
+                label = name_path.read_text(encoding="utf-8").strip() or path.parent.name
+            except OSError:
+                label = path.parent.parent.name if path.parent.parent.name else path.parent.name
+            return {
+                "ok": True,
+                "available": True,
+                "temperatureF": round(_fahrenheit_from_celsius(temp_c), 1),
+                "temperatureC": round(temp_c, 2),
+                "source": "hwmon",
+                "label": label,
+                "path": str(path),
+                "error": "",
+            }
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def _smbus_class():
+    try:
+        from smbus2 import SMBus  # type: ignore
+        return SMBus
+    except Exception:
+        from smbus import SMBus  # type: ignore
+        return SMBus
+
+
+def _read_tmp102_temperature(bus, address: int) -> float:
+    data = bus.read_i2c_block_data(address, 0x00, 2)
+    raw = ((int(data[0]) << 8) | int(data[1])) >> 4
+    if raw & 0x800:
+        raw -= 1 << 12
+    return raw * 0.0625
+
+
+def _read_sht3x_temperature(bus, address: int) -> float:
+    bus.write_i2c_block_data(address, 0x24, [0x00])
+    time.sleep(0.02)
+    data = bus.read_i2c_block_data(address, 0x00, 6)
+    raw = (int(data[0]) << 8) | int(data[1])
+    return -45.0 + 175.0 * (raw / 65535.0)
+
+
+def _read_direct_i2c_temperature_sensor() -> dict | None:
+    if not HARDWARE_I2C_DEVICE.exists():
+        return None
+    address_override = _parse_i2c_address(LOCAL_TEMP_SENSOR_ADDRESS)
+    sensor_type = LOCAL_TEMP_SENSOR_TYPE
+    probes: list[tuple[str, int]] = []
+    if address_override is not None:
+        if sensor_type in {"sht30", "sht31", "sht3x"}:
+            probes.append(("sht3x", address_override))
+        elif sensor_type in {"tmp102", "tmp112", "tmp10x"}:
+            probes.append(("tmp102", address_override))
+        else:
+            probes.extend((kind, address_override) for kind in ("sht3x", "tmp102"))
+    else:
+        probes.extend(("sht3x", address) for address in (0x44, 0x45))
+        probes.extend(("tmp102", address) for address in (0x48, 0x49, 0x4A, 0x4B))
+
+    if not probes:
+        return None
+
+    try:
+        SMBus = _smbus_class()
+    except Exception:
+        return None
+
+    errors: list[str] = []
+    try:
+        with SMBus(HARDWARE_I2C_BUS) as bus:
+            for kind, address in probes:
+                try:
+                    if kind == "sht3x":
+                        temp_c = _read_sht3x_temperature(bus, address)
+                        label = f"SHT3x 0x{address:02X}"
+                    else:
+                        temp_c = _read_tmp102_temperature(bus, address)
+                        label = f"TMP102 0x{address:02X}"
+                    if not (-40.0 <= temp_c <= 60.0):
+                        raise ValueError(f"unreasonable reading {temp_c:.2f}C")
+                    return {
+                        "ok": True,
+                        "available": True,
+                        "temperatureF": round(_fahrenheit_from_celsius(temp_c), 1),
+                        "temperatureC": round(temp_c, 2),
+                        "source": "i2c",
+                        "label": label,
+                        "address": f"0x{address:02X}",
+                        "error": "",
+                    }
+                except Exception as exc:
+                    errors.append(f"{kind} 0x{address:02X}: {exc}")
+                    continue
+    except Exception as exc:
+        errors.append(str(exc))
+    if address_override is not None and errors:
+        return {"ok": False, "available": False, "temperatureF": None, "temperatureC": None, "source": "i2c", "label": "", "error": "; ".join(errors[-3:])}
+    return None
+
+
+def _read_local_temperature_sensor(force: bool = False) -> dict:
+    now = time.time()
+    with _LOCAL_TEMP_SENSOR_LOCK:
+        cached = _LOCAL_TEMP_SENSOR_CACHE.get("payload")
+        if not force and cached and now - float(_LOCAL_TEMP_SENSOR_CACHE.get("at") or 0) < LOCAL_TEMP_SENSOR_POLL_SECONDS:
+            return _deepcopy_json(cached)
+
+        if not LOCAL_TEMP_SENSOR_ENABLED:
+            payload = {"ok": True, "available": False, "temperatureF": None, "temperatureC": None, "source": "disabled", "label": "", "error": "Local temperature sensor disabled"}
+        else:
+            payload = _read_hwmon_temperature_sensor() or _read_direct_i2c_temperature_sensor()
+            if not payload:
+                payload = {
+                    "ok": True,
+                    "available": False,
+                    "temperatureF": None,
+                    "temperatureC": None,
+                    "source": "none",
+                    "label": "No onboard room temperature sensor found",
+                    "error": "",
+                }
+        payload["readAt"] = int(now)
+        _LOCAL_TEMP_SENSOR_CACHE["at"] = now
+        _LOCAL_TEMP_SENSOR_CACHE["payload"] = _deepcopy_json(payload)
+        return _deepcopy_json(payload)
+
+
+def _thermostat_should_use_local_temp_sensor(thermostat: dict, now: float) -> bool:
+    mode = LOCAL_TEMP_SENSOR_MODE
+    if mode in {"always", "on", "force"}:
+        return True
+    source = str(thermostat.get("currentTempSource") or "").strip().lower()
+    if source in LOCAL_TEMP_SOURCE_NAMES:
+        return True
+    if mode in {"fallback", "auto", "ha-fallback", "home-assistant-fallback"} and source == "home-assistant":
+        last_update = _number(thermostat.get("currentTempUpdatedAt"), 0, 0)
+        return not last_update or now - last_update >= LOCAL_TEMP_SENSOR_STALE_SECONDS
+    return False
+
+
+def _apply_local_temperature_sensor_if_needed(record: dict) -> dict:
+    thermostat = record.get("thermostat") or {}
+    now = time.time()
+    if not _thermostat_should_use_local_temp_sensor(thermostat, now):
+        return thermostat
+    sensor = _read_local_temperature_sensor()
+    temp_f = sensor.get("temperatureF")
+    if not sensor.get("available") or temp_f is None:
+        return thermostat
+    try:
+        next_temp = round(float(temp_f), 1)
+    except (TypeError, ValueError):
+        return thermostat
+    if not (-40.0 <= next_temp <= 130.0):
+        return thermostat
+    source = str(thermostat.get("currentTempSource") or "").strip().lower()
+    label = str(sensor.get("label") or "Onboard Temp Sensor").strip() or "Onboard Temp Sensor"
+    next_source = "onboard" if source in LOCAL_TEMP_SOURCE_NAMES else "onboard-fallback"
+    updated = dict(thermostat)
+    updated["currentTemp"] = next_temp
+    updated["currentTempUpdatedAt"] = int(now)
+    updated["currentTempSource"] = next_source
+    updated["currentTempSourceName"] = label
+    if updated != thermostat:
+        _write_thermostat_record(updated)
+    return updated
+
+
+def _thermostat_control_loop() -> None:
+    print(
+        f"Smart Thermostat autonomous control loop started; interval={CONTROL_LOOP_INTERVAL_SECONDS}s "
+        f"local_temp_mode={LOCAL_TEMP_SENSOR_MODE}.",
+        flush=True,
+    )
+    while not _CONTROL_LOOP_STOP.wait(CONTROL_LOOP_INTERVAL_SECONDS):
+        try:
+            record = _read_thermostat_record()
+            thermostat = _apply_local_temperature_sensor_if_needed(record)
+            outputs = _thermostat_outputs(thermostat)
+            _apply_thermostat_outputs_to_hardware(outputs)
+        except Exception as exc:  # noqa: BLE001 - keep local HVAC control alive
+            print(f"Thermostat autonomous control loop error: {exc}", flush=True)
+
+
+def _start_thermostat_control_loop() -> None:
+    global _CONTROL_LOOP_THREAD_STARTED
+    if not CONTROL_LOOP_ENABLED or _CONTROL_LOOP_THREAD_STARTED:
+        return
+    _CONTROL_LOOP_THREAD_STARTED = True
+    thread = threading.Thread(target=_thermostat_control_loop, name="thermostat-control-loop", daemon=True)
+    thread.start()
+
 def _hardware_status_payload(force_i2c: bool = False) -> dict:
     with _HARDWARE_LOCK:
         relay_backend = _relay_backend()
@@ -2039,6 +2331,7 @@ def _hardware_status_payload(force_i2c: bool = False) -> dict:
         "relays": relays,
         "rgb": rgb,
         "i2c": _scan_i2c_devices(force=force_i2c),
+        "localTempSensor": _read_local_temperature_sensor(force=force_i2c),
         "pinout": {
             "relays": HARDWARE_RELAY_PINS,
             "rgb": HARDWARE_RGB_PIN,
@@ -3588,6 +3881,7 @@ def main() -> None:
         request_queue_size = 32
 
     def _clean_shutdown(signum=None, frame=None):
+        _CONTROL_LOOP_STOP.set()
         _flush_thermostat_state_to_disk()
         _flush_hvac_history_to_disk()
         if signum is not None:
@@ -3601,12 +3895,15 @@ def main() -> None:
     except Exception:
         pass
 
+    _start_thermostat_control_loop()
+
     httpd = SmartThermostatHTTPServer((args.host, args.port), SmartThermostatHandler)
     print(f"Smart Thermostat server running at http://{args.host}:{args.port}")
     print("Open http://localhost:%s" % args.port)
     try:
         httpd.serve_forever()
     finally:
+        _CONTROL_LOOP_STOP.set()
         _flush_thermostat_state_to_disk()
         _flush_hvac_history_to_disk()
 
