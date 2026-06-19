@@ -25,7 +25,7 @@ From the project folder:
 
 ```bash
 cd ~/Smart-Thermostat-Development
-chmod +x scripts/install-pi.sh scripts/kiosk-launch.sh scripts/network_watchdog.py
+chmod +x scripts/install-pi.sh scripts/kiosk-launch.sh scripts/configure-pi-display.sh scripts/network_watchdog.py
 ./scripts/install-pi.sh
 sudo reboot
 ```
@@ -95,7 +95,28 @@ sudo systemctl restart smart-thermostat-kiosk.service
 
 ## Touch/display orientation
 
-The attached DSI screen is portrait-native. The UI is designed to work in either orientation, but the intended thermostat wall layout is landscape. Configure display rotation at the OS display level after the screen is attached. Keep the app URL the same.
+The Waveshare 10.1-DSI-TOUCH-A is an 800×1280 portrait-native DSI panel. The intended thermostat wall layout is landscape, so configure the Pi display and touch matrix together:
+
+```bash
+cd ~/Smart-Thermostat-Development
+sudo ./scripts/configure-pi-display.sh 90
+sudo reboot
+```
+
+If the picture is upside-down for the way the panel is mounted, use 270 instead:
+
+```bash
+sudo ./scripts/configure-pi-display.sh 270
+sudo reboot
+```
+
+The helper updates the Raspberry Pi boot config with the Waveshare DSI overlay, adds the DSI rotation command to `cmdline.txt`, and writes a libinput touch calibration rule so taps line up with the rotated picture. It also saves timestamped backups of the boot files before editing them.
+
+The settings written by the helper are also recorded here for troubleshooting:
+
+```bash
+cat /etc/smart-thermostat/display.env
+```
 
 ## Home Assistant traffic optimization
 

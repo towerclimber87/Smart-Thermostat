@@ -30,6 +30,10 @@ install_packages() {
     unclutter
   )
 
+  if apt-cache show wlr-randr >/dev/null 2>&1; then
+    packages+=(wlr-randr)
+  fi
+
   local optional_hardware_packages=(
     python3-gpiozero
     python3-rpi.gpio
@@ -142,7 +146,7 @@ if getent group i2c >/dev/null 2>&1; then
   sudo usermod -aG i2c "${INSTALL_USER}" || true
 fi
 enable_i2c
-chmod +x "${PROJECT_DIR}/scripts/install-pi.sh" "${PROJECT_DIR}/scripts/kiosk-launch.sh" "${PROJECT_DIR}/scripts/network_watchdog.py" 2>/dev/null || true
+chmod +x "${PROJECT_DIR}/scripts/install-pi.sh" "${PROJECT_DIR}/scripts/kiosk-launch.sh" "${PROJECT_DIR}/scripts/configure-pi-display.sh" "${PROJECT_DIR}/scripts/network_watchdog.py" 2>/dev/null || true
 
 install_service "${WEB_SERVICE_NAME}"
 install_service "${KIOSK_SERVICE_NAME}"
@@ -180,7 +184,7 @@ install_sudoers
 sudo systemctl daemon-reload
 sudo systemctl enable --now "${WEB_SERVICE_NAME}"
 sudo systemctl enable --now "${NETWORK_WATCHDOG_SERVICE_NAME}"
-sudo systemctl enable "${KIOSK_SERVICE_NAME}"
+sudo systemctl enable --now "${KIOSK_SERVICE_NAME}" || true
 if [[ -f "/etc/systemd/system/${UPDATE_AGENT_SERVICE_NAME}" ]]; then
   sudo systemctl enable --now "${UPDATE_AGENT_SERVICE_NAME}" || true
 fi
@@ -192,5 +196,6 @@ fi
 
 echo "IHA web service, Chromium kiosk service, and network watchdog installed."
 echo "Web UI: http://localhost:8080"
-echo "Kiosk service: sudo systemctl start ${KIOSK_SERVICE_NAME}"
+echo "Kiosk service: sudo systemctl status ${KIOSK_SERVICE_NAME}"
+echo "Waveshare 10.1 DSI rotation helper: sudo ${PROJECT_DIR}/scripts/configure-pi-display.sh 90"
 echo "Home Assistant discovery uses mDNS service _iha-thermostat._tcp.local."
