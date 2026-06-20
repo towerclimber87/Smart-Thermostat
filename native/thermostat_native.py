@@ -581,61 +581,96 @@ class NativeThermostatApp:
 
 
     def draw_web_style_dial(self, current: float, target: float, action_label: str, action_color: str) -> None:
+        """Draw the native dial from the web UI template, not camera photos.
+
+        The previous visual polish pass accidentally copied reflection artifacts
+        from phone photos (yellow/orange corner brackets and extra highlights).
+        This version intentionally follows the old web build structure instead:
+        outer glass puck, tick ring, span/progress ring, inner glass face,
+        current marker, target knob, and range labels.
+        """
         cx, cy = self.sx(640), self.sy(430)
-        r = min(self.sx(151), self.sy(151))
-        self.dial_area = (cx-r-self.sx(42), cy-r-self.sy(42), cx+r+self.sx(42), cy+r+self.sy(42))
-        # Outer black glass puck with layered rings.
-        self.canvas.create_oval(cx-r-18, cy-r-18, cx+r+18, cy+r+18, fill="#02050a", outline="#0b1118", width=2)
-        self.canvas.create_oval(cx-r-8, cy-r-8, cx+r+8, cy+r+8, fill="#080d14", outline="#17202b", width=2)
-        # Temperature progress band.
+        r = min(self.sx(148), self.sy(148))
+        self.dial_area = (cx-r-self.sx(48), cy-r-self.sy(48), cx+r+self.sx(48), cy+r+self.sy(48))
         minimum, maximum = self.target_limits()
-        pct = clamp((target - minimum) / max(1, maximum - minimum), 0, 1)
-        for i in range(106):
-            pos = i / 105
-            angle = math.radians(218 + pos * 284)
-            length = 21 if i % 7 == 0 else 14
-            active = pos <= pct
-            if active:
-                # cyan to purple-ish like the web dial
-                col = "#55e5ff" if pos < 0.55 else "#8c72ff"
+        target_pct = clamp((target - minimum) / max(1, maximum - minimum), 0, 1)
+        current_pct = clamp((current - minimum) / max(1, maximum - minimum), 0, 1)
+
+        # Outer glass puck and shadow.  Keep it simple/vector-only for the Pi.
+        self.canvas.create_oval(cx-r-18, cy-r-18, cx+r+18, cy+r+18, fill="#03060b", outline="#05070b", width=2)
+        self.canvas.create_oval(cx-r-9, cy-r-9, cx+r+9, cy+r+9, fill="#0a111a", outline="#17202c", width=2)
+        self.canvas.create_oval(cx-r+4, cy-r+4, cx+r-4, cy+r-4, fill="#0b121c", outline="#222c39", width=1)
+
+        # Web-like tick ring.  No photo/reflection artifacts.  The active span is
+        # subtle cyan/purple, like the browser CSS conic/progress dial.
+        start_deg, span_deg = 225, 270
+        tick_count = 98
+        for i in range(tick_count):
+            pos = i / (tick_count - 1)
+            angle = math.radians(start_deg + pos * span_deg)
+            major = (i % 7 == 0)
+            length = 20 if major else 13
+            width = 2 if major else 1
+            if pos <= target_pct:
+                col = "#48d9ff" if pos < 0.62 else "#8c78ff"
             else:
-                col = "#2f3b47"
+                col = "#31404d"
             x1 = cx + math.cos(angle) * (r - length)
             y1 = cy + math.sin(angle) * (r - length)
-            x2 = cx + math.cos(angle) * (r - 4)
-            y2 = cy + math.sin(angle) * (r - 4)
-            self.canvas.create_line(x1, y1, x2, y2, fill=col, width=2)
-        # White handles at current/target for the web look.
-        for pos, width in ((clamp((current-minimum)/max(1, maximum-minimum),0,1), 5), (pct, 4)):
-            a = math.radians(218 + pos * 284)
-            x1 = cx + math.cos(a) * (r - 10); y1 = cy + math.sin(a) * (r - 10)
-            x2 = cx + math.cos(a) * (r + 17); y2 = cy + math.sin(a) * (r + 17)
+            x2 = cx + math.cos(angle) * (r - 5)
+            y2 = cy + math.sin(angle) * (r - 5)
+            self.canvas.create_line(x1, y1, x2, y2, fill=col, width=width)
+
+        # Target rail / span ring: drawn as a soft arc, not a box/corner mark.
+        arc_box = (cx-r+18, cy-r+18, cx+r-18, cy+r-18)
+        try:
+            self.canvas.create_arc(*arc_box, start=135, extent=-270, style="arc", outline="#192635", width=10)
+            self.canvas.create_arc(*arc_box, start=135, extent=-270*target_pct, style="arc", outline="#52dfff", width=10)
+        except Exception:
+            pass
+
+        # Current marker and target knob.
+        for pos, width, knob in ((current_pct, 5, False), (target_pct, 4, True)):
+            a = math.radians(start_deg + pos * span_deg)
+            x1 = cx + math.cos(a) * (r - 12)
+            y1 = cy + math.sin(a) * (r - 12)
+            x2 = cx + math.cos(a) * (r + 14)
+            y2 = cy + math.sin(a) * (r + 14)
             self.canvas.create_line(x1, y1, x2, y2, fill="#eef6ff", width=width, capstyle="round")
-            self.canvas.create_oval(x2-5, y2-5, x2+5, y2+5, fill="#eef6ff", outline="")
-        # Yellow corner brackets.
-        bracket = "#d7df2f"
-        for sxn, syn in [(-1,-1),(1,-1),(-1,1),(1,1)]:
-            bx = cx + sxn * int(r*0.52); by = cy + syn * int(r*0.54)
-            self.canvas.create_line(bx, by, bx + sxn*self.sx(26), by, fill=bracket, width=2)
-            self.canvas.create_line(bx, by, bx, by + syn*self.sy(22), fill=bracket, width=2)
-        # Center color field.
-        inner = int(r * 0.62)
-        if "cool" in action_label.lower():
-            fill = "#167bff"
-        elif "heat" in action_label.lower():
-            fill = "#b14a2f"
+            if knob:
+                self.canvas.create_oval(x2-self.sx(6), y2-self.sy(6), x2+self.sx(6), y2+self.sy(6), fill="#eef6ff", outline="#d8e6f7")
+
+        # Inner glass face.  Use rings instead of fake gradients/crescent blocks.
+        inner = int(r * 0.61)
+        if "heat" in action_label.lower():
+            inner_fill = "#d85b42"
+            inner_dark = "#381514"
+            pill_fill = "#5a2823"
+            pill_outline = "#dc7665"
+        elif "cool" in action_label.lower():
+            inner_fill = "#168bff"
+            inner_dark = "#061a3a"
+            pill_fill = "#145eb7"
+            pill_outline = "#39cfff"
         elif action_label.lower() == "idle":
-            fill = "#14c962"
+            inner_fill = "#19c95f"
+            inner_dark = "#052b19"
+            pill_fill = "#124d31"
+            pill_outline = "#42db83"
         else:
-            fill = "#15b66c"
-        self.canvas.create_oval(cx-inner-8, cy-inner-8, cx+inner+8, cy+inner+8, fill="#08111d", outline="")
-        self.canvas.create_oval(cx-inner, cy-inner, cx+inner, cy+inner, fill=fill, outline="")
-        self.canvas.create_oval(cx-inner//2, cy-inner, cx+inner, cy+inner//2, fill="#31d7ff", outline="")
-        self.text(cx, cy-self.sy(69), action_label.upper()[:18], 11, "#eaf5ff", "bold")
+            inner_fill = "#16a86a"
+            inner_dark = "#06291d"
+            pill_fill = "#143b33"
+            pill_outline = "#45d6aa"
+        self.canvas.create_oval(cx-inner-10, cy-inner-10, cx+inner+10, cy+inner+10, fill=inner_dark, outline="#111a25", width=1)
+        self.canvas.create_oval(cx-inner, cy-inner, cx+inner, cy+inner, fill=inner_fill, outline="#2fb8ff" if "cool" in action_label.lower() else "#2bd986", width=1)
+        self.canvas.create_oval(cx-inner+16, cy-inner+18, cx+inner-16, cy+inner-8, fill="#2fcfff" if "cool" in action_label.lower() else "#4ee083", outline="")
+
+        self.text(cx, cy-self.sy(70), action_label.upper()[:18], 11, "#eaf5ff", "bold")
         self.text(cx, cy-self.sy(10), f"{current:.0f}°", 62, TEXT, "bold")
-        self.pill(cx-self.sx(54), cy+self.sy(56), cx+self.sx(54), cy+self.sy(84), f"Set Temp  {target:.0f}°", fill="#1460b8" if "cool" in action_label.lower() else "#203c49", outline="#28a6ff", color=TEXT, size=10)
-        self.pill(cx-self.sx(142), cy+self.sy(124), cx-self.sx(98), cy+self.sy(148), "65°", fill="#080c12", outline="#111820", color=TEXT, size=10)
-        self.pill(cx+self.sx(98), cy+self.sy(124), cx+self.sx(142), cy+self.sy(148), "80°", fill="#080c12", outline="#111820", color=TEXT, size=10)
+        self.pill(cx-self.sx(54), cy+self.sy(56), cx+self.sx(54), cy+self.sy(84), f"Set Temp  {target:.0f}°", fill=pill_fill, outline=pill_outline, color=TEXT, size=10)
+        self.pill(cx-self.sx(142), cy+self.sy(124), cx-self.sx(98), cy+self.sy(148), f"{minimum:.0f}°", fill="#080c12", outline="#111820", color=TEXT, size=10)
+        self.pill(cx+self.sx(98), cy+self.sy(124), cx+self.sx(142), cy+self.sy(148), f"{maximum:.0f}°", fill="#080c12", outline="#111820", color=TEXT, size=10)
 
 
     def door_label(self) -> str:
