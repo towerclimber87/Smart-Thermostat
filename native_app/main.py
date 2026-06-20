@@ -223,10 +223,10 @@ class ThermostatScreen(Page):
         self.status_badge = QLabel("●  Auto • Cool • Idle")
         self.status_badge.setAlignment(Qt.AlignCenter)
         self.status_badge.setFont(font(11, QFont.Black))
-        self.status_badge.setStyleSheet("color:#f6f8ff; background:rgba(69,78,99,0.63); border:1px solid rgba(154,176,208,0.25); border-radius:18px; padding:8px 16px;")
+        self.status_badge.setStyleSheet("color:#f6f8ff; background:transparent; border:0; padding:0;")
         self.outdoor = QLabel("OUTDOOR --°   WIND --")
         self.outdoor.setFont(font(9, QFont.Black, 20))
-        self.outdoor.setStyleSheet("color:#d3dbee; background:rgba(70,78,95,0.55); border-radius:13px; padding:8px 14px;")
+        self.outdoor.setStyleSheet("color:#d3dbee; background:transparent; border:0; padding:0;")
         self.notice = QLabel("")
         self.notice.setAlignment(Qt.AlignCenter)
         self.notice.setFont(font(12, QFont.Black))
@@ -299,7 +299,7 @@ class ThermostatScreen(Page):
         right_top = QWidget()
         right_top.setFixedHeight(side_top_h)
         right_top_lay = QVBoxLayout(right_top)
-        right_top_lay.setContentsMargins(0, 0, 0, 0)
+        right_top_lay.setContentsMargins(0, -34, 0, 0)
         right_top_lay.addWidget(self.virtual_panel, 0, Qt.AlignRight | Qt.AlignTop)
         right_top_lay.addStretch(1)
         right_col.addWidget(right_top)
@@ -317,15 +317,15 @@ class ThermostatScreen(Page):
         self.alarm_card.clicked.connect(self.toggle_alarm)
 
     def _mode_bar(self):
-        # Floating mode buttons. No shared rail/border. Keep them compact enough
-        # for the 1280x800 DSI panel so the four buttons never overlap.
+        # Floating mode buttons. No shared rail/border. These use a tighter,
+        # fully rounded pill style so they do not look squared-off or overlap.
         lay = QHBoxLayout()
-        lay.setContentsMargins(0, 2, 0, 0)
-        lay.setSpacing(18)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(16)
         lay.addStretch(1)
         for mode in ["cool", "heat", "auto", "away"]:
             b = RoundButton(mode.capitalize(), active=False, min_h=38)
-            b.setFixedWidth(86)
+            b.setFixedSize(94, 38)
             b.clicked.connect(lambda checked=False, m=mode: self.set_mode(m))
             self.mode_buttons[mode] = b
             lay.addWidget(b)
@@ -336,12 +336,12 @@ class ThermostatScreen(Page):
         # Compact floating fan status pill. Tap it for Off / On / Auto.
         lay = QHBoxLayout()
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(8)
+        lay.setSpacing(6)
         label = QLabel("FAN")
         label.setFont(font(8, QFont.Black, 15))
         label.setStyleSheet("color:#9ca6bb; background:transparent; border:0;")
         self.fan_status_button = RoundButton("Auto", active=False, min_h=38)
-        self.fan_status_button.setFixedWidth(118)
+        self.fan_status_button.setFixedSize(86, 38)
         self.fan_status_button.clicked.connect(self.show_fan_menu)
         lay.addStretch(1)
         lay.addWidget(label)
@@ -431,6 +431,30 @@ class ThermostatScreen(Page):
         except Exception as exc:
             self.requestToast.emit(f"Alarm action failed: {exc}")
 
+    def _floating_button_style(self, active: bool = False) -> str:
+        if active:
+            bg = "qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #45e3ff, stop:1 #4ba7ff)"
+            color = "#031322"
+            border = "rgba(255,255,255,0.24)"
+        else:
+            bg = "qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 rgba(73,83,101,0.70), stop:1 rgba(29,36,52,0.72))"
+            color = "#dbe3f4"
+            border = "rgba(157,176,207,0.22)"
+        return f"""
+            QPushButton {{
+                background:{bg};
+                color:{color};
+                border:1px solid {border};
+                border-radius:19px;
+                padding:0;
+                font-family:Arial;
+                font-weight:900;
+            }}
+            QPushButton:pressed {{
+                background:rgba(72,214,255,0.48);
+            }}
+        """
+
     def sync(self, config: dict, thermostat: dict):
         super().sync(config, thermostat)
         t = thermostat or {}
@@ -439,11 +463,12 @@ class ThermostatScreen(Page):
         active = str(t.get("autoActiveMode") or t.get("activeMode") or mode)
         self.dial.setData(t.get("currentTemp"), t.get("targetTemp"), mode, active, t.get("limits"))
         for m, b in self.mode_buttons.items():
-            b.setActive((m == mode and not away) or (m == "away" and away))
+            selected = (m == mode and not away) or (m == "away" and away)
+            b.setStyleSheet(self._floating_button_style(selected))
         fan = str(t.get("fan") or "auto").lower()
         if self.fan_status_button:
             self.fan_status_button.setText(fan.capitalize())
-            self.fan_status_button.setActive(False)
+            self.fan_status_button.setStyleSheet(self._floating_button_style(False))
         out = t.get("outdoorTemp") or t.get("outdoor_temperature") or "--"
         wind = t.get("outdoorWindSpeed") or t.get("outdoor_wind_speed") or 0
         unit = t.get("outdoorWindUnit") or t.get("outdoor_wind_unit") or "mph"
