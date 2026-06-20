@@ -234,6 +234,11 @@ class ThermostatScreen(Page):
         self.door_card = InfoTile("Inside Doors", "CLOSED", "▯", good=True)
         self.alarm_card = InfoTile("Alarmo", "DISARMED", "盾", good=True)
         self.virtual_panel = VirtualOutputsPanel()
+        self.virtual_temp_pending: float | None = None
+        self.virtual_temp_push_timer = QTimer(self)
+        self.virtual_temp_push_timer.setSingleShot(True)
+        self.virtual_temp_push_timer.timeout.connect(self.push_virtual_temp)
+        self.virtual_panel.tempChanged.connect(self.set_virtual_temp)
         self.minus = IconCircle("−", "minus", 96)
         self.plus = IconCircle("+", "plus", 96)
 
@@ -314,7 +319,7 @@ class ThermostatScreen(Page):
         self.plus.clicked.connect(lambda: self.change_target(1))
         self.dial.targetChanged.connect(lambda v: self.set_target(v))
         self.door_card.clicked.connect(lambda: self.requestToast.emit("Door status is synced from Home Assistant."))
-        self.alarm_card.clicked.connect(self.toggle_alarm)
+        self.alarm_card.clicked.connect(self.show_alarm_dialog)
 
     def _mode_bar(self):
         # Floating mode buttons. No shared rail/border. These use a tighter,
@@ -412,24 +417,46 @@ class ThermostatScreen(Page):
         except Exception as exc:
             self.requestToast.emit(f"Set temp failed: {exc}")
 
-    def toggle_alarm(self):
+    def set_virtual_temp(self, value: float):
+        self.virtual_temp_pending = float(value)
+        self.s.thermostat["currentTemp"] = float(value)
+        self.s.thermostat["currentTempSource"] = "virtual"
+        self.s.thermostat["currentTempSourceName"] = "Virtual Temp"
+        self.sync(self.s.config, self.s.thermostat)
+        self.virtual_temp_push_timer.start(220)
+
+    def push_virtual_temp(self):
+        if self.virtual_temp_pending is None:
+            return
+        value = float(self.virtual_temp_pending)
+        try:
+            self.s.update_thermostat({
+                "currentTemp": value,
+                "currentTempSource": "virtual",
+                "currentTempSourceName": "Virtual Temp",
+                "currentTempUpdatedAt": time.time(),
+            })
+            self.sync(self.s.config, self.s.thermostat)
+            self.requestToast.emit(f"Virtual temp {value:.0f}°")
+        except Exception as exc:
+            self.requestToast.emit(f"Virtual temp failed: {exc}")
+
+    def show_alarm_dialog(self):
         ha = self.s.ha()
         entity = ha.get("alarmEntity") or {}
         eid = entity.get("entityId") or ""
         if not eid:
             self.requestToast.emit("No alarm entity assigned")
             return
-        state = str(entity.get("state") or "disarmed").lower()
-        action = "arm_home" if state == "disarmed" else "disarm"
-        code = str((self.config.get("alarm") or {}).get("disarmCode") or "")
-        try:
-            result = self.s.api.post("/api/ha/alarm/action", self.s.ha_payload({"entityId": eid, "action": action, "code": code}))
-            alarm = result.get("alarm") or {}
-            entity.update(alarm)
-            self.requestToast.emit(f"Alarm {action.replace('_',' ')} sent")
+        dlg = AlarmControlDialog(self.s, entity, self)
+        def applied(alarm, action):
+            if alarm:
+                entity.update(alarm)
+            self.requestToast.emit(f"Alarm {action.replace('_', ' ')} sent")
             self.sync(self.s.config, self.s.thermostat)
-        except Exception as exc:
-            self.requestToast.emit(f"Alarm action failed: {exc}")
+        dlg.actionDone.connect(applied)
+        dlg.exec_()
+
 
     def _floating_button_style(self, active: bool = False) -> str:
         if active:
@@ -490,6 +517,7 @@ class ThermostatScreen(Page):
         ha = nested_get(config, "integrations", "homeAssistant", default={}) or {}
         alarm = ha.get("alarmEntity") or {}
         self.alarm_card.setValue(str(alarm.get("state") or "disarmed").upper())
+        self.alarm_card.setAlarmState(str(alarm.get("state") or "disarmed"))
         self.virtual_panel.updateData(t)
 
     def poll(self):
@@ -504,11 +532,29 @@ class InfoTile(HoldCard):
         self.value = value
         self.symbol = symbol
         self.good = good
+        self.alarm_state = ""
+        self.flash_on = False
+        self.flash_timer = QTimer(self)
+        self.flash_timer.timeout.connect(self._flash_tick)
         self.setMinimumSize(226, 164)
         self.setMaximumWidth(270)
 
     def setValue(self, value: str):
         self.value = value
+        self.update()
+
+    def setAlarmState(self, state: str):
+        self.alarm_state = str(state or "").lower()
+        armed = self.alarm_state.startswith("armed") or self.alarm_state in {"arming", "pending"}
+        if armed and not self.flash_timer.isActive():
+            self.flash_timer.start(520)
+        elif not armed and self.flash_timer.isActive():
+            self.flash_timer.stop()
+            self.flash_on = False
+        self.update()
+
+    def _flash_tick(self):
+        self.flash_on = not self.flash_on
         self.update()
 
     def draw_icon(self, p: QPainter, cx: float, cy: float, size: float):
@@ -556,18 +602,33 @@ class InfoTile(HoldCard):
         p.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
         r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
 
+        armed_alarm = "alarm" in self.title.lower() and (
+            self.alarm_state.startswith("armed") or self.alarm_state in {"arming", "pending"}
+        )
+        pulse = 34 if (armed_alarm and self.flash_on) else 0
         glow = QRadialGradient(QPointF(r.center().x(), r.top() + 70), max(r.width(), r.height()) * 0.8)
-        glow.setColorAt(0.0, QColor(42, 255, 187, 54 if self.good else 24))
-        glow.setColorAt(0.62, QColor(27, 88, 77, 32))
+        if armed_alarm:
+            glow.setColorAt(0.0, QColor(255, 45, 92, 90 + pulse))
+            glow.setColorAt(0.62, QColor(115, 17, 39, 58 + pulse))
+        else:
+            glow.setColorAt(0.0, QColor(42, 255, 187, 54 if self.good else 24))
+            glow.setColorAt(0.62, QColor(27, 88, 77, 32))
         glow.setColorAt(1.0, QColor(0, 0, 0, 0))
         p.fillRect(r, glow)
 
         g = QLinearGradient(r.topLeft(), r.bottomRight())
-        g.setColorAt(0.0, QColor(22, 88, 78, 205 if self.good else 150))
-        g.setColorAt(0.48, QColor(15, 45, 53, 210))
-        g.setColorAt(1.0, QColor(12, 23, 39, 226))
+        if armed_alarm:
+            g.setColorAt(0.0, QColor(108, 19, 43, 225))
+            g.setColorAt(0.48, QColor(62, 16, 35, 220))
+            g.setColorAt(1.0, QColor(22, 12, 28, 232))
+            border_color = QColor(255, 67, 111, 168 + min(pulse, 40))
+        else:
+            g.setColorAt(0.0, QColor(22, 88, 78, 205 if self.good else 150))
+            g.setColorAt(0.48, QColor(15, 45, 53, 210))
+            g.setColorAt(1.0, QColor(12, 23, 39, 226))
+            border_color = QColor(61, 221, 184, 118 if self.good else 70)
         p.setBrush(QBrush(g))
-        p.setPen(QPen(QColor(61, 221, 184, 118 if self.good else 70), 1.6))
+        p.setPen(QPen(border_color, 1.6))
         p.drawRoundedRect(r, 28, 28)
 
         self.draw_icon(p, r.center().x(), r.top() + 50, 68)
@@ -580,7 +641,7 @@ class InfoTile(HoldCard):
         fm = p.fontMetrics()
         badge_w = max(86, min(r.width() - 34, fm.horizontalAdvance(badge_text) + 28))
         badge = QRectF(r.center().x() - badge_w / 2, 128, badge_w, 24)
-        p.setBrush(QColor(40, 141, 113, 205 if self.good else 135))
+        p.setBrush(QColor(185, 35, 67, 220) if ("alarm" in self.title.lower() and (self.alarm_state.startswith("armed") or self.alarm_state in {"arming", "pending"})) else QColor(40, 141, 113, 205 if self.good else 135))
         p.setPen(Qt.NoPen)
         p.drawRoundedRect(badge, 12, 12)
         p.setFont(font(9, QFont.Black, 18))
@@ -599,6 +660,20 @@ class ValueTile(GlassPanel):
         self.value = value
         self.update()
 
+    def setAlarmState(self, state: str):
+        self.alarm_state = str(state or "").lower()
+        armed = self.alarm_state.startswith("armed") or self.alarm_state in {"arming", "pending"}
+        if armed and not self.flash_timer.isActive():
+            self.flash_timer.start(520)
+        elif not armed and self.flash_timer.isActive():
+            self.flash_timer.stop()
+            self.flash_on = False
+        self.update()
+
+    def _flash_tick(self):
+        self.flash_on = not self.flash_on
+        self.update()
+
     def paintEvent(self, event):
         super().paintEvent(event)
         p = QPainter(self)
@@ -613,14 +688,76 @@ class ValueTile(GlassPanel):
 
 
 class VirtualOutputsPanel(GlassPanel):
+    tempChanged = pyqtSignal(float)
+
     def __init__(self, parent=None):
         super().__init__(parent, radius=20)
         self.data = {}
+        self.virtual_min = 50.0
+        self.virtual_max = 90.0
+        self.dragging = False
         self.setFixedSize(252, 174)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setAttribute(Qt.WA_AcceptTouchEvents, True)
 
     def updateData(self, data: dict):
         self.data = data or {}
         self.update()
+
+    def current_virtual_temp(self) -> float:
+        value = self.data.get("currentTemp")
+        try:
+            return clamp(float(value), self.virtual_min, self.virtual_max)
+        except Exception:
+            return 70.0
+
+    def slider_rect(self) -> QRectF:
+        return QRectF(18, 116, 208, 18)
+
+    def temp_from_pos(self, pos: QPoint) -> float:
+        rail = self.slider_rect()
+        pct = clamp((pos.x() - rail.left()) / max(1.0, rail.width()), 0.0, 1.0)
+        value = self.virtual_min + pct * (self.virtual_max - self.virtual_min)
+        return round(value)
+
+    def set_temp_from_pos(self, pos: QPoint):
+        value = self.temp_from_pos(pos)
+        self.data["currentTemp"] = value
+        self.update()
+        self.tempChanged.emit(float(value))
+
+    def mousePressEvent(self, event):
+        if self.slider_rect().adjusted(-12, -20, 12, 20).contains(QPointF(event.pos())):
+            self.dragging = True
+            self.set_temp_from_pos(event.pos())
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self.dragging:
+            self.set_temp_from_pos(event.pos())
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self.dragging:
+            self.set_temp_from_pos(event.pos())
+            self.dragging = False
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def event(self, event):
+        if event.type() in (QEvent.TouchBegin, QEvent.TouchUpdate, QEvent.TouchEnd):
+            pts = event.touchPoints()
+            if pts:
+                self.set_temp_from_pos(pts[0].pos().toPoint())
+                self.dragging = event.type() != QEvent.TouchEnd
+                event.accept()
+                return True
+        return super().event(event)
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -630,6 +767,7 @@ class VirtualOutputsPanel(GlassPanel):
         p.setFont(font(7, QFont.Black, 18))
         p.setPen(T.TEXT_MUTED)
         p.drawText(QRectF(0, 12, r.width(), 14), Qt.AlignCenter, "VIRTUAL OUTPUTS")
+
         rel = self.data.get("relays") or {}
         labels = [("Fan", rel.get("fan")), ("Heat", rel.get("heat")), ("Cool", rel.get("cool"))]
         x = 22
@@ -645,19 +783,40 @@ class VirtualOutputsPanel(GlassPanel):
             p.setPen(T.TEXT)
             p.drawText(QRectF(pill.x(), pill.y()+18, pill.width(), 14), Qt.AlignCenter, name)
             x += 68
+
+        temp = self.current_virtual_temp()
+        pct = (temp - self.virtual_min) / max(1.0, (self.virtual_max - self.virtual_min))
+        rail = self.slider_rect()
+        knob_x = rail.left() + rail.width() * pct
+
         p.setFont(font(8, QFont.Black, 18))
         p.setPen(T.TEXT_MUTED)
-        p.drawText(QRectF(18, 86, 120, 16), Qt.AlignLeft, "VIRTUAL TEMP")
+        p.drawText(QRectF(18, 84, 120, 16), Qt.AlignLeft, "VIRTUAL TEMP")
         p.setFont(font(16, QFont.Black))
         p.setPen(T.TEXT)
-        p.drawText(QRectF(136, 80, 96, 28), Qt.AlignRight, fmt_temp(self.data.get("currentTemp")))
+        p.drawText(QRectF(136, 78, 96, 28), Qt.AlignRight, fmt_temp(temp))
+
+        p.setPen(QPen(QColor(255,255,255,70), 5, Qt.SolidLine, Qt.RoundCap))
+        p.drawLine(QPointF(rail.left(), rail.center().y()), QPointF(rail.right(), rail.center().y()))
         p.setPen(QPen(T.CYAN, 7, Qt.SolidLine, Qt.RoundCap))
-        p.drawLine(18, 122, 150, 122)
-        p.setPen(QPen(QColor(255,255,255,70), 4, Qt.SolidLine, Qt.RoundCap))
-        p.drawLine(150, 122, 226, 122)
-        p.setFont(font(8, QFont.Black, 15))
+        p.drawLine(QPointF(rail.left(), rail.center().y()), QPointF(knob_x, rail.center().y()))
+
+        glow = QRadialGradient(QPointF(knob_x, rail.center().y()), 25)
+        glow.setColorAt(0, QColor(90, 235, 255, 155))
+        glow.setColorAt(1, QColor(90, 235, 255, 0))
+        p.setBrush(glow)
+        p.setPen(Qt.NoPen)
+        p.drawEllipse(QRectF(knob_x - 25, rail.center().y() - 25, 50, 50))
+        p.setBrush(QColor(246, 248, 255))
+        p.setPen(QPen(QColor(103, 226, 255, 190), 2))
+        p.drawEllipse(QRectF(knob_x - 9, rail.center().y() - 9, 18, 18))
+
+        p.setFont(font(7, QFont.Black, 15))
         p.setPen(T.TEXT_MUTED)
-        p.drawText(QRectF(18, 144, 216, 16), Qt.AlignCenter, "MANUAL TEST SOURCE")
+        p.drawText(QRectF(18, 136, 34, 16), Qt.AlignLeft, f"{int(self.virtual_min)}°")
+        p.drawText(QRectF(192, 136, 34, 16), Qt.AlignRight, f"{int(self.virtual_max)}°")
+        p.setFont(font(8, QFont.Black, 15))
+        p.drawText(QRectF(18, 150, 216, 16), Qt.AlignCenter, "SLIDE TO TEST TEMP")
 
 
 class RoomScreen(Page):
@@ -1648,6 +1807,161 @@ class SettingsDialog(QDialog):
             QMessageBox.information(self, "History", msg)
         except Exception as exc:
             QMessageBox.warning(self, "History", str(exc))
+
+
+class AlarmControlDialog(QDialog):
+    actionDone = pyqtSignal(dict, str)
+
+    def __init__(self, state: AppState, alarm_entity: dict, parent=None):
+        super().__init__(parent)
+        self.s = state
+        self.entity = alarm_entity or {}
+        self.remaining = 0
+        self.pending_action = ""
+        self.countdown_timer = QTimer(self)
+        self.countdown_timer.timeout.connect(self.countdown_tick)
+        self.setModal(True)
+        self.setWindowTitle("Alarm Control")
+        self.setFixedSize(520, 410)
+        self.setStyleSheet("""
+            QDialog {
+                background:qlineargradient(x1:0,y1:0,x2:1,y2:1,
+                    stop:0 #09111f,
+                    stop:0.55 #101a32,
+                    stop:1 #220d18);
+                color:#f7fbff;
+            }
+            QLabel {
+                color:#f7fbff;
+                font-family:Arial;
+            }
+            QLineEdit {
+                background:rgba(5,10,20,0.80);
+                color:#ffffff;
+                border:1px solid rgba(255,255,255,0.20);
+                border-radius:18px;
+                padding:12px 16px;
+                font-size:22px;
+                font-weight:900;
+                letter-spacing:5px;
+            }
+        """)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(22, 20, 22, 20)
+        root.setSpacing(14)
+
+        top = QHBoxLayout()
+        title = QLabel("ALARM CONTROL<br><span style='font-size:30px;color:#ffffff'>Alarmo</span>")
+        title.setTextFormat(Qt.RichText)
+        title.setFont(font(10, QFont.Black, 18))
+        title.setStyleSheet("color:#55f0ff; letter-spacing:3px;")
+        top.addWidget(title)
+        top.addStretch(1)
+        self.state_badge = QLabel("")
+        self.state_badge.setAlignment(Qt.AlignCenter)
+        self.state_badge.setMinimumSize(170, 54)
+        self.state_badge.setFont(font(14, QFont.Black))
+        top.addWidget(self.state_badge)
+        root.addLayout(top)
+
+        self.message = QLabel("Choose an alarm mode.")
+        self.message.setAlignment(Qt.AlignCenter)
+        self.message.setWordWrap(True)
+        self.message.setFont(font(13, QFont.Black))
+        self.message.setStyleSheet("color:#dfe8ff; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); border-radius:18px; padding:13px;")
+        root.addWidget(self.message)
+
+        self.code = QLineEdit()
+        self.code.setEchoMode(QLineEdit.Password)
+        self.code.setMaxLength(12)
+        self.code.setPlaceholderText("Disarm code")
+        root.addWidget(self.code)
+
+        buttons = QGridLayout()
+        buttons.setHorizontalSpacing(10)
+        buttons.setVerticalSpacing(10)
+        self.arm_home = RoundButton("Arm Home", active=True, min_h=58)
+        self.arm_away = RoundButton("Arm Away\n60 sec", active=True, kind="purple", min_h=58)
+        self.disarm = RoundButton("Disarm", active=False, kind="danger", min_h=58)
+        self.cancel = RoundButton("Cancel", active=False, min_h=50)
+        buttons.addWidget(self.arm_home, 0, 0)
+        buttons.addWidget(self.arm_away, 0, 1)
+        buttons.addWidget(self.disarm, 1, 0)
+        buttons.addWidget(self.cancel, 1, 1)
+        root.addLayout(buttons)
+
+        self.arm_home.clicked.connect(lambda: self.send_action("arm_home"))
+        self.arm_away.clicked.connect(self.begin_arm_away_countdown)
+        self.disarm.clicked.connect(lambda: self.send_action("disarm"))
+        self.cancel.clicked.connect(self.reject)
+        self.update_state_badge()
+
+    def current_state(self) -> str:
+        return str(self.entity.get("state") or "unknown").lower()
+
+    def update_state_badge(self):
+        state = self.current_state()
+        armed = state.startswith("armed") or state in {"arming", "pending"}
+        color = "#ff406f" if armed else "#4dffc3"
+        bg = "rgba(255,45,92,0.28)" if armed else "rgba(58,244,190,0.22)"
+        self.state_badge.setText(state.replace("_", " ").upper())
+        self.state_badge.setStyleSheet(f"color:{color}; background:{bg}; border:1px solid {color}; border-radius:22px; padding:8px;")
+
+    def set_busy(self, busy: bool):
+        for w in [self.arm_home, self.arm_away, self.disarm, self.cancel, self.code]:
+            w.setEnabled(not busy)
+
+    def begin_arm_away_countdown(self):
+        self.remaining = 60
+        self.pending_action = "arm_away"
+        self.arm_home.setEnabled(False)
+        self.arm_away.setEnabled(False)
+        self.disarm.setEnabled(False)
+        self.cancel.setText("Cancel Countdown")
+        self.message.setStyleSheet("color:#ffffff; background:rgba(255,74,111,0.22); border:1px solid rgba(255,74,111,0.55); border-radius:18px; padding:13px;")
+        self.countdown_timer.start(1000)
+        self.countdown_tick(first=True)
+
+    def countdown_tick(self, first: bool = False):
+        if not first:
+            self.remaining -= 1
+        if self.remaining <= 0:
+            self.countdown_timer.stop()
+            self.send_action("arm_away")
+            return
+        self.message.setText(f"Arming Away in {self.remaining} seconds. Tap Cancel Countdown to stop.")
+
+    def reject(self):
+        if self.countdown_timer.isActive():
+            self.countdown_timer.stop()
+        super().reject()
+
+    def send_action(self, action: str):
+        if action == "disarm" and not self.code.text().strip():
+            self.message.setText("Enter the disarm code first.")
+            self.code.setFocus()
+            return
+        self.set_busy(True)
+        self.message.setText(f"Sending {action.replace('_', ' ').title()}...")
+        QApplication.processEvents()
+        try:
+            code = self.code.text().strip() if action == "disarm" else ""
+            result = self.s.api.post("/api/ha/alarm/action", self.s.ha_payload({
+                "entityId": self.entity.get("entityId") or "",
+                "action": action,
+                "code": code,
+            }))
+            alarm = result.get("alarm") or {}
+            if alarm:
+                self.entity.update(alarm)
+            self.update_state_badge()
+            self.message.setText(f"{action.replace('_', ' ').title()} sent.")
+            self.actionDone.emit(alarm or self.entity, action)
+            QTimer.singleShot(550, self.accept)
+        except Exception as exc:
+            self.set_busy(False)
+            self.message.setText(f"Alarm action failed: {exc}")
 
 
 class MainWindow(Background):
