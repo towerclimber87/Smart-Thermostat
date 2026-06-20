@@ -458,11 +458,18 @@ class ThermostatScreen(Page):
     def position_alert_banner(self):
         if not hasattr(self, "alert_banner"):
             return
-        w = min(520, max(420, self.width() - 120))
-        self.alert_banner.setFixedWidth(w)
-        self.alert_banner.adjustSize()
-        x = max(12, (self.width() - self.alert_banner.width()) // 2)
-        y = 72
+        if getattr(self.alert_banner, "kind", "") == "lockout":
+            w = min(470, max(390, self.width() - 160))
+            self.alert_banner.setFixedWidth(w)
+            self.alert_banner.adjustSize()
+            x = min(max(280, self.width() // 4), max(12, self.width() - self.alert_banner.width() - 26))
+            y = 104
+        else:
+            w = min(520, max(420, self.width() - 120))
+            self.alert_banner.setFixedWidth(w)
+            self.alert_banner.adjustSize()
+            x = max(12, (self.width() - self.alert_banner.width()) // 2)
+            y = 72
         self.alert_banner.move(x, y)
         if self.alert_banner.isVisible():
             self.alert_banner.raise_()
@@ -561,12 +568,12 @@ class ThermostatScreen(Page):
         auto_until = self.safe_float(t.get("autoLockoutUntil"), 0.0)
         if pending in {"heat", "cool"} and until > now_ms:
             remaining = self.format_remaining((until - now_ms) / 1000)
-            self.alert_banner.set_alert("lockout", f"{pending.capitalize()} Delay", f"Changeover protection is active. {pending.capitalize()} is available in {remaining}.", dismiss=False, revert=False, bypass=True)
+            self.alert_banner.set_alert("lockout", f"{pending.capitalize()} Cooldown", f"Changeover delay is active. {pending.capitalize()} starts in {remaining}, or tap Bypass.", dismiss=False, revert=False, bypass=True)
             self.position_alert_banner()
             return
         if auto_pending in {"heat", "cool"} and auto_until > now_ms:
             remaining = self.format_remaining((auto_until - now_ms) / 1000)
-            self.alert_banner.set_alert("lockout", f"Auto {auto_pending.capitalize()} Delay", f"Auto mode is waiting on changeover protection. {auto_pending.capitalize()} is available in {remaining}.", dismiss=False, revert=False, bypass=True)
+            self.alert_banner.set_alert("lockout", f"Auto {auto_pending.capitalize()} Cooldown", f"Auto mode is waiting on changeover delay. {auto_pending.capitalize()} starts in {remaining}, or tap Bypass.", dismiss=False, revert=False, bypass=True)
             self.position_alert_banner()
             return
 
@@ -601,6 +608,7 @@ class ThermostatScreen(Page):
                 "mode": from_mode,
                 "away": False,
                 "autoSwitchNotice": {"active": False, "source": "", "fromMode": "", "toMode": "", "switchTemp": 0, "outdoorTemp": 0, "coolTarget": 0, "heatTarget": 0, "createdAt": 0},
+                "autoSwitchHold": {"active": True, "source": "manual", "mode": from_mode, "until": int(time.time() * 1000) + 600000, "reason": "revert"},
             })
             self.sync(self.s.config, self.s.thermostat)
         except Exception as exc:
@@ -619,6 +627,7 @@ class ThermostatScreen(Page):
                 "manualLockoutUntil": 0,
                 "autoPendingMode": "",
                 "autoLockoutUntil": 0,
+                "bypassChangeoverLockout": pending,
             }
             if str(t.get("mode") or "").lower() == "auto":
                 changes["autoActiveMode"] = pending
@@ -2149,10 +2158,11 @@ class SettingsDialog(QDialog):
         self.build_value("coolMax", "Cool High", nested_get(t, "limits", "cool", "max", default=80), 1, 1, 50, 90)
         self.build_value("heatMin", "Heat Low", nested_get(t, "limits", "heat", "min", default=60), 1, 2, 40, 80)
         self.build_value("heatMax", "Heat High", nested_get(t, "limits", "heat", "max", default=78), 1, 3, 40, 85)
-        self.build_value("autoCoolOutdoorTarget", "Cool Target", t.get("autoCoolOutdoorTarget", 70), 2, 0, 40, 100)
-        self.build_value("autoHeatOutdoorTarget", "Heat Target", t.get("autoHeatOutdoorTarget", 65), 2, 1, 40, 100)
-        self.build_value("autoChangeoverLockoutMinutes", "Lockout", int(float(t.get("autoChangeoverLockoutMinutes", 120))/60), 2, 2, 0, 8, " hr")
-        self.build_value("coolFanRemainOnMinutes", "Cool Fan", t.get("coolFanRemainOnMinutes", 2), 2, 3, 0, 15, " min")
+        self.build_value("autoCoolOutdoorTarget", "Cool Switch", t.get("autoCoolOutdoorTarget", 70), 2, 0, 40, 100)
+        self.build_value("autoHeatOutdoorTarget", "Heat Switch", t.get("autoHeatOutdoorTarget", 65), 2, 1, 40, 100)
+        self.build_value("autoChangeoverLockoutMinutes", "Auto Delay", int(float(t.get("autoChangeoverLockoutMinutes", 120))/60), 2, 2, 0, 8, " hr")
+        self.build_value("manualChangeoverLockoutMinutes", "Manual Delay", t.get("manualChangeoverLockoutMinutes", 10), 2, 3, 0, 60, " min")
+        self.build_value("coolFanRemainOnMinutes", "Cool Fan", t.get("coolFanRemainOnMinutes", 2), 4, 2, 0, 15, " min")
 
         temp_source = self.add_section("Current Temperature Source", 3, 0, 1, 2)
         source_name = t.get("currentTempSourceName") or "Virtual Temp"
@@ -2230,6 +2240,7 @@ class SettingsDialog(QDialog):
             "autoCoolOutdoorTarget": self.val_number("autoCoolOutdoorTarget"),
             "autoHeatOutdoorTarget": self.val_number("autoHeatOutdoorTarget"),
             "autoChangeoverLockoutMinutes": self.val_number("autoChangeoverLockoutMinutes") * 60,
+            "manualChangeoverLockoutMinutes": self.val_number("manualChangeoverLockoutMinutes"),
             "coolFanRemainOnMinutes": self.val_number("coolFanRemainOnMinutes"),
             "limits": limits,
         }

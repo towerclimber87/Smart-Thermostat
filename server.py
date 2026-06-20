@@ -652,8 +652,8 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             ("outdoorWindSpeed", base.get("outdoorWindSpeed", 0), 0, 250),
             ("autoCoolOutdoorTarget", base["autoCoolOutdoorTarget"], 41, 100),
             ("autoHeatOutdoorTarget", base["autoHeatOutdoorTarget"], 40, 99),
-            ("autoChangeoverLockoutMinutes", base["autoChangeoverLockoutMinutes"], 120, 720),
-            ("manualChangeoverLockoutMinutes", base.get("manualChangeoverLockoutMinutes", MANUAL_CHANGEOVER_LOCKOUT_MINUTES), 1, 60),
+            ("autoChangeoverLockoutMinutes", base["autoChangeoverLockoutMinutes"], 0, 720),
+            ("manualChangeoverLockoutMinutes", base.get("manualChangeoverLockoutMinutes", MANUAL_CHANGEOVER_LOCKOUT_MINUTES), 0, 60),
             ("coolFanRemainOnMinutes", base["coolFanRemainOnMinutes"], 0, 10),
             ("autoLockoutUntil", base["autoLockoutUntil"], 0, None),
             ("manualLockoutUntil", base.get("manualLockoutUntil", 0), 0, None),
@@ -1406,6 +1406,193 @@ def _config_import_payload(payload: object) -> dict:
     }
 
 
+
+def _mode_available_for_auto_switch(thermostat: dict, mode: str) -> bool:
+    mode = str(mode or "").strip().lower()
+    if mode == "heat":
+        return not bool(thermostat.get("heatLocked"))
+    if mode == "cool":
+        return not bool(thermostat.get("coolLocked"))
+    return False
+
+
+def _auto_switch_targets(thermostat: dict) -> tuple[float, float]:
+    cool_target = _number(thermostat.get("autoCoolOutdoorTarget"), 70, 41, 100)
+    heat_target = _number(thermostat.get("autoHeatOutdoorTarget"), 65, 40, 99)
+    heat_target = min(heat_target, cool_target - 1)
+    return cool_target, heat_target
+
+
+def _auto_switch_signal(thermostat: dict) -> str:
+    current = _number(thermostat.get("currentTemp"), 70, -40, 130)
+    cool_target, heat_target = _auto_switch_targets(thermostat)
+    cool_available = _mode_available_for_auto_switch(thermostat, "cool")
+    heat_available = _mode_available_for_auto_switch(thermostat, "heat")
+    if not cool_available and not heat_available:
+        return ""
+    if current > cool_target:
+        return "cool" if cool_available else ("heat" if heat_available else "")
+    if current <= heat_target:
+        return "heat" if heat_available else ("cool" if cool_available else "")
+    return ""
+
+
+def _empty_auto_switch_notice() -> dict:
+    return _deepcopy_json(DEFAULT_THERMOSTAT["autoSwitchNotice"])
+
+
+def _empty_auto_switch_hold() -> dict:
+    return _deepcopy_json(DEFAULT_THERMOSTAT["autoSwitchHold"])
+
+
+def _record_auto_switch_notice(thermostat: dict, source: str, from_mode: str, to_mode: str) -> None:
+    from_mode = str(from_mode or "").strip().lower()
+    to_mode = str(to_mode or "").strip().lower()
+    if from_mode not in {"heat", "cool"} or to_mode not in {"heat", "cool"} or from_mode == to_mode:
+        return
+    cool_target, heat_target = _auto_switch_targets(thermostat)
+    current = _number(thermostat.get("currentTemp"), 70, -40, 130)
+    thermostat["autoSwitchNotice"] = {
+        "active": True,
+        "source": str(source or "manual").strip().lower() if str(source or "").strip().lower() in {"auto", "manual"} else "manual",
+        "fromMode": from_mode,
+        "toMode": to_mode,
+        "switchTemp": current,
+        "outdoorTemp": current,
+        "coolTarget": cool_target,
+        "heatTarget": heat_target,
+        "createdAt": int(time.time() * 1000),
+    }
+    thermostat["autoSwitchHold"] = _empty_auto_switch_hold()
+
+
+def _clamp_comfort_target_to_mode(thermostat: dict) -> None:
+    mode = str(thermostat.get("mode") or "auto").strip().lower()
+    mode_for_limits = mode if mode in {"heat", "cool"} else "auto"
+    limits = thermostat.get("limits") if isinstance(thermostat.get("limits"), dict) else {}
+    lim = limits.get(mode_for_limits) or limits.get("auto") or {"min": 45, "max": 95}
+    low = _number(lim.get("min"), 45, 45, 95)
+    high = _number(lim.get("max"), 95, low + 1, 95)
+    thermostat["targetTemp"] = _number(thermostat.get("targetTemp"), thermostat.get("lastComfortTarget", 70), low, high)
+    thermostat["lastComfortTarget"] = _number(thermostat.get("lastComfortTarget"), thermostat["targetTemp"], low, high)
+
+
+def _apply_comfort_auto_switch_logic(thermostat: dict, *, notify: bool = True) -> dict:
+    """Apply room-temp mode switching and changeover lockout state.
+
+    The old web UI used autoCoolOutdoorTarget/autoHeatOutdoorTarget as the room
+    temperature thresholds for comfort auto-switching. Keep the field names for
+    compatibility, but treat them as Cool Mode Switch / Heat Mode Switch here.
+    """
+    t = _merge_thermostat_state(thermostat)
+    now_ms = int(time.time() * 1000)
+    mode = _normalize_mode(t.get("mode"), "cool")
+    signal = _auto_switch_signal(t)
+
+    hold = t.get("autoSwitchHold") if isinstance(t.get("autoSwitchHold"), dict) else {}
+    hold_active = bool(hold.get("active"))
+    hold_source = str(hold.get("source") or "").lower()
+    hold_mode = str(hold.get("mode") or "").lower()
+    hold_until = _number(hold.get("until"), 0, 0, None)
+    if hold_active and hold_source == "manual" and mode != "auto":
+        if (
+            hold_mode not in {"heat", "cool"}
+            or not _mode_available_for_auto_switch(t, hold_mode)
+            or not signal
+            or signal == hold_mode
+            or (hold_until and now_ms >= hold_until)
+        ):
+            t["autoSwitchHold"] = _empty_auto_switch_hold()
+        else:
+            if t.get("mode") != hold_mode:
+                t["mode"] = hold_mode
+                t["manualPendingMode"] = ""
+                t["manualLockoutUntil"] = 0
+                _clamp_comfort_target_to_mode(t)
+            return t
+
+    if mode == "auto":
+        active = str(t.get("autoActiveMode") or "").lower()
+        if active not in {"heat", "cool"} or not _mode_available_for_auto_switch(t, active):
+            active = "cool" if _mode_available_for_auto_switch(t, "cool") else "heat" if _mode_available_for_auto_switch(t, "heat") else ""
+        desired = signal or active
+        if desired not in {"heat", "cool"}:
+            t["autoActiveMode"] = ""
+            t["autoPendingMode"] = ""
+            t["autoLockoutUntil"] = 0
+            return t
+
+        pending = str(t.get("autoPendingMode") or "").lower()
+        until = _number(t.get("autoLockoutUntil"), 0, 0, None)
+        if pending in {"heat", "cool"} and until and now_ms >= until:
+            previous = active
+            t["autoActiveMode"] = pending
+            t["autoPendingMode"] = ""
+            t["autoLockoutUntil"] = 0
+            if notify and previous and pending != previous:
+                _record_auto_switch_notice(t, "auto", previous, pending)
+            return t
+
+        if desired != active:
+            last_key = "equipmentLastCoolRunAt" if desired == "heat" else "equipmentLastHeatRunAt"
+            legacy_key = "lastCoolRunAt" if desired == "heat" else "lastHeatRunAt"
+            last_opposite = max(_number(t.get(last_key), 0, 0), _number(t.get(legacy_key), 0, 0))
+            lockout_minutes = _number(t.get("autoChangeoverLockoutMinutes"), 120, 0, 720)
+            lockout_ms = lockout_minutes * 60000
+            if lockout_ms > 0 and last_opposite and now_ms - last_opposite < lockout_ms:
+                t["autoPendingMode"] = desired
+                t["autoLockoutUntil"] = last_opposite + lockout_ms
+                return t
+            previous = active
+            t["autoActiveMode"] = desired
+            t["autoPendingMode"] = ""
+            t["autoLockoutUntil"] = 0
+            if notify and previous and desired != previous:
+                _record_auto_switch_notice(t, "auto", previous, desired)
+        elif t.get("autoLockoutUntil") and now_ms >= _number(t.get("autoLockoutUntil"), 0, 0):
+            t["autoPendingMode"] = ""
+            t["autoLockoutUntil"] = 0
+        return t
+
+    current_mode = mode if mode in {"heat", "cool"} else ""
+    if signal and current_mode and signal != current_mode and _mode_available_for_auto_switch(t, signal):
+        previous = current_mode
+        t["mode"] = signal
+        t["manualPendingMode"] = ""
+        t["manualLockoutUntil"] = 0
+        _clamp_comfort_target_to_mode(t)
+        if notify:
+            _record_auto_switch_notice(t, "manual", previous, signal)
+    return t
+
+
+def _apply_runtime_thermostat_logic(record: dict, *, notify: bool = True) -> dict:
+    thermostat = _apply_local_temperature_sensor_if_needed(record)
+    updated = _apply_comfort_auto_switch_logic(thermostat, notify=notify)
+    if updated != thermostat:
+        _write_thermostat_record(updated, persist=False)
+    return updated
+
+
+def _mark_thermostat_equipment_run(outputs: dict) -> None:
+    changes: dict[str, float] = {}
+    now_ms = int(time.time() * 1000)
+    if outputs.get("heat"):
+        changes["equipmentLastHeatRunAt"] = now_ms
+        changes["lastHeatRunAt"] = now_ms
+    if outputs.get("cool"):
+        changes["equipmentLastCoolRunAt"] = now_ms
+        changes["lastCoolRunAt"] = now_ms
+    if not changes:
+        return
+    try:
+        current = _read_thermostat_record()["thermostat"]
+        updated = {**current, **changes}
+        _write_thermostat_record(updated, persist=False)
+    except Exception as exc:
+        print(f"Unable to mark HVAC equipment runtime: {exc}", flush=True)
+
+
 def _thermostat_outputs(thermostat: dict) -> dict:
     mode = _allowed_mode_for_locks(_normalize_mode(thermostat.get("mode"), "cool"), thermostat, "cool")
     active_mode = thermostat.get("autoActiveMode") if mode == "auto" else mode
@@ -1436,10 +1623,11 @@ def _thermostat_outputs(thermostat: dict) -> dict:
     if not safety_mode and mode != "auto" and (heat or cool):
         pending_mode = "heat" if heat else "cool"
         last_key = "equipmentLastCoolRunAt" if pending_mode == "heat" else "equipmentLastHeatRunAt"
-        last_opposite_run_at = _number(thermostat.get(last_key), 0, 0)
-        lockout_minutes = _number(thermostat.get("manualChangeoverLockoutMinutes"), MANUAL_CHANGEOVER_LOCKOUT_MINUTES, 1, 60)
+        legacy_key = "lastCoolRunAt" if pending_mode == "heat" else "lastHeatRunAt"
+        last_opposite_run_at = max(_number(thermostat.get(last_key), 0, 0), _number(thermostat.get(legacy_key), 0, 0))
+        lockout_minutes = _number(thermostat.get("manualChangeoverLockoutMinutes"), MANUAL_CHANGEOVER_LOCKOUT_MINUTES, 0, 60)
         until = last_opposite_run_at + lockout_minutes * 60000
-        if last_opposite_run_at and until > now_ms:
+        if lockout_minutes > 0 and last_opposite_run_at and until > now_ms:
             heat = False
             cool = False
             active_mode = "lockout"
@@ -1461,7 +1649,9 @@ def _thermostat_outputs(thermostat: dict) -> dict:
 
 def _thermostat_status_payload() -> dict:
     record = _read_thermostat_record()
-    thermostat = record["thermostat"]
+    thermostat = _apply_runtime_thermostat_logic(record)
+    record = _read_thermostat_record()
+    record["thermostat"] = thermostat
     outputs = _thermostat_outputs(thermostat)
     _apply_thermostat_outputs_to_hardware(outputs)
     hvac_mode = "heat_cool" if thermostat["mode"] == "auto" else thermostat["mode"]
@@ -1547,7 +1737,42 @@ def _thermostat_status_payload() -> dict:
 def _handle_thermostat_update(payload: dict) -> dict:
     existing = _read_thermostat_record()["thermostat"]
     incoming = payload.get("thermostat", payload) if isinstance(payload, dict) else {}
+    if not isinstance(incoming, dict):
+        incoming = {}
+
+    bypass_mode = str(incoming.get("bypassChangeoverLockout") or "").strip().lower()
+    if bypass_mode not in {"heat", "cool"} and incoming.get("bypassChangeoverLockout"):
+        bypass_mode = str(existing.get("manualPendingMode") or existing.get("autoPendingMode") or "").strip().lower()
+    if bypass_mode in {"heat", "cool"}:
+        existing = dict(existing)
+        if bypass_mode == "heat":
+            existing["equipmentLastCoolRunAt"] = 0
+            existing["lastCoolRunAt"] = 0
+        else:
+            existing["equipmentLastHeatRunAt"] = 0
+            existing["lastHeatRunAt"] = 0
+        existing["manualPendingMode"] = ""
+        existing["manualLockoutUntil"] = 0
+        existing["autoPendingMode"] = ""
+        existing["autoLockoutUntil"] = 0
+        incoming = {k: v for k, v in incoming.items() if k != "bypassChangeoverLockout"}
+
     merged = _merge_thermostat_state(existing, incoming)
+
+    requested_mode = incoming.get("mode", incoming.get("hvac_mode", incoming.get("hvacMode")))
+    requested_mode = _normalize_mode(requested_mode, "") if requested_mode is not None else ""
+    if requested_mode in {"heat", "cool"}:
+        signal = _auto_switch_signal(merged)
+        if signal and signal != requested_mode and _mode_available_for_auto_switch(merged, signal):
+            merged["autoSwitchHold"] = {
+                "active": True,
+                "source": "manual",
+                "mode": requested_mode,
+                "until": int(time.time() * 1000) + 3000,
+                "reason": "ack",
+            }
+
+    merged = _apply_comfort_auto_switch_logic(merged, notify=True)
     _write_thermostat_record(merged)
     return _thermostat_status_payload()
 
@@ -1866,6 +2091,7 @@ def _apply_thermostat_outputs_to_hardware(outputs: dict) -> None:
             {"fan": outputs.get("fan"), "heat": outputs.get("heat"), "cool": outputs.get("cool")},
             "thermostat",
         )
+    _mark_thermostat_equipment_run(outputs)
 
 
 def _set_manual_relay(relay: str, on: bool) -> dict:
@@ -2298,7 +2524,7 @@ def _thermostat_control_loop() -> None:
     while not _CONTROL_LOOP_STOP.wait(CONTROL_LOOP_INTERVAL_SECONDS):
         try:
             record = _read_thermostat_record()
-            thermostat = _apply_local_temperature_sensor_if_needed(record)
+            thermostat = _apply_runtime_thermostat_logic(record)
             outputs = _thermostat_outputs(thermostat)
             _apply_thermostat_outputs_to_hardware(outputs)
         except Exception as exc:  # noqa: BLE001 - keep local HVAC control alive
