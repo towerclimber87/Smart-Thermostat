@@ -542,7 +542,9 @@ class NativeThermostatApp:
         wind = as_float(t.get("outdoorWindSpeed", t.get("outdoor_wind_speed", 0)), 0)
         hum = as_float(t.get("humidity", 0), 0)
         if mode == "auto":
-            action_label = "Auto • Cool • Idle" if action in {"idle", "off"} else title_case(action)
+            active_side = self.effective_limit_mode()
+            running = "Cooling" if action == "cooling" or relays.get("cool") else "Heating" if action == "heating" or relays.get("heat") else "Idle"
+            action_label = f"Auto • {title_case(active_side)} • {running}"
         else:
             action_label = "Cooling" if action == "cooling" or relays.get("cool") else "Heating" if action == "heating" or relays.get("heat") else "Idle"
         action_color = CYAN if "cool" in action_label.lower() else RED if "heat" in action_label.lower() else GREEN
@@ -581,13 +583,11 @@ class NativeThermostatApp:
 
 
     def draw_web_style_dial(self, current: float, target: float, action_label: str, action_color: str) -> None:
-        """Draw the native dial from the web UI template, not camera photos.
+        """Draw the thermostat dial using the old web dial geometry.
 
-        The previous visual polish pass accidentally copied reflection artifacts
-        from phone photos (yellow/orange corner brackets and extra highlights).
-        This version intentionally follows the old web build structure instead:
-        outer glass puck, tick ring, span/progress ring, inner glass face,
-        current marker, target knob, and range labels.
+        Keep the native dial clean and circular.  No reflection artifacts, no
+        fake oblong shine, and the visible min/max scale follows the comfort
+        range returned by target_limits().
         """
         cx, cy = self.sx(640), self.sy(430)
         r = min(self.sx(148), self.sy(148))
@@ -596,41 +596,57 @@ class NativeThermostatApp:
         target_pct = clamp((target - minimum) / max(1, maximum - minimum), 0, 1)
         current_pct = clamp((current - minimum) / max(1, maximum - minimum), 0, 1)
 
-        # Outer glass puck and shadow.  Keep it simple/vector-only for the Pi.
+        # Old web dial scale: lower-left min, sweep over the top, lower-right max.
+        # Canvas y grows downward, so 135° -> lower-left and 405°/45° -> lower-right.
+        start_deg, span_deg = 135.0, 270.0
+
+        # Outer glass puck and rings.
         self.canvas.create_oval(cx-r-18, cy-r-18, cx+r+18, cy+r+18, fill="#03060b", outline="#05070b", width=2)
         self.canvas.create_oval(cx-r-9, cy-r-9, cx+r+9, cy+r+9, fill="#0a111a", outline="#17202c", width=2)
         self.canvas.create_oval(cx-r+4, cy-r+4, cx+r-4, cy+r-4, fill="#0b121c", outline="#222c39", width=1)
 
-        # Web-like tick ring.  No photo/reflection artifacts.  The active span is
-        # subtle cyan/purple, like the browser CSS conic/progress dial.
-        start_deg, span_deg = 225, 270
-        tick_count = 98
+        # Tick ring.  This is the primary range visual, so it must line up with
+        # the same min/max limits used by dragging and the range labels.
+        tick_count = 104
         for i in range(tick_count):
             pos = i / (tick_count - 1)
             angle = math.radians(start_deg + pos * span_deg)
-            major = (i % 7 == 0)
-            length = 20 if major else 13
+            major = (i % 8 == 0)
+            length = 21 if major else 13
             width = 2 if major else 1
             if pos <= target_pct:
-                col = "#48d9ff" if pos < 0.62 else "#8c78ff"
+                col = "#46d9ff" if pos < 0.62 else "#8d7dff"
             else:
                 col = "#31404d"
             x1 = cx + math.cos(angle) * (r - length)
             y1 = cy + math.sin(angle) * (r - length)
             x2 = cx + math.cos(angle) * (r - 5)
             y2 = cy + math.sin(angle) * (r - 5)
-            self.canvas.create_line(x1, y1, x2, y2, fill=col, width=width)
+            self.canvas.create_line(x1, y1, x2, y2, fill=col, width=width, capstyle="round")
 
-        # Target rail / span ring: drawn as a soft arc, not a box/corner mark.
-        arc_box = (cx-r+18, cy-r+18, cx+r-18, cy+r-18)
-        try:
-            self.canvas.create_arc(*arc_box, start=135, extent=-270, style="arc", outline="#192635", width=10)
-            self.canvas.create_arc(*arc_box, start=135, extent=-270*target_pct, style="arc", outline="#52dfff", width=10)
-        except Exception:
-            pass
+        # Subtle inner rail; avoid Tk arc direction issues by drawing short line
+        # segments with the exact same geometry as the tick ring.
+        last = None
+        rail_r = r - 37
+        for i in range(80):
+            pos = i / 79
+            angle = math.radians(start_deg + pos * span_deg)
+            point = (cx + math.cos(angle) * rail_r, cy + math.sin(angle) * rail_r)
+            if last:
+                self.canvas.create_line(last[0], last[1], point[0], point[1], fill="#192635", width=7, capstyle="round")
+            last = point
+        last = None
+        active_steps = max(2, int(80 * target_pct))
+        for i in range(active_steps):
+            pos = i / 79
+            angle = math.radians(start_deg + pos * span_deg)
+            point = (cx + math.cos(angle) * rail_r, cy + math.sin(angle) * rail_r)
+            if last:
+                self.canvas.create_line(last[0], last[1], point[0], point[1], fill="#52dfff", width=7, capstyle="round")
+            last = point
 
         # Current marker and target knob.
-        for pos, width, knob in ((current_pct, 5, False), (target_pct, 4, True)):
+        def marker(pos: float, width: int, knob: bool) -> None:
             a = math.radians(start_deg + pos * span_deg)
             x1 = cx + math.cos(a) * (r - 12)
             y1 = cy + math.sin(a) * (r - 12)
@@ -639,8 +655,11 @@ class NativeThermostatApp:
             self.canvas.create_line(x1, y1, x2, y2, fill="#eef6ff", width=width, capstyle="round")
             if knob:
                 self.canvas.create_oval(x2-self.sx(6), y2-self.sy(6), x2+self.sx(6), y2+self.sy(6), fill="#eef6ff", outline="#d8e6f7")
+        marker(current_pct, 5, False)
+        marker(target_pct, 4, True)
 
-        # Inner glass face.  Use rings instead of fake gradients/crescent blocks.
+        # Inner face.  No oval/shine overlay; the previous highlight looked like
+        # an off-center oblong blob on the physical display.
         inner = int(r * 0.61)
         if "heat" in action_label.lower():
             inner_fill = "#d85b42"
@@ -664,7 +683,6 @@ class NativeThermostatApp:
             pill_outline = "#45d6aa"
         self.canvas.create_oval(cx-inner-10, cy-inner-10, cx+inner+10, cy+inner+10, fill=inner_dark, outline="#111a25", width=1)
         self.canvas.create_oval(cx-inner, cy-inner, cx+inner, cy+inner, fill=inner_fill, outline="#2fb8ff" if "cool" in action_label.lower() else "#2bd986", width=1)
-        self.canvas.create_oval(cx-inner+16, cy-inner+18, cx+inner-16, cy+inner-8, fill="#2fcfff" if "cool" in action_label.lower() else "#4ee083", outline="")
 
         self.text(cx, cy-self.sy(70), action_label.upper()[:18], 11, "#eaf5ff", "bold")
         self.text(cx, cy-self.sy(10), f"{current:.0f}°", 62, TEXT, "bold")
@@ -834,11 +852,39 @@ class NativeThermostatApp:
             self.button(self.sx(x), self.sy(538), self.sx(x+210), self.sy(590), name, lambda s=sched: self.apply_schedule(s), fill="#12293a", text=TEXT)
             x += 220
 
-    def target_limits(self) -> tuple[float, float]:
+    def effective_limit_mode(self) -> str:
+        """Return the comfort-limit bucket that should drive the dial scale.
+
+        The web panel does not use the broad auto safety range for the visible
+        dial when Auto is actively controlling cool/heat.  In Auto, the dial
+        should follow the active side of the changeover so an Auto→Cool screen
+        uses the Cool comfort range, for example 65–80.
+        """
         mode = str(self.thermostat.get("mode", "cool")).lower()
+        if mode in {"cool", "heat"}:
+            return mode
+        if mode == "auto":
+            for key in ("autoActiveMode", "autoPendingMode", "manualPendingMode"):
+                value = str(self.thermostat.get(key, "") or "").lower()
+                if value in {"cool", "heat"}:
+                    return value
+            action = str(self.thermostat.get("hvac_action", self.thermostat.get("hvacAction", "")) or "").lower()
+            if "heat" in action:
+                return "heat"
+            if "cool" in action:
+                return "cool"
+            return "cool"
+        return "cool"
+
+    def target_limits(self) -> tuple[float, float]:
+        mode = self.effective_limit_mode()
         limits_all = self.thermostat.get("limits", {}) if isinstance(self.thermostat.get("limits"), dict) else {}
-        limits = limits_all.get(mode) or limits_all.get("cool") or {}
-        return as_float(limits.get("min"), 45), as_float(limits.get("max"), 95)
+        limits = limits_all.get(mode) or limits_all.get("cool") or limits_all.get("auto") or {}
+        low = as_float(limits.get("min"), 45)
+        high = as_float(limits.get("max"), 95)
+        if high <= low:
+            high = low + 2
+        return low, high
 
     def begin_dial_adjust(self, x: int, y: int) -> bool:
         if self.locked:
@@ -870,7 +916,7 @@ class NativeThermostatApp:
             angle = math.degrees(math.atan2(y - cy, x - cx))
             if angle < 0:
                 angle += 360
-            start, span = 218.0, 284.0
+            start, span = 135.0, 270.0
             mapped = angle
             if mapped < start:
                 mapped += 360
@@ -889,8 +935,8 @@ class NativeThermostatApp:
 
     def change_target(self, delta: float) -> None:
         target = as_float(self.thermostat.get("targetTemp", self.thermostat.get("target_temperature", 70)), 70) + delta
-        limits = self.thermostat.get("limits", {}).get(str(self.thermostat.get("mode", "cool")), {"min": 45, "max": 95})
-        target = clamp(target, as_float(limits.get("min"), 45), as_float(limits.get("max"), 95))
+        minimum, maximum = self.target_limits()
+        target = clamp(target, minimum, maximum)
         self.thermostat["targetTemp"] = target
         self.draw()
         self._run_busy("Target", lambda: self.control({"targetTemp": target}))
@@ -1428,6 +1474,10 @@ class NativeThermostatApp:
         sections: dict[str, list[dict[str, Any]]] = {
             "comfort": [
                 {"label":"Target Temp", "key":"targetTemp", "kind":"number", "step":1},
+                {"label":"Cool Min", "kind":"limit", "mode":"cool", "bound":"min", "step":1},
+                {"label":"Cool Max", "kind":"limit", "mode":"cool", "bound":"max", "step":1},
+                {"label":"Heat Min", "kind":"limit", "mode":"heat", "bound":"min", "step":1},
+                {"label":"Heat Max", "kind":"limit", "mode":"heat", "bound":"max", "step":1},
                 {"label":"Away Heat", "key":"awayHeat", "kind":"number", "step":1},
                 {"label":"Away Cool", "key":"awayCool", "kind":"number", "step":1},
                 {"label":"Safety Low", "key":"safetyLow", "kind":"number", "step":1},
@@ -1507,7 +1557,14 @@ class NativeThermostatApp:
         self.text(x+self.sx(14), y+self.sy(19), str(item.get("label","Setting")), 12, MUTED, "bold", "w")
         kind = item.get("kind")
         key = item.get("key")
-        if kind == "number":
+        if kind == "limit":
+            mode = str(item.get("mode", "cool"))
+            bound = str(item.get("bound", "min"))
+            val = self.get_limit_value(mode, bound)
+            self.small_button(x+w-self.sx(104), y+self.sy(18), x+w-self.sx(70), y+self.sy(52), "−", lambda m=mode,b=bound,st=item.get("step",1): self.adjust_limit(m, b, -as_float(st,1)), fill="#173246", size=14)
+            self.text(x+w-self.sx(52), y+self.sy(36), f"{val:.0f}", 18, TEXT, "bold")
+            self.small_button(x+w-self.sx(34), y+self.sy(18), x+w-self.sx(2), y+self.sy(52), "+", lambda m=mode,b=bound,st=item.get("step",1): self.adjust_limit(m, b, as_float(st,1)), fill="#173246", size=14)
+        elif kind == "number":
             val = as_float(self.thermostat.get(key), 0)
             self.small_button(x+w-self.sx(104), y+self.sy(18), x+w-self.sx(70), y+self.sy(52), "−", lambda k=key,st=item.get("step",1): self.adjust_setting(k, -as_float(st,1)), fill="#173246", size=14)
             self.text(x+w-self.sx(52), y+self.sy(36), f"{val:.0f}", 18, TEXT, "bold")
@@ -1530,6 +1587,37 @@ class NativeThermostatApp:
         else:
             value = item.get("value", self.thermostat.get(key, ""))
             self.text(x+w-self.sx(14), y+self.sy(42), str(value)[:28], 12, TEXT, "bold", "e")
+
+
+    def get_limit_value(self, mode: str, bound: str) -> float:
+        limits_all = self.thermostat.get("limits", {}) if isinstance(self.thermostat.get("limits"), dict) else {}
+        limits = limits_all.get(mode) if isinstance(limits_all.get(mode), dict) else {}
+        default = 65 if mode == "cool" and bound == "min" else 80 if mode == "cool" and bound == "max" else 60 if bound == "min" else 78
+        return as_float(limits.get(bound), default)
+
+    def adjust_limit(self, mode: str, bound: str, delta: float) -> None:
+        limits_all = self.thermostat.setdefault("limits", {})
+        if not isinstance(limits_all, dict):
+            limits_all = {}
+            self.thermostat["limits"] = limits_all
+        current = limits_all.setdefault(mode, {})
+        if not isinstance(current, dict):
+            current = {}
+            limits_all[mode] = current
+        low = as_float(current.get("min"), 65 if mode == "cool" else 60)
+        high = as_float(current.get("max"), 80 if mode == "cool" else 78)
+        if bound == "min":
+            low = clamp(low + delta, 45, high - 2)
+        else:
+            high = clamp(high + delta, low + 2, 95)
+        current["min"] = round(low)
+        current["max"] = round(high)
+        minimum, maximum = self.target_limits()
+        target = as_float(self.thermostat.get("targetTemp", self.thermostat.get("target_temperature", 70)), 70)
+        self.thermostat["targetTemp"] = round(clamp(target, minimum, maximum))
+        payload = {"limits": {mode: {"min": current["min"], "max": current["max"]}}, "targetTemp": self.thermostat["targetTemp"]}
+        self.draw()
+        self._run_busy("Comfort Limits", lambda p=payload: self.control(p))
 
 
     def adjust_setting(self, key: str, delta: float) -> None:
