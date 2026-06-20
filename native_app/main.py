@@ -858,15 +858,15 @@ class ThermostatScreen(Page):
         left_col.addWidget(self.door_card, 0, Qt.AlignCenter)
         left_col.addStretch(1)
         self.schedule_shortcuts = QWidget()
-        self.schedule_shortcuts.setMaximumWidth(210)
-        self.schedule_shortcuts_lay = QVBoxLayout(self.schedule_shortcuts)
+        self.schedule_shortcuts.setMaximumWidth(238)
+        self.schedule_shortcuts_lay = QHBoxLayout(self.schedule_shortcuts)
         self.schedule_shortcuts_lay.setContentsMargins(0, 0, 0, 0)
         self.schedule_shortcuts_lay.setSpacing(6)
-        left_col.addWidget(self.schedule_shortcuts, 0, Qt.AlignCenter)
-        self.schedule_button = RoundButton("S", active=False, min_h=62)
-        self.schedule_button.setFixedSize(68, 62)
+        left_col.addWidget(self.schedule_shortcuts, 0, Qt.AlignLeft)
+        self.schedule_button = RoundButton("S", active=False, min_h=46)
+        self.schedule_button.setFixedSize(50, 46)
         self.schedule_button.clicked.connect(self.open_schedule_manager)
-        left_col.addWidget(self.schedule_button, 0, Qt.AlignCenter)
+        left_col.addWidget(self.schedule_button, 0, Qt.AlignLeft)
         mid.addLayout(left_col, 0, 0, 2, 1)
         mid.addWidget(self.minus, 0, 1, 2, 1, Qt.AlignCenter)
 
@@ -1250,19 +1250,20 @@ class ThermostatScreen(Page):
         schedules = self.thermostat_view().get("schedules") or []
         for sched in schedules[:3]:
             name = str(sched.get("name") or "Schedule").strip()[:18] or "Schedule"
-            b = RoundButton(name, active=False, min_h=36)
-            b.setFixedHeight(36)
-            # Fit the label, but cap the bubble so it cannot widen the whole
-            # left column and shove the dial/buttons into each other.
-            b.setFixedWidth(max(92, min(190, 42 + len(name) * 10)))
+            b = RoundButton(name, active=False, min_h=32)
+            b.setFixedHeight(32)
+            # Side-by-side, but hard-capped so three shortcuts cannot widen the
+            # left column and push the dial into the + / − buttons.
+            b.setFixedWidth(max(58, min(76, 28 + len(name) * 7)))
             b.setStyleSheet("""
                 QPushButton {
                     background:rgba(255,255,255,0.075);
                     color:#eaf3ff;
                     border:1px solid rgba(130,229,255,0.28);
-                    border-radius:18px;
-                    padding:0 14px;
+                    border-radius:16px;
+                    padding:0 8px;
                     font-weight:900;
+                    font-size:10px;
                 }
                 QPushButton:pressed {
                     background:rgba(71,224,255,0.30);
