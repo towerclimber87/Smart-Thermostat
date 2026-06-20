@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${EUID}" -ne 0 ]]; then
+  echo "Run this with sudo: sudo ./scripts/install-native.sh" >&2
+  exit 1
+fi
+
+APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+APP_USER="${SUDO_USER:-$(logname 2>/dev/null || echo david)}"
+APP_HOME="$(eval echo "~${APP_USER}")"
+
+if [[ ! -f "$APP_DIR/server.py" || ! -f "$APP_DIR/native_app/main.py" ]]; then
+  echo "This does not look like the SmartThermostatNative folder: $APP_DIR" >&2
+  exit 1
+fi
+
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  python3 \
+  python3-pyqt5 \
+  xserver-xorg \
+  xinit \
+  x11-xserver-utils \
+  xserver-xorg-legacy \
+  unclutter
+
+# Let systemd launch the appliance X server as the pi user.
+mkdir -p /etc/X11
+cat >/etc/X11/Xwrapper.config <<EOF
+allowed_users=anybody
+needs_root_rights=yes
+EOF
+
+chown -R "$APP_USER:$APP_USER" "$APP_DIR"
+chmod +x "$APP_DIR/scripts/native-xinit.sh" "$APP_DIR/scripts/run-native.sh"
+
+# Stop and disable browser/web kiosk services if they exist. The new backend still listens on 8080 for local API calls.
+for svc in smart-thermostat-kiosk.service smart-thermostat-web.service smart-thermostat-native.service; do
+  systemctl stop "$svc" 2>/dev/null || true
+  systemctl disable "$svc" 2>/dev/null || true
+done
+
+sed -e "s|@APP_DIR@|$APP_DIR|g" -e "s|@APP_USER@|$APP_USER|g" -e "s|@APP_HOME@|$APP_HOME|g" \
+  "$APP_DIR/systemd/smart-thermostat-backend.service.template" > /etc/systemd/system/smart-thermostat-backend.service
+sed -e "s|@APP_DIR@|$APP_DIR|g" -e "s|@APP_USER@|$APP_USER|g" -e "s|@APP_HOME@|$APP_HOME|g" \
+  "$APP_DIR/systemd/smart-thermostat-native.service.template" > /etc/systemd/system/smart-thermostat-native.service
+
+systemctl daemon-reload
+systemctl enable smart-thermostat-backend.service
+systemctl enable smart-thermostat-native.service
+systemctl restart smart-thermostat-backend.service
+systemctl restart smart-thermostat-native.service
+
+echo "Installed SmartThermostatNative from $APP_DIR"
+echo "Backend: systemctl status smart-thermostat-backend.service"
+echo "Native UI: systemctl status smart-thermostat-native.service"

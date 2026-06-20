@@ -1,120 +1,49 @@
-# IHA
+# Smart Thermostat Native
 
-A Raspberry Pi wall-panel interface starter project for the IHA thermostat, Sonos-style audio controller, and room/blind controls.
+This package removes Chromium from the touchscreen UI and replaces it with a native PyQt5 appliance client. The local Python backend is still used for thermostat safety logic, relay control, Home Assistant proxy calls, config import/export, hardware info, history, reboot, and update handling.
 
-This first version is intentionally frontend-only. The buttons, sliders, page swipes, and placeholder states work locally so the interface can be tested before wiring GPIO, I2C sensors, relays, Home Assistant, or Sonos integrations.
+The package intentionally does not include the old `public/` web UI or the old Tkinter native file.
 
-## Current screens
+## Included from the current panel
 
-- **Thermostat**
-  - Cool / Heat mode only
-  - No auto heat/cool mode
-  - Away mode with safety setpoints
-  - Interactive setpoint buttons
-  - Placeholder humidity, runtime, and current temperature
+- `data/panel-config.json` copied from the uploaded panel, including the panel name, Home Assistant URL/token, assigned room controls, blinds, lights, audio controls, alarm entity, and thermostat settings.
+- `data/thermostat-state.json` copied from the uploaded panel.
 
-- **Audio**
-  - Sonos placeholder page
-  - Play/pause, next, previous
-  - Volume, gain, bass, and treble sliders
-  - Now-playing placeholder card
+Do not share this folder publicly because the config contains a Home Assistant long-lived access token.
 
-- **Blinds**
-  - Living Room: 4 blinds
-  - Kitchen: 3 blinds
-  - Room-level open/close/stop
-  - Independent blind sliders and actions
+## Install on the Pi
 
-## Navigation
-
-- Tap the left/right side of the screen to change pages.
-- Use the bottom nav buttons.
-- Swipe right/left on a touchscreen.
-- On desktop, use left/right arrow keys.
-- Use +/- keys to change the thermostat setpoint.
-
-## Run locally
-
-From the project root:
+From the folder you extracted:
 
 ```bash
-python3 server.py --host 0.0.0.0 --port 8080
+cd ~/SmartThermostatNative
+chmod +x scripts/install-native.sh
+sudo ./scripts/install-native.sh
 ```
 
-Then open:
-
-```text
-http://localhost:8080
-```
-
-On another computer on the same network, use the Pi/computer IP address:
-
-```text
-http://<device-ip>:8080
-```
-
-
-
-## Raspberry Pi wall-panel kiosk
-
-This build includes a Raspberry Pi kiosk setup for the wall-mounted thermostat panel. The Pi runs the local Python server and starts Chromium automatically in full-screen kiosk mode at `http://127.0.0.1:8080`.
-
-Install on the Pi:
+Then reboot:
 
 ```bash
-cd ~/Smart-Thermostat-Development
-chmod +x scripts/install-pi.sh scripts/kiosk-launch.sh scripts/network_watchdog.py
-./scripts/install-pi.sh
 sudo reboot
 ```
 
-Services installed:
+The installer disables the old Chromium kiosk services if they exist, installs Qt dependencies, enables the local backend on `127.0.0.1:8080`, and starts the full-screen native UI.
 
-- `smart-thermostat-web.service` — local API/static web server
-- `smart-thermostat-kiosk.service` — Chromium kiosk launcher
-- `smart-thermostat-network-watchdog.service` — Ethernet priority and Wi-Fi reconnect watchdog
+## Manual test without installing services
 
-Kiosk configuration is stored in `/etc/smart-thermostat/kiosk.env`. More details are in `docs/raspberry-pi-notes.md`.
-
-## Home Assistant auto-discovery
-
-This build includes a no-MQTT Home Assistant path. The Raspberry Pi server exposes a local thermostat API and advertises `_iha-thermostat._tcp.local.` over mDNS/Zeroconf. The included custom integration in `custom_components/iha` turns the panel into a Home Assistant `climate` entity after the discovered device is accepted.
-
-See `docs/home-assistant.md` for install steps and the manual-add fallback.
-
-## Project structure
-
-```text
-Smart-Thermostat/
-├── public/
-│   ├── index.html
-│   ├── css/styles.css
-│   └── js/app.js
-├── docs/
-│   ├── integration-plan.md
-│   └── raspberry-pi-notes.md
-├── scripts/
-│   └── install-pi.sh
-├── systemd/
-│   └── smart-thermostat-web.service
-├── .gitignore
-├── LICENSE
-├── package.json
-└── README.md
+```bash
+cd ~/SmartThermostatNative
+python3 server.py --host 127.0.0.1 --port 8080
 ```
 
-## Future direction
+In a second terminal/X session:
 
-The intended production architecture is:
-
-```text
-Touch UI
-  ↓
-Local control service
-  ↓
-GPIO/I2C/relay interface hardware
-  ↓
-HVAC / sensors / blinds / audio bridge
+```bash
+cd ~/SmartThermostatNative
+python3 native_app/main.py
 ```
 
-Home Assistant should eventually be an integration layer, not the required path for local thermostat changes.
+## Services
+
+- `smart-thermostat-backend.service` runs `server.py`.
+- `smart-thermostat-native.service` launches the Qt full-screen UI through X.

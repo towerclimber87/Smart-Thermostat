@@ -1,0 +1,22 @@
+[Unit]
+Description=Smart Thermostat Native Touch UI
+After=smart-thermostat-backend.service systemd-user-sessions.service
+Requires=smart-thermostat-backend.service
+
+[Service]
+Type=simple
+User=@APP_USER@
+WorkingDirectory=@APP_DIR@
+Environment=HOME=@APP_HOME@
+Environment=DISPLAY=:0
+Environment=SMART_THERMOSTAT_API=http://127.0.0.1:8080
+ExecStart=/usr/bin/startx @APP_DIR@/scripts/native-xinit.sh -- :0 -nolisten tcp -nocursor
+Restart=always
+RestartSec=2
+TTYPath=/dev/tty1
+StandardInput=tty
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

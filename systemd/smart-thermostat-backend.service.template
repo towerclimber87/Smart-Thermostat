@@ -1,0 +1,17 @@
+[Unit]
+Description=Smart Thermostat Local Backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@APP_USER@
+WorkingDirectory=@APP_DIR@
+Environment=PYTHONUNBUFFERED=1
+Environment=PORT=8080
+ExecStart=/usr/bin/python3 @APP_DIR@/server.py --host 127.0.0.1 --port 8080
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
