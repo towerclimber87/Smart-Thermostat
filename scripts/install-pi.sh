@@ -185,7 +185,7 @@ if getent group i2c >/dev/null 2>&1; then
   sudo usermod -aG i2c "${INSTALL_USER}" || true
 fi
 enable_i2c
-chmod +x "${PROJECT_DIR}/scripts/install-pi.sh" "${PROJECT_DIR}/scripts/display-mode.sh" "${PROJECT_DIR}/scripts/kiosk-launch.sh" "${PROJECT_DIR}/scripts/kiosk-xinit.sh" "${PROJECT_DIR}/scripts/native-launch.sh" "${PROJECT_DIR}/scripts/native-xinit.sh" "${PROJECT_DIR}/scripts/hybrid-launch.sh" "${PROJECT_DIR}/scripts/hybrid-xinit.sh" "${PROJECT_DIR}/native/html_panel.py" "${PROJECT_DIR}/scripts/network_watchdog.py" 2>/dev/null || true
+chmod +x "${PROJECT_DIR}/scripts/install-pi.sh" "${PROJECT_DIR}/scripts/display-mode.sh" "${PROJECT_DIR}/scripts/force-html-display.sh" "${PROJECT_DIR}/scripts/kiosk-launch.sh" "${PROJECT_DIR}/scripts/kiosk-xinit.sh" "${PROJECT_DIR}/scripts/native-launch.sh" "${PROJECT_DIR}/scripts/native-xinit.sh" "${PROJECT_DIR}/scripts/hybrid-launch.sh" "${PROJECT_DIR}/scripts/hybrid-xinit.sh" "${PROJECT_DIR}/native/html_panel.py" "${PROJECT_DIR}/scripts/network_watchdog.py" 2>/dev/null || true
 
 install_service "${WEB_SERVICE_NAME}"
 install_service "${KIOSK_SERVICE_NAME}"
@@ -266,8 +266,8 @@ if systemctl get-default | grep -q '^graphical.target$'; then
   echo "Run ./scripts/appliance-mode.sh or ./scripts/display-mode.sh hybrid to disable the desktop/Chromium display path."
 fi
 
-echo "IHA web service, hybrid HTML appliance display, native fallback, and network watchdog installed."
+echo "IHA web service, hybrid HTML appliance display, legacy native alias, and network watchdog installed."
 echo "Web UI/API: http://localhost:8080"
 echo "Hybrid HTML display: sudo systemctl restart ${HYBRID_SERVICE_NAME}"
-echo "Native fallback service: sudo systemctl restart ${NATIVE_SERVICE_NAME}"
+echo "Legacy native alias: sudo systemctl restart ${NATIVE_SERVICE_NAME}  # forwards to HTML host in this build"
 echo "Home Assistant discovery uses mDNS service _iha-thermostat._tcp.local."

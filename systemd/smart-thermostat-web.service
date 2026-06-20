@@ -10,7 +10,7 @@ WorkingDirectory=__PROJECT_DIR__
 ExecStart=/usr/bin/python3 __PROJECT_DIR__/server.py --host 0.0.0.0 --port 8080
 Restart=always
 RestartSec=3
-Environment=SMART_THERMOSTAT_RESTART_SERVICES=smart-thermostat-web.service,smart-thermostat-hybrid.service,smart-thermostat-native.service
+Environment=SMART_THERMOSTAT_RESTART_SERVICES=smart-thermostat-web.service,smart-thermostat-hybrid.service
 
 [Install]
 WantedBy=multi-user.target

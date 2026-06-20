@@ -64,4 +64,4 @@ sudo systemctl daemon-reload
 sudo systemctl enable smart-thermostat-web.service smart-thermostat-hybrid.service >/dev/null 2>&1 || true
 sudo systemctl restart smart-thermostat-web.service smart-thermostat-hybrid.service
 
-echo "Smart Thermostat hybrid HTML appliance mode enabled: desktop/Chromium/native canvas disabled, WebKit HTML display owns tty7."
+echo "Smart Thermostat HTML appliance mode enabled: the wall display shows the same port-8080 web UI in native WebKit; Chromium and the old blocky native canvas are disabled."

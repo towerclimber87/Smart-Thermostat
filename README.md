@@ -57,15 +57,14 @@ http://<device-ip>:8080
 
 ## Raspberry Pi wall-panel display
 
-The recommended wall display is now the hybrid HTML runtime. The Pi runs the local Python web/API server and shows the same polished HTML UI inside a lightweight native GTK/WebKit host instead of launching full Chromium kiosk.
+The recommended wall display is now the hybrid HTML runtime. The Pi runs the local Python web/API server and shows the same polished HTML UI inside a lightweight native GTK/WebKit host instead of launching full Chromium kiosk. The old blocky Tk/canvas native screen is no longer the normal native display path.
 
 Install on the Pi:
 
 ```bash
 cd ~/Smart-Thermostat-Development
-chmod +x scripts/*.sh native/html_panel.py
-./scripts/install-pi.sh
-./scripts/display-mode.sh hybrid
+chmod +x scripts/*.sh native/*.py
+./scripts/force-html-display.sh
 sudo reboot
 ```
 
@@ -73,11 +72,19 @@ Services installed:
 
 - `smart-thermostat-web.service` — local API/static web server
 - `smart-thermostat-hybrid.service` — full-screen native WebKit host for the HTML UI
-- `smart-thermostat-native.service` — Tk/canvas native fallback
+- `smart-thermostat-native.service` — legacy alias; forwards to the HTML host in this build
 - `smart-thermostat-kiosk.service` — Chromium fallback
 - `smart-thermostat-network-watchdog.service` — Ethernet priority and Wi-Fi reconnect watchdog
 
 Hybrid configuration is stored in `/etc/smart-thermostat/hybrid.env`. More details are in `docs/html-hybrid-webview.md`.
+
+If the wall panel still shows the old blocky native screen after updating, run:
+
+```bash
+cd ~/Smart-Thermostat-Development
+./scripts/force-html-display.sh
+sudo reboot
+```
 
 ## Home Assistant auto-discovery
 

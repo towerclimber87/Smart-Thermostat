@@ -8,21 +8,24 @@ NATIVE_SERVICE="smart-thermostat-native.service"
 KIOSK_SERVICE="smart-thermostat-kiosk.service"
 
 usage() {
-  cat <<'EOF'
-Usage: scripts/display-mode.sh hybrid|native|kiosk|status
+  cat <<'USAGE'
+Usage: scripts/display-mode.sh hybrid|native|html|canvas|kiosk|status
 
-  hybrid  Recommended wall display. Keep the web/API server running and show
-          the exact local HTML UI in a lightweight native WebKit host. Chromium
-          kiosk and the old Tk/canvas native screen are disabled.
+  hybrid/html/native
+          Recommended wall display. Shows the exact local HTML UI from
+          http://127.0.0.1:8080 inside a lightweight native WebKit host.
+          Chromium kiosk and the old blocky Tk/canvas screen are disabled.
 
-  native  Fallback no-browser mode. Keep the web/API server running and use the
-          Tk/canvas native touchscreen app as the wall display.
+  canvas  Emergency fallback only. Shows the old Tk/canvas native screen.
+          Do not use this when you want the clean browser-looking UI.
 
-  kiosk   Fallback troubleshooting mode. Keep the web/API server running and use
-          Chromium kiosk as the wall display.
+  kiosk   Troubleshooting fallback. Uses full Chromium kiosk.
 
-  status  Show which display services are enabled and active.
-EOF
+  status  Show display service status.
+
+For a stubborn unit that still boots the old blocky native screen, run:
+  ./scripts/force-html-display.sh
+USAGE
 }
 
 status() {
@@ -40,17 +43,17 @@ prepare_headless_display_target() {
 }
 
 case "${MODE}" in
-  hybrid|webview|html)
+  hybrid|webview|html|native)
     prepare_headless_display_target
     sudo systemctl disable --now "${KIOSK_SERVICE}" "${NATIVE_SERVICE}" >/dev/null 2>&1 || true
     sudo systemctl enable --now "${WEB_SERVICE}" "${HYBRID_SERVICE}"
-    echo "Hybrid HTML display mode enabled. The Pi shows the local web UI in a native WebKit host; Chromium kiosk is disabled."
+    echo "HTML hybrid display enabled. The wall panel now shows the same web UI from port 8080 in native WebKit; Chromium and the old blocky native canvas are disabled."
     ;;
-  native)
+  canvas|tk|fallback)
     prepare_headless_display_target
     sudo systemctl disable --now "${KIOSK_SERVICE}" "${HYBRID_SERVICE}" >/dev/null 2>&1 || true
     sudo systemctl enable --now "${WEB_SERVICE}" "${NATIVE_SERVICE}"
-    echo "Native fallback display mode enabled. Web/API stays available; Chromium kiosk and hybrid WebKit display are disabled."
+    echo "Canvas fallback display enabled. This is the old blocky native screen, not the clean HTML web UI."
     ;;
   kiosk|chromium)
     sudo systemctl disable --now "${NATIVE_SERVICE}" "${HYBRID_SERVICE}" >/dev/null 2>&1 || true

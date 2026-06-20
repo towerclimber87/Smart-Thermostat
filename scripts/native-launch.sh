@@ -1,12 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Legacy compatibility launcher.
+#
+# Older installs may still have smart-thermostat-native.service enabled, and that
+# service calls scripts/native-xinit.sh -> scripts/native-launch.sh.  Do NOT let
+# that path start the old Tk/canvas thermostat anymore.  The requested wall
+# runtime is the beautiful HTML panel hosted by the lightweight native WebKit
+# shell, so this launcher intentionally forwards the old "native" path to the
+# HTML hybrid host.
+
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-API_URL="${SMART_THERMOSTAT_API:-http://127.0.0.1:8080}"
-HEALTH_TIMEOUT_SECONDS="${SMART_NATIVE_HEALTH_TIMEOUT_SECONDS:-75}"
-DISPLAY_ROTATION="${SMART_NATIVE_ROTATION:-left}"
-TOUCH_MATRIX="${SMART_NATIVE_TOUCH_MATRIX:--1 0 1 0 -1 1 0 0 1}"
-APP="${PROJECT_DIR}/native/thermostat_native.py"
+PANEL_URL="${SMART_HYBRID_URL:-${SMART_THERMOSTAT_URL:-${SMART_THERMOSTAT_API:-http://127.0.0.1:8080}}}"
+API_URL="${SMART_THERMOSTAT_API:-${PANEL_URL}}"
+HEALTH_TIMEOUT_SECONDS="${SMART_NATIVE_HEALTH_TIMEOUT_SECONDS:-${SMART_HYBRID_HEALTH_TIMEOUT_SECONDS:-75}}"
+DISPLAY_ROTATION="${SMART_HYBRID_ROTATION:-${SMART_NATIVE_ROTATION:-left}}"
+TOUCH_MATRIX="${SMART_HYBRID_TOUCH_MATRIX:-${SMART_NATIVE_TOUCH_MATRIX:--1 0 1 0 -1 1 0 0 1}}"
+APP="${PROJECT_DIR}/native/html_panel.py"
 
 ensure_runtime_dir() {
   local runtime_dir="${XDG_RUNTIME_DIR:-}"
@@ -33,7 +43,7 @@ PY
     fi
     now="$(date +%s)"
     if (( now - started >= HEALTH_TIMEOUT_SECONDS )); then
-      echo "Native display API health check timed out after ${HEALTH_TIMEOUT_SECONDS}s: ${health_url}" >&2
+      echo "HTML display API health check timed out after ${HEALTH_TIMEOUT_SECONDS}s: ${health_url}" >&2
       return 1
     fi
     sleep 1
@@ -98,11 +108,27 @@ apply_display_calibration() {
 }
 
 main() {
+  if [[ ! -f "${APP}" ]]; then
+    echo "Missing ${APP}. Apply the hybrid HTML display update first." >&2
+    exit 1
+  fi
+
   ensure_runtime_dir
   wait_for_api
   wait_for_display
   apply_display_calibration
+
   export SMART_THERMOSTAT_API="${API_URL}"
+  export SMART_THERMOSTAT_URL="${PANEL_URL}"
+  export SMART_HYBRID_URL="${PANEL_URL}"
+  export SMART_HYBRID_FULLSCREEN="${SMART_HYBRID_FULLSCREEN:-1}"
+  export SMART_HYBRID_WIDTH="${SMART_HYBRID_WIDTH:-1280}"
+  export SMART_HYBRID_HEIGHT="${SMART_HYBRID_HEIGHT:-800}"
+  export XDG_CACHE_HOME="${SMART_HYBRID_CACHE_DIR:-/tmp/smart-thermostat-webkit-cache-$(id -u)}"
+  export XDG_DATA_HOME="${SMART_HYBRID_DATA_DIR:-/tmp/smart-thermostat-webkit-data-$(id -u)}"
+  mkdir -p "${XDG_CACHE_HOME}" "${XDG_DATA_HOME}"
+  chmod 700 "${XDG_CACHE_HOME}" "${XDG_DATA_HOME}" 2>/dev/null || true
+
   exec /usr/bin/python3 "${APP}"
 }
 

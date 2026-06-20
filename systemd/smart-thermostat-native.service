@@ -1,8 +1,8 @@
 [Unit]
-Description=IHA native thermostat appliance display
+Description=IHA HTML thermostat appliance display (legacy native alias)
 After=systemd-user-sessions.service smart-thermostat-web.service
 Wants=smart-thermostat-web.service
-Conflicts=getty@tty7.service smart-thermostat-kiosk.service
+Conflicts=getty@tty7.service smart-thermostat-kiosk.service smart-thermostat-hybrid.service
 
 [Service]
 Type=simple
@@ -12,6 +12,7 @@ Environment=DISPLAY=:0
 Environment=XAUTHORITY=/home/__USER__/.Xauthority
 Environment=XDG_RUNTIME_DIR=/tmp/smart-thermostat-runtime-__UID__
 EnvironmentFile=-/etc/smart-thermostat/native.env
+EnvironmentFile=-/etc/smart-thermostat/hybrid.env
 ExecStart=__PROJECT_DIR__/scripts/native-xinit.sh
 Restart=always
 RestartSec=3
