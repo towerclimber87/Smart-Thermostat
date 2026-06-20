@@ -464,9 +464,12 @@ class NativeThermostatApp:
         self.text(tx, (y1+y2)//2, text, size, color, weight)
 
     def label_chip(self, x:int, y:int, label:str, value:str, w:int=118) -> None:
-        self.round_rect(self.sx(x), self.sy(y), self.sx(x+w), self.sy(y+22), self.sy(11), "#2a3038", "#343c46", 1)
-        self.text(self.sx(x+14), self.sy(y+11), label.upper(), 10, MUTED, "bold", "w")
-        self.text(self.sx(x+w-10), self.sy(y+11), value, 13, TEXT, "bold", "e")
+        # Small web-style environmental chip.  Keep it subtle and readable on the
+        # 10.1-inch panel: one clean pill, compact label, strong value.
+        x1, y1, x2, y2 = self.sx(x), self.sy(y), self.sx(x+w), self.sy(y+24)
+        self.round_rect_shadow(x1, y1, x2, y2, self.sy(12), "#242c35", "#3d4854", 1, shadow="#06090d", offset=self.sy(1))
+        self.text(self.sx(x+12), self.sy(y+12), label.upper(), 8, "#b8c4d0", "bold", "w")
+        self.text(self.sx(x+w-10), self.sy(y+12), value.upper(), 11, TEXT, "bold", "e")
 
     def small_button(self, x1:int, y1:int, x2:int, y2:int, label:str, action:Callable[[], None], fill:str=PANEL_2, outline:str="#2e465b", text:str=TEXT, size:int=12, tag:str="") -> None:
         self.button(x1, y1, x2, y2, label, action, fill=fill, outline=outline, text=text, tag=tag, size=size, radius=max(6, (y2-y1)//3), border=1)
@@ -550,9 +553,12 @@ class NativeThermostatApp:
         action_color = CYAN if "cool" in action_label.lower() else RED if "heat" in action_label.lower() else GREEN
 
         # Web parity thermostat page, scaled down for the 10.1-inch Pi display.
-        self.label_chip(60, 168, "Outdoor", f"{outdoor:.0f}°", 112)
-        self.label_chip(180, 168, "Wind", f"{wind:.0f} mph", 104)
-        self.text(self.sx(58), self.sy(236), "Climate Control", 46, TEXT, "bold", "w")
+        self.label_chip(60, 166, "Outdoor", f"{outdoor:.0f}°", 112)
+        self.label_chip(180, 166, "Wind", f"{wind:.0f} mph", 104)
+        # The web title is large, but on the native 10-inch panel the previous
+        # size consumed too much of the layout.  Keep the same position but make
+        # it about 40% smaller so the page breathes like the browser version.
+        self.text(self.sx(58), self.sy(228), "Climate Control", 28, TEXT, "bold", "w")
 
         notice = self.auto_switch_notice()
         if notice:
@@ -565,7 +571,9 @@ class NativeThermostatApp:
             self.text(self.sx(185), self.sy(350), f"To {title_case(to_mode)}", 17, TEXT, "bold")
             self.pill(self.sx(152), self.sy(364), self.sx(218), self.sy(384), f"INSIDE {switch_temp:.0f}°", fill="#1f3945", outline="#335d6e", color=TEXT, size=8)
 
-        self.pill(self.sx(575), self.sy(262), self.sx(705), self.sy(292), action_label, fill="#252b36", outline="#3a4351", color=TEXT, size=11, dot=action_color)
+        # Status pill belongs above the dial, not partially underneath the outer
+        # dial ring.  If it overlaps the ring it looks like a floating artifact.
+        self.pill(self.sx(558), self.sy(234), self.sx(722), self.sy(260), action_label, fill="#252b36", outline="#3a4351", color=TEXT, size=10, dot=action_color)
         self.draw_web_style_dial(current, target, action_label, action_color)
 
         self.circle_button(378, 446, 31, "−", lambda: self.change_target(-1), fill="#242b34", outline="#3a444f", color=TEXT, size=26)
@@ -880,8 +888,15 @@ class NativeThermostatApp:
         mode = self.effective_limit_mode()
         limits_all = self.thermostat.get("limits", {}) if isinstance(self.thermostat.get("limits"), dict) else {}
         limits = limits_all.get(mode) or limits_all.get("cool") or limits_all.get("auto") or {}
-        low = as_float(limits.get("min"), 45)
-        high = as_float(limits.get("max"), 95)
+        # Match the comfort-limit behavior from the web panel.  Auto→Cool should
+        # not fall back to the broad 45–95 safety range; it should use the cool
+        # comfort range, normally 65–80, unless the saved config overrides it.
+        if mode == "heat":
+            default_low, default_high = 60, 78
+        else:
+            default_low, default_high = 65, 80
+        low = as_float(limits.get("min"), default_low)
+        high = as_float(limits.get("max"), default_high)
         if high <= low:
             high = low + 2
         return low, high
