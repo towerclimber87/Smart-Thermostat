@@ -5,6 +5,7 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WEB_SERVICE_NAME="smart-thermostat-web.service"
 KIOSK_SERVICE_NAME="smart-thermostat-kiosk.service"
 NATIVE_SERVICE_NAME="smart-thermostat-native.service"
+HYBRID_SERVICE_NAME="smart-thermostat-hybrid.service"
 UPDATE_AGENT_SERVICE_NAME="smart-thermostat-update-agent.service"
 NETWORK_WATCHDOG_SERVICE_NAME="smart-thermostat-network-watchdog.service"
 
@@ -26,13 +27,42 @@ install_packages() {
     avahi-daemon
     git
     python3
+    python3-gi
     python3-tk
     python3-zeroconf
     x11-xserver-utils
     xinit
     openbox
     unclutter
+    gir1.2-gtk-3.0
   )
+
+  local optional_webview_packages=(
+    gir1.2-webkit2-4.1
+    gir1.2-webkit2-4.0
+    dbus-x11
+  )
+  local optional_webview_package
+  local webkit_gir_added=0
+  for optional_webview_package in "${optional_webview_packages[@]}"; do
+    if ! apt-cache show "${optional_webview_package}" >/dev/null 2>&1; then
+      continue
+    fi
+    case "${optional_webview_package}" in
+      gir1.2-webkit2-4.*)
+        if [[ "${webkit_gir_added}" == "0" ]]; then
+          packages+=("${optional_webview_package}")
+          webkit_gir_added=1
+        fi
+        ;;
+      *)
+        packages+=("${optional_webview_package}")
+        ;;
+    esac
+  done
+  if [[ "${webkit_gir_added}" == "0" ]]; then
+    echo "WARNING: WebKitGTK GIR package was not found in apt. Hybrid HTML display needs gir1.2-webkit2-4.1 or gir1.2-webkit2-4.0." >&2
+  fi
 
   local optional_hardware_packages=(
     python3-gpiozero
@@ -49,7 +79,7 @@ install_packages() {
     fi
   done
 
-  # Chromium is no longer installed by default. The wall panel runs the native
+  # Chromium is no longer installed by default. The wall panel runs the hybrid HTML WebKit
   # touchscreen client while the web service remains available for admin/debug
   # from another browser. Install Chromium only when you explicitly want the
   # fallback kiosk service available on the Pi itself:
@@ -60,7 +90,7 @@ install_packages() {
     elif apt-cache show chromium >/dev/null 2>&1; then
       packages+=(chromium)
     else
-      echo "WARNING: Could not find chromium-browser or chromium in apt. Native mode does not require it." >&2
+      echo "WARNING: Could not find chromium-browser or chromium in apt. Hybrid/native mode does not require it." >&2
     fi
   fi
 
@@ -140,7 +170,8 @@ EOF_REBOOT_HELPER
 Cmnd_Alias SMART_THERMOSTAT_REBOOT = /usr/local/sbin/smart-thermostat-reboot, /usr/bin/systemctl reboot, /bin/systemctl reboot, ${systemctl_bin} reboot, /usr/sbin/reboot, /sbin/reboot, /usr/bin/reboot
 Cmnd_Alias SMART_THERMOSTAT_WEB_RESTART = /usr/bin/systemctl restart ${WEB_SERVICE_NAME}, /bin/systemctl restart ${WEB_SERVICE_NAME}, ${systemctl_bin} restart ${WEB_SERVICE_NAME}
 Cmnd_Alias SMART_THERMOSTAT_NATIVE_RESTART = /usr/bin/systemctl restart ${NATIVE_SERVICE_NAME}, /bin/systemctl restart ${NATIVE_SERVICE_NAME}, ${systemctl_bin} restart ${NATIVE_SERVICE_NAME}
-${INSTALL_USER} ALL=(root) NOPASSWD: SMART_THERMOSTAT_REBOOT, SMART_THERMOSTAT_WEB_RESTART, SMART_THERMOSTAT_NATIVE_RESTART
+Cmnd_Alias SMART_THERMOSTAT_HYBRID_RESTART = /usr/bin/systemctl restart ${HYBRID_SERVICE_NAME}, /bin/systemctl restart ${HYBRID_SERVICE_NAME}, ${systemctl_bin} restart ${HYBRID_SERVICE_NAME}
+${INSTALL_USER} ALL=(root) NOPASSWD: SMART_THERMOSTAT_REBOOT, SMART_THERMOSTAT_WEB_RESTART, SMART_THERMOSTAT_NATIVE_RESTART, SMART_THERMOSTAT_HYBRID_RESTART
 EOF_SUDOERS
   sudo chmod 440 /etc/sudoers.d/smart-thermostat-panel
   sudo visudo -cf /etc/sudoers.d/smart-thermostat-panel >/dev/null
@@ -154,11 +185,12 @@ if getent group i2c >/dev/null 2>&1; then
   sudo usermod -aG i2c "${INSTALL_USER}" || true
 fi
 enable_i2c
-chmod +x "${PROJECT_DIR}/scripts/install-pi.sh" "${PROJECT_DIR}/scripts/display-mode.sh" "${PROJECT_DIR}/scripts/kiosk-launch.sh" "${PROJECT_DIR}/scripts/kiosk-xinit.sh" "${PROJECT_DIR}/scripts/native-launch.sh" "${PROJECT_DIR}/scripts/native-xinit.sh" "${PROJECT_DIR}/scripts/network_watchdog.py" 2>/dev/null || true
+chmod +x "${PROJECT_DIR}/scripts/install-pi.sh" "${PROJECT_DIR}/scripts/display-mode.sh" "${PROJECT_DIR}/scripts/kiosk-launch.sh" "${PROJECT_DIR}/scripts/kiosk-xinit.sh" "${PROJECT_DIR}/scripts/native-launch.sh" "${PROJECT_DIR}/scripts/native-xinit.sh" "${PROJECT_DIR}/scripts/hybrid-launch.sh" "${PROJECT_DIR}/scripts/hybrid-xinit.sh" "${PROJECT_DIR}/native/html_panel.py" "${PROJECT_DIR}/scripts/network_watchdog.py" 2>/dev/null || true
 
 install_service "${WEB_SERVICE_NAME}"
 install_service "${KIOSK_SERVICE_NAME}"
 install_service "${NATIVE_SERVICE_NAME}"
+install_service "${HYBRID_SERVICE_NAME}"
 install_service "${UPDATE_AGENT_SERVICE_NAME}"
 install_service "${NETWORK_WATCHDOG_SERVICE_NAME}"
 
@@ -188,6 +220,21 @@ EOF_KIOSK
   sudo chmod 600 /etc/smart-thermostat/kiosk.env
 fi
 
+sudo tee /etc/smart-thermostat/hybrid.env >/dev/null <<'EOF_HYBRID'
+SMART_THERMOSTAT_URL=http://127.0.0.1:8080
+SMART_THERMOSTAT_API=http://127.0.0.1:8080
+SMART_HYBRID_HEALTH_TIMEOUT_SECONDS=75
+SMART_HYBRID_ROTATION=left
+SMART_HYBRID_TOUCH_MATRIX=-1 0 1 0 -1 1 0 0 1
+SMART_HYBRID_FULLSCREEN=1
+SMART_HYBRID_WIDTH=1280
+SMART_HYBRID_HEIGHT=800
+SMART_HYBRID_CACHE_DIR=/tmp/smart-thermostat-webkit-cache
+SMART_HYBRID_DATA_DIR=/tmp/smart-thermostat-webkit-data
+SMART_HYBRID_TITLE=Smart Thermostat
+EOF_HYBRID
+sudo chmod 600 /etc/smart-thermostat/hybrid.env
+
 sudo tee /etc/smart-thermostat/native.env >/dev/null <<'EOF_NATIVE'
 SMART_THERMOSTAT_API=http://127.0.0.1:8080
 SMART_NATIVE_HEALTH_TIMEOUT_SECONDS=75
@@ -208,18 +255,19 @@ install_sudoers
 sudo systemctl daemon-reload
 sudo systemctl enable --now "${WEB_SERVICE_NAME}"
 sudo systemctl enable --now "${NETWORK_WATCHDOG_SERVICE_NAME}"
-sudo systemctl disable --now "${KIOSK_SERVICE_NAME}" >/dev/null 2>&1 || true
-sudo systemctl enable --now "${NATIVE_SERVICE_NAME}"
+sudo systemctl disable --now "${KIOSK_SERVICE_NAME}" "${NATIVE_SERVICE_NAME}" >/dev/null 2>&1 || true
+sudo systemctl enable --now "${HYBRID_SERVICE_NAME}"
 if [[ -f "/etc/systemd/system/${UPDATE_AGENT_SERVICE_NAME}" ]]; then
   sudo systemctl enable --now "${UPDATE_AGENT_SERVICE_NAME}" || true
 fi
 
 if systemctl get-default | grep -q '^graphical.target$'; then
-  echo "NOTE: native appliance mode can run from multi-user.target without the desktop."
-  echo "Run ./scripts/appliance-mode.sh or ./scripts/display-mode.sh native to disable the desktop/Chromium display path."
+  echo "NOTE: hybrid appliance mode can run from multi-user.target without the desktop."
+  echo "Run ./scripts/appliance-mode.sh or ./scripts/display-mode.sh hybrid to disable the desktop/Chromium display path."
 fi
 
-echo "IHA web service, native appliance service, and network watchdog installed."
+echo "IHA web service, hybrid HTML appliance display, native fallback, and network watchdog installed."
 echo "Web UI/API: http://localhost:8080"
-echo "Native service: sudo systemctl restart ${NATIVE_SERVICE_NAME}"
+echo "Hybrid HTML display: sudo systemctl restart ${HYBRID_SERVICE_NAME}"
+echo "Native fallback service: sudo systemctl restart ${NATIVE_SERVICE_NAME}"
 echo "Home Assistant discovery uses mDNS service _iha-thermostat._tcp.local."

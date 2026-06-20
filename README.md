@@ -55,26 +55,29 @@ http://<device-ip>:8080
 
 
 
-## Raspberry Pi wall-panel kiosk
+## Raspberry Pi wall-panel display
 
-This build includes a Raspberry Pi kiosk setup for the wall-mounted thermostat panel. The Pi runs the local Python server and starts Chromium automatically in full-screen kiosk mode at `http://127.0.0.1:8080`.
+The recommended wall display is now the hybrid HTML runtime. The Pi runs the local Python web/API server and shows the same polished HTML UI inside a lightweight native GTK/WebKit host instead of launching full Chromium kiosk.
 
 Install on the Pi:
 
 ```bash
 cd ~/Smart-Thermostat-Development
-chmod +x scripts/install-pi.sh scripts/kiosk-launch.sh scripts/network_watchdog.py
+chmod +x scripts/*.sh native/html_panel.py
 ./scripts/install-pi.sh
+./scripts/display-mode.sh hybrid
 sudo reboot
 ```
 
 Services installed:
 
 - `smart-thermostat-web.service` — local API/static web server
-- `smart-thermostat-kiosk.service` — Chromium kiosk launcher
+- `smart-thermostat-hybrid.service` — full-screen native WebKit host for the HTML UI
+- `smart-thermostat-native.service` — Tk/canvas native fallback
+- `smart-thermostat-kiosk.service` — Chromium fallback
 - `smart-thermostat-network-watchdog.service` — Ethernet priority and Wi-Fi reconnect watchdog
 
-Kiosk configuration is stored in `/etc/smart-thermostat/kiosk.env`. More details are in `docs/raspberry-pi-notes.md`.
+Hybrid configuration is stored in `/etc/smart-thermostat/hybrid.env`. More details are in `docs/html-hybrid-webview.md`.
 
 ## Home Assistant auto-discovery
 

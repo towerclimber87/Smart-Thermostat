@@ -1,3 +1,32 @@
+# Native / Hybrid Thermostat Appliance Mode
+
+## Current recommended mode: Hybrid HTML WebView
+
+The wall display now defaults to the hybrid HTML runtime.  That means the screen shows the same polished HTML/CSS interface you see from a browser, but it is hosted by `native/html_panel.py` in a small GTK/WebKit full-screen shell instead of the full Chromium kiosk stack.
+
+```bash
+cd ~/Smart-Thermostat-Development
+chmod +x scripts/*.sh native/html_panel.py
+./scripts/install-pi.sh
+./scripts/display-mode.sh hybrid
+```
+
+Use the older Tk/canvas native UI only as a fallback:
+
+```bash
+./scripts/display-mode.sh native
+```
+
+Use Chromium only as a troubleshooting fallback:
+
+```bash
+./scripts/display-mode.sh kiosk
+```
+
+More detail is in `docs/html-hybrid-webview.md`.
+
+---
+
 # Native Thermostat Appliance Mode
 
 This build adds a native Raspberry Pi touchscreen client so the wall controller no longer needs Chromium for the on-device display.
