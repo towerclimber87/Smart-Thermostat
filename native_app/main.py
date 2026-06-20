@@ -307,7 +307,12 @@ class ThermostatScreen(Page):
         self.notice = QLabel("")
         self.notice.setAlignment(Qt.AlignCenter)
         self.notice.setFont(font(12, QFont.Black))
+        self.notice.setCursor(Qt.PointingHandCursor)
+        self.notice.setMinimumSize(220, 96)
+        self.notice.setMaximumWidth(260)
+        self.notice.setWordWrap(True)
         self.notice.setStyleSheet("background:rgba(2,78,130,0.65); color:#f6f8ff; border:1px solid rgba(71,224,255,0.45); border-radius:22px; padding:12px 18px;")
+        self.notice.mousePressEvent = lambda event: self.show_auto_switch_menu()
         self.door_card = InfoTile("Inside Doors", "CLOSED", "▯", good=True)
         self.alarm_card = InfoTile("Alarmo", "DISARMED", "盾", good=True)
         self.virtual_panel = VirtualOutputsPanel()
@@ -448,7 +453,10 @@ class ThermostatScreen(Page):
         safety = str(t.get("safetyMode") or outputs.get("safetyMode") or "").lower()
         if safety in {"heat", "cool"}:
             return safety
-        active = str(t.get("autoActiveMode") or t.get("activeMode") or t.get("mode") or "cool").lower()
+        mode = str(t.get("mode") or "cool").lower()
+        if mode in {"heat", "cool"}:
+            return mode
+        active = str(t.get("autoActiveMode") or t.get("activeMode") or "cool").lower()
         return active if active in {"heat", "cool"} else "cool"
 
     def resizeEvent(self, event):
@@ -557,6 +565,7 @@ class ThermostatScreen(Page):
             else:
                 title = "Safety Cool Engaged"
                 body = f"Room is {fmt_temp(current)}. Cooling will stay active until the room is back below {fmt_temp(high)}."
+            self.notice.hide()
             self.alert_banner.set_alert("safety", title, body, dismiss=False, revert=False, bypass=False)
             self.position_alert_banner()
             return
@@ -568,26 +577,66 @@ class ThermostatScreen(Page):
         auto_until = self.safe_float(t.get("autoLockoutUntil"), 0.0)
         if pending in {"heat", "cool"} and until > now_ms:
             remaining = self.format_remaining((until - now_ms) / 1000)
+            self.notice.hide()
             self.alert_banner.set_alert("lockout", f"{pending.capitalize()} Cooldown", f"Changeover delay is active. {pending.capitalize()} starts in {remaining}, or tap Bypass.", dismiss=False, revert=False, bypass=True)
             self.position_alert_banner()
             return
         if auto_pending in {"heat", "cool"} and auto_until > now_ms:
             remaining = self.format_remaining((auto_until - now_ms) / 1000)
+            self.notice.hide()
             self.alert_banner.set_alert("lockout", f"Auto {auto_pending.capitalize()} Cooldown", f"Auto mode is waiting on changeover delay. {auto_pending.capitalize()} starts in {remaining}, or tap Bypass.", dismiss=False, revert=False, bypass=True)
             self.position_alert_banner()
             return
 
         notice = t.get("autoSwitchNotice") if isinstance(t.get("autoSwitchNotice"), dict) else {}
         if notice.get("active"):
+            self.alert_banner.hide()
             to_mode = str(notice.get("toMode") or self.active_visual_mode()).lower()
-            from_mode = str(notice.get("fromMode") or "").lower()
             switch_temp = notice.get("switchTemp") or current
-            title = f"Auto-Switched to {to_mode.capitalize()}"
-            body = f"Inside is {fmt_temp(switch_temp)}. The panel changed from {from_mode.capitalize() or 'the previous mode'} to {to_mode.capitalize()} based on your comfort rules."
-            self.alert_banner.set_alert(to_mode or "auto", title, body, dismiss=True, revert=from_mode in {"heat", "cool"}, bypass=False)
-            self.position_alert_banner()
+            mode_label = to_mode.capitalize() if to_mode in {"heat", "cool"} else "Auto"
+            self.notice.setText(f"AUTO-SWITCHED\nTo {mode_label}\nINSIDE {fmt_temp(switch_temp)}")
+            if to_mode == "heat":
+                self.notice.setStyleSheet("background:qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 rgba(120,16,38,0.88), stop:1 rgba(28,12,28,0.88)); color:#ffffff; border:1px solid rgba(255,74,111,0.72); border-radius:22px; padding:12px 18px;")
+            else:
+                self.notice.setStyleSheet("background:qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 rgba(2,78,130,0.88), stop:1 rgba(10,28,55,0.88)); color:#f6f8ff; border:1px solid rgba(71,224,255,0.62); border-radius:22px; padding:12px 18px;")
+            self.notice.show()
+            self.notice.raise_()
             return
+        self.notice.hide()
         self.alert_banner.hide()
+
+    def show_auto_switch_menu(self):
+        t = self.thermostat_view()
+        notice = t.get("autoSwitchNotice") if isinstance(t.get("autoSwitchNotice"), dict) else {}
+        if not notice.get("active"):
+            return
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background:rgba(18,27,45,245);
+                color:#f6f8ff;
+                border:1px solid rgba(104,222,255,0.45);
+                border-radius:14px;
+                padding:8px;
+                font-weight:900;
+                font-size:15px;
+            }
+            QMenu::item {
+                padding:11px 48px 11px 18px;
+                border-radius:10px;
+            }
+            QMenu::item:selected {
+                background:rgba(72,214,255,210);
+                color:#06101f;
+            }
+        """)
+        from_mode = str(notice.get("fromMode") or "").lower()
+        if from_mode in {"heat", "cool"}:
+            revert = menu.addAction(f"Revert to {from_mode.capitalize()}")
+            revert.triggered.connect(self.revert_auto_switch)
+        dismiss = menu.addAction("Dismiss")
+        dismiss.triggered.connect(self.dismiss_auto_switch)
+        menu.exec_(self.notice.mapToGlobal(self.notice.rect().bottomLeft()))
 
     def dismiss_auto_switch(self):
         try:
@@ -801,9 +850,12 @@ class ThermostatScreen(Page):
     def sync(self, config: dict, thermostat: dict):
         super().sync(config, thermostat)
         t = self.thermostat_view()
-        mode = str(t.get("mode") or "auto")
+        mode = str(t.get("mode") or "auto").lower()
         away = bool(t.get("away"))
-        active = str(t.get("autoActiveMode") or t.get("activeMode") or mode)
+        if mode == "auto":
+            active = str(t.get("autoActiveMode") or t.get("activeMode") or "cool").lower()
+        else:
+            active = mode
         self.dial.setData(t.get("currentTemp"), t.get("targetTemp"), mode, active, t.get("limits"))
         for m, b in self.mode_buttons.items():
             selected = (m == mode and not away) or (m == "away" and away)
@@ -2158,8 +2210,8 @@ class SettingsDialog(QDialog):
         self.build_value("coolMax", "Cool High", nested_get(t, "limits", "cool", "max", default=80), 1, 1, 50, 90)
         self.build_value("heatMin", "Heat Low", nested_get(t, "limits", "heat", "min", default=60), 1, 2, 40, 80)
         self.build_value("heatMax", "Heat High", nested_get(t, "limits", "heat", "max", default=78), 1, 3, 40, 85)
-        self.build_value("autoCoolOutdoorTarget", "Cool Switch", t.get("autoCoolOutdoorTarget", 70), 2, 0, 40, 100)
-        self.build_value("autoHeatOutdoorTarget", "Heat Switch", t.get("autoHeatOutdoorTarget", 65), 2, 1, 40, 100)
+        self.build_value("autoCoolOutdoorTarget", "Cool Mode Switch", t.get("autoCoolOutdoorTarget", 70), 2, 0, 40, 100)
+        self.build_value("autoHeatOutdoorTarget", "Heat Mode Switch", t.get("autoHeatOutdoorTarget", 65), 2, 1, 40, 100)
         self.build_value("autoChangeoverLockoutMinutes", "Auto Delay", int(float(t.get("autoChangeoverLockoutMinutes", 120))/60), 2, 2, 0, 8, " hr")
         self.build_value("manualChangeoverLockoutMinutes", "Manual Delay", t.get("manualChangeoverLockoutMinutes", 10), 2, 3, 0, 60, " min")
         self.build_value("coolFanRemainOnMinutes", "Cool Fan", t.get("coolFanRemainOnMinutes", 2), 4, 2, 0, 15, " min")
@@ -2190,21 +2242,13 @@ class SettingsDialog(QDialog):
         note.setStyleSheet("color:#c4d0e5; background:rgba(5,10,20,0.42); border:1px dashed rgba(160,180,210,0.26); border-radius:10px; padding:7px;")
         people.layout().addWidget(note)
 
-        theme = self.add_section("Theme", 5, 0, 1, 2)
-        theme_row = QHBoxLayout()
-        theme_row.setSpacing(8)
-        theme.layout().addLayout(theme_row)
-        for name in ["Regular", "Star Trek", "Christmas"]:
-            b = RoundButton(name, active=name == "Regular", min_h=40)
-            theme_row.addWidget(b)
-
-        code_sec = self.add_section("Security Code", 5, 2, 1, 1)
+        code_sec = self.add_section("Security Code", 5, 0, 1, 1)
         current_security = str((self.s.config.get("alarm") or {}).get("disarmCode") or "")
         self.security_code_field = self.code_field(current_security, self.edit_security_code)
         self.security_code_field.setPlaceholderText("Alarm disarm code")
         code_sec.layout().addWidget(self.security_code_field)
 
-        settings_code_sec = self.add_section("Settings Code", 5, 3, 1, 1)
+        settings_code_sec = self.add_section("Settings Code", 5, 1, 1, 1)
         current_settings = str((self.s.config.get("security") or {}).get("settingsCode") or "")
         self.settings_code_field = self.code_field(current_settings, self.edit_settings_code)
         self.settings_code_field.setPlaceholderText("Settings access code")
