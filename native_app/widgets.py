@@ -250,7 +250,8 @@ class ThermostatDial(QWidget):
         self.min_temp = 60.0
         self.max_temp = 80.0
         self.dragging = False
-        self.setMinimumSize(420, 420)
+        self.setMinimumSize(360, 360)
+        self.setMaximumSize(470, 470)
         self.setCursor(Qt.PointingHandCursor)
 
     def setData(self, current=None, target=None, mode=None, active_mode=None, limits=None):
@@ -281,7 +282,7 @@ class ThermostatDial(QWidget):
         self.update()
 
     def sizeHint(self):
-        return QSize(520, 520)
+        return QSize(455, 455)
 
     def _angle_for_temp(self, temp: float) -> float:
         t = max(self.min_temp, min(self.max_temp, float(temp)))

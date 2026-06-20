@@ -743,6 +743,7 @@ class ThermostatScreen(Page):
     def __init__(self, app_state: AppState, parent=None):
         super().__init__(app_state, parent)
         self.dial = ThermostatDial()
+        self.dial.setMaximumSize(470, 470)
         self.mode_buttons: dict[str, RoundButton] = {}
         self.fan_buttons: dict[str, RoundButton] = {}
         self.fan_status_button: RoundButton | None = None
@@ -809,11 +810,11 @@ class ThermostatScreen(Page):
         self.virtual_temp_push_timer.setSingleShot(True)
         self.virtual_temp_push_timer.timeout.connect(self.push_virtual_temp)
         self.virtual_panel.tempChanged.connect(self.set_virtual_temp)
-        self.minus = IconCircle("−", "minus", 96)
-        self.plus = IconCircle("+", "plus", 96)
+        self.minus = IconCircle("−", "minus", 82)
+        self.plus = IconCircle("+", "plus", 82)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(54, 20, 54, 40)
+        root.setContentsMargins(42, 18, 42, 34)
         root.setSpacing(0)
         title_row = QHBoxLayout()
         left_title = QVBoxLayout()
@@ -828,8 +829,8 @@ class ThermostatScreen(Page):
         root.addLayout(title_row)
 
         mid = QGridLayout()
-        mid.setHorizontalSpacing(28)
-        mid.setVerticalSpacing(12)
+        mid.setHorizontalSpacing(20)
+        mid.setVerticalSpacing(10)
         mid.setColumnStretch(0, 3)
         mid.setColumnStretch(1, 1)
         mid.setColumnStretch(2, 5)
@@ -857,7 +858,8 @@ class ThermostatScreen(Page):
         left_col.addWidget(self.door_card, 0, Qt.AlignCenter)
         left_col.addStretch(1)
         self.schedule_shortcuts = QWidget()
-        self.schedule_shortcuts_lay = QHBoxLayout(self.schedule_shortcuts)
+        self.schedule_shortcuts.setMaximumWidth(210)
+        self.schedule_shortcuts_lay = QVBoxLayout(self.schedule_shortcuts)
         self.schedule_shortcuts_lay.setContentsMargins(0, 0, 0, 0)
         self.schedule_shortcuts_lay.setSpacing(6)
         left_col.addWidget(self.schedule_shortcuts, 0, Qt.AlignCenter)
@@ -1250,14 +1252,16 @@ class ThermostatScreen(Page):
             name = str(sched.get("name") or "Schedule").strip()[:18] or "Schedule"
             b = RoundButton(name, active=False, min_h=36)
             b.setFixedHeight(36)
-            b.setMinimumWidth(max(88, min(190, 42 + len(name) * 11)))
+            # Fit the label, but cap the bubble so it cannot widen the whole
+            # left column and shove the dial/buttons into each other.
+            b.setFixedWidth(max(92, min(190, 42 + len(name) * 10)))
             b.setStyleSheet("""
                 QPushButton {
                     background:rgba(255,255,255,0.075);
                     color:#eaf3ff;
                     border:1px solid rgba(130,229,255,0.28);
                     border-radius:18px;
-                    padding:0 16px;
+                    padding:0 14px;
                     font-weight:900;
                 }
                 QPushButton:pressed {
