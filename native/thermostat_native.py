@@ -36,6 +36,8 @@ VERSION_FILE = ROOT / "VERSION"
 DEFAULT_API_BASE = os.environ.get("SMART_THERMOSTAT_API", "http://127.0.0.1:8080").rstrip("/")
 POLL_MS = int(os.environ.get("SMART_NATIVE_POLL_MS", "1500"))
 SLOW_POLL_MS = int(os.environ.get("SMART_NATIVE_SLOW_POLL_MS", "8000"))
+FRAME_MS = max(250, int(os.environ.get("SMART_NATIVE_FRAME_MS", "500")))
+DISPLAY_RUNTIME_LABEL = os.environ.get("SMART_NATIVE_DISPLAY_LABEL", "Native touchscreen + local web API")
 THERMOSTAT_ONLY = os.environ.get("SMART_NATIVE_THERMOSTAT_ONLY", "0").strip().lower() not in {"0", "false", "no", "off"}
 VISUAL_MODE = os.environ.get("SMART_NATIVE_VISUAL_MODE", "web_parity").strip().lower()
 BG = "#121820"
@@ -271,7 +273,7 @@ class NativeThermostatApp:
         self._schedule_fetch()
         self.draw()
         if not self.shutdown_event.is_set():
-            self.root.after(500, self._tick)
+            self.root.after(FRAME_MS, self._tick)
 
     def _process_jobs(self) -> None:
         while True:
@@ -1646,7 +1648,9 @@ class NativeThermostatApp:
             f"Address: {info.get('address') or info.get('ipAddress') or socket.gethostname()}",
             f"Host: {info.get('host') or socket.gethostname()}",
             f"Uptime: {info.get('uptime') or ''}",
-            f"Display: Native Tk web-parity appliance, no Chromium",
+            f"Display: {DISPLAY_RUNTIME_LABEL}",
+            f"Chromium: disabled for the wall display",
+            f"Native frame: {FRAME_MS} ms  •  API poll: {POLL_MS}/{SLOW_POLL_MS} ms",
         ]
         y = y1+self.sy(105)
         for line in lines:

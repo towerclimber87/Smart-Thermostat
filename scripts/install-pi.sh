@@ -29,6 +29,8 @@ install_packages() {
     python3-tk
     python3-zeroconf
     x11-xserver-utils
+    xinit
+    openbox
     unclutter
   )
 
@@ -47,12 +49,19 @@ install_packages() {
     fi
   done
 
-  if apt-cache show chromium-browser >/dev/null 2>&1; then
-    packages+=(chromium-browser)
-  elif apt-cache show chromium >/dev/null 2>&1; then
-    packages+=(chromium)
-  else
-    echo "WARNING: Could not find chromium-browser or chromium in apt. Install Chromium before enabling kiosk mode." >&2
+  # Chromium is no longer installed by default. The wall panel runs the native
+  # touchscreen client while the web service remains available for admin/debug
+  # from another browser. Install Chromium only when you explicitly want the
+  # fallback kiosk service available on the Pi itself:
+  #   SMART_INSTALL_CHROMIUM=1 ./scripts/install-pi.sh
+  if [[ "${SMART_INSTALL_CHROMIUM:-0}" == "1" ]]; then
+    if apt-cache show chromium-browser >/dev/null 2>&1; then
+      packages+=(chromium-browser)
+    elif apt-cache show chromium >/dev/null 2>&1; then
+      packages+=(chromium)
+    else
+      echo "WARNING: Could not find chromium-browser or chromium in apt. Native mode does not require it." >&2
+    fi
   fi
 
   sudo apt-get install -y "${packages[@]}"
@@ -145,7 +154,7 @@ if getent group i2c >/dev/null 2>&1; then
   sudo usermod -aG i2c "${INSTALL_USER}" || true
 fi
 enable_i2c
-chmod +x "${PROJECT_DIR}/scripts/install-pi.sh" "${PROJECT_DIR}/scripts/kiosk-launch.sh" "${PROJECT_DIR}/scripts/kiosk-xinit.sh" "${PROJECT_DIR}/scripts/native-launch.sh" "${PROJECT_DIR}/scripts/native-xinit.sh" "${PROJECT_DIR}/scripts/network_watchdog.py" 2>/dev/null || true
+chmod +x "${PROJECT_DIR}/scripts/install-pi.sh" "${PROJECT_DIR}/scripts/display-mode.sh" "${PROJECT_DIR}/scripts/kiosk-launch.sh" "${PROJECT_DIR}/scripts/kiosk-xinit.sh" "${PROJECT_DIR}/scripts/native-launch.sh" "${PROJECT_DIR}/scripts/native-xinit.sh" "${PROJECT_DIR}/scripts/network_watchdog.py" 2>/dev/null || true
 
 install_service "${WEB_SERVICE_NAME}"
 install_service "${KIOSK_SERVICE_NAME}"
@@ -186,6 +195,8 @@ SMART_NATIVE_ROTATION=left
 SMART_NATIVE_TOUCH_MATRIX=-1 0 1 0 -1 1 0 0 1
 SMART_NATIVE_POLL_MS=1500
 SMART_NATIVE_SLOW_POLL_MS=8000
+SMART_NATIVE_FRAME_MS=500
+SMART_NATIVE_DISPLAY_LABEL=Native touchscreen + local web API
 SMART_NATIVE_THERMOSTAT_ONLY=0
 SMART_NATIVE_VISUAL_MODE=web_full_parity
 SMART_NATIVE_FALLBACK_SCHEDULES=1
@@ -203,9 +214,9 @@ if [[ -f "/etc/systemd/system/${UPDATE_AGENT_SERVICE_NAME}" ]]; then
   sudo systemctl enable --now "${UPDATE_AGENT_SERVICE_NAME}" || true
 fi
 
-if systemctl get-default | grep -q '^multi-user.target$'; then
-  echo "NOTE: this Pi is set to boot to console. Kiosk mode needs the graphical desktop target."
-  echo "Run: sudo systemctl set-default graphical.target"
+if systemctl get-default | grep -q '^graphical.target$'; then
+  echo "NOTE: native appliance mode can run from multi-user.target without the desktop."
+  echo "Run ./scripts/appliance-mode.sh or ./scripts/display-mode.sh native to disable the desktop/Chromium display path."
 fi
 
 echo "IHA web service, native appliance service, and network watchdog installed."
