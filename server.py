@@ -32,13 +32,17 @@ THERMOSTAT_STATE_FILE = DATA_DIR / "thermostat-state.json"
 PANEL_CONFIG_FILE = DATA_DIR / "panel-config.json"
 HVAC_HISTORY_FILE = DATA_DIR / "hvac-history.json"
 APP_STARTED_AT = time.time()
-HA_STATES_CACHE_TTL_SECONDS = float(os.environ.get("SMART_THERMOSTAT_HA_STATES_CACHE_TTL_SECONDS", "1.0"))
+HA_STATES_CACHE_TTL_SECONDS = float(os.environ.get("SMART_THERMOSTAT_HA_STATES_CACHE_TTL_SECONDS", "8.0"))
+HA_ENTITY_STATE_CACHE_TTL_SECONDS = float(os.environ.get("SMART_THERMOSTAT_HA_ENTITY_STATE_CACHE_TTL_SECONDS", "8.0"))
+HA_REQUEST_TIMEOUT_SECONDS = float(os.environ.get("SMART_THERMOSTAT_HA_REQUEST_TIMEOUT_SECONDS", "3.0"))
 ACCESS_LOGS_ENABLED = os.environ.get("SMART_THERMOSTAT_ACCESS_LOGS", "0").strip().lower() in {"1", "true", "yes", "on"}
 HISTORY_PERSISTENCE_MODE = os.environ.get("SMART_THERMOSTAT_HISTORY_PERSISTENCE", "daily").strip().lower() or "daily"
 HISTORY_SAVE_ON_SHUTDOWN = os.environ.get("SMART_THERMOSTAT_HISTORY_SAVE_ON_SHUTDOWN", "0").strip().lower() in {"1", "true", "yes", "on"}
 MANUAL_CHANGEOVER_LOCKOUT_MINUTES = 10
 _HA_STATES_CACHE_LOCK = threading.Lock()
 _HA_STATES_CACHE: dict[tuple[str, str], tuple[float, list[dict]]] = {}
+_HA_ENTITY_STATE_CACHE_LOCK = threading.Lock()
+_HA_ENTITY_STATE_CACHE: dict[tuple[str, str, str], tuple[float, dict]] = {}
 _THERMOSTAT_RECORD_LOCK = threading.RLock()
 _THERMOSTAT_RECORD_CACHE: dict | None = None
 _THERMOSTAT_RECORD_LAST_PERSIST_SIGNATURE = ""
@@ -1819,13 +1823,17 @@ def _thermostat_outputs(thermostat: dict) -> dict:
         "manualLockoutUntil": manual_lockout_until,
     }
 
-def _thermostat_status_payload() -> dict:
+def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware: bool = False) -> dict:
     record = _read_thermostat_record()
-    thermostat = _apply_runtime_thermostat_logic(record)
-    record = _read_thermostat_record()
-    record["thermostat"] = thermostat
+    if refresh_runtime:
+        thermostat = _apply_runtime_thermostat_logic(record)
+        record = _read_thermostat_record()
+        record["thermostat"] = thermostat
+    else:
+        thermostat = record["thermostat"]
     outputs = _thermostat_outputs(thermostat)
-    _apply_thermostat_outputs_to_hardware(outputs)
+    if apply_hardware:
+        _apply_thermostat_outputs_to_hardware(outputs)
     hvac_mode = "heat_cool" if thermostat["mode"] == "auto" else thermostat["mode"]
     preset_mode = "away" if thermostat.get("away") else "home"
     thermostat_detail = {
@@ -1964,7 +1972,7 @@ def _handle_thermostat_update(payload: dict) -> dict:
 
     merged = _apply_comfort_auto_switch_logic(merged, notify=True)
     _write_thermostat_record(merged)
-    return _thermostat_status_payload()
+    return _thermostat_status_payload(refresh_runtime=True, apply_hardware=True)
 
 
 def _local_host_name() -> str:
@@ -2748,7 +2756,7 @@ def _apply_selected_ha_temperature_sensor_if_needed(thermostat: dict) -> dict:
     if not entity_id:
         return thermostat
     try:
-        item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
+        item = _ha_state_cached(ha_url, token, entity_id)
         if not isinstance(item, dict):
             return thermostat
         temp_f, _unit = _temperature_from_ha_state_item(item)
@@ -2800,7 +2808,7 @@ def _apply_selected_ha_outdoor_temperature_sensor_if_needed(thermostat: dict) ->
     if not entity_id:
         return thermostat
     try:
-        item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
+        item = _ha_state_cached(ha_url, token, entity_id)
         if not isinstance(item, dict):
             return thermostat
         attrs = item.get("attributes") or {}
@@ -3184,7 +3192,7 @@ def _fetch_ha_covers(ha_url: str, token: str) -> list[dict]:
         method="GET",
     )
     try:
-        with request.urlopen(req, timeout=12) as resp:
+        with request.urlopen(req, timeout=HA_REQUEST_TIMEOUT_SECONDS) as resp:
             raw = resp.read()
     except error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[:500]
@@ -3266,6 +3274,47 @@ def _ha_json_request(ha_url: str, token: str, method: str, path: str, payload: d
         return {"raw": raw.decode("utf-8", errors="replace")}
 
 
+def _ha_state_cached(ha_url: str, token: str, entity_id: str, ttl: float | None = None) -> dict:
+    """Cached direct /api/states/<entity_id> lookup.
+
+    This is used by the local thermostat status/runtime path so a slow Home
+    Assistant request cannot make the touchscreen feel sticky every few seconds.
+    """
+    entity_id = str(entity_id or "").strip()
+    if not entity_id:
+        return {}
+    ha_url = _normalize_ha_url(ha_url)
+    token = (token or "").strip()
+    if not token:
+        raise ValueError("Missing Home Assistant token")
+    ttl = HA_ENTITY_STATE_CACHE_TTL_SECONDS if ttl is None else max(0.0, float(ttl))
+    cache_key = (ha_url, token, entity_id)
+    now = time.monotonic()
+    with _HA_ENTITY_STATE_CACHE_LOCK:
+        cached = _HA_ENTITY_STATE_CACHE.get(cache_key)
+        if cached and now - cached[0] <= ttl:
+            return _deepcopy_json(cached[1])
+    item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
+    if not isinstance(item, dict):
+        item = {}
+    with _HA_ENTITY_STATE_CACHE_LOCK:
+        _HA_ENTITY_STATE_CACHE[cache_key] = (time.monotonic(), _deepcopy_json(item))
+    return item
+
+
+def _invalidate_ha_entity_state_cache(ha_url: str, token: str, entity_ids: list[str] | None = None) -> None:
+    try:
+        norm_url = _normalize_ha_url(ha_url)
+        norm_token = (token or "").strip()
+    except ValueError:
+        return
+    wanted = {str(x or "").strip() for x in (entity_ids or []) if str(x or "").strip()}
+    with _HA_ENTITY_STATE_CACHE_LOCK:
+        for key in list(_HA_ENTITY_STATE_CACHE.keys()):
+            if key[0] == norm_url and key[1] == norm_token and (not wanted or key[2] in wanted):
+                _HA_ENTITY_STATE_CACHE.pop(key, None)
+
+
 def _ha_all_states_cached(ha_url: str, token: str) -> list[dict]:
     """Return HA /api/states with a tiny cache shared by all panel pollers.
 
@@ -3301,6 +3350,7 @@ def _invalidate_ha_state_cache(ha_url: str, token: str) -> None:
         return
     with _HA_STATES_CACHE_LOCK:
         _HA_STATES_CACHE.pop(cache_key, None)
+    _invalidate_ha_entity_state_cache(ha_url, token)
 
 
 def _ordered_unique_entity_ids(entity_ids: list[str] | None, domains: set[str] | None = None) -> list[str]:
@@ -3338,8 +3388,8 @@ def _fetch_ha_state_items_for_entities(
     if len(wanted) < max(2, int(all_states_threshold or 3)):
         items: list[dict] = []
         for entity_id in wanted:
-            item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
-            if isinstance(item, dict):
+            item = _ha_state_cached(ha_url, token, entity_id)
+            if isinstance(item, dict) and item:
                 items.append(item)
         return items
 
@@ -4231,7 +4281,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
         if path == "/api/config":
             return _json(self, 200, _panel_config_payload())
         if path == "/api/thermostat/status":
-            return _json(self, 200, _thermostat_status_payload())
+            return _json(self, 200, _thermostat_status_payload(refresh_runtime=False, apply_hardware=False))
         if path == "/api/discovery":
             return _json(self, 200, _discovery_payload())
 
@@ -4288,7 +4338,10 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
             if path == "/api/hardware/release":
                 return _json(self, 200, _release_manual_hardware())
 
-            if path in {"/api/thermostat/status", "/api/thermostat/control"}:
+            if path == "/api/thermostat/status":
+                return _json(self, 200, _thermostat_status_payload(refresh_runtime=False, apply_hardware=False))
+
+            if path == "/api/thermostat/control":
                 return _json(self, 200, _handle_thermostat_update(payload))
 
             if path == "/api/ha/covers":

@@ -3635,7 +3635,7 @@ class MainWindow(Background):
         self.poll_timer.start(1800)
         self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self.refresh_status)
-        self.status_timer.start(2500)
+        self.status_timer.start(4000)
         QTimer.singleShot(100, self.boot)
 
     def boot(self):
@@ -3662,14 +3662,22 @@ class MainWindow(Background):
         self.current_name = name
         self.stack.setCurrentWidget(self.pages[name])
         self.header.set_page(name)
+        self.pages[name].sync(self.s.config, self.s.thermostat)
         self.pages[name].poll()
 
     def refresh_status(self):
         try:
             self.s.refresh_status()
-            self.sync_all()
+            self.sync_runtime_only()
         except Exception:
             pass
+
+    def sync_runtime_only(self):
+        t = self.s.thermostat or {}
+        self.header.update_values(t.get("currentTemp"), t.get("targetTemp"))
+        page = self.pages.get(self.current_name)
+        if page is not None:
+            page.sync(self.s.config, self.s.thermostat)
 
     def reload_all(self):
         try:
