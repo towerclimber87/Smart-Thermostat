@@ -1207,8 +1207,11 @@ class SettingsDialog(QDialog):
         self.s = state
         self.setWindowTitle("Comfort Setup")
         self.setModal(True)
-        self.setMinimumSize(900, 540)
-        self.resize(1220, 720)
+        # The 10.1" DSI panel has a physical bezel and a rotated touch surface.
+        # Keep the settings panel away from the top edge so the header buttons
+        # remain reachable, then fit the dialog inside the real 1280x800 screen.
+        self.setMinimumSize(900, 500)
+        self.resize(1220, 650)
         self.setStyleSheet("""
             QDialog {
                 background:#07101f;
@@ -1232,6 +1235,9 @@ class SettingsDialog(QDialog):
                 background:transparent;
                 border:0;
             }
+            QScrollArea > QWidget > QWidget {
+                background:transparent;
+            }
             QScrollBar:vertical {
                 background:rgba(255,255,255,0.05);
                 width:12px;
@@ -1249,23 +1255,30 @@ class SettingsDialog(QDialog):
         """)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 8, 10, 10)
+        root.setContentsMargins(10, 0, 10, 8)
         root.setSpacing(6)
+
+        # Touch/bezel safe area. Without this, the top row can sit under the
+        # panel edge and clicks on Done/Hardware/History become unreliable.
+        self.top_safe_space = QWidget()
+        self.top_safe_space.setFixedHeight(28)
+        self.top_safe_space.setStyleSheet("background:transparent;")
+        root.addWidget(self.top_safe_space)
 
         header = QHBoxLayout()
         header.setSpacing(8)
-        title = QLabel("<span style='color:#46e8ff; letter-spacing:3px; font-size:9px; font-weight:900'>PANEL SETTINGS</span><br><span style='font-size:26px; font-weight:1000; color:#ffffff'>Comfort Setup</span>")
+        title = QLabel("<span style='color:#46e8ff; letter-spacing:3px; font-size:9px; font-weight:900'>PANEL SETTINGS</span><br><span style='font-size:23px; font-weight:1000; color:#ffffff'>Comfort Setup</span>")
         title.setTextFormat(Qt.RichText)
-        title.setMinimumHeight(48)
-        title.setMaximumHeight(54)
+        title.setMinimumHeight(42)
+        title.setMaximumHeight(48)
         header.addWidget(title)
         header.addStretch(1)
-        self.hardware = RoundButton("Hardware Information", active=True, min_h=38)
-        self.history = RoundButton("History", active=True, min_h=38)
-        self.done = RoundButton("Done", active=True, min_h=38)
+        self.hardware = RoundButton("Hardware Information", active=True, min_h=40)
+        self.history = RoundButton("History", active=True, min_h=40)
+        self.done = RoundButton("Done", active=True, min_h=40)
         self.hardware.setMinimumWidth(190)
-        self.history.setMinimumWidth(112)
-        self.done.setMinimumWidth(104)
+        self.history.setMinimumWidth(120)
+        self.done.setMinimumWidth(118)
         header.addWidget(self.hardware)
         header.addWidget(self.history)
         header.addWidget(self.done)
@@ -1276,6 +1289,8 @@ class SettingsDialog(QDialog):
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         body = QWidget()
+        body.setStyleSheet("background:transparent;")
+        scroll.viewport().setStyleSheet("background:transparent;")
         self.grid = QGridLayout(body)
         self.grid.setSpacing(6)
         self.grid.setContentsMargins(0, 0, 2, 0)
@@ -1284,11 +1299,30 @@ class SettingsDialog(QDialog):
         scroll.setWidget(body)
         root.addWidget(scroll, 1)
 
+        # Duplicate the critical actions at the bottom. On the real touchscreen
+        # this gives a reliable target even if the top edge is hard to hit.
+        bottom = QHBoxLayout()
+        bottom.setSpacing(10)
+        self.bottom_hardware = RoundButton("Hardware", active=True, min_h=44)
+        self.bottom_history = RoundButton("History", active=True, min_h=44)
+        self.bottom_save = RoundButton("Save Settings", active=True, min_h=44)
+        self.bottom_done = RoundButton("Done", active=True, min_h=48)
+        bottom.addWidget(self.bottom_hardware)
+        bottom.addWidget(self.bottom_history)
+        bottom.addStretch(1)
+        bottom.addWidget(self.bottom_save)
+        bottom.addWidget(self.bottom_done)
+        root.addLayout(bottom)
+
         self.controls: dict[str, QLabel] = {}
         self.build()
         self.done.clicked.connect(self.accept)
+        self.bottom_done.clicked.connect(self.accept)
         self.hardware.clicked.connect(self.show_hardware)
+        self.bottom_hardware.clicked.connect(self.show_hardware)
         self.history.clicked.connect(self.show_history)
+        self.bottom_history.clicked.connect(self.show_history)
+        self.bottom_save.clicked.connect(self.save_all)
         QTimer.singleShot(0, self.fit_to_screen)
 
     def showEvent(self, event):
@@ -1300,10 +1334,12 @@ class SettingsDialog(QDialog):
         if not screen:
             return
         geo = screen.availableGeometry()
-        w = min(1220, max(900, geo.width() - 24))
-        h = min(720, max(540, geo.height() - 24))
+        top_safe = 46
+        bottom_safe = 22
+        w = min(1220, max(900, geo.width() - 36))
+        h = min(650, max(500, geo.height() - top_safe - bottom_safe))
         self.resize(w, h)
-        self.move(geo.x() + (geo.width() - w) // 2, geo.y() + (geo.height() - h) // 2)
+        self.move(geo.x() + (geo.width() - w) // 2, geo.y() + top_safe)
 
     def settings_panel(self, radius: int = 14) -> QFrame:
         p = QFrame()
@@ -1414,9 +1450,9 @@ class SettingsDialog(QDialog):
         code_sec.layout().addWidget(code)
         code.textChanged.connect(lambda x: self.s.config.setdefault("alarm", {}).__setitem__("disarmCode", x))
 
-        save = RoundButton("Save Settings", active=True, min_h=42)
-        save.clicked.connect(self.save_all)
-        self.grid.addWidget(save, 5, 3)
+        spacer = QLabel("")
+        spacer.setStyleSheet("background:transparent; border:0;")
+        self.grid.addWidget(spacer, 5, 3)
         self.grid.setRowStretch(6, 1)
 
     def val_number(self, key):
