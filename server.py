@@ -107,6 +107,7 @@ DEFAULT_THERMOSTAT = {
     "currentTempUpdatedAt": 0,
     "currentTempSource": "virtual",
     "currentTempSourceName": "Virtual Temp",
+    "virtualTempOverrideUntil": 0,
     "targetTemp": 70,
     "lastComfortTarget": 70,
     "mode": "cool",
@@ -641,6 +642,7 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
         for key, fallback, minimum, maximum in (
             ("currentTemp", base["currentTemp"], -40, 130),
             ("currentTempUpdatedAt", base.get("currentTempUpdatedAt", 0), 0, None),
+            ("virtualTempOverrideUntil", base.get("virtualTempOverrideUntil", 0), 0, None),
             ("targetTemp", base["targetTemp"], 45, 95),
             ("lastComfortTarget", base["lastComfortTarget"], 45, 95),
             ("awayHeat", base["awayHeat"], 45, 72),
@@ -787,6 +789,7 @@ THERMOSTAT_PERSIST_KEYS = (
 THERMOSTAT_RUNTIME_KEYS = (
     "currentTemp",
     "currentTempUpdatedAt",
+    "virtualTempOverrideUntil",
     "humidity",
     "outdoorTemp",
     "outdoorWindSpeed",
@@ -1690,6 +1693,7 @@ def _apply_presence_away_logic(thermostat: dict) -> dict:
 
 def _apply_runtime_thermostat_logic(record: dict, *, notify: bool = True) -> dict:
     thermostat = record.get("thermostat") or {}
+    thermostat = _clear_expired_virtual_temp_override(thermostat)
     thermostat = _apply_selected_ha_temperature_sensor_if_needed(thermostat)
     thermostat = _apply_local_temperature_sensor_if_needed({"thermostat": thermostat})
     updated = _apply_presence_away_logic(thermostat)
@@ -2671,7 +2675,31 @@ def _temperature_from_ha_state_item(item: dict) -> tuple[float | None, str]:
     return round(value, 1), unit
 
 
+
+def _virtual_temp_override_active(thermostat: dict) -> bool:
+    source = str(thermostat.get("currentTempSource") or "").strip().lower()
+    until = _number(thermostat.get("virtualTempOverrideUntil"), 0, 0, None)
+    return source == "virtual" and until > int(time.time() * 1000)
+
+
+def _clear_expired_virtual_temp_override(thermostat: dict) -> dict:
+    source = str(thermostat.get("currentTempSource") or "").strip().lower()
+    until = _number(thermostat.get("virtualTempOverrideUntil"), 0, 0, None)
+    if source == "virtual" and until and until <= int(time.time() * 1000):
+        updated = dict(thermostat)
+        updated["virtualTempOverrideUntil"] = 0
+        # Return to the configured source. The runtime pass immediately below
+        # will read the selected Home Assistant sensor if one is configured.
+        if _selected_ha_temperature_entity():
+            updated["currentTempSource"] = "home-assistant"
+            updated["currentTempSourceName"] = "Home Assistant Sensor"
+        return _merge_thermostat_state(updated)
+    return thermostat
+
+
 def _apply_selected_ha_temperature_sensor_if_needed(thermostat: dict) -> dict:
+    if _virtual_temp_override_active(thermostat):
+        return thermostat
     source = _selected_ha_temperature_entity()
     if not source:
         return thermostat
@@ -2707,6 +2735,8 @@ def _apply_selected_ha_temperature_sensor_if_needed(thermostat: dict) -> dict:
 
 def _apply_local_temperature_sensor_if_needed(record: dict) -> dict:
     thermostat = record.get("thermostat") or {}
+    if _virtual_temp_override_active(thermostat):
+        return thermostat
     now = time.time()
     if not _thermostat_should_use_local_temp_sensor(thermostat, now):
         return thermostat

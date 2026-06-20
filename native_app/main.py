@@ -1344,7 +1344,8 @@ class ThermostatScreen(Page):
         self.virtual_temp_pending = float(value)
         self.s.thermostat["currentTemp"] = float(value)
         self.s.thermostat["currentTempSource"] = "virtual"
-        self.s.thermostat["currentTempSourceName"] = "Virtual Temp"
+        self.s.thermostat["currentTempSourceName"] = "Virtual Temp Test"
+        self.s.thermostat["virtualTempOverrideUntil"] = int(time.time() * 1000) + 120000
         self.sync(self.s.config, self.s.thermostat)
         self.virtual_temp_push_timer.start(220)
 
@@ -1356,8 +1357,9 @@ class ThermostatScreen(Page):
             self.s.update_thermostat({
                 "currentTemp": value,
                 "currentTempSource": "virtual",
-                "currentTempSourceName": "Virtual Temp",
+                "currentTempSourceName": "Virtual Temp Test",
                 "currentTempUpdatedAt": time.time(),
+                "virtualTempOverrideUntil": int(time.time() * 1000) + 120000,
             })
             self.sync(self.s.config, self.s.thermostat)
         except Exception as exc:
@@ -3590,17 +3592,30 @@ class MainWindow(Background):
         dlg.exec_()
 
     def show_settings(self):
-        security = self.s.config.get("security") or {}
-        alarm = self.s.config.get("alarm") or {}
-        settings_code = str(security.get("settingsCode") or alarm.get("settingsCode") or alarm.get("disarmCode") or "").strip()
-        if settings_code:
-            entered = CodeKeypadDialog.get_code(self, "Settings Locked", "Enter Settings Code", settings_code)
-            if entered is None:
-                return
-        dlg = SettingsDialog(self.s, self)
-        dlg.saved.connect(self.reload_all)
-        dlg.exec_()
-        self.reload_all()
+        now = time.monotonic()
+        if getattr(self, "_settings_dialog_open", False):
+            return
+        if now < getattr(self, "_settings_reopen_block_until", 0):
+            return
+        self._settings_dialog_open = True
+        try:
+            security = self.s.config.get("security") or {}
+            alarm = self.s.config.get("alarm") or {}
+            settings_code = str(security.get("settingsCode") or alarm.get("settingsCode") or alarm.get("disarmCode") or "").strip()
+            if settings_code:
+                entered = CodeKeypadDialog.get_code(self, "Settings Locked", "Enter Settings Code", settings_code)
+                if entered is None:
+                    self._settings_reopen_block_until = time.monotonic() + 1.5
+                    return
+            dlg = SettingsDialog(self.s, self)
+            dlg.saved.connect(self.reload_all)
+            dlg.exec_()
+            self.reload_all()
+        finally:
+            self._settings_dialog_open = False
+            # Touchscreens can emit a second tap/release after the modal closes.
+            # Block immediate re-entry so the settings keypad does not pop back up.
+            self._settings_reopen_block_until = time.monotonic() + 2.0
 
     def show_info(self):
         try:
