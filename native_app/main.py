@@ -1470,6 +1470,136 @@ class AudioScreen(Page):
             pass
 
 
+class CodeKeypadDialog(QDialog):
+    def __init__(self, title: str, subtitle: str = "Enter Code", verify_code: str | None = None, parent=None):
+        super().__init__(parent)
+        self.verify_code = None if verify_code is None else str(verify_code)
+        self.code_buffer = ""
+        self.result_code = ""
+        self.title_text = title
+        self.subtitle_text = subtitle
+        self.setModal(True)
+        self.setWindowTitle(title)
+        self.setFixedSize(430, 505)
+        self.setStyleSheet("""
+            QDialog {
+                background:qlineargradient(x1:0,y1:0,x2:1,y2:1,
+                    stop:0 #070d18,
+                    stop:0.55 #101a32,
+                    stop:1 #150b1f);
+                color:#f7fbff;
+            }
+            QLabel {
+                color:#f7fbff;
+                font-family:Arial;
+            }
+        """)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(22, 18, 22, 18)
+        root.setSpacing(12)
+
+        self.title = QLabel("")
+        self.title.setAlignment(Qt.AlignCenter)
+        self.title.setTextFormat(Qt.RichText)
+        root.addWidget(self.title)
+
+        self.code_display = QLabel("")
+        self.code_display.setAlignment(Qt.AlignCenter)
+        self.code_display.setFont(font(30, QFont.Black))
+        root.addWidget(self.code_display)
+
+        keypad = QGridLayout()
+        keypad.setHorizontalSpacing(10)
+        keypad.setVerticalSpacing(10)
+        keys = [
+            ("1", 0, 0), ("2", 0, 1), ("3", 0, 2),
+            ("4", 1, 0), ("5", 1, 1), ("6", 1, 2),
+            ("7", 2, 0), ("8", 2, 1), ("9", 2, 2),
+            ("⌫", 3, 0), ("0", 3, 1), ("Cancel", 3, 2),
+        ]
+        for label, row, col in keys:
+            b = RoundButton(label, active=(label not in {"⌫", "Cancel"}), min_h=64)
+            if label == "Cancel":
+                b.setKind("danger")
+                b.clicked.connect(self.reject)
+            elif label == "⌫":
+                b.clicked.connect(self.backspace_code)
+            else:
+                b.clicked.connect(lambda checked=False, d=label: self.add_code_digit(d))
+            keypad.addWidget(b, row, col)
+        root.addLayout(keypad, 1)
+        self.render_normal()
+
+    def render_normal(self):
+        self.title.setText(
+            f"<span style='color:#55f0ff; letter-spacing:3px; font-size:12px; font-weight:900'>{self.title_text.upper()}</span>"
+            f"<br><span style='font-size:30px; font-weight:1000; color:#ffffff'>{self.subtitle_text}</span>"
+        )
+        self.code_display.setStyleSheet("""
+            QLabel {
+                color:#ffffff;
+                background:rgba(255,255,255,0.07);
+                border:1px solid rgba(85,240,255,0.45);
+                border-radius:24px;
+                padding:12px;
+                letter-spacing:9px;
+            }
+        """)
+        self.update_code_display()
+
+    def update_code_display(self):
+        entered = "•" * len(self.code_buffer)
+        remaining = "·" * max(0, 4 - len(self.code_buffer))
+        self.code_display.setText(entered + remaining)
+
+    def add_code_digit(self, digit: str):
+        if len(self.code_buffer) >= 4:
+            return
+        self.code_buffer += digit
+        self.update_code_display()
+        if len(self.code_buffer) == 4:
+            QTimer.singleShot(120, self.accept_or_validate)
+
+    def backspace_code(self):
+        self.code_buffer = self.code_buffer[:-1]
+        self.update_code_display()
+
+    def accept_or_validate(self):
+        if self.verify_code is not None and self.code_buffer != self.verify_code:
+            self.invalid_code()
+            return
+        self.result_code = self.code_buffer
+        self.accept()
+
+    def invalid_code(self):
+        self.code_buffer = ""
+        self.title.setText(
+            "<span style='color:#ff4c78; letter-spacing:3px; font-size:12px; font-weight:900'>INVALID CODE</span>"
+            "<br><span style='font-size:30px; font-weight:1000; color:#ffffff'>Try Again</span>"
+        )
+        self.code_display.setText("••••")
+        self.code_display.setStyleSheet("""
+            QLabel {
+                color:#ffffff;
+                background:rgba(255,54,91,0.18);
+                border:1px solid rgba(255,74,111,0.78);
+                border-radius:24px;
+                padding:12px;
+                letter-spacing:9px;
+            }
+        """)
+        QTimer.singleShot(750, self.render_normal)
+
+    @staticmethod
+    def get_code(parent, title: str, subtitle: str = "Enter Code", verify_code: str | None = None) -> str | None:
+        dlg = CodeKeypadDialog(title, subtitle, verify_code, parent)
+        if dlg.exec_() == QDialog.Accepted:
+            return dlg.result_code
+        return None
+
+
+
 class SettingsDialog(QDialog):
     saved = pyqtSignal()
 
@@ -1666,6 +1796,37 @@ class SettingsDialog(QDialog):
         self.grid.addWidget(p, row, col, rowspan, colspan)
         return p
 
+    def masked_code(self, value: str) -> str:
+        value = str(value or "")
+        return "•" * len(value) if value else "Tap to set"
+
+    def code_field(self, value: str, callback) -> QLineEdit:
+        field = QLineEdit(self.masked_code(value))
+        field.setReadOnly(True)
+        field.setCursor(Qt.PointingHandCursor)
+        field.setPlaceholderText("Tap to set")
+        field.mousePressEvent = lambda event: callback()
+        return field
+
+    def edit_security_code(self):
+        current = str((self.s.config.get("alarm") or {}).get("disarmCode") or "")
+        code = CodeKeypadDialog.get_code(self, "Security Code", "New 4-Digit Code")
+        if code is None:
+            return
+        self.s.config.setdefault("alarm", {})["disarmCode"] = code
+        if hasattr(self, "security_code_field"):
+            self.security_code_field.setText(self.masked_code(code))
+
+    def edit_settings_code(self):
+        current = str((self.s.config.get("security") or {}).get("settingsCode") or "")
+        code = CodeKeypadDialog.get_code(self, "Settings Code", "New 4-Digit Code")
+        if code is None:
+            return
+        self.s.config.setdefault("security", {})["settingsCode"] = code
+        if hasattr(self, "settings_code_field"):
+            self.settings_code_field.setText(self.masked_code(code))
+
+
     def build(self):
         t = self.s.thermostat or {}
         self.build_value("safetyLow", "Low Safety", t.get("safetyLow", 55), 0, 0, 40, 75)
@@ -1716,14 +1877,17 @@ class SettingsDialog(QDialog):
             theme_row.addWidget(b)
 
         code_sec = self.add_section("Security Code", 5, 2, 1, 1)
-        code = QLineEdit(str((self.s.config.get("alarm") or {}).get("disarmCode") or ""))
-        code.setPlaceholderText("User access code")
-        code_sec.layout().addWidget(code)
-        code.textChanged.connect(lambda x: self.s.config.setdefault("alarm", {}).__setitem__("disarmCode", x))
+        current_security = str((self.s.config.get("alarm") or {}).get("disarmCode") or "")
+        self.security_code_field = self.code_field(current_security, self.edit_security_code)
+        self.security_code_field.setPlaceholderText("Alarm disarm code")
+        code_sec.layout().addWidget(self.security_code_field)
 
-        spacer = QLabel("")
-        spacer.setStyleSheet("background:transparent; border:0;")
-        self.grid.addWidget(spacer, 5, 3)
+        settings_code_sec = self.add_section("Settings Code", 5, 3, 1, 1)
+        current_settings = str((self.s.config.get("security") or {}).get("settingsCode") or "")
+        self.settings_code_field = self.code_field(current_settings, self.edit_settings_code)
+        self.settings_code_field.setPlaceholderText("Settings access code")
+        settings_code_sec.layout().addWidget(self.settings_code_field)
+
         self.grid.setRowStretch(6, 1)
 
     def val_number(self, key):
@@ -1976,8 +2140,49 @@ class AlarmControlDialog(QDialog):
         self.update_code_display()
 
     def auto_disarm(self):
-        if len(self.code_buffer) == 4:
-            self.send_action("disarm", self.code_buffer)
+        if len(self.code_buffer) != 4:
+            return
+        expected = str((self.s.config.get("alarm") or {}).get("disarmCode") or "").strip()
+        if expected and self.code_buffer != expected:
+            self.invalid_disarm_code()
+            return
+        self.send_action("disarm", self.code_buffer)
+
+    def invalid_disarm_code(self):
+        self.code_buffer = ""
+        self.title.setText(
+            "<span style='color:#ff4979; letter-spacing:3px; font-size:12px; font-weight:900'>INVALID CODE</span>"
+            "<br><span style='font-size:32px; font-weight:1000; color:#ffffff'>Try Again</span>"
+        )
+        self.code_display.setText("••••")
+        self.code_display.setStyleSheet("""
+            QLabel {
+                color:#ffffff;
+                background:rgba(255,54,91,0.18);
+                border:1px solid rgba(255,74,111,0.78);
+                border-radius:24px;
+                padding:12px;
+                letter-spacing:9px;
+            }
+        """)
+        QTimer.singleShot(800, self.restore_keypad_after_invalid)
+
+    def restore_keypad_after_invalid(self):
+        self.title.setText(
+            "<span style='color:#ff4979; letter-spacing:3px; font-size:12px; font-weight:900'>ALARM ARMED</span>"
+            "<br><span style='font-size:32px; font-weight:1000; color:#ffffff'>Enter Code</span>"
+        )
+        self.code_display.setStyleSheet("""
+            QLabel {
+                color:#ffffff;
+                background:rgba(255,255,255,0.07);
+                border:1px solid rgba(255,73,121,0.52);
+                border-radius:24px;
+                padding:12px;
+                letter-spacing:9px;
+            }
+        """)
+        self.update_code_display()
 
     def begin_arm_away_countdown(self):
         self.clear_body()
@@ -2192,6 +2397,11 @@ class MainWindow(Background):
         dlg.exec_()
 
     def show_settings(self):
+        settings_code = str((self.s.config.get("security") or {}).get("settingsCode") or "").strip()
+        if settings_code:
+            entered = CodeKeypadDialog.get_code(self, "Settings Locked", "Enter Settings Code", settings_code)
+            if entered is None:
+                return
         dlg = SettingsDialog(self.s, self)
         dlg.saved.connect(self.reload_all)
         dlg.exec_()
