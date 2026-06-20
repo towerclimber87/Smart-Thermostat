@@ -208,17 +208,19 @@ class SectionTitle(QLabel):
         self.setMinimumHeight(106)
 
 
-class NavBar(GlassPanel):
+class NavBar(QWidget):
     changed = pyqtSignal(str)
 
     def __init__(self, tabs: Iterable[str], parent=None):
-        super().__init__(parent, radius=28, strong=False)
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setStyleSheet("background:transparent; border:0;")
         self.tabs = list(tabs)
         self.buttons: dict[str, RoundButton] = {}
         self.active = self.tabs[0]
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(8, 7, 8, 7)
-        lay.setSpacing(8)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(10)
         for tab in self.tabs:
             b = RoundButton(tab, tab == self.active, min_h=42)
             b.clicked.connect(lambda checked=False, t=tab: self.setActive(t, emit=True))

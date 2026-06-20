@@ -15,7 +15,7 @@ ROOT_DIR = APP_DIR.parent
 sys.path.insert(0, str(APP_DIR))
 
 from PyQt5.QtCore import QEvent, QPoint, QRectF, QSize, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QCursor, QFont, QIcon, QPainter, QPen
+from PyQt5.QtGui import QColor, QCursor, QFont, QIcon, QPainter, QPen, QBrush, QLinearGradient, QPainterPath, QRadialGradient
 from PyQt5.QtWidgets import (
     QApplication,
     QComboBox,
@@ -27,6 +27,7 @@ from PyQt5.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QMenu,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -218,6 +219,7 @@ class ThermostatScreen(Page):
         self.dial = ThermostatDial()
         self.mode_buttons: dict[str, RoundButton] = {}
         self.fan_buttons: dict[str, RoundButton] = {}
+        self.fan_status_button: RoundButton | None = None
         self.status_badge = QLabel("●  Auto • Cool • Idle")
         self.status_badge.setAlignment(Qt.AlignCenter)
         self.status_badge.setFont(font(11, QFont.Black))
@@ -315,42 +317,67 @@ class ThermostatScreen(Page):
         self.alarm_card.clicked.connect(self.toggle_alarm)
 
     def _mode_bar(self):
+        # Floating mode buttons. Keep the buttons, remove the shared rail/border,
+        # and spread them out as independent touch targets.
         lay = QHBoxLayout()
-        lay.setSpacing(8)
-        panel = GlassPanel(radius=26)
-        p_lay = QHBoxLayout(panel)
-        p_lay.setContentsMargins(7, 7, 7, 7)
-        p_lay.setSpacing(8)
+        lay.setContentsMargins(0, 6, 0, 0)
+        lay.setSpacing(22)
+        lay.addStretch(1)
         for mode in ["cool", "heat", "auto", "away"]:
             b = RoundButton(mode.capitalize(), active=False, min_h=44)
-            b.setMinimumWidth(120)
+            b.setMinimumWidth(128)
             b.clicked.connect(lambda checked=False, m=mode: self.set_mode(m))
             self.mode_buttons[mode] = b
-            p_lay.addWidget(b)
-        lay.addStretch(1)
-        lay.addWidget(panel)
+            lay.addWidget(b)
         lay.addStretch(1)
         return lay
 
     def _fan_bar(self):
+        # Single floating status pill. Tap it for Off / On / Auto instead of
+        # keeping three always-visible buttons grouped in a bordered rail.
         lay = QHBoxLayout()
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(10)
         label = QLabel("FAN")
         label.setFont(font(8, QFont.Black, 15))
-        label.setStyleSheet("color:#9ca6bb;")
-        panel = GlassPanel(radius=24)
-        panel.setMinimumWidth(230)
-        p_lay = QHBoxLayout(panel)
-        p_lay.setContentsMargins(14, 9, 14, 9)
-        p_lay.addWidget(label)
-        p_lay.addStretch(1)
-        for fan in ["off", "on", "auto"]:
-            b = RoundButton(fan.capitalize(), active=False, min_h=38)
-            b.setMinimumWidth(76)
-            b.clicked.connect(lambda checked=False, f=fan: self.set_fan(f))
-            self.fan_buttons[fan] = b
-            p_lay.addWidget(b)
-        lay.addWidget(panel)
+        label.setStyleSheet("color:#9ca6bb; background:transparent; border:0;")
+        self.fan_status_button = RoundButton("Fan   Auto", active=False, min_h=54)
+        self.fan_status_button.setMinimumWidth(230)
+        self.fan_status_button.clicked.connect(self.show_fan_menu)
+        lay.addStretch(1)
+        lay.addWidget(label)
+        lay.addWidget(self.fan_status_button)
+        lay.addStretch(1)
         return lay
+
+    def show_fan_menu(self):
+        if not self.fan_status_button:
+            return
+        current = str(self.thermostat.get("fan") or "auto").lower()
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background:rgba(18,27,45,245);
+                color:#f6f8ff;
+                border:1px solid rgba(104,222,255,0.45);
+                border-radius:14px;
+                padding:8px;
+                font-weight:900;
+                font-size:15px;
+            }
+            QMenu::item {
+                padding:11px 48px 11px 18px;
+                border-radius:10px;
+            }
+            QMenu::item:selected {
+                background:rgba(72,214,255,210);
+                color:#06101f;
+            }
+        """)
+        for fan in ["off", "on", "auto"]:
+            action = menu.addAction(("✓  " if fan == current else "   ") + fan.capitalize())
+            action.triggered.connect(lambda checked=False, f=fan: self.set_fan(f))
+        menu.exec_(self.fan_status_button.mapToGlobal(self.fan_status_button.rect().topLeft()))
 
     def set_mode(self, mode: str):
         try:
@@ -414,9 +441,10 @@ class ThermostatScreen(Page):
         self.dial.setData(t.get("currentTemp"), t.get("targetTemp"), mode, active, t.get("limits"))
         for m, b in self.mode_buttons.items():
             b.setActive((m == mode and not away) or (m == "away" and away))
-        fan = str(t.get("fan") or "auto")
-        for f, b in self.fan_buttons.items():
-            b.setActive(f == fan)
+        fan = str(t.get("fan") or "auto").lower()
+        if self.fan_status_button:
+            self.fan_status_button.setText(f"Fan   {fan.capitalize()}")
+            self.fan_status_button.setActive(False)
         out = t.get("outdoorTemp") or t.get("outdoor_temperature") or "--"
         wind = t.get("outdoorWindSpeed") or t.get("outdoor_wind_speed") or 0
         unit = t.get("outdoorWindUnit") or t.get("outdoor_wind_unit") or "mph"
@@ -452,33 +480,88 @@ class InfoTile(HoldCard):
         self.value = value
         self.symbol = symbol
         self.good = good
-        self.setMinimumSize(210, 158)
-        self.setMaximumWidth(260)
+        self.setMinimumSize(226, 164)
+        self.setMaximumWidth(270)
 
     def setValue(self, value: str):
         self.value = value
         self.update()
 
+    def draw_icon(self, p: QPainter, cx: float, cy: float, size: float):
+        icon_rect = QRectF(cx - size / 2, cy - size / 2, size, size)
+        ring = QRadialGradient(QPointF(cx, cy), size * 0.74)
+        ring.setColorAt(0.0, QColor(98, 255, 205, 54))
+        ring.setColorAt(0.72, QColor(98, 255, 205, 18))
+        ring.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.setBrush(ring)
+        p.setPen(Qt.NoPen)
+        p.drawEllipse(icon_rect.adjusted(-8, -8, 8, 8))
+
+        p.setBrush(QColor(27, 95, 84, 112))
+        p.setPen(QPen(QColor(147, 255, 224, 64), 1.4))
+        p.drawEllipse(icon_rect)
+
+        p.setPen(QPen(QColor(198, 255, 240, 185), 3, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.setBrush(Qt.NoBrush)
+        title = self.title.lower()
+        if "door" in title:
+            door = QRectF(cx - size * 0.16, cy - size * 0.27, size * 0.32, size * 0.54)
+            p.drawRect(door)
+            p.drawLine(QPointF(cx - size * 0.31, cy - size * 0.36), QPointF(cx - size * 0.16, cy - size * 0.27))
+            p.drawLine(QPointF(cx + size * 0.16, cy - size * 0.27), QPointF(cx + size * 0.31, cy - size * 0.36))
+            p.drawLine(QPointF(cx - size * 0.31, cy + size * 0.36), QPointF(cx - size * 0.16, cy + size * 0.27))
+            p.drawLine(QPointF(cx + size * 0.16, cy + size * 0.27), QPointF(cx + size * 0.31, cy + size * 0.36))
+            p.setBrush(QColor(198, 255, 240, 190))
+            p.drawEllipse(QRectF(cx + size * 0.06, cy - 2, 4, 4))
+            p.setBrush(Qt.NoBrush)
+        elif "alarm" in title:
+            shield = QPainterPath()
+            shield.moveTo(cx, cy - size * 0.34)
+            shield.lineTo(cx + size * 0.27, cy - size * 0.22)
+            shield.lineTo(cx + size * 0.24, cy + size * 0.16)
+            shield.quadTo(cx, cy + size * 0.38, cx - size * 0.24, cy + size * 0.16)
+            shield.lineTo(cx - size * 0.27, cy - size * 0.22)
+            shield.closeSubpath()
+            p.drawPath(shield)
+        else:
+            p.setFont(font(34, QFont.Black))
+            p.drawText(icon_rect, Qt.AlignCenter, self.symbol)
+
     def paintEvent(self, event):
-        super().paintEvent(event)
         p = QPainter(self)
         p.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
-        r = QRectF(self.rect())
-        if self.good:
-            glow = QColor(37, 255, 174, 46)
-            p.setBrush(glow)
-            p.setPen(Qt.NoPen)
-            p.drawRoundedRect(r.adjusted(2,2,-2,-2), self.radius, self.radius)
-        p.setFont(font(40, QFont.Bold))
-        p.setPen(QColor(210, 245, 235, 160))
-        p.drawText(QRectF(0, 28, r.width(), 52), Qt.AlignCenter, self.symbol)
-        p.setFont(font(14, QFont.Black))
-        p.setPen(T.TEXT)
-        p.drawText(QRectF(12, 90, r.width()-24, 24), Qt.AlignCenter, self.title)
-        p.setFont(font(9, QFont.Black, 14))
-        p.setPen(T.TEXT if self.good else T.TEXT_DIM)
-        p.drawText(QRectF(12, 120, r.width()-24, 20), Qt.AlignCenter, self.value)
+        r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
 
+        glow = QRadialGradient(QPointF(r.center().x(), r.top() + 70), max(r.width(), r.height()) * 0.8)
+        glow.setColorAt(0.0, QColor(42, 255, 187, 54 if self.good else 24))
+        glow.setColorAt(0.62, QColor(27, 88, 77, 32))
+        glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.fillRect(r, glow)
+
+        g = QLinearGradient(r.topLeft(), r.bottomRight())
+        g.setColorAt(0.0, QColor(22, 88, 78, 205 if self.good else 150))
+        g.setColorAt(0.48, QColor(15, 45, 53, 210))
+        g.setColorAt(1.0, QColor(12, 23, 39, 226))
+        p.setBrush(QBrush(g))
+        p.setPen(QPen(QColor(61, 221, 184, 118 if self.good else 70), 1.6))
+        p.drawRoundedRect(r, 28, 28)
+
+        self.draw_icon(p, r.center().x(), r.top() + 50, 68)
+
+        p.setFont(font(15, QFont.Black))
+        p.setPen(QColor(246, 251, 255))
+        p.drawText(QRectF(16, 100, r.width() - 32, 24), Qt.AlignCenter, self.title)
+
+        badge_text = str(self.value or "").upper()
+        fm = p.fontMetrics()
+        badge_w = max(86, min(r.width() - 34, fm.horizontalAdvance(badge_text) + 28))
+        badge = QRectF(r.center().x() - badge_w / 2, 128, badge_w, 24)
+        p.setBrush(QColor(40, 141, 113, 205 if self.good else 135))
+        p.setPen(Qt.NoPen)
+        p.drawRoundedRect(badge, 12, 12)
+        p.setFont(font(9, QFont.Black, 18))
+        p.setPen(QColor(230, 255, 247))
+        p.drawText(badge, Qt.AlignCenter, badge_text)
 
 class ValueTile(GlassPanel):
     def __init__(self, label: str, value: str, parent=None):
