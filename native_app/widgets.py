@@ -345,21 +345,17 @@ class ThermostatDial(QWidget):
         p.drawEllipse(inner)
 
         p.setPen(T.TEXT)
-        p.setFont(font(max(11, int(side * 0.027)), QFont.Black, 12))
-        mode_label = "AUTO " + (self.active_mode or self.mode).upper() if self.mode == "auto" else self.mode.upper()
-        p.drawText(QRectF(inner.x(), inner.y() + inner.height() * 0.25, inner.width(), 28), Qt.AlignCenter, mode_label)
-        p.setFont(font(max(52, int(side * 0.17)), QFont.Black))
-        p.drawText(QRectF(inner.x(), inner.y() + inner.height() * 0.36, inner.width(), inner.height() * 0.32), Qt.AlignCenter, fmt_temp(self.current).replace("°", ""))
+        # The mode/equipment text is already shown above the dial, so keep the
+        # center clean and make the current temperature the visual focus.
+        p.setFont(font(max(56, int(side * 0.18)), QFont.Black))
+        p.drawText(QRectF(inner.x(), inner.y() + inner.height() * 0.28, inner.width(), inner.height() * 0.34), Qt.AlignCenter, fmt_temp(self.current).replace("°", ""))
         p.setFont(font(max(18, int(side * 0.043)), QFont.Black))
-        p.drawText(QRectF(inner.x() + inner.width() * 0.63, inner.y() + inner.height() * 0.43, 44, 30), Qt.AlignLeft | Qt.AlignTop, "°F")
+        p.drawText(QRectF(inner.x() + inner.width() * 0.63, inner.y() + inner.height() * 0.35, 44, 30), Qt.AlignLeft | Qt.AlignTop, "°F")
 
-        pill = QRectF(inner.center().x() - 76, inner.y() + inner.height() * 0.70, 152, 38)
-        p.setBrush(QColor(31, 112, 218, 165))
-        p.setPen(Qt.NoPen)
-        p.drawRoundedRect(pill, 18, 18)
+        set_rect = QRectF(inner.x(), inner.y() + inner.height() * 0.64, inner.width(), 34)
         p.setFont(font(12, QFont.Black))
-        p.setPen(T.TEXT)
-        p.drawText(pill, Qt.AlignCenter, f"Set Temp  {fmt_temp(self.target)}")
+        p.setPen(QColor(224, 241, 255))
+        p.drawText(set_rect, Qt.AlignCenter, f"Set Temp  {fmt_temp(self.target)}")
 
         for label, temp in [(str(int(self.min_temp)), self.min_temp), (str(int(self.max_temp)), self.max_temp)]:
             ang = math.radians(self._angle_for_temp(temp))

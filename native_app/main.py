@@ -174,6 +174,12 @@ class Header(QWidget):
 
     def set_page(self, name: str):
         self.nav.setActive(name)
+        # The thermostat page already has the large center dial, so the small
+        # Current/Set pills are redundant there. Keep them visible on Blinds,
+        # Audio, Lights, and Room where they provide useful context.
+        show_temp_pills = name != "Thermostat"
+        self.current_pill.setVisible(show_temp_pills)
+        self.set_pill.setVisible(show_temp_pills)
 
 
 class AppState:
@@ -508,7 +514,8 @@ class ThermostatScreen(Page):
             equipment = "Heating"
         elif relays.get("fan"):
             equipment = "Fan"
-        self.status_badge.setText(f"●  {mode.capitalize()} • {active.capitalize()} • {equipment}")
+        mode_label = "Away" if away else mode.capitalize()
+        self.status_badge.setText(f"• {mode_label} • {equipment}")
         self.humidity_tile.setValue(f"{int(float(t.get('humidity') or 0))}%")
         self.notice.setVisible(bool((t.get("autoSwitchNotice") or {}).get("active")))
         if self.notice.isVisible():
