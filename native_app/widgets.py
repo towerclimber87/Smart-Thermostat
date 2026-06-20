@@ -320,30 +320,60 @@ class ThermostatDial(QWidget):
         c = tick_rect.center()
         radius_outer = tick_rect.width() / 2
         radius_inner = radius_outer - side * 0.08
-        for i in range(74):
-            pct = i / 73
+        heat_active = str(self.active_mode or self.mode).lower() == "heat"
+        heat_color = QColor(255, 72, 83)
+        cool_color = T.CYAN
+        active_color = heat_color if heat_active else cool_color
+
+        def pct_for_temp(temp: float) -> float:
+            return max(0.0, min(1.0, (float(temp) - self.min_temp) / max(1.0, self.max_temp - self.min_temp)))
+
+        current_pct = pct_for_temp(self.current)
+        target_pct = pct_for_temp(self.target)
+        band_low = min(current_pct, target_pct)
+        band_high = max(current_pct, target_pct)
+
+        # Base scale ticks stay dim. The highlighted ticks only cover the
+        # actual space between current room temp and the selected set temp.
+        # This makes the dial read like "where we are" vs "where we are going"
+        # instead of filling from the low limit all the way to the target.
+        for i in range(91):
+            pct = i / 90
             angle = math.radians(225 - pct * 270)
-            x1 = c.x() + math.cos(angle) * radius_inner
-            y1 = c.y() - math.sin(angle) * radius_inner
+            is_major = i % 10 == 0
+            is_mid = i % 5 == 0
+            in_band = band_low <= pct <= band_high and abs(current_pct - target_pct) > 0.015
+            inner_offset = side * (0.105 if is_major else 0.087 if is_mid else 0.066)
+            x1 = c.x() + math.cos(angle) * (radius_outer - inner_offset)
+            y1 = c.y() - math.sin(angle) * (radius_outer - inner_offset)
             x2 = c.x() + math.cos(angle) * radius_outer
             y2 = c.y() - math.sin(angle) * radius_outer
-            col = QColor(83, 222, 255, 155 if i % 2 == 0 else 88)
-            p.setPen(QPen(col, 3 if i % 3 else 4))
+            if in_band:
+                alpha = 205 if is_major else 180 if is_mid else 145
+                col = QColor(active_color.red(), active_color.green(), active_color.blue(), alpha)
+                width = 5 if is_major else 4 if is_mid else 3
+            else:
+                col = QColor(105, 143, 175, 82 if is_major else 58 if is_mid else 40)
+                width = 4 if is_major else 3 if is_mid else 2
+            p.setPen(QPen(col, width, Qt.SolidLine, Qt.RoundCap))
             p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
 
         arc_rect = rect.adjusted(side * 0.165, side * 0.165, -side * 0.165, -side * 0.165)
         start_angle = int(225 * 16)
         span = int(-270 * 16)
-        p.setPen(QPen(QColor(105, 142, 255, 72), side * 0.08, Qt.SolidLine, Qt.RoundCap))
+        p.setPen(QPen(QColor(105, 142, 255, 52), side * 0.065, Qt.SolidLine, Qt.RoundCap))
         p.drawArc(arc_rect, start_angle, span)
         target_ang = self._angle_for_temp(self.target)
-        target_span = int((target_ang - 225) * 16)
-        heat_active = str(self.active_mode or self.mode).lower() == "heat"
-        heat_color = QColor(255, 72, 83)
-        cool_color = T.CYAN
-        grad_pen = QPen(heat_color if heat_active else cool_color, side * 0.08, Qt.SolidLine, Qt.RoundCap)
-        p.setPen(grad_pen)
-        p.drawArc(arc_rect, start_angle, target_span)
+        current_ang = self._angle_for_temp(self.current)
+
+        # Highlight only the current-to-target band.
+        if abs(current_pct - target_pct) > 0.015:
+            band_start_ang = max(current_ang, target_ang)
+            band_end_ang = min(current_ang, target_ang)
+            band_span = int((band_end_ang - band_start_ang) * 16)
+            grad_pen = QPen(active_color, side * 0.07, Qt.SolidLine, Qt.RoundCap)
+            p.setPen(grad_pen)
+            p.drawArc(arc_rect, int(band_start_ang * 16), band_span)
 
         inner = rect.adjusted(side * 0.29, side * 0.29, -side * 0.29, -side * 0.29)
         g = QRadialGradient(inner.center(), inner.width() / 2)
@@ -384,12 +414,21 @@ class ThermostatDial(QWidget):
             p.setPen(T.TEXT_DIM)
             p.drawText(tag, Qt.AlignCenter, label + "°")
 
-        ang = math.radians(target_ang)
         rr = arc_rect.width() / 2
+
+        # Current room temperature marker.
+        current_ang_rad = math.radians(current_ang)
+        current_knob = QPointF(c.x() + math.cos(current_ang_rad) * rr, c.y() - math.sin(current_ang_rad) * rr)
+        p.setBrush(QColor(active_color.red(), active_color.green(), active_color.blue(), 145))
+        p.setPen(QPen(QColor(255, 255, 255, 120), 2))
+        p.drawEllipse(current_knob, 8, 8)
+
+        # Target setpoint marker.
+        ang = math.radians(target_ang)
         knob = QPointF(c.x() + math.cos(ang) * rr, c.y() - math.sin(ang) * rr)
         p.setBrush(T.TEXT)
-        p.setPen(Qt.NoPen)
-        p.drawEllipse(knob, 11, 11)
+        p.setPen(QPen(QColor(active_color.red(), active_color.green(), active_color.blue(), 170), 3))
+        p.drawEllipse(knob, 12, 12)
 
     def mousePressEvent(self, event):
         self.dragging = True
