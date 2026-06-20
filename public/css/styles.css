@@ -13727,3 +13727,35 @@ body.booting .boot-overlay {
     padding-inline: 14px;
   }
 }
+
+
+/* 2026-06-19 v12.2 appliance runtime tuning
+   Chromium kiosk keeps the full polished web look. GTK/WebKit fallback gets a
+   reduced compositor load because WebKitGTK can peg the Pi CPU on the heavy
+   glass/animation effects that Chromium handles more smoothly. */
+.runtime-hybrid-webview .ambient,
+.runtime-hybrid-webview .climate-symbol,
+.runtime-hybrid-webview .boot-ring,
+.runtime-hybrid-webview .alarm-orbit,
+.runtime-hybrid-webview .door-alert-ring {
+  animation: none !important;
+}
+
+.runtime-hybrid-webview .panel,
+.runtime-hybrid-webview .top-nav,
+.runtime-hybrid-webview .clock,
+.runtime-hybrid-webview .icon-button,
+.runtime-hybrid-webview .panel-info-button,
+.runtime-hybrid-webview .thermo-dial,
+.runtime-hybrid-webview .modal-sheet,
+.runtime-hybrid-webview .settings-panel {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+.runtime-hybrid-webview .climate-symbol,
+.runtime-hybrid-webview .alarm-shield,
+.runtime-hybrid-webview .door-control-widget,
+.runtime-hybrid-webview .panel::after {
+  filter: none !important;
+}

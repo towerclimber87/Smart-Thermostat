@@ -70,3 +70,8 @@ After the fix, this command should show `native/html_panel.py`, not `native/ther
 ```bash
 ps -ef | grep -E 'thermostat_native.py|html_panel.py|hybrid-xinit|xinit' | grep -v grep
 ```
+
+
+## 12.2 Fast HTML appliance runtime
+
+The recommended wall display is now `./scripts/display-mode.sh fast`: the same port-8080 HTML UI in optimized Chromium under bare X11. Chromium profile/cache are stored in `/tmp` to avoid SD-card hammering. GTK/WebKit hybrid remains available with `./scripts/display-mode.sh hybrid`, but it can be slower on Raspberry Pi for the current glass/animation-heavy UI.

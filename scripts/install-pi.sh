@@ -79,18 +79,18 @@ install_packages() {
     fi
   done
 
-  # Chromium is no longer installed by default. The wall panel runs the hybrid HTML WebKit
-  # touchscreen client while the web service remains available for admin/debug
-  # from another browser. Install Chromium only when you explicitly want the
-  # fallback kiosk service available on the Pi itself:
-  #   SMART_INSTALL_CHROMIUM=1 ./scripts/install-pi.sh
-  if [[ "${SMART_INSTALL_CHROMIUM:-0}" == "1" ]]; then
+  # Chromium is installed by default again because the smoothest wall runtime on
+  # this Pi is the optimized Chromium kiosk under bare X11.  The kiosk profile
+  # and cache are stored in /tmp, so it does not hammer the SD card like a normal
+  # desktop browser profile.  Set SMART_SKIP_CHROMIUM=1 only if you intentionally
+  # want to use the slower GTK/WebKit fallback.
+  if [[ "${SMART_SKIP_CHROMIUM:-0}" != "1" ]]; then
     if apt-cache show chromium-browser >/dev/null 2>&1; then
       packages+=(chromium-browser)
     elif apt-cache show chromium >/dev/null 2>&1; then
       packages+=(chromium)
     else
-      echo "WARNING: Could not find chromium-browser or chromium in apt. Hybrid/native mode does not require it." >&2
+      echo "WARNING: Could not find chromium-browser or chromium in apt. Fast kiosk mode requires Chromium." >&2
     fi
   fi
 
@@ -185,7 +185,7 @@ if getent group i2c >/dev/null 2>&1; then
   sudo usermod -aG i2c "${INSTALL_USER}" || true
 fi
 enable_i2c
-chmod +x "${PROJECT_DIR}/scripts/install-pi.sh" "${PROJECT_DIR}/scripts/display-mode.sh" "${PROJECT_DIR}/scripts/force-html-display.sh" "${PROJECT_DIR}/scripts/kiosk-launch.sh" "${PROJECT_DIR}/scripts/kiosk-xinit.sh" "${PROJECT_DIR}/scripts/native-launch.sh" "${PROJECT_DIR}/scripts/native-xinit.sh" "${PROJECT_DIR}/scripts/hybrid-launch.sh" "${PROJECT_DIR}/scripts/hybrid-xinit.sh" "${PROJECT_DIR}/native/html_panel.py" "${PROJECT_DIR}/scripts/network_watchdog.py" 2>/dev/null || true
+chmod +x "${PROJECT_DIR}/scripts/install-pi.sh" "${PROJECT_DIR}/scripts/display-mode.sh" "${PROJECT_DIR}/scripts/force-html-display.sh" "${PROJECT_DIR}/scripts/kiosk-launch.sh" "${PROJECT_DIR}/scripts/kiosk-xinit.sh" "${PROJECT_DIR}/scripts/native-launch.sh" "${PROJECT_DIR}/scripts/native-xinit.sh" "${PROJECT_DIR}/scripts/hybrid-launch.sh" "${PROJECT_DIR}/scripts/hybrid-xinit.sh" "${PROJECT_DIR}/native/html_panel.py" "${PROJECT_DIR}/scripts/network_watchdog.py" "${PROJECT_DIR}/scripts/trim-appliance-services.sh" 2>/dev/null || true
 
 install_service "${WEB_SERVICE_NAME}"
 install_service "${KIOSK_SERVICE_NAME}"
@@ -205,20 +205,20 @@ EOF_NETWORK
   sudo chmod 600 /etc/smart-thermostat/network-watchdog.env
 fi
 
-if [[ ! -f /etc/smart-thermostat/kiosk.env ]]; then
-  sudo tee /etc/smart-thermostat/kiosk.env >/dev/null <<'EOF_KIOSK'
+sudo tee /etc/smart-thermostat/kiosk.env >/dev/null <<'EOF_KIOSK'
 SMART_THERMOSTAT_URL=http://127.0.0.1:8080
 SMART_KIOSK_PROFILE_DIR=/tmp/smart-thermostat-chromium-profile
 SMART_KIOSK_CACHE_DIR=/tmp/smart-thermostat-chromium-cache
-SMART_KIOSK_HEALTH_TIMEOUT_SECONDS=45
-# auto, wayland, or x11. Auto lets the launcher use Wayland when the desktop exposes it.
-SMART_KIOSK_OZONE_PLATFORM=auto
+SMART_KIOSK_HEALTH_TIMEOUT_SECONDS=75
+SMART_KIOSK_OZONE_PLATFORM=x11
+SMART_KIOSK_LOW_POWER_MODE=1
+SMART_KIOSK_ROTATION=left
+SMART_KIOSK_TOUCH_MATRIX=-1 0 1 0 -1 1 0 0 1
 # Optional extra Chromium flags. Example:
 # SMART_KIOSK_EXTRA_FLAGS=--force-device-scale-factor=1
 SMART_KIOSK_EXTRA_FLAGS=
 EOF_KIOSK
-  sudo chmod 600 /etc/smart-thermostat/kiosk.env
-fi
+sudo chmod 600 /etc/smart-thermostat/kiosk.env
 
 sudo tee /etc/smart-thermostat/hybrid.env >/dev/null <<'EOF_HYBRID'
 SMART_THERMOSTAT_URL=http://127.0.0.1:8080
@@ -255,19 +255,19 @@ install_sudoers
 sudo systemctl daemon-reload
 sudo systemctl enable --now "${WEB_SERVICE_NAME}"
 sudo systemctl enable --now "${NETWORK_WATCHDOG_SERVICE_NAME}"
-sudo systemctl disable --now "${KIOSK_SERVICE_NAME}" "${NATIVE_SERVICE_NAME}" >/dev/null 2>&1 || true
-sudo systemctl enable --now "${HYBRID_SERVICE_NAME}"
+sudo systemctl disable --now "${NATIVE_SERVICE_NAME}" "${HYBRID_SERVICE_NAME}" >/dev/null 2>&1 || true
+sudo systemctl enable --now "${KIOSK_SERVICE_NAME}"
 if [[ -f "/etc/systemd/system/${UPDATE_AGENT_SERVICE_NAME}" ]]; then
   sudo systemctl enable --now "${UPDATE_AGENT_SERVICE_NAME}" || true
 fi
 
 if systemctl get-default | grep -q '^graphical.target$'; then
-  echo "NOTE: hybrid appliance mode can run from multi-user.target without the desktop."
-  echo "Run ./scripts/appliance-mode.sh or ./scripts/display-mode.sh hybrid to disable the desktop/Chromium display path."
+  echo "NOTE: fast appliance mode can run from multi-user.target without the desktop."
+  echo "Run ./scripts/appliance-mode.sh or ./scripts/display-mode.sh fast to disable the desktop and use the optimized wall display."
 fi
 
-echo "IHA web service, hybrid HTML appliance display, legacy native alias, and network watchdog installed."
+echo "IHA web service, fast Chromium HTML appliance display, and network watchdog installed."
 echo "Web UI/API: http://localhost:8080"
-echo "Hybrid HTML display: sudo systemctl restart ${HYBRID_SERVICE_NAME}"
-echo "Legacy native alias: sudo systemctl restart ${NATIVE_SERVICE_NAME}  # forwards to HTML host in this build"
+echo "Fast wall display: sudo systemctl restart ${KIOSK_SERVICE_NAME}"
+echo "GTK/WebKit fallback: ./scripts/display-mode.sh hybrid"
 echo "Home Assistant discovery uses mDNS service _iha-thermostat._tcp.local."

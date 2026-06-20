@@ -1,6 +1,10 @@
 const RUNTIME_QUERY = new URLSearchParams(window.location.search || "");
-const IS_HYBRID_WEBVIEW_RUNTIME = RUNTIME_QUERY.get("runtime") === "hybrid-webview" || RUNTIME_QUERY.get("wall") === "1";
-const runtimeInterval = (normalMs, hybridMs = normalMs) => IS_HYBRID_WEBVIEW_RUNTIME ? hybridMs : normalMs;
+const RUNTIME_MODE = (RUNTIME_QUERY.get("runtime") || "").toLowerCase();
+const IS_HYBRID_WEBVIEW_RUNTIME = RUNTIME_MODE === "hybrid-webview";
+const IS_CHROMIUM_KIOSK_RUNTIME = RUNTIME_MODE === "chromium-kiosk" || RUNTIME_MODE === "kiosk";
+const IS_WALL_RUNTIME = RUNTIME_QUERY.get("wall") === "1" || IS_HYBRID_WEBVIEW_RUNTIME || IS_CHROMIUM_KIOSK_RUNTIME;
+const IS_PERFORMANCE_RUNTIME = RUNTIME_QUERY.get("performance") === "1" || IS_CHROMIUM_KIOSK_RUNTIME;
+const runtimeInterval = (normalMs, wallMs = normalMs) => IS_WALL_RUNTIME ? wallMs : normalMs;
 
 const ABS_MIN = 45;
 const ABS_MAX = 95;
@@ -9906,7 +9910,19 @@ function dismissBootOverlay(delay = 1800) {
   }, delay);
 }
 
+function applyRuntimeClasses() {
+  const root = document.documentElement;
+  const classTargets = [root, document.body, elements.app].filter(Boolean);
+  classTargets.forEach((target) => {
+    target.classList.toggle("wall-runtime", IS_WALL_RUNTIME);
+    target.classList.toggle("runtime-hybrid-webview", IS_HYBRID_WEBVIEW_RUNTIME);
+    target.classList.toggle("runtime-chromium-kiosk", IS_CHROMIUM_KIOSK_RUNTIME);
+    target.classList.toggle("runtime-performance", IS_PERFORMANCE_RUNTIME);
+  });
+}
+
 async function init() {
+  applyRuntimeClasses();
   await loadSavedConfig();
   applyPanelTheme(state.theme, { save: false });
   dismissBootOverlay(normalizePanelTheme(state.theme) === "star-trek" ? 2600 : 1200);
