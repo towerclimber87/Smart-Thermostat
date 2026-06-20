@@ -1581,15 +1581,40 @@ class MainWindow(Background):
         except Exception as exc:
             self.toast.show_message(f"Import failed: {exc}")
 
+    def force_panel_geometry(self):
+        """Force the native kiosk window to cover the whole X screen.
+
+        On the Raspberry Pi appliance we run directly under xinit with no
+        window manager. In that mode Qt's showFullScreen() can leave the
+        window at its previous/pre-rotation size, which exposes the black X
+        root background on part of the touchscreen. Setting the screen
+        geometry explicitly fixes the unused-screen-real-estate issue.
+        """
+        screen = QApplication.primaryScreen() or self.screen()
+        if not screen:
+            return
+        geo = screen.geometry()
+        self.setGeometry(geo)
+        self.move(geo.topLeft())
+        self.resize(geo.size())
+        try:
+            print(f"Native UI geometry forced to {geo.width()}x{geo.height()} at {geo.x()},{geo.y()}", flush=True)
+        except Exception:
+            pass
+
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key_Escape, Qt.Key_F11):
             self.showNormal() if self.isFullScreen() else self.showFullScreen()
+            QTimer.singleShot(50, self.force_panel_geometry)
         else:
             super().keyPressEvent(event)
 
 
 def main():
-    os.environ.setdefault("QT_AUTO_SCREEN_SCALE_FACTOR", "1")
+    # The appliance display is a fixed touchscreen. Disable Qt auto scaling so
+    # physical pixels map directly to the X screen size reported after rotation.
+    os.environ.setdefault("QT_AUTO_SCREEN_SCALE_FACTOR", "0")
+    os.environ.setdefault("QT_SCALE_FACTOR", "1")
     app = QApplication(sys.argv)
     app.setApplicationName("Smart Thermostat Native")
     app.setFont(font(10, QFont.Bold))
@@ -1598,7 +1623,15 @@ def main():
         w.resize(1600, 900)
         w.show()
     else:
+        w.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
+        w.force_panel_geometry()
         w.showFullScreen()
+        # Run this more than once because xrandr may have just rotated the DSI
+        # output in native-xinit.sh before Python starts. This keeps the app
+        # from being stuck at the old 800x1280 geometry.
+        QTimer.singleShot(50, w.force_panel_geometry)
+        QTimer.singleShot(350, w.force_panel_geometry)
+        QTimer.singleShot(1000, w.force_panel_geometry)
     sys.exit(app.exec_())
 
 
