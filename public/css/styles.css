@@ -13667,3 +13667,63 @@ body.booting .boot-overlay {
     display: none;
   }
 }
+
+/* 2026-06-19: cleaner modern page tabs and HA-only current temp entry. */
+.top-nav {
+  gap: clamp(14px, 1.65vw, 28px);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.nav-pill {
+  min-width: clamp(118px, 9vw, 158px);
+  min-height: 50px;
+  padding: 0 clamp(20px, 1.8vw, 30px);
+  border: 1px solid transparent;
+  font-size: clamp(.98rem, 1.05vw, 1.18rem);
+  background: rgba(255,255,255,.035);
+  color: rgba(232,242,252,.74);
+}
+.nav-pill:not(.active):hover,
+.nav-pill:not(.active):focus-visible {
+  color: rgba(248,252,255,.96);
+  background: rgba(255,255,255,.075);
+  box-shadow: 0 10px 24px rgba(0,0,0,.18);
+}
+.app-shell[data-theme="star-trek"] .top-nav,
+.app-shell[data-theme="christmas"] .top-nav {
+  gap: clamp(14px, 1.65vw, 28px);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.app-shell[data-theme="star-trek"] .nav-pill,
+.app-shell[data-theme="christmas"] .nav-pill {
+  min-width: clamp(118px, 9vw, 158px);
+  min-height: 50px;
+  padding: 0 clamp(20px, 1.8vw, 30px);
+  font-size: clamp(.98rem, 1.05vw, 1.18rem);
+}
+.virtual-sensor-section {
+  display: none !important;
+}
+@media (max-width: 1180px) {
+  .top-nav,
+  .app-shell[data-theme="star-trek"] .top-nav,
+  .app-shell[data-theme="christmas"] .top-nav {
+    gap: 10px;
+  }
+  .nav-pill,
+  .app-shell[data-theme="star-trek"] .nav-pill,
+  .app-shell[data-theme="christmas"] .nav-pill {
+    min-width: clamp(88px, 7.5vw, 116px);
+    min-height: 48px;
+    padding-inline: 14px;
+  }
+}

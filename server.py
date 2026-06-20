@@ -106,8 +106,8 @@ DEFAULT_THERMOSTAT = {
     "name": "IHA Thermostat",
     "currentTemp": 70,
     "currentTempUpdatedAt": 0,
-    "currentTempSource": "virtual",
-    "currentTempSourceName": "Virtual Temp",
+    "currentTempSource": "home-assistant",
+    "currentTempSourceName": "No Entry Selected",
     "targetTemp": 70,
     "lastComfortTarget": 70,
     "mode": "cool",
@@ -623,9 +623,10 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             if name:
                 base["name"] = name[:80]
         if "currentTempSource" in source:
-            base["currentTempSource"] = str(source.get("currentTempSource") or "virtual").strip()[:80] or "virtual"
+            raw_source = str(source.get("currentTempSource") or "home-assistant").strip().lower()[:80] or "home-assistant"
+            base["currentTempSource"] = raw_source if raw_source in LOCAL_TEMP_SOURCE_NAMES or raw_source == "home-assistant" else "home-assistant"
         if "currentTempSourceName" in source:
-            base["currentTempSourceName"] = str(source.get("currentTempSourceName") or "Virtual Temp").strip()[:120] or "Virtual Temp"
+            base["currentTempSourceName"] = str(source.get("currentTempSourceName") or "No Entry Selected").strip()[:120] or "No Entry Selected"
 
         hvac_mode = source.get("hvac_mode", source.get("hvacMode", source.get("mode")))
         if hvac_mode is not None:
