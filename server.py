@@ -1689,7 +1689,9 @@ def _apply_presence_away_logic(thermostat: dict) -> dict:
 
 
 def _apply_runtime_thermostat_logic(record: dict, *, notify: bool = True) -> dict:
-    thermostat = _apply_local_temperature_sensor_if_needed(record)
+    thermostat = record.get("thermostat") or {}
+    thermostat = _apply_selected_ha_temperature_sensor_if_needed(thermostat)
+    thermostat = _apply_local_temperature_sensor_if_needed({"thermostat": thermostat})
     updated = _apply_presence_away_logic(thermostat)
     updated = _apply_comfort_auto_switch_logic(updated, notify=notify)
     scheduled = _apply_thermostat_schedules(updated)
@@ -2633,6 +2635,74 @@ def _thermostat_should_use_local_temp_sensor(thermostat: dict, now: float) -> bo
         last_update = _number(thermostat.get("currentTempUpdatedAt"), 0, 0)
         return not last_update or now - last_update >= LOCAL_TEMP_SENSOR_STALE_SECONDS
     return False
+
+
+
+def _selected_ha_temperature_entity() -> dict | None:
+    try:
+        record = _read_panel_config_record()
+        config = record.get("config") if isinstance(record, dict) else {}
+        ha = (((config or {}).get("integrations") or {}).get("homeAssistant") or {})
+        selected = ha.get("currentTempEntity")
+        if isinstance(selected, dict):
+            eid = str(selected.get("entityId") or selected.get("entity_id") or "").strip()
+            if eid:
+                return {"entityId": eid, "name": str(selected.get("name") or selected.get("friendly_name") or eid)}
+        if isinstance(selected, str) and selected.strip():
+            eid = selected.strip()
+            return {"entityId": eid, "name": eid}
+    except Exception:
+        return None
+    return None
+
+
+def _temperature_from_ha_state_item(item: dict) -> tuple[float | None, str]:
+    attrs = item.get("attributes") or {}
+    raw = item.get("state")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None, ""
+    unit = str(attrs.get("unit_of_measurement") or "").strip()
+    if unit.lower() in {"°c", "c", "celsius"}:
+        value = value * 9.0 / 5.0 + 32.0
+    if not (-40.0 <= value <= 130.0):
+        return None, unit
+    return round(value, 1), unit
+
+
+def _apply_selected_ha_temperature_sensor_if_needed(thermostat: dict) -> dict:
+    source = _selected_ha_temperature_entity()
+    if not source:
+        return thermostat
+    ha_url, token = _ha_credentials_from_panel_config()
+    if not ha_url or not token:
+        return thermostat
+    entity_id = str(source.get("entityId") or "").strip()
+    if not entity_id:
+        return thermostat
+    try:
+        item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
+        if not isinstance(item, dict):
+            return thermostat
+        temp_f, _unit = _temperature_from_ha_state_item(item)
+        if temp_f is None:
+            return thermostat
+        attrs = item.get("attributes") or {}
+        label = str(source.get("name") or attrs.get("friendly_name") or entity_id).strip() or entity_id
+        updated = dict(thermostat)
+        updated["currentTemp"] = temp_f
+        updated["currentTempUpdatedAt"] = int(time.time())
+        updated["currentTempSource"] = "home-assistant"
+        updated["currentTempSourceName"] = label
+        updated["runtimeTempSource"] = "home-assistant"
+        updated["runtimeTempSourceName"] = label
+        if updated != thermostat:
+            _write_thermostat_record(updated, persist=False)
+        return updated
+    except Exception as exc:
+        print(f"Home Assistant temperature sensor update failed for {entity_id}: {exc}", flush=True)
+        return thermostat
 
 
 def _apply_local_temperature_sensor_if_needed(record: dict) -> dict:

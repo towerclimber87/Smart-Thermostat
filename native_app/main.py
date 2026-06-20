@@ -2765,29 +2765,21 @@ class SettingsDialog(QDialog):
         scroll.setWidget(body)
         root.addWidget(scroll, 1)
 
-        # Duplicate the critical actions at the bottom. On the real touchscreen
-        # this gives a reliable target even if the top edge is hard to hit.
+        # Single clean bottom action bar. Hardware / History / Done stay in the
+        # header only so the settings screen does not show duplicate controls.
         bottom = QHBoxLayout()
         bottom.setSpacing(10)
-        self.bottom_hardware = RoundButton("Hardware", active=True, min_h=44)
-        self.bottom_history = RoundButton("History", active=True, min_h=44)
-        self.bottom_save = RoundButton("Save Settings", active=True, min_h=44)
-        self.bottom_done = RoundButton("Done", active=True, min_h=48)
-        bottom.addWidget(self.bottom_hardware)
-        bottom.addWidget(self.bottom_history)
         bottom.addStretch(1)
+        self.bottom_save = RoundButton("Save Settings", active=True, min_h=46)
+        self.bottom_save.setMinimumWidth(190)
         bottom.addWidget(self.bottom_save)
-        bottom.addWidget(self.bottom_done)
         root.addLayout(bottom)
 
         self.controls: dict[str, QLabel] = {}
         self.build()
         self.done.clicked.connect(self.accept)
-        self.bottom_done.clicked.connect(self.accept)
         self.hardware.clicked.connect(self.show_hardware)
-        self.bottom_hardware.clicked.connect(self.show_hardware)
         self.history.clicked.connect(self.show_history)
-        self.bottom_history.clicked.connect(self.show_history)
         self.bottom_save.clicked.connect(self.save_all)
         QTimer.singleShot(0, self.fit_to_screen)
 
@@ -2956,10 +2948,10 @@ class SettingsDialog(QDialog):
         else:
             source_name = t.get("currentTempSourceName") or "Virtual Temp"
             source_line = "Using virtual temp until a sensor is selected"
-        a = QLabel(f"{source_name}\n{source_line}")
-        a.setFont(font(10, QFont.Black))
-        a.setStyleSheet("color:#dfe9ff; background:transparent; border:0;")
-        temp_source.layout().addWidget(a)
+        self.temp_source_label = QLabel(f"{source_name}\n{source_line}")
+        self.temp_source_label.setFont(font(10, QFont.Black))
+        self.temp_source_label.setStyleSheet("color:#dfe9ff; background:transparent; border:0;")
+        temp_source.layout().addWidget(self.temp_source_label)
         choose = RoundButton("Choose Sensor", active=True, min_h=34)
         choose.setMinimumWidth(150)
         choose.clicked.connect(self.choose_temp_sensor)
@@ -3040,6 +3032,45 @@ class SettingsDialog(QDialog):
         except Exception as exc:
             if not quiet: QMessageBox.warning(self, "Update failed", str(exc))
 
+    def show_saved_then_close(self):
+        dlg = QDialog(self)
+        dlg.setModal(True)
+        dlg.setWindowTitle("Saved")
+        dlg.setFixedSize(360, 160)
+        dlg.setStyleSheet("""
+            QDialog {
+                background:qlineargradient(x1:0,y1:0,x2:1,y2:1,
+                    stop:0 #0a1b2d,
+                    stop:1 #102d3e);
+                color:#f7fbff;
+                border:1px solid rgba(85,240,255,0.45);
+                border-radius:24px;
+            }
+            QLabel {
+                color:#f7fbff;
+                font-family:Arial;
+                background:transparent;
+                border:0;
+            }
+        """)
+        lay = QVBoxLayout(dlg)
+        lay.setContentsMargins(22, 18, 22, 18)
+        title = QLabel("SETTINGS SAVED")
+        title.setAlignment(Qt.AlignCenter)
+        title.setFont(font(20, QFont.Black, 4))
+        title.setStyleSheet("color:#55f0ff; letter-spacing:3px;")
+        sub = QLabel("Applying changes…")
+        sub.setAlignment(Qt.AlignCenter)
+        sub.setFont(font(12, QFont.Black))
+        sub.setStyleSheet("color:#dce8ff;")
+        lay.addStretch(1)
+        lay.addWidget(title)
+        lay.addWidget(sub)
+        lay.addStretch(1)
+        QTimer.singleShot(650, dlg.accept)
+        dlg.exec_()
+        self.accept()
+
     def save_all(self):
         self.apply_values()
         try:
@@ -3049,36 +3080,69 @@ class SettingsDialog(QDialog):
                 self.security_code_field.setText(self.masked_code(str((self.s.config.get("alarm") or {}).get("disarmCode") or "")))
             if hasattr(self, "settings_code_field"):
                 self.settings_code_field.setText(self.masked_code(str((self.s.config.get("security") or {}).get("settingsCode") or "")))
-            QMessageBox.information(self, "Saved", "Settings saved.")
+            self.show_saved_then_close()
         except Exception as exc:
             QMessageBox.warning(self, "Save failed", str(exc))
 
     def choose_temp_sensor(self):
         ha = self.s.ha()
-        entities = ha.get("currentTempAvailableEntities") or []
+        stored = ha.get("currentTempAvailableEntities") or []
+        entities = []
+        try:
+            data = self.s.api.post("/api/ha/entities", self.s.ha_payload({"domains": ["sensor"]}))
+            entities = data.get("entities") or []
+        except Exception:
+            entities = []
+
+        by_id = {}
+        for item in list(entities) + list(stored):
+            if not isinstance(item, dict):
+                continue
+            eid = str(item.get("entityId") or item.get("entity_id") or "").strip()
+            if not eid:
+                continue
+            by_id[eid] = {
+                "entityId": eid,
+                "name": str(item.get("name") or item.get("friendly_name") or eid),
+                "domain": str(item.get("domain") or "sensor"),
+                "state": item.get("state"),
+                "unitOfMeasurement": item.get("unitOfMeasurement") or item.get("unit_of_measurement") or "",
+            }
+        entities = list(by_id.values())
         if not entities:
-            try:
-                data = self.s.api.post("/api/ha/entities", self.s.ha_payload({"domains": ["sensor"]}))
-                entities = data.get("entities") or []
-            except Exception as exc:
-                QMessageBox.warning(self, "Failed", str(exc)); return
+            QMessageBox.warning(self, "Failed", "No Home Assistant sensor entities found.")
+            return
+
         dlg = EntityPickerDialog("Choose Temperature Sensor", entities, self)
         def apply(e):
             try:
                 eid = str(e.get("entityId") or e.get("entity_id") or "").strip()
                 if not eid:
                     return
-                selected = {"entityId": eid, "name": str(e.get("name") or e.get("friendly_name") or eid), "domain": str(e.get("domain") or "sensor")}
+                selected = {
+                    "entityId": eid,
+                    "name": str(e.get("name") or e.get("friendly_name") or eid),
+                    "domain": str(e.get("domain") or "sensor"),
+                    "unitOfMeasurement": str(e.get("unitOfMeasurement") or e.get("unit_of_measurement") or ""),
+                }
                 ha = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
+                # Force replace the selected current temp source. Do not keep
+                # using the previous sensor just because it is still in the list.
                 ha["currentTempEntity"] = selected
-                available = ha.get("currentTempAvailableEntities")
-                if not isinstance(available, list):
-                    available = []
-                if all(str(item.get("entityId") or "") != eid for item in available if isinstance(item, dict)):
-                    available.append(selected)
+                available = [selected]
+                for item in entities:
+                    if isinstance(item, dict) and str(item.get("entityId") or "") != eid:
+                        available.append(item)
                 ha["currentTempAvailableEntities"] = available
                 self.s.save_config()
-                self.s.update_thermostat({"currentTempSource": "home-assistant", "currentTempSourceName": selected["name"]})
+                self.s.update_thermostat({
+                    "currentTempSource": "home-assistant",
+                    "currentTempSourceName": selected["name"],
+                    "runtimeTempSource": "home-assistant",
+                    "runtimeTempSourceName": selected["name"],
+                })
+                if hasattr(self, "temp_source_label"):
+                    self.temp_source_label.setText(f"{selected['name']}\nUsing {selected['entityId']}")
                 self.saved.emit()
             except Exception as exc:
                 QMessageBox.warning(self, "Choose Sensor", str(exc))
