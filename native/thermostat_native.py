@@ -528,19 +528,26 @@ class NativeThermostatApp:
 
 
     def draw_top_nav(self) -> None:
-        # Match the web pill navigation: compact, centered, rounded, and cyan active state.
+        # Native appliance navigation: bigger touch targets, more breathing room,
+        # and no enclosing border/frame so the top bar stays clean and modern.
         pages = [("blinds", "Blinds"), ("audio", "Audio"), ("thermostat", "Thermostat"), ("lights", "Lights"), ("room", "Room")]
-        widths = {"blinds": 74, "audio": 70, "thermostat": 94, "lights": 72, "room": 70}
-        gap = 4
+        widths = {"blinds": 98, "audio": 96, "thermostat": 146, "lights": 96, "room": 88}
+        gap = 18
         total = sum(widths[p] for p, _ in pages) + gap * (len(pages) - 1)
         x = (1280 - total) // 2
-        y, h = 33, 30
-        self.round_rect_shadow(self.sx(x-9), self.sy(y-5), self.sx(x+total+9), self.sy(y+h+5), self.sy(17), "#202832", "#394451", 1, shadow="#06090d", offset=self.sy(2))
-        self.canvas.create_line(self.sx(x+6), self.sy(y-3), self.sx(x+total-6), self.sy(y-3), fill="#485460", width=1)
+        y, h = 28, 38
         for page, label in pages:
             w = widths[page]
             active = self.page == page
-            self.glossy_button(self.sx(x), self.sy(y), self.sx(x+w), self.sy(y+h), label, lambda p=page: self.set_page(p), active=active, size=10, tag=f"nav:{page}")
+            if active:
+                self.glossy_button(self.sx(x), self.sy(y), self.sx(x+w), self.sy(y+h), label, lambda p=page: self.set_page(p), active=True, size=13, tag=f"nav:{page}")
+            else:
+                # Draw inactive tabs as text-first soft chips instead of a heavy
+                # bordered group. Each tab remains a large touch target.
+                x1, y1, x2, y2 = self.sx(x), self.sy(y), self.sx(x+w), self.sy(y+h)
+                self.buttons.append(ButtonSpec(x1, y1, x2, y2, label, lambda p=page: self.set_page(p), "", "", TEXT, f"nav:{page}"))
+                self.round_rect(x1, y1, x2, y2, self.sy(16), "#141c25", "#1f2a35", 1)
+                self.text((x1+x2)//2, (y1+y2)//2, label, 13, "#d9e6f2", "bold")
             x += w + gap
 
 
@@ -611,7 +618,7 @@ class NativeThermostatApp:
 
         self.draw_status_tile(110, 398, 148, 100, "Inside Doors", self.door_label(), "door", GREEN if self.door_label().lower() == "closed" else RED, lambda: self.show_toast("Door status updated from Home Assistant"), long_action=lambda: self.open_entity_picker("door_entity", ["binary_sensor", "cover"], "Select Inside Door / Entry Sensor"))
         self.draw_status_tile(1020, 398, 148, 100, "Alarmo", self.alarm_label(), "shield", GREEN, lambda: self.open_alarm(), long_action=lambda: self.open_entity_picker("alarm_entity", ["alarm_control_panel"], "Select Alarm Entity"))
-        self.draw_virtual_outputs(relays, current)
+        self.draw_relay_outputs(relays)
 
         self.draw_schedule_preset_bar()
         self.circle_button(54, 708, 23, "S", lambda: self.open_schedule(), fill="#143543", outline="#276273", color=TEXT, size=21)
@@ -763,9 +770,11 @@ class NativeThermostatApp:
         self.canvas.create_oval(cx-inner-10, cy-inner-10, cx+inner+10, cy+inner+10, fill=inner_dark, outline="#111a25", width=1)
         self.canvas.create_oval(cx-inner, cy-inner, cx+inner, cy+inner, fill=inner_fill, outline="#2fb8ff" if "cool" in action_label.lower() else "#2bd986", width=1)
 
-        self.text(cx, cy-self.sy(70), action_label.upper()[:18], 11, "#eaf5ff", "bold")
-        self.text(cx, cy-self.sy(10), f"{current:.0f}°", 62, TEXT, "bold")
-        self.pill(cx-self.sx(54), cy+self.sy(56), cx+self.sx(54), cy+self.sy(84), f"Set Temp  {target:.0f}°", fill=pill_fill, outline=pill_outline, color=TEXT, size=10)
+        # The status is already shown in the clean pill above the dial. Keep the
+        # dial center focused on room temperature and the setpoint only.
+        self.text(cx, cy-self.sy(34), f"{current:.0f}°", 64, TEXT, "bold")
+        self.text(cx, cy+self.sy(30), "SET TEMPERATURE", 10, "#d7f4ff", "bold")
+        self.text(cx, cy+self.sy(64), f"{target:.0f}°", 30, TEXT, "bold")
         self.pill(cx-self.sx(142), cy+self.sy(124), cx-self.sx(98), cy+self.sy(148), f"{minimum:.0f}°", fill="#080c12", outline="#111820", color=TEXT, size=10)
         self.pill(cx+self.sx(98), cy+self.sy(124), cx+self.sx(142), cy+self.sy(148), f"{maximum:.0f}°", fill="#080c12", outline="#111820", color=TEXT, size=10)
 
@@ -800,10 +809,12 @@ class NativeThermostatApp:
         self.pill(self.sx(x+(w-pill_w)//2), self.sy(y+80), self.sx(x+(w+pill_w)//2), self.sy(y+98), state.upper()[:13], fill="#1b4b39" if not openish else "#604311", outline=border, color="#effff8", size=7)
 
 
-    def draw_virtual_outputs(self, relays: dict[str, Any], current: float) -> None:
-        x,y,w,h = 998, 218, 172, 112
-        self.round_rect(self.sx(x), self.sy(y), self.sx(x+w), self.sy(y+h), self.sy(14), "#222933", "#3d4651", 1)
-        self.text(self.sx(x+w//2), self.sy(y+16), "VIRTUAL OUTPUTS", 8, MUTED, "bold")
+    def draw_relay_outputs(self, relays: dict[str, Any]) -> None:
+        # Keep the useful live relay indicators, but remove the virtual room-temp
+        # slider. Current room temperature now comes from the selected HA entry.
+        x,y,w,h = 998, 226, 172, 76
+        self.round_rect(self.sx(x), self.sy(y), self.sx(x+w), self.sy(y+h), self.sy(14), "#17212b", "#2b3744", 1)
+        self.text(self.sx(x+w//2), self.sy(y+16), "OUTPUTS", 8, MUTED, "bold")
         labels=[("fan","Fan"),("heat","Heat"),("cool","Cool")]
         for i,(key,label) in enumerate(labels):
             bx=x+12+i*52
@@ -811,11 +822,6 @@ class NativeThermostatApp:
             self.round_rect(self.sx(bx), self.sy(y+30), self.sx(bx+42), self.sy(y+60), self.sy(8), "#164d3d" if on else "#262d36", "#2d755d" if on else "#3a444f", 1)
             self.canvas.create_oval(self.sx(bx+17), self.sy(y+36), self.sx(bx+24), self.sy(y+43), fill=GREEN if on else "#cfd4da", outline="")
             self.text(self.sx(bx+21), self.sy(y+52), label, 7, TEXT, "bold")
-        self.text(self.sx(x+12), self.sy(y+82), "VIRTUAL TEMP", 8, MUTED, "bold", "w")
-        self.text(self.sx(x+w-18), self.sy(y+82), f"{current:.1f}°", 10, TEXT, "bold", "e")
-        self.canvas.create_line(self.sx(x+14), self.sy(y+96), self.sx(x+w-14), self.sy(y+96), fill="#eef2f7", width=1)
-        knob_x = self.sx(x+14 + (w-28) * clamp((current-50)/40, 0, 1))
-        self.canvas.create_oval(knob_x-self.sx(5), self.sy(y+91), knob_x+self.sx(5), self.sy(y+101), fill=CYAN_2, outline="")
 
     def segmented_control(self, x:int, y:int, w:int, h:int, items:list[tuple[str,str]], active:str, on_pick:Callable[[str],None], label_first:bool=False) -> None:
         x1,y1,x2,y2 = self.sx(x), self.sy(y), self.sx(x+w), self.sy(y+h)
@@ -1647,6 +1653,7 @@ class NativeThermostatApp:
                 {"label":"Release Manual", "key":"relayRelease", "kind":"release"},
             ],
             "entries": [
+                {"label":"Current Temp Entry", "value": ent_value("currentTempEntity"), "kind":"entity", "edit":"current_temp_entity", "domains":["sensor","number","input_number"], "title":"Select Current Temperature Entry"},
                 {"label":"Inside Door Entity", "value": ent_value("doorEntity"), "kind":"entity", "edit":"door_entity", "domains":["binary_sensor","cover"], "title":"Select Inside Door / Entry Sensor"},
                 {"label":"Alarm Entity", "value": ent_value("alarmEntity"), "kind":"entity", "edit":"alarm_entity", "domains":["alarm_control_panel"], "title":"Select Alarm Entity"},
                 {"label":"Weather Entity", "value": ent_value("weatherEntity"), "kind":"entity", "edit":"weather_entity", "domains":["weather"], "title":"Select Weather Entity"},
@@ -1748,7 +1755,8 @@ class NativeThermostatApp:
         elif kind == "entity":
             value = item.get("value", "Tap Select")
             self.text(x+w-self.sx(126), y+self.sy(42), str(value)[:24], 11, TEXT, "bold", "e")
-            self.small_button(x+w-self.sx(112), y+self.sy(18), x+w-self.sx(12), y+self.sy(52), "Select", lambda it=item: self.open_entity_picker(str(it.get("edit")), list(it.get("domains") or []), str(it.get("title") or it.get("label") or "Select Entity"), it.get("target") if isinstance(it.get("target"), dict) else None), fill="#173246", text=CYAN_2, size=12)
+            button_label = "Choose" if str(item.get("edit") or "") == "current_temp_entity" else "Select"
+            self.small_button(x+w-self.sx(112), y+self.sy(18), x+w-self.sx(12), y+self.sy(52), button_label, lambda it=item: self.open_entity_picker(str(it.get("edit")), list(it.get("domains") or []), str(it.get("title") or it.get("label") or "Select Entity"), it.get("target") if isinstance(it.get("target"), dict) else None), fill="#173246", text=CYAN_2, size=12)
         elif kind == "brightness":
             display_cfg = self.config.get("display") if isinstance(self.config.get("display"), dict) else {}
             val = int(clamp(as_float(display_cfg.get("brightnessPercent"), 100), 1, 100))
@@ -1777,9 +1785,20 @@ class NativeThermostatApp:
         self.modal = "entity_picker"
         self.modal_data = {"edit": edit, "domains": domains, "title": title, "target": target or {}, "loading": True, "entities": [], "error": "", "page": 0}
         self.draw()
-        self._run_async("entity_picker", lambda: self.fetch_entity_picker(domains))
+        self._run_async("entity_picker", lambda d=list(domains), e=edit: self.fetch_entity_picker(d, e))
 
-    def fetch_entity_picker(self, domains: list[str]) -> None:
+    def is_temperature_entry(self, ent: dict[str, Any]) -> bool:
+        eid = str(ent.get("entityId") or ent.get("entity_id") or "").lower()
+        name = str(ent.get("name") or ent.get("friendly_name") or "").lower()
+        device_class = str(ent.get("deviceClass") or ent.get("device_class") or "").lower()
+        unit = str(ent.get("unitOfMeasurement") or ent.get("unit_of_measurement") or "").strip().lower()
+        if device_class == "temperature":
+            return True
+        if unit in {"°f", "f", "fahrenheit", "°c", "c", "celsius", "k", "kelvin"}:
+            return True
+        return "temp" in name or "temperature" in name or "temp" in eid or "temperature" in eid
+
+    def fetch_entity_picker(self, domains: list[str], edit: str = "") -> None:
         ha = self._ha()
         if not ha:
             self.pending_jobs.put(("entity_picker_results", {"entities": [], "error": "Home Assistant is not configured"}))
@@ -1796,7 +1815,10 @@ class NativeThermostatApp:
             eid = ent.get("entityId") or ent.get("entity_id")
             if not eid:
                 continue
-            cleaned.append({**ent, "entityId": eid, "name": self.entity_display_name(ent)})
+            normalized = {**ent, "entityId": eid, "name": self.entity_display_name(ent)}
+            if edit == "current_temp_entity" and not self.is_temperature_entry(normalized):
+                continue
+            cleaned.append(normalized)
         cleaned.sort(key=lambda e: (str(e.get("domain") or e.get("entityId", "")).lower(), str(e.get("name", "")).lower()))
         self.pending_jobs.put(("entity_picker_results", {"entities": cleaned, "error": ""}))
 
@@ -1804,7 +1826,8 @@ class NativeThermostatApp:
         title = str(self.modal_data.get("title") or "Select Home Assistant Entity")
         self.text((x1+x2)//2, y1+self.sy(42), title, 26, TEXT, "bold")
         domains = ", ".join(self.modal_data.get("domains") or [])
-        self.text((x1+x2)//2, y1+self.sy(72), f"Showing: {domains}. Long-press cards on pages to assign them.", 12, MUTED, "bold")
+        help_text = "Showing temperature-capable Home Assistant entries." if self.modal_data.get("edit") == "current_temp_entity" else f"Showing: {domains}. Long-press cards on pages to assign them."
+        self.text((x1+x2)//2, y1+self.sy(72), help_text, 12, MUTED, "bold")
         if self.modal_data.get("loading"):
             self.text((x1+x2)//2, (y1+y2)//2, "Loading entities from Home Assistant…", 22, CYAN_2, "bold")
         elif self.modal_data.get("error"):
@@ -1861,8 +1884,19 @@ class NativeThermostatApp:
         ha = integrations.setdefault("homeAssistant", {})
         if not isinstance(ha, dict):
             integrations["homeAssistant"] = ha = {}
-        simple = {"entityId": eid, "name": name, "domain": str(ent.get("domain") or eid.split(".")[0] if "." in eid else "")}
-        if edit == "alarm_entity":
+        simple = {
+            "entityId": eid,
+            "name": name,
+            "domain": str(ent.get("domain") or eid.split(".")[0] if "." in eid else ""),
+            "deviceClass": str(ent.get("deviceClass") or ent.get("device_class") or ""),
+            "unitOfMeasurement": str(ent.get("unitOfMeasurement") or ent.get("unit_of_measurement") or ""),
+            "state": ent.get("state"),
+        }
+        if edit == "current_temp_entity":
+            ha["currentTempEntity"] = simple
+            self.thermostat["currentTempSource"] = "home-assistant"
+            self.thermostat["currentTempSourceName"] = name
+        elif edit == "alarm_entity":
             ha["alarmEntity"] = simple
         elif edit == "weather_entity":
             ha["weatherEntity"] = simple

@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import atexit
 import json
+import math
 import mimetypes
 import os
 import signal
@@ -76,6 +77,7 @@ LOCAL_TEMP_SENSOR_STALE_SECONDS = max(15.0, float(os.environ.get("SMART_THERMOST
 LOCAL_TEMP_SENSOR_ADDRESS = os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_I2C_ADDRESS", "").strip()
 LOCAL_TEMP_SENSOR_TYPE = os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_TYPE", "auto").strip().lower() or "auto"
 LOCAL_TEMP_SOURCE_NAMES = {"onboard", "local", "i2c", "hardware", "onboard-fallback"}
+HA_CURRENT_TEMP_POLL_SECONDS = max(1.0, float(os.environ.get("SMART_THERMOSTAT_HA_CURRENT_TEMP_POLL_SECONDS", "2") or "2"))
 
 _HARDWARE_LOCK = threading.RLock()
 _HARDWARE_RELAY_BACKEND = None
@@ -87,6 +89,8 @@ _HARDWARE_RGB = {"on": False, "color": "#35eaff"}
 _HARDWARE_LAST_I2C_SCAN = {"at": 0.0, "payload": None}
 _LOCAL_TEMP_SENSOR_LOCK = threading.RLock()
 _LOCAL_TEMP_SENSOR_CACHE = {"at": 0.0, "payload": None}
+_HA_CURRENT_TEMP_LOCK = threading.RLock()
+_HA_CURRENT_TEMP_CACHE = {"at": 0.0, "entityId": "", "payload": None, "error": ""}
 _CONTROL_LOOP_THREAD_STARTED = False
 _CONTROL_LOOP_STOP = threading.Event()
 
@@ -1523,7 +1527,9 @@ def _thermostat_outputs(thermostat: dict) -> dict:
 
 def _thermostat_status_payload() -> dict:
     record = _read_thermostat_record()
-    thermostat = record["thermostat"]
+    thermostat = _apply_home_assistant_temperature_if_needed(record)
+    record["thermostat"] = thermostat
+    thermostat = _apply_local_temperature_sensor_if_needed(record)
     outputs = _thermostat_outputs(thermostat)
     _apply_thermostat_outputs_to_hardware(outputs)
     hvac_mode = "heat_cool" if thermostat["mode"] == "auto" else thermostat["mode"]
@@ -2312,6 +2318,121 @@ def _read_local_temperature_sensor(force: bool = False) -> dict:
         return _deepcopy_json(payload)
 
 
+def _home_assistant_temperature_entity_config() -> tuple[str, str, dict] | None:
+    """Return the saved HA temperature entry without forcing browser-side JS.
+
+    Native mode has no web page running JavaScript, so the local server must be
+    able to pull the selected Home Assistant temperature entry itself. The
+    result is cached at the HA fetch layer so this does not create SD writes and
+    does not hammer Home Assistant.
+    """
+    record = _read_panel_config_record()
+    cfg = record.get("config") if isinstance(record.get("config"), dict) else {}
+    integrations = cfg.get("integrations") if isinstance(cfg.get("integrations"), dict) else {}
+    ha = integrations.get("homeAssistant") if isinstance(integrations.get("homeAssistant"), dict) else {}
+    url = str(ha.get("url") or "").strip()
+    token = str(ha.get("token") or "").strip()
+    ent = ha.get("currentTempEntity")
+    if isinstance(ent, str):
+        ent = {"entityId": ent, "name": ent}
+    if not isinstance(ent, dict):
+        return None
+    entity_id = str(ent.get("entityId") or ent.get("entity_id") or "").strip()
+    if not url or not token or not entity_id or "." not in entity_id:
+        return None
+    return url, token, {**ent, "entityId": entity_id}
+
+
+def _optional_temperature_number(raw: object) -> float | None:
+    if raw is None or raw == "":
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value):
+        return None
+    return value
+
+
+def _ha_temperature_from_state_item(item: dict) -> float | None:
+    attrs = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
+    value = _optional_temperature_number(item.get("state"))
+    if value is None:
+        value = _optional_temperature_number(attrs.get("current_temperature"))
+    if value is None:
+        value = _optional_temperature_number(attrs.get("temperature"))
+    if value is None:
+        return None
+    unit = str(attrs.get("unit_of_measurement") or attrs.get("temperature_unit") or "°F").strip().lower()
+    if unit in {"°c", "c", "celsius"}:
+        value = value * 9 / 5 + 32
+    elif unit in {"k", "kelvin"}:
+        value = (value - 273.15) * 9 / 5 + 32
+    if not -40 <= value <= 130:
+        return None
+    return round(value, 1)
+
+
+def _fetch_home_assistant_current_temperature() -> dict | None:
+    cfg = _home_assistant_temperature_entity_config()
+    if not cfg:
+        return None
+    ha_url, token, ent = cfg
+    entity_id = ent["entityId"]
+    now = time.monotonic()
+    with _HA_CURRENT_TEMP_LOCK:
+        cached_entity = str(_HA_CURRENT_TEMP_CACHE.get("entityId") or "")
+        cached_payload = _HA_CURRENT_TEMP_CACHE.get("payload")
+        if cached_entity == entity_id and now - float(_HA_CURRENT_TEMP_CACHE.get("at") or 0) < HA_CURRENT_TEMP_POLL_SECONDS:
+            return _deepcopy_json(cached_payload) if cached_payload else None
+
+    try:
+        item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}", timeout=1.5)
+        if not isinstance(item, dict):
+            return None
+        temp_f = _ha_temperature_from_state_item(item)
+        if temp_f is None:
+            return None
+        attrs = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
+        payload = {
+            "entityId": entity_id,
+            "name": str(attrs.get("friendly_name") or ent.get("name") or entity_id),
+            "temperatureF": temp_f,
+            "source": "home-assistant",
+        }
+        with _HA_CURRENT_TEMP_LOCK:
+            _HA_CURRENT_TEMP_CACHE.update({"at": now, "entityId": entity_id, "payload": _deepcopy_json(payload), "error": ""})
+        return payload
+    except Exception as exc:
+        with _HA_CURRENT_TEMP_LOCK:
+            _HA_CURRENT_TEMP_CACHE.update({"at": now, "entityId": entity_id, "payload": None, "error": str(exc)[:240]})
+        return None
+
+
+def _apply_home_assistant_temperature_if_needed(record: dict) -> dict:
+    thermostat = record.get("thermostat") or {}
+    source = str(thermostat.get("currentTempSource") or "home-assistant").strip().lower()
+    if source != "home-assistant":
+        return thermostat
+    reading = _fetch_home_assistant_current_temperature()
+    if not reading:
+        return thermostat
+    next_temp = reading.get("temperatureF")
+    if next_temp is None:
+        return thermostat
+    updated = dict(thermostat)
+    updated["currentTemp"] = round(float(next_temp), 1)
+    updated["currentTempUpdatedAt"] = int(time.time())
+    updated["currentTempSource"] = "home-assistant"
+    updated["currentTempSourceName"] = str(reading.get("name") or reading.get("entityId") or "Home Assistant Entry")[:120]
+    updated["runtimeTempSource"] = "home-assistant"
+    updated["runtimeTempSourceName"] = updated["currentTempSourceName"]
+    if updated != thermostat:
+        _write_thermostat_record(updated, persist=False)
+    return updated
+
+
 def _thermostat_should_use_local_temp_sensor(thermostat: dict, now: float) -> bool:
     mode = LOCAL_TEMP_SENSOR_MODE
     if mode in {"always", "on", "force"}:
@@ -2360,6 +2481,8 @@ def _thermostat_control_loop() -> None:
     while not _CONTROL_LOOP_STOP.wait(CONTROL_LOOP_INTERVAL_SECONDS):
         try:
             record = _read_thermostat_record()
+            thermostat = _apply_home_assistant_temperature_if_needed(record)
+            record["thermostat"] = thermostat
             thermostat = _apply_local_temperature_sensor_if_needed(record)
             outputs = _thermostat_outputs(thermostat)
             _apply_thermostat_outputs_to_hardware(outputs)
@@ -2687,7 +2810,7 @@ def _fetch_ha_covers(ha_url: str, token: str) -> list[dict]:
         method="GET",
     )
     try:
-        with request.urlopen(req, timeout=12) as resp:
+        with request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read()
     except error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[:500]
@@ -2734,7 +2857,7 @@ def _fetch_ha_cover_states_for_entities(ha_url: str, token: str, entity_ids: lis
     return [by_id[entity_id] for entity_id in wanted if entity_id in by_id]
 
 
-def _ha_json_request(ha_url: str, token: str, method: str, path: str, payload: dict | None = None) -> object:
+def _ha_json_request(ha_url: str, token: str, method: str, path: str, payload: dict | None = None, timeout: float = 12.0) -> object:
     ha_url = _normalize_ha_url(ha_url)
     token = (token or "").strip()
     if not token:
