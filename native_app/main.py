@@ -259,24 +259,48 @@ class ThermostatScreen(Page):
         mid.setColumnStretch(3, 1)
         mid.setColumnStretch(4, 3)
 
+        # Side cards are intentionally aligned in matching vertical lanes.
+        # The original web UI keeps Inside Doors and Alarmo horizontally lined
+        # up even when the auto-switch notice is hidden. A normal vertical
+        # layout collapses hidden widgets and pushed the door tile too high,
+        # making the native UI look uneven. These fixed-height top lanes reserve
+        # the same visual space on both sides before the status cards.
+        side_top_h = 188
+
         left_col = QVBoxLayout()
-        left_col.addWidget(self.notice)
-        left_col.addWidget(self.door_card)
+        left_col.setSpacing(12)
+        left_top = QWidget()
+        left_top.setFixedHeight(side_top_h)
+        left_top_lay = QVBoxLayout(left_top)
+        left_top_lay.setContentsMargins(0, 0, 0, 0)
+        left_top_lay.addStretch(1)
+        left_top_lay.addWidget(self.notice, 0, Qt.AlignCenter)
+        left_col.addWidget(left_top)
+        left_col.addWidget(self.door_card, 0, Qt.AlignCenter)
         left_col.addStretch(1)
         hum = ValueTile("HUMIDITY", "45%")
         self.humidity_tile = hum
         left_col.addWidget(hum, 0, Qt.AlignCenter)
         mid.addLayout(left_col, 0, 0, 2, 1)
         mid.addWidget(self.minus, 0, 1, 2, 1, Qt.AlignCenter)
+
         center = QVBoxLayout()
+        center.setSpacing(8)
         center.addWidget(self.status_badge, 0, Qt.AlignCenter)
         center.addWidget(self.dial, 1, Qt.AlignCenter)
         center.addLayout(self._mode_bar())
         mid.addLayout(center, 0, 2, 2, 1)
         mid.addWidget(self.plus, 0, 3, 2, 1, Qt.AlignCenter)
+
         right_col = QVBoxLayout()
-        right_col.addWidget(self.virtual_panel, 0, Qt.AlignRight)
-        right_col.addStretch(1)
+        right_col.setSpacing(12)
+        right_top = QWidget()
+        right_top.setFixedHeight(side_top_h)
+        right_top_lay = QVBoxLayout(right_top)
+        right_top_lay.setContentsMargins(0, 0, 0, 0)
+        right_top_lay.addWidget(self.virtual_panel, 0, Qt.AlignRight | Qt.AlignTop)
+        right_top_lay.addStretch(1)
+        right_col.addWidget(right_top)
         right_col.addWidget(self.alarm_card, 0, Qt.AlignCenter)
         right_col.addStretch(1)
         fan_bar = self._fan_bar()
