@@ -38,26 +38,26 @@ POLL_MS = int(os.environ.get("SMART_NATIVE_POLL_MS", "1500"))
 SLOW_POLL_MS = int(os.environ.get("SMART_NATIVE_SLOW_POLL_MS", "8000"))
 THERMOSTAT_ONLY = os.environ.get("SMART_NATIVE_THERMOSTAT_ONLY", "0").strip().lower() not in {"0", "false", "no", "off"}
 VISUAL_MODE = os.environ.get("SMART_NATIVE_VISUAL_MODE", "web_parity").strip().lower()
-BG = "#030711"
-BG_2 = "#07101d"
-PANEL = "#0d1626"
-PANEL_2 = "#141f33"
-PANEL_3 = "#08111f"
-TEXT = "#f7fbff"
-MUTED = "#95a7bd"
-CYAN = "#4deeff"
-CYAN_2 = "#7ff6ff"
-GREEN = "#63f1ad"
+BG = "#121820"
+BG_2 = "#171d27"
+PANEL = "#1b232d"
+PANEL_2 = "#202a36"
+PANEL_3 = "#111821"
+TEXT = "#f4f7fb"
+MUTED = "#9aa6b5"
+CYAN = "#48cfff"
+CYAN_2 = "#6eeeff"
+GREEN = "#4ee083"
 YELLOW = "#ffd85a"
-ORANGE = "#ffad5c"
-RED = "#ff647d"
-BLUE = "#45a8ff"
+ORANGE = "#ff9d42"
+RED = "#ff4c5d"
+BLUE = "#1f78ff"
 BLUE_DARK = "#0a4fc4"
-PURPLE = "#9b6dff"
-GRAY = "#607086"
-BLACK = "#03101f"
-CARD_BORDER = "#ffffff22"
-SOFT_BORDER = "#ffffff16"
+PURPLE = "#22203e"
+GRAY = "#314354"
+BLACK = "#000000"
+CARD_BORDER = "#35404d"
+SOFT_BORDER = "#28323f"
 DEFAULT_ACCESS_CODE = "3762"
 DEFAULT_NATIVE_SCHEDULES = [
     {"id": "native-home", "name": "Home", "time": "06:00", "enabled": True, "coolSetpoint": 73, "heatSetpoint": 70, "personEntityIds": []},
@@ -360,19 +360,15 @@ class NativeThermostatApp:
         self.toast = message
         self.toast_until = time.time() + seconds
 
-    def button(self, x1: int, y1: int, x2: int, y2: int, label: str, action: Callable[[], None], fill: str = PANEL_2, outline: str = CARD_BORDER, text: str = TEXT, tag: str = "", size: int = 18, radius: int = 16, border: int = 1) -> None:
+    def button(self, x1: int, y1: int, x2: int, y2: int, label: str, action: Callable[[], None], fill: str = PANEL_2, outline: str = "#2e465b", text: str = TEXT, tag: str = "", size: int = 18, radius: int = 16, border: int = 2) -> None:
         self.buttons.append(ButtonSpec(x1, y1, x2, y2, label, action, fill, outline, text, tag))
-        r = max(8, radius)
-        self.round_rect_shadow(x1, y1, x2, y2, r, fill, outline, border, shadow="#02050a", offset=max(1, self.sy(2)))
-        # Tiny top highlight gives the soft web-app glass feel without expensive alpha/blur.
-        self.canvas.create_line(x1 + r, y1 + 2, x2 - r, y1 + 2, fill="#ffffff2a", width=1)
+        self.round_rect(x1, y1, x2, y2, radius, fill, outline, border)
         self.canvas.create_text((x1+x2)//2, (y1+y2)//2, text=label, fill=text, font=self.font(size, "bold"), justify="center")
 
     def round_rect(self, x1: int, y1: int, x2: int, y2: int, r: int, fill: str, outline: str = "", width: int = 1) -> None:
         # Canvas polygon with smoothed corners keeps drawing light on the Pi.
-        r = max(2, min(r, (x2 - x1) // 2, (y2 - y1) // 2))
         pts = [x1+r,y1, x2-r,y1, x2,y1, x2,y1+r, x2,y2-r, x2,y2, x2-r,y2, x1+r,y2, x1,y2, x1,y2-r, x1,y1+r, x1,y1]
-        self.canvas.create_polygon(pts, smooth=True, splinesteps=10, fill=fill, outline=outline, width=width)
+        self.canvas.create_polygon(pts, smooth=True, splinesteps=8, fill=fill, outline=outline, width=width)
 
     def text(self, x: int, y: int, value: str, size: int = 18, fill: str = TEXT, weight: str = "normal", anchor: str = "center") -> None:
         self.canvas.create_text(x, y, text=value, fill=fill, font=self.font(size, weight), anchor=anchor)
@@ -382,10 +378,10 @@ class NativeThermostatApp:
             self.round_rect(x1 + offset, y1 + offset, x2 + offset, y2 + offset, r, shadow, "", 0)
         self.round_rect(x1, y1, x2, y2, r, fill, outline, width)
 
-    def glass_panel(self, x1: int, y1: int, x2: int, y2: int, r: int = 22, fill: str = "#0d1626", outline: str = CARD_BORDER) -> None:
-        self.round_rect_shadow(x1, y1, x2, y2, r, fill, outline, 1, shadow="#02050a", offset=max(2, self.sy(5)))
-        self.round_rect(x1 + 1, y1 + 1, x2 - 1, y2 - 1, max(2, r - 1), "", "#ffffff12", 1)
-        self.canvas.create_line(x1 + r, y1 + 3, x2 - r, y1 + 3, fill="#ffffff30", width=1)
+    def glass_panel(self, x1: int, y1: int, x2: int, y2: int, r: int = 22, fill: str = "#18212b", outline: str = "#32404d") -> None:
+        self.round_rect_shadow(x1, y1, x2, y2, r, fill, outline, 1, shadow="#06090e", offset=max(2, self.sy(4)))
+        # A small highlight at the top sells the glass look without expensive blur.
+        self.canvas.create_line(x1 + r, y1 + 2, x2 - r, y1 + 2, fill="#465462", width=1)
 
     def glow_dot(self, x: int, y: int, color: str, r: int = 4) -> None:
         self.canvas.create_oval(x-r*3, y-r*3, x+r*3, y+r*3, fill="#14231e", outline="")
@@ -438,32 +434,26 @@ class NativeThermostatApp:
             self.draw_modal()
 
     def draw_background(self) -> None:
-        """Lightweight web-style ambient background for the native Pi UI."""
-        self.canvas.create_rectangle(0, 0, self.width, self.height, fill=BG, outline="")
-        # Ambient color fields, intentionally vector-only.
-        self.canvas.create_oval(self.sx(-210), self.sy(-130), self.sx(480), self.sy(520), fill="#082633", outline="")
-        self.canvas.create_oval(self.sx(760), self.sy(-220), self.sx(1460), self.sy(470), fill="#20164a", outline="")
-        self.canvas.create_oval(self.sx(330), self.sy(420), self.sx(1080), self.sy(1030), fill="#0a1d3a", outline="")
-        # Climate-aware soft wash, like the old web climate backdrop.
-        action = str((self.thermostat or {}).get("hvac_action", (self.thermostat or {}).get("hvacAction", "")) or "").lower()
-        relays = (self.thermostat or {}).get("relays") or {}
-        if "heat" in action or as_bool(relays.get("heat")):
-            self.canvas.create_oval(self.sx(370), self.sy(150), self.sx(930), self.sy(710), fill="#4b1117", outline="")
-            self.text(self.sx(1040), self.sy(190), "☀", 160, "#ffcf7a", "bold")
-        elif "cool" in action or as_bool(relays.get("cool")):
-            self.canvas.create_oval(self.sx(360), self.sy(120), self.sx(960), self.sy(740), fill="#062857", outline="")
-            self.text(self.sx(1028), self.sy(205), "❄", 150, "#b9ecff", "bold")
-        else:
-            self.canvas.create_oval(self.sx(390), self.sy(180), self.sx(920), self.sy(760), fill="#082b24", outline="")
-        # Blueprint grid.
-        grid = max(34, self.sx(56))
+        """Low-cost glass dashboard background.
+
+        This intentionally stays vector-only.  No PNGs, no blur filters, and no
+        per-pixel effects so the Pi 3B stays responsive, but the result is much
+        closer to the old web UI: dark glass, soft color blooms, and a subtle
+        blueprint grid.
+        """
+        self.canvas.create_rectangle(0, 0, self.width, self.height, fill="#0d1219", outline="")
+        # Subtle grid, scaled to the current display.
+        grid = max(18, self.sx(42))
         for x in range(0, self.width + grid, grid):
-            self.canvas.create_line(x, 0, x, self.height, fill="#ffffff08", width=1)
+            self.canvas.create_line(x, 0, x, self.height, fill="#141b24", width=1)
         for y in range(0, self.height + grid, grid):
-            self.canvas.create_line(0, y, self.width, y, fill="#ffffff07", width=1)
-        # Outer shell, with the same glass-panel framing as the web app.
-        self.round_rect_shadow(self.sx(12), self.sy(14), self.sx(1268), self.sy(786), self.sx(34), "#06101de8", "#ffffff28", 1, shadow="#000000", offset=self.sy(5))
-        self.round_rect(self.sx(16), self.sy(18), self.sx(1264), self.sy(782), self.sx(30), "", "#ffffff10", 1)
+            self.canvas.create_line(0, y, self.width, y, fill="#141b24", width=1)
+        # Cheap glow fields that mimic the web gradient without CSS blur.
+        self.canvas.create_oval(self.sx(360), self.sy(120), self.sx(1030), self.sy(780), fill="#111a3a", outline="")
+        self.canvas.create_oval(self.sx(-160), self.sy(110), self.sx(410), self.sy(820), fill="#0c2430", outline="")
+        self.canvas.create_oval(self.sx(840), self.sy(260), self.sx(1380), self.sy(900), fill="#111623", outline="")
+        # Outer glass frame.
+        self.round_rect_shadow(self.sx(12), self.sy(14), self.sx(1268), self.sy(786), self.sx(28), "#111821", "#26313d", 2, offset=self.sy(4))
 
     def pill(self, x1:int, y1:int, x2:int, y2:int, text:str, fill:str="#232a34", outline:str="#37414d", color:str=TEXT, size:int=14, weight:str="bold", dot:str|None=None) -> None:
         self.round_rect(x1, y1, x2, y2, max(8, (y2-y1)//2), fill, outline, 1)
@@ -474,12 +464,15 @@ class NativeThermostatApp:
         self.text(tx, (y1+y2)//2, text, size, color, weight)
 
     def label_chip(self, x:int, y:int, label:str, value:str, w:int=118) -> None:
-        # Small web-style environmental chip.  Keep it subtle and readable on the
-        # 10.1-inch panel: one clean pill, compact label, strong value.
-        x1, y1, x2, y2 = self.sx(x), self.sy(y), self.sx(x+w), self.sy(y+24)
-        self.round_rect_shadow(x1, y1, x2, y2, self.sy(12), "#242c35", "#3d4854", 1, shadow="#06090d", offset=self.sy(1))
-        self.text(self.sx(x+12), self.sy(y+12), label.upper(), 8, "#b8c4d0", "bold", "w")
-        self.text(self.sx(x+w-10), self.sy(y+12), value.upper(), 11, TEXT, "bold", "e")
+        # Web-style environmental readout with no enclosing cell.  The browser UI
+        # reads these as simple inline labels, not cards.  Draw label/value
+        # separately so WIND never collides with the numeric mph value.
+        label_text = label.upper()
+        value_text = value.upper()
+        value_offset = 78 if label_text == "OUTDOOR" else 62 if label_text == "WIND" else max(54, min(w - 38, len(label_text) * 10 + 16))
+        baseline = self.sy(y + 12)
+        self.text(self.sx(x), baseline, label_text, 9, "#b8c4d0", "bold", "w")
+        self.text(self.sx(x + value_offset), baseline, value_text, 11, TEXT, "bold", "w")
 
     def small_button(self, x1:int, y1:int, x2:int, y2:int, label:str, action:Callable[[], None], fill:str=PANEL_2, outline:str="#2e465b", text:str=TEXT, size:int=12, tag:str="") -> None:
         self.button(x1, y1, x2, y2, label, action, fill=fill, outline=outline, text=text, tag=tag, size=size, radius=max(6, (y2-y1)//3), border=1)
@@ -487,52 +480,42 @@ class NativeThermostatApp:
     def icon_text(self, x:int, y:int, icon:str, size:int=34, fill:str=CYAN_2) -> None:
         self.text(self.sx(x), self.sy(y), icon, size, fill, "bold")
 
-    def circle_button(self, cx:int, cy:int, r:int, label:str, action:Callable[[], None], fill:str="#111b2b", outline:str=CARD_BORDER, color:str=TEXT, size:int=20) -> None:
+    def circle_button(self, cx:int, cy:int, r:int, label:str, action:Callable[[], None], fill:str="#232a34", outline:str="#343e4a", color:str=TEXT, size:int=20) -> None:
         x1,y1,x2,y2 = self.sx(cx-r), self.sy(cy-r), self.sx(cx+r), self.sy(cy+r)
         self.buttons.append(ButtonSpec(x1,y1,x2,y2,label,action,fill,outline,color))
-        off=max(1,self.sy(2))
-        self.canvas.create_oval(x1+off,y1+off,x2+off,y2+off,fill="#02050a",outline="")
         self.canvas.create_oval(x1,y1,x2,y2,fill=fill,outline=outline,width=2)
-        self.canvas.create_arc(x1+self.sx(7), y1+self.sy(5), x2-self.sx(7), y2-self.sy(5), start=55, extent=80, style="arc", outline="#ffffff35", width=1)
         self.text(self.sx(cx), self.sy(cy), label, size, color, "bold")
 
     def draw_header(self) -> None:
-        # Top controls match the old browser pill cluster but stay native/lightweight.
-        x1, y1, x2, y2 = self.sx(26), self.sy(28), self.sx(158), self.sy(72)
+        # Top-left lock chip: small, translucent, and clickable like the web UI.
+        x1, y1, x2, y2 = self.sx(24), self.sy(32), self.sx(132), self.sy(62)
         label = "🔒  LOCKED" if self.locked else "🔓  UNLOCKED"
-        fill = "#152f36" if not self.locked else "#3a1824"
-        outline = "#45d8df" if not self.locked else "#ff647d"
-        color = "#d6fff9" if not self.locked else "#ffd2dc"
+        fill = "#16282b" if not self.locked else "#2b1b22"
+        outline = "#2f6567" if not self.locked else "#7a3342"
+        color = "#b9fff3" if not self.locked else "#ffd2dc"
         self.buttons.append(ButtonSpec(x1, y1, x2, y2, label, self.toggle_lock, fill, outline, color, "panel-lock"))
-        self.round_rect_shadow(x1, y1, x2, y2, self.sy(22), fill, outline, 1, shadow="#02050a", offset=self.sy(2))
-        self.canvas.create_line(x1+self.sx(16), y1+2, x2-self.sx(16), y1+2, fill="#ffffff26", width=1)
-        self.text((x1+x2)//2, (y1+y2)//2, label, 9, color, "bold")
-        self.pill(self.sx(1092), self.sy(28), self.sx(1180), self.sy(72), time.strftime("%I:%M %p").lstrip("0"), fill="#101b2a", outline="#ffffff22", color=TEXT, size=9)
-        self.circle_button(1214, 50, 21, "i", lambda: self.open_info(), fill="#102f46", outline="#3bdfff", color=CYAN_2, size=17)
-        self.circle_button(1252, 50, 21, "⚙", lambda: self.open_settings(), fill="#101b2a", outline="#ffffff22", color="#dce7f5", size=14)
+        self.round_rect_shadow(x1, y1, x2, y2, self.sy(15), fill, outline, 1, shadow="#06090d", offset=self.sy(2))
+        self.text((x1+x2)//2, (y1+y2)//2, label, 8, color, "bold")
+        # Right-side clock/info/settings chips.
+        self.pill(self.sx(1121), self.sy(32), self.sx(1178), self.sy(62), time.strftime("%I:%M %p").lstrip("0"), fill="#242a33", outline="#3b4551", color=TEXT, size=9)
+        self.circle_button(1214, 47, 18, "i", lambda: self.open_info(), fill="#123244", outline="#2d6c83", color=CYAN_2, size=16)
+        self.circle_button(1248, 47, 18, "⚙", lambda: self.open_settings(), fill="#242b34", outline="#3b4551", color=MUTED, size=14)
 
 
     def draw_top_nav(self) -> None:
+        # Match the web pill navigation: compact, centered, rounded, and cyan active state.
         pages = [("blinds", "Blinds"), ("audio", "Audio"), ("thermostat", "Thermostat"), ("lights", "Lights"), ("room", "Room")]
-        widths = {"blinds": 112, "audio": 106, "thermostat": 146, "lights": 106, "room": 102}
-        gap = 8
+        widths = {"blinds": 74, "audio": 70, "thermostat": 94, "lights": 72, "room": 70}
+        gap = 4
         total = sum(widths[p] for p, _ in pages) + gap * (len(pages) - 1)
         x = (1280 - total) // 2
-        y, h = 28, 44
-        self.round_rect_shadow(self.sx(x-8), self.sy(y-7), self.sx(x+total+8), self.sy(y+h+7), self.sy(28), "#0f1928", "#ffffff24", 1, shadow="#02050a", offset=self.sy(3))
-        self.canvas.create_line(self.sx(x+18), self.sy(y-4), self.sx(x+total-18), self.sy(y-4), fill="#ffffff2c", width=1)
+        y, h = 33, 30
+        self.round_rect_shadow(self.sx(x-9), self.sy(y-5), self.sx(x+total+9), self.sy(y+h+5), self.sy(17), "#202832", "#394451", 1, shadow="#06090d", offset=self.sy(2))
+        self.canvas.create_line(self.sx(x+6), self.sy(y-3), self.sx(x+total-6), self.sy(y-3), fill="#485460", width=1)
         for page, label in pages:
             w = widths[page]
             active = self.page == page
-            x1, y1, x2, y2 = self.sx(x), self.sy(y), self.sx(x+w), self.sy(y+h)
-            fill = CYAN if active else "#00000000"
-            outline = "#7ff6ff" if active else ""
-            text = BLACK if active else "#d8e4f2"
-            self.buttons.append(ButtonSpec(x1, y1, x2, y2, label, lambda p=page: self.set_page(p), fill, outline, text, f"nav-{page}"))
-            if active:
-                self.round_rect_shadow(x1, y1, x2, y2, self.sy(22), fill, outline, 1, shadow="#082136", offset=self.sy(2))
-                self.canvas.create_line(x1+self.sx(18), y1+2, x2-self.sx(18), y1+2, fill="#ffffff70", width=1)
-            self.text((x1+x2)//2, (y1+y2)//2, label, 12, text, "bold")
+            self.glossy_button(self.sx(x), self.sy(y), self.sx(x+w), self.sy(y+h), label, lambda p=page: self.set_page(p), active=active, size=10, tag=f"nav:{page}")
             x += w + gap
 
 
@@ -572,11 +555,13 @@ class NativeThermostatApp:
             action_label = "Cooling" if action == "cooling" or relays.get("cool") else "Heating" if action == "heating" or relays.get("heat") else "Idle"
         action_color = CYAN if "cool" in action_label.lower() else RED if "heat" in action_label.lower() else GREEN
 
-        # Web-parity thermostat layout: big hero title, floating chips, clean center dial.
-        self.text(self.sx(58), self.sy(136), "CLIMATE", 10, CYAN, "bold", "w")
-        self.text(self.sx(58), self.sy(190), "Climate Control", 54, TEXT, "bold", "w")
-        self.label_chip(60, 222, "Outdoor", f"{outdoor:.0f}°", 128)
-        self.label_chip(198, 222, "Wind", f"{wind:.0f} mph", 116)
+        # Web parity thermostat page, scaled down for the 10.1-inch Pi display.
+        self.label_chip(60, 166, "Outdoor", f"{outdoor:.0f}°", 112)
+        self.label_chip(180, 166, "Wind", f"{wind:.0f} mph", 104)
+        # The web title is large, but on the native 10-inch panel the previous
+        # size consumed too much of the layout.  Keep the same position but make
+        # it about 40% smaller so the page breathes like the browser version.
+        self.text(self.sx(58), self.sy(228), "Climate Control", 28, TEXT, "bold", "w")
 
         notice = self.auto_switch_notice()
         if notice:
@@ -591,11 +576,11 @@ class NativeThermostatApp:
 
         # Status pill belongs above the dial, not partially underneath the outer
         # dial ring.  If it overlaps the ring it looks like a floating artifact.
-        self.pill(self.sx(540), self.sy(122), self.sx(740), self.sy(154), action_label, fill="#111b2b", outline="#ffffff24", color=TEXT, size=10, dot=action_color)
+        self.pill(self.sx(558), self.sy(234), self.sx(722), self.sy(260), action_label, fill="#252b36", outline="#3a4351", color=TEXT, size=10, dot=action_color)
         self.draw_web_style_dial(current, target, action_label, action_color)
 
-        self.circle_button(376, 446, 37, "−", lambda: self.change_target(-1), fill="#111b2b", outline="#ffffff22", color=TEXT, size=30)
-        self.circle_button(904, 446, 37, "+", lambda: self.change_target(1), fill="#111b2b", outline="#ffffff22", color=TEXT, size=29)
+        self.circle_button(378, 446, 31, "−", lambda: self.change_target(-1), fill="#242b34", outline="#3a444f", color=TEXT, size=26)
+        self.circle_button(902, 446, 31, "+", lambda: self.change_target(1), fill="#242b34", outline="#3a444f", color=TEXT, size=25)
 
         self.draw_status_tile(110, 398, 148, 100, "Inside Doors", self.door_label(), "door", GREEN if self.door_label().lower() == "closed" else RED, lambda: self.show_toast("Door status updated from Home Assistant"))
         self.draw_status_tile(1020, 398, 148, 100, "Alarmo", self.alarm_label(), "shield", GREEN, lambda: self.open_alarm())
@@ -603,95 +588,120 @@ class NativeThermostatApp:
 
         self.draw_schedule_preset_bar()
         self.circle_button(54, 708, 23, "S", lambda: self.open_schedule(), fill="#143543", outline="#276273", color=TEXT, size=21)
-        self.pill(self.sx(244), self.sy(686), self.sx(350), self.sy(732), f"HUMIDITY   {hum:.0f}%", fill="#242b34", outline="#3a444f", color=TEXT, size=14)
+        # Humidity is a simple web-style inline readout, not a boxed control.
+        self.text(self.sx(244), self.sy(710), "HUMIDITY", 9, "#b8c4d0", "bold", "w")
+        self.text(self.sx(328), self.sy(710), f"{hum:.0f}%", 14, TEXT, "bold", "w")
         self.segmented_control(500, 686, 360, 46, [("cool","Cool"),("heat","Heat"),("auto","Auto"),("away","Away")], "away" if away else mode, lambda v: self.toggle_away() if v == "away" else self.set_mode(v))
         self.segmented_control(888, 686, 152, 46, [("fan","Fan"),("auto", title_case(fan or "auto"))], "auto", lambda _v: self.set_fan("on" if fan != "on" else "auto"), label_first=True)
 
 
     def draw_web_style_dial(self, current: float, target: float, action_label: str, action_color: str) -> None:
-        """Draw a modern Nest/web-style dial with light native primitives only."""
+        """Draw the thermostat dial using the old web dial geometry.
+
+        Keep the native dial clean and circular.  No reflection artifacts, no
+        fake oblong shine, and the visible min/max scale follows the comfort
+        range returned by target_limits().
+        """
         cx, cy = self.sx(640), self.sy(430)
-        r = min(self.sx(174), self.sy(174))
-        self.dial_area = (cx-r-self.sx(54), cy-r-self.sy(54), cx+r+self.sx(54), cy+r+self.sy(54))
+        r = min(self.sx(148), self.sy(148))
+        self.dial_area = (cx-r-self.sx(48), cy-r-self.sy(48), cx+r+self.sx(48), cy+r+self.sy(48))
         minimum, maximum = self.target_limits()
         target_pct = clamp((target - minimum) / max(1, maximum - minimum), 0, 1)
         current_pct = clamp((current - minimum) / max(1, maximum - minimum), 0, 1)
+
+        # Old web dial scale: lower-left min, sweep over the top, lower-right max.
+        # Canvas y grows downward, so 135° -> lower-left and 405°/45° -> lower-right.
         start_deg, span_deg = 135.0, 270.0
 
-        # Outer glass layers.
-        self.canvas.create_oval(cx-r-30, cy-r-30, cx+r+30, cy+r+30, fill="#02050a", outline="#ffffff08", width=1)
-        self.canvas.create_oval(cx-r-20, cy-r-20, cx+r+20, cy+r+20, fill="#07101d", outline="#ffffff1f", width=2)
-        self.canvas.create_oval(cx-r-7, cy-r-7, cx+r+7, cy+r+7, fill="#0a1422", outline="#ffffff1a", width=1)
+        # Outer glass puck and rings.
+        self.canvas.create_oval(cx-r-18, cy-r-18, cx+r+18, cy+r+18, fill="#03060b", outline="#05070b", width=2)
+        self.canvas.create_oval(cx-r-9, cy-r-9, cx+r+9, cy+r+9, fill="#0a111a", outline="#17202c", width=2)
+        self.canvas.create_oval(cx-r+4, cy-r+4, cx+r-4, cy+r-4, fill="#0b121c", outline="#222c39", width=1)
 
-        # Background and active rails.
-        rail_r = r - 34
-        last = None
-        for i in range(118):
-            pos = i / 117
-            a = math.radians(start_deg + pos * span_deg)
-            pt = (cx + math.cos(a) * rail_r, cy + math.sin(a) * rail_r)
-            if last:
-                self.canvas.create_line(last[0], last[1], pt[0], pt[1], fill="#1b2b3c", width=10, capstyle="round")
-            last = pt
-        last = None
-        active_steps = max(2, int(118 * target_pct))
-        hot = "heat" in action_label.lower()
-        active_color = "#ff9278" if hot else CYAN
-        accent2 = "#ffcf7a" if hot else BLUE
-        for i in range(active_steps):
-            pos = i / 117
-            a = math.radians(start_deg + pos * span_deg)
-            pt = (cx + math.cos(a) * rail_r, cy + math.sin(a) * rail_r)
-            if last:
-                self.canvas.create_line(last[0], last[1], pt[0], pt[1], fill=active_color if pos < .7 else accent2, width=10, capstyle="round")
-            last = pt
-
-        # Tick ring.
-        tick_count = 88
+        # Tick ring.  This is the primary range visual, so it must line up with
+        # the same min/max limits used by dragging and the range labels.
+        tick_count = 104
         for i in range(tick_count):
             pos = i / (tick_count - 1)
-            a = math.radians(start_deg + pos * span_deg)
+            angle = math.radians(start_deg + pos * span_deg)
             major = (i % 8 == 0)
-            length = 20 if major else 11
+            length = 21 if major else 13
             width = 2 if major else 1
-            col = "#eaf8ff" if abs(pos-target_pct) < .012 else ("#7ff6ff" if pos <= target_pct and not hot else "#ffd2bd" if pos <= target_pct else "#46566a")
-            x1 = cx + math.cos(a) * (r - length)
-            y1 = cy + math.sin(a) * (r - length)
-            x2 = cx + math.cos(a) * (r - 4)
-            y2 = cy + math.sin(a) * (r - 4)
+            if pos <= target_pct:
+                col = "#46d9ff" if pos < 0.62 else "#8d7dff"
+            else:
+                col = "#31404d"
+            x1 = cx + math.cos(angle) * (r - length)
+            y1 = cy + math.sin(angle) * (r - length)
+            x2 = cx + math.cos(angle) * (r - 5)
+            y2 = cy + math.sin(angle) * (r - 5)
             self.canvas.create_line(x1, y1, x2, y2, fill=col, width=width, capstyle="round")
 
+        # Subtle inner rail; avoid Tk arc direction issues by drawing short line
+        # segments with the exact same geometry as the tick ring.
+        last = None
+        rail_r = r - 37
+        for i in range(80):
+            pos = i / 79
+            angle = math.radians(start_deg + pos * span_deg)
+            point = (cx + math.cos(angle) * rail_r, cy + math.sin(angle) * rail_r)
+            if last:
+                self.canvas.create_line(last[0], last[1], point[0], point[1], fill="#192635", width=7, capstyle="round")
+            last = point
+        last = None
+        active_steps = max(2, int(80 * target_pct))
+        for i in range(active_steps):
+            pos = i / 79
+            angle = math.radians(start_deg + pos * span_deg)
+            point = (cx + math.cos(angle) * rail_r, cy + math.sin(angle) * rail_r)
+            if last:
+                self.canvas.create_line(last[0], last[1], point[0], point[1], fill="#52dfff", width=7, capstyle="round")
+            last = point
+
+        # Current marker and target knob.
         def marker(pos: float, width: int, knob: bool) -> None:
             a = math.radians(start_deg + pos * span_deg)
-            x1 = cx + math.cos(a) * (r - 16)
-            y1 = cy + math.sin(a) * (r - 16)
-            x2 = cx + math.cos(a) * (r + 17)
-            y2 = cy + math.sin(a) * (r + 17)
-            self.canvas.create_line(x1, y1, x2, y2, fill="#f7fbff", width=width, capstyle="round")
+            x1 = cx + math.cos(a) * (r - 12)
+            y1 = cy + math.sin(a) * (r - 12)
+            x2 = cx + math.cos(a) * (r + 14)
+            y2 = cy + math.sin(a) * (r + 14)
+            self.canvas.create_line(x1, y1, x2, y2, fill="#eef6ff", width=width, capstyle="round")
             if knob:
-                self.canvas.create_oval(x2-self.sx(9), y2-self.sy(9), x2+self.sx(9), y2+self.sy(9), fill="#f7fbff", outline="#cfefff", width=1)
+                self.canvas.create_oval(x2-self.sx(6), y2-self.sy(6), x2+self.sx(6), y2+self.sy(6), fill="#eef6ff", outline="#d8e6f7")
         marker(current_pct, 5, False)
         marker(target_pct, 4, True)
 
-        # Inner face.
-        inner = int(r * 0.58)
-        if hot:
-            inner_fill, inner_dark, pill_fill, pill_outline = "#d85b42", "#351217", "#5a2823", "#ffb09f"
+        # Inner face.  No oval/shine overlay; the previous highlight looked like
+        # an off-center oblong blob on the physical display.
+        inner = int(r * 0.61)
+        if "heat" in action_label.lower():
+            inner_fill = "#d85b42"
+            inner_dark = "#381514"
+            pill_fill = "#5a2823"
+            pill_outline = "#dc7665"
         elif "cool" in action_label.lower():
-            inner_fill, inner_dark, pill_fill, pill_outline = "#168bff", "#061a3a", "#114b95", "#71f1ff"
+            inner_fill = "#168bff"
+            inner_dark = "#061a3a"
+            pill_fill = "#145eb7"
+            pill_outline = "#39cfff"
         elif action_label.lower() == "idle":
-            inner_fill, inner_dark, pill_fill, pill_outline = "#18ba67", "#052b19", "#124d31", "#7ef2b8"
+            inner_fill = "#19c95f"
+            inner_dark = "#052b19"
+            pill_fill = "#124d31"
+            pill_outline = "#42db83"
         else:
-            inner_fill, inner_dark, pill_fill, pill_outline = "#16a86a", "#06291d", "#143b33", "#45d6aa"
-        self.canvas.create_oval(cx-inner-16, cy-inner-16, cx+inner+16, cy+inner+16, fill=inner_dark, outline="#ffffff12", width=1)
-        self.canvas.create_oval(cx-inner, cy-inner, cx+inner, cy+inner, fill=inner_fill, outline=pill_outline, width=2)
-        self.canvas.create_arc(cx-inner+9, cy-inner+9, cx+inner-9, cy+inner-9, start=52, extent=76, style="arc", outline="#ffffff70", width=3)
+            inner_fill = "#16a86a"
+            inner_dark = "#06291d"
+            pill_fill = "#143b33"
+            pill_outline = "#45d6aa"
+        self.canvas.create_oval(cx-inner-10, cy-inner-10, cx+inner+10, cy+inner+10, fill=inner_dark, outline="#111a25", width=1)
+        self.canvas.create_oval(cx-inner, cy-inner, cx+inner, cy+inner, fill=inner_fill, outline="#2fb8ff" if "cool" in action_label.lower() else "#2bd986", width=1)
 
-        self.text(cx, cy-self.sy(72), action_label.upper()[:20], 11, "#eaf5ff", "bold")
-        self.text(cx, cy-self.sy(8), f"{current:.0f}°", 66, TEXT, "bold")
-        self.pill(cx-self.sx(66), cy+self.sy(58), cx+self.sx(66), cy+self.sy(88), f"Set to  {target:.0f}°", fill=pill_fill, outline=pill_outline, color=TEXT, size=10)
-        self.pill(cx-self.sx(160), cy+self.sy(146), cx-self.sx(110), cy+self.sy(172), f"{minimum:.0f}°", fill="#050a12", outline="#ffffff10", color=TEXT, size=10)
-        self.pill(cx+self.sx(110), cy+self.sy(146), cx+self.sx(160), cy+self.sy(172), f"{maximum:.0f}°", fill="#050a12", outline="#ffffff10", color=TEXT, size=10)
+        self.text(cx, cy-self.sy(70), action_label.upper()[:18], 11, "#eaf5ff", "bold")
+        self.text(cx, cy-self.sy(10), f"{current:.0f}°", 62, TEXT, "bold")
+        self.pill(cx-self.sx(54), cy+self.sy(56), cx+self.sx(54), cy+self.sy(84), f"Set Temp  {target:.0f}°", fill=pill_fill, outline=pill_outline, color=TEXT, size=10)
+        self.pill(cx-self.sx(142), cy+self.sy(124), cx-self.sx(98), cy+self.sy(148), f"{minimum:.0f}°", fill="#080c12", outline="#111820", color=TEXT, size=10)
+        self.pill(cx+self.sx(98), cy+self.sy(124), cx+self.sx(142), cy+self.sy(148), f"{maximum:.0f}°", fill="#080c12", outline="#111820", color=TEXT, size=10)
 
 
     def door_label(self) -> str:
@@ -709,9 +719,9 @@ class NativeThermostatApp:
         border = ORANGE if title.lower().startswith("inside") and openish else "#18a877" if accent == GREEN else accent
         fill = "#172223" if not openish else "#2d210c"
         self.buttons.append(ButtonSpec(x1,y1,x2,y2,title,action,fill,border,TEXT))
-        self.glass_panel(x1,y1,x2,y2,self.sy(20),fill,border)
+        self.round_rect_shadow(x1,y1,x2,y2,self.sy(15),fill,border,2,shadow="#06090d",offset=self.sy(3))
         icx, icy = x + w//2, y + 30
-        self.canvas.create_oval(self.sx(icx-31), self.sy(icy-31), self.sx(icx+31), self.sy(icy+31), fill="#123734" if not openish else "#4a3516", outline="#57e7bd" if not openish else "#ffad5c", width=1)
+        self.canvas.create_oval(self.sx(icx-28), self.sy(icy-28), self.sx(icx+28), self.sy(icy+28), fill="#173432" if not openish else "#4a3516", outline="#2f695f" if not openish else "#ae7b22", width=1)
         if icon == "door":
             self.canvas.create_rectangle(self.sx(icx-10), self.sy(icy-17), self.sx(icx+11), self.sy(icy+17), outline="#b9fff3", width=2)
             self.canvas.create_line(self.sx(icx-10), self.sy(icy-17), self.sx(icx+3), self.sy(icy-24), fill="#b9fff3", width=1)
