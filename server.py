@@ -1566,27 +1566,127 @@ def _apply_comfort_auto_switch_logic(thermostat: dict, *, notify: bool = True) -
     return t
 
 
+
+def _ha_credentials_from_panel_config() -> tuple[str, str]:
+    try:
+        record = _read_panel_config_record()
+        config = record.get("config") if isinstance(record, dict) else {}
+        ha = (((config or {}).get("integrations") or {}).get("homeAssistant") or {})
+        return str(ha.get("url") or "").strip(), str(ha.get("token") or "").strip()
+    except Exception:
+        return "", ""
+
+
+def _person_states_for_schedule(entity_ids: list[str], thermostat: dict) -> dict[str, str]:
+    wanted = {str(entity_id or "").strip() for entity_id in entity_ids if str(entity_id or "").strip()}
+    if not wanted:
+        return {}
+    states: dict[str, str] = {}
+    for person in thermostat.get("people") or []:
+        if not isinstance(person, dict):
+            continue
+        entity_id = str(person.get("entityId") or person.get("entity_id") or "").strip()
+        if entity_id in wanted:
+            states[entity_id] = str(person.get("state") or "unknown").strip().lower()
+
+    ha_url, token = _ha_credentials_from_panel_config()
+    if ha_url and token:
+        try:
+            for item in _ha_all_states_cached(ha_url, token):
+                entity_id = str(item.get("entity_id") or "").strip()
+                if entity_id in wanted:
+                    states[entity_id] = str(item.get("state") or "unknown").strip().lower()
+        except Exception as exc:
+            print(f"Schedule person-state lookup failed: {exc}", flush=True)
+    return states
+
+
+def _schedule_people_are_home(schedule: dict, thermostat: dict) -> bool:
+    entity_ids = _normalize_schedule_person_ids(schedule.get("personEntityIds") or [])
+    if not entity_ids:
+        return True
+    states = _person_states_for_schedule(entity_ids, thermostat)
+    return all(states.get(entity_id) == "home" for entity_id in entity_ids)
+
+
+def _schedule_target_for_current_mode(thermostat: dict, schedule: dict) -> int:
+    mode = str(thermostat.get("mode") or "cool").strip().lower()
+    active = str(thermostat.get("autoActiveMode") or "").strip().lower()
+    effective = active if mode == "auto" and active in {"heat", "cool"} else mode
+    if effective == "heat":
+        return _intish(schedule.get("heatSetpoint"), thermostat.get("targetTemp", 70), 45, 95)
+    return _intish(schedule.get("coolSetpoint"), thermostat.get("targetTemp", 70), 45, 95)
+
+
+def _apply_thermostat_schedules(thermostat: dict) -> dict:
+    schedules = _normalize_schedule_entries(thermostat.get("schedules") or [])
+    if not schedules:
+        return thermostat
+    now = datetime.now()
+    time_key = now.strftime("%H:%M")
+    date_key = now.strftime("%Y-%m-%d")
+    changed = False
+    updated_schedules: list[dict] = []
+    updated = dict(thermostat)
+    for schedule in schedules:
+        sched = dict(schedule)
+        should_run = (
+            bool(sched.get("enabled", True))
+            and str(sched.get("time") or "") == time_key
+            and str(sched.get("lastTriggeredDate") or "") != date_key
+            and _schedule_people_are_home(sched, updated)
+        )
+        if should_run:
+            target = _schedule_target_for_current_mode(updated, sched)
+            updated["targetTemp"] = target
+            updated["lastComfortTarget"] = target
+            sched["lastTriggeredDate"] = date_key
+            changed = True
+        updated_schedules.append(sched)
+    if changed:
+        updated["schedules"] = updated_schedules
+        return _merge_thermostat_state(updated)
+    return thermostat
+
+
 def _apply_runtime_thermostat_logic(record: dict, *, notify: bool = True) -> dict:
     thermostat = _apply_local_temperature_sensor_if_needed(record)
     updated = _apply_comfort_auto_switch_logic(thermostat, notify=notify)
-    if updated != thermostat:
+    scheduled = _apply_thermostat_schedules(updated)
+    if scheduled != updated:
+        _write_thermostat_record(scheduled, persist=True)
+        updated = scheduled
+    elif updated != thermostat:
         _write_thermostat_record(updated, persist=False)
     return updated
 
 
 def _mark_thermostat_equipment_run(outputs: dict) -> None:
-    changes: dict[str, float] = {}
     now_ms = int(time.time() * 1000)
-    if outputs.get("heat"):
-        changes["equipmentLastHeatRunAt"] = now_ms
-        changes["lastHeatRunAt"] = now_ms
-    if outputs.get("cool"):
-        changes["equipmentLastCoolRunAt"] = now_ms
-        changes["lastCoolRunAt"] = now_ms
-    if not changes:
-        return
     try:
         current = _read_thermostat_record()["thermostat"]
+        changes: dict[str, float | bool] = {}
+        was_cooling = bool(current.get("coolRelayWasOn"))
+        is_cooling = bool(outputs.get("cool"))
+
+        if outputs.get("heat"):
+            changes["equipmentLastHeatRunAt"] = now_ms
+            changes["lastHeatRunAt"] = now_ms
+
+        if is_cooling:
+            changes["equipmentLastCoolRunAt"] = now_ms
+            changes["lastCoolRunAt"] = now_ms
+            changes["coolRelayWasOn"] = True
+            changes["coolFanHoldUntil"] = 0
+        elif was_cooling:
+            remain_minutes = _number(current.get("coolFanRemainOnMinutes"), 2, 0, 15)
+            changes["coolRelayWasOn"] = False
+            changes["coolFanHoldUntil"] = int(now_ms + remain_minutes * 60000) if remain_minutes > 0 else 0
+        elif _number(current.get("coolFanHoldUntil"), 0, 0) and _number(current.get("coolFanHoldUntil"), 0, 0) <= now_ms:
+            changes["coolFanHoldUntil"] = 0
+
+        if not changes:
+            return
         updated = {**current, **changes}
         _write_thermostat_record(updated, persist=False)
     except Exception as exc:
@@ -1682,6 +1782,9 @@ def _thermostat_status_payload() -> dict:
         "outdoorWindUnit": thermostat.get("outdoorWindUnit", "mph"),
         "outdoor_wind_unit": thermostat.get("outdoorWindUnit", "mph"),
         "safetyMode": outputs.get("safetyMode", ""),
+        "coolingFanHold": outputs.get("coolingFanHold", False),
+        "coolFanHoldUntil": thermostat.get("coolFanHoldUntil", 0),
+        "schedules": thermostat.get("schedules") or [],
         "relays": {"fan": outputs["fan"], "heat": outputs["heat"], "cool": outputs["cool"]},
     }
     payload = {
@@ -1726,6 +1829,9 @@ def _thermostat_status_payload() -> dict:
         "outdoorWindUnit": thermostat.get("outdoorWindUnit", "mph"),
         "outdoor_wind_unit": thermostat.get("outdoorWindUnit", "mph"),
         "safetyMode": outputs.get("safetyMode", ""),
+        "coolingFanHold": outputs.get("coolingFanHold", False),
+        "coolFanHoldUntil": thermostat.get("coolFanHoldUntil", 0),
+        "schedules": thermostat.get("schedules") or [],
         "relays": {"fan": outputs["fan"], "heat": outputs["heat"], "cool": outputs["cool"]},
         "relayFan": outputs["fan"],
         "relayHeat": outputs["heat"],

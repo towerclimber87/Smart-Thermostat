@@ -290,6 +290,455 @@ class ThermostatActionBanner(GlassPanel):
         self.raise_()
 
 
+class TextKeyboardDialog(QDialog):
+    def __init__(self, title: str, value: str = "", parent=None):
+        super().__init__(parent)
+        self.result_text = str(value or "")
+        self.setModal(True)
+        self.setWindowTitle(title)
+        self.setFixedSize(660, 430)
+        self.setStyleSheet("""
+            QDialog { background:#09111f; color:#f7fbff; }
+            QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
+        """)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 16, 18, 16)
+        root.setSpacing(10)
+        title_label = QLabel(title)
+        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setFont(font(24, QFont.Black))
+        root.addWidget(title_label)
+        self.display = QLabel("")
+        self.display.setAlignment(Qt.AlignCenter)
+        self.display.setFont(font(24, QFont.Black))
+        self.display.setStyleSheet("background:rgba(255,255,255,0.07); border:1px solid rgba(85,240,255,0.35); border-radius:18px; padding:12px;")
+        root.addWidget(self.display)
+        rows = [list("QWERTYUIOP"), list("ASDFGHJKL"), list("ZXCVBNM")]
+        for letters in rows:
+            row = QHBoxLayout()
+            row.setSpacing(6)
+            row.addStretch(1)
+            for ch in letters:
+                b = RoundButton(ch, active=True, min_h=42)
+                b.setFixedSize(52, 42)
+                b.clicked.connect(lambda checked=False, c=ch: self.add_char(c))
+                row.addWidget(b)
+            row.addStretch(1)
+            root.addLayout(row)
+        bottom = QHBoxLayout()
+        bottom.setSpacing(8)
+        space = RoundButton("Space", active=False, min_h=46)
+        back = RoundButton("⌫", active=False, min_h=46)
+        clear = RoundButton("Clear", active=False, min_h=46)
+        cancel = RoundButton("Cancel", active=False, kind="danger", min_h=46)
+        done = RoundButton("Done", active=True, min_h=46)
+        space.clicked.connect(lambda: self.add_char(" "))
+        back.clicked.connect(self.backspace)
+        clear.clicked.connect(self.clear_text)
+        cancel.clicked.connect(self.reject)
+        done.clicked.connect(self.accept)
+        bottom.addWidget(space)
+        bottom.addWidget(back)
+        bottom.addWidget(clear)
+        bottom.addStretch(1)
+        bottom.addWidget(cancel)
+        bottom.addWidget(done)
+        root.addLayout(bottom)
+        self.refresh()
+
+    def refresh(self):
+        self.display.setText(self.result_text or " ")
+
+    def add_char(self, ch: str):
+        if len(self.result_text) < 28:
+            self.result_text += ch
+            self.refresh()
+
+    def backspace(self):
+        self.result_text = self.result_text[:-1]
+        self.refresh()
+
+    def clear_text(self):
+        self.result_text = ""
+        self.refresh()
+
+    @staticmethod
+    def get_text(parent, title: str, value: str = "") -> str | None:
+        dlg = TextKeyboardDialog(title, value, parent)
+        if dlg.exec_() == QDialog.Accepted:
+            return dlg.result_text.strip()
+        return None
+
+
+class ScheduleEditDialog(QDialog):
+    saved = pyqtSignal(dict)
+
+    def __init__(self, state: AppState, schedule: dict | None = None, parent=None):
+        super().__init__(parent)
+        self.s = state
+        self.schedule = copy.deepcopy(schedule or {})
+        self.people: list[dict] = []
+        self.setModal(True)
+        self.setWindowTitle("Schedule")
+        self.setFixedSize(780, 620)
+        self.setStyleSheet("""
+            QDialog { background:#09111f; color:#f7fbff; }
+            QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
+        """)
+        self.name = str(self.schedule.get("name") or "Morning")
+        self.hour = 7
+        self.minute = 0
+        raw_time = str(self.schedule.get("time") or "07:00")
+        try:
+            h, m = raw_time.split(":", 1)
+            self.hour = max(0, min(23, int(h)))
+            self.minute = max(0, min(59, int(m)))
+        except Exception:
+            pass
+        self.cool = int(float(self.schedule.get("coolSetpoint") or 72))
+        self.heat = int(float(self.schedule.get("heatSetpoint") or 68))
+        self.enabled = bool(self.schedule.get("enabled", True))
+        self.person_ids = [str(x) for x in (self.schedule.get("personEntityIds") or []) if str(x)]
+        self.available_people: list[dict] = []
+        self.load_people()
+        self.build()
+
+    def load_people(self):
+        saved_people = self.s.thermostat.get("people") if isinstance(self.s.thermostat, dict) else []
+        if isinstance(saved_people, list):
+            for p in saved_people:
+                if isinstance(p, dict) and p.get("entityId"):
+                    self.available_people.append(p)
+        try:
+            data = self.s.api.post("/api/ha/entities", self.s.ha_payload({"domains": ["person"]}))
+            for p in data.get("entities") or []:
+                eid = str(p.get("entityId") or "")
+                if eid and all(str(x.get("entityId")) != eid for x in self.available_people):
+                    self.available_people.append(p)
+        except Exception:
+            pass
+
+    def build(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 18, 20, 18)
+        root.setSpacing(12)
+        title = QLabel("SCHEDULE")
+        title.setFont(font(24, QFont.Black))
+        title.setStyleSheet("color:#55f0ff; letter-spacing:3px;")
+        root.addWidget(title)
+
+        top = QGridLayout()
+        top.setHorizontalSpacing(12)
+        top.setVerticalSpacing(10)
+        self.name_btn = RoundButton(self.name, active=True, min_h=52)
+        self.name_btn.clicked.connect(self.edit_name)
+        top.addWidget(QLabel("Name"), 0, 0)
+        top.addWidget(self.name_btn, 0, 1, 1, 3)
+
+        self.time_label = QLabel("")
+        self.time_label.setAlignment(Qt.AlignCenter)
+        self.time_label.setFont(font(22, QFont.Black))
+        self.time_label.setStyleSheet("background:rgba(255,255,255,0.07); border:1px solid rgba(85,240,255,0.25); border-radius:16px; padding:8px;")
+        top.addWidget(QLabel("Time"), 1, 0)
+        top.addWidget(self.time_label, 1, 1)
+        for text_value, delta_h, delta_m, col in [("Hour −", -1, 0, 2), ("Hour +", 1, 0, 3), ("Min −", 0, -5, 2), ("Min +", 0, 5, 3)]:
+            b = RoundButton(text_value, active=False, min_h=42)
+            b.clicked.connect(lambda checked=False, dh=delta_h, dm=delta_m: self.adjust_time(dh, dm))
+            top.addWidget(b, 1 if delta_m == 0 else 2, col)
+        top.addWidget(QLabel(""), 2, 0)
+        root.addLayout(top)
+
+        target_row = QHBoxLayout()
+        target_row.setSpacing(12)
+        target_row.addWidget(self.target_control("Cool Target", "cool", 45, 95))
+        target_row.addWidget(self.target_control("Heat Target", "heat", 45, 95))
+        root.addLayout(target_row)
+
+        people_panel = GlassPanel(radius=18)
+        people_lay = QVBoxLayout(people_panel)
+        people_lay.setContentsMargins(12, 10, 12, 10)
+        people_lay.setSpacing(8)
+        hdr = QHBoxLayout()
+        hdr.addWidget(QLabel("Only run if these people are home"))
+        hdr.addStretch(1)
+        add = RoundButton("+ Person", active=True, min_h=38)
+        add.clicked.connect(self.add_person)
+        hdr.addWidget(add)
+        people_lay.addLayout(hdr)
+        self.people_box = QVBoxLayout()
+        people_lay.addLayout(self.people_box)
+        root.addWidget(people_panel, 1)
+
+        bottom = QHBoxLayout()
+        self.enabled_btn = RoundButton("Enabled", active=self.enabled, min_h=48)
+        self.enabled_btn.clicked.connect(self.toggle_enabled)
+        cancel = RoundButton("Cancel", active=False, kind="danger", min_h=48)
+        save = RoundButton("Save", active=True, min_h=48)
+        cancel.clicked.connect(self.reject)
+        save.clicked.connect(self.save)
+        bottom.addWidget(self.enabled_btn)
+        bottom.addStretch(1)
+        bottom.addWidget(cancel)
+        bottom.addWidget(save)
+        root.addLayout(bottom)
+        self.refresh()
+
+    def target_control(self, title: str, attr: str, low: int, high: int) -> QWidget:
+        panel = GlassPanel(radius=18)
+        lay = QVBoxLayout(panel)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lab = QLabel(title)
+        lab.setFont(font(12, QFont.Black))
+        lay.addWidget(lab, 0, Qt.AlignCenter)
+        val = QLabel("")
+        val.setObjectName(attr + "_value")
+        val.setAlignment(Qt.AlignCenter)
+        val.setFont(font(30, QFont.Black))
+        val.setStyleSheet("background:transparent; border:0;")
+        lay.addWidget(val)
+        row = QHBoxLayout()
+        minus = RoundButton("−", active=False, min_h=42)
+        plus = RoundButton("+", active=True, min_h=42)
+        minus.clicked.connect(lambda: self.adjust_target(attr, -1, low, high))
+        plus.clicked.connect(lambda: self.adjust_target(attr, 1, low, high))
+        row.addWidget(minus)
+        row.addWidget(plus)
+        lay.addLayout(row)
+        return panel
+
+    def refresh(self):
+        self.name_btn.setText(self.name)
+        self.time_label.setText(f"{self.hour:02d}:{self.minute:02d}")
+        for label in self.findChildren(QLabel):
+            if label.objectName() == "cool_value":
+                label.setText(f"{self.cool}°")
+            elif label.objectName() == "heat_value":
+                label.setText(f"{self.heat}°")
+        self.enabled_btn.setText("Enabled" if self.enabled else "Disabled")
+        self.enabled_btn.setActive(self.enabled)
+        while self.people_box.count():
+            item = self.people_box.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+            elif item.layout():
+                while item.layout().count():
+                    child = item.layout().takeAt(0)
+                    if child.widget():
+                        child.widget().deleteLater()
+        if not self.person_ids:
+            none = QLabel("No people selected. This schedule runs every day at the set time.")
+            none.setWordWrap(True)
+            none.setStyleSheet("color:#c4d0e5; background:rgba(255,255,255,0.05); border-radius:10px; padding:8px;")
+            self.people_box.addWidget(none)
+        for eid in self.person_ids:
+            row = QHBoxLayout()
+            name = self.person_name(eid)
+            lab = QLabel(f"{name}\n{eid}")
+            lab.setFont(font(10, QFont.Black))
+            lab.setStyleSheet("color:#e8f1ff; background:transparent; border:0;")
+            remove = RoundButton("Remove", active=False, kind="danger", min_h=34)
+            remove.clicked.connect(lambda checked=False, x=eid: self.remove_person(x))
+            row.addWidget(lab, 1)
+            row.addWidget(remove)
+            self.people_box.addLayout(row)
+
+    def person_name(self, entity_id: str) -> str:
+        for p in self.available_people:
+            if str(p.get("entityId")) == entity_id:
+                return str(p.get("name") or p.get("friendly_name") or entity_id)
+        return entity_id
+
+    def edit_name(self):
+        value = TextKeyboardDialog.get_text(self, "Schedule Name", self.name)
+        if value:
+            self.name = value[:28]
+            self.refresh()
+
+    def adjust_time(self, dh: int, dm: int):
+        total = self.hour * 60 + self.minute + dh * 60 + dm
+        total %= 24 * 60
+        self.hour, self.minute = divmod(total, 60)
+        self.refresh()
+
+    def adjust_target(self, attr: str, delta: int, low: int, high: int):
+        if attr == "cool":
+            self.cool = int(clamp(self.cool + delta, low, high))
+        else:
+            self.heat = int(clamp(self.heat + delta, low, high))
+        self.refresh()
+
+    def toggle_enabled(self):
+        self.enabled = not self.enabled
+        self.refresh()
+
+    def add_person(self):
+        entities = self.available_people
+        if not entities:
+            QMessageBox.warning(self, "People", "No Home Assistant person entities found.")
+            return
+        dlg = EntityPickerDialog("Choose Person", entities, self)
+        def selected(e):
+            eid = str(e.get("entityId") or "")
+            if eid and eid not in self.person_ids:
+                self.person_ids.append(eid)
+                self.refresh()
+        dlg.selected.connect(selected)
+        dlg.exec_()
+
+    def remove_person(self, entity_id: str):
+        self.person_ids = [x for x in self.person_ids if x != entity_id]
+        self.refresh()
+
+    def save(self):
+        sid = str(self.schedule.get("id") or f"schedule-{int(time.time()*1000)}")
+        payload = {
+            "id": sid,
+            "name": self.name or "Schedule",
+            "enabled": self.enabled,
+            "time": f"{self.hour:02d}:{self.minute:02d}",
+            "coolSetpoint": int(self.cool),
+            "heatSetpoint": int(self.heat),
+            "personEntityIds": list(self.person_ids),
+            "lastTriggeredDate": str(self.schedule.get("lastTriggeredDate") or ""),
+        }
+        self.saved.emit(payload)
+        self.accept()
+
+
+class ScheduleManagerDialog(QDialog):
+    changed = pyqtSignal()
+
+    def __init__(self, state: AppState, parent=None):
+        super().__init__(parent)
+        self.s = state
+        self.setModal(True)
+        self.setWindowTitle("Schedules")
+        self.setFixedSize(760, 620)
+        self.setStyleSheet("""
+            QDialog { background:#09111f; color:#f7fbff; }
+            QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
+        """)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 18, 20, 18)
+        root.setSpacing(12)
+        header = QHBoxLayout()
+        title = QLabel("SCHEDULES")
+        title.setFont(font(24, QFont.Black))
+        title.setStyleSheet("color:#55f0ff; letter-spacing:3px;")
+        new_btn = RoundButton("+ New", active=True, min_h=46)
+        close = RoundButton("Done", active=False, min_h=46)
+        new_btn.clicked.connect(self.new_schedule)
+        close.clicked.connect(self.accept)
+        header.addWidget(title)
+        header.addStretch(1)
+        header.addWidget(new_btn)
+        header.addWidget(close)
+        root.addLayout(header)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setStyleSheet("QScrollArea{background:transparent;border:0;}")
+        self.body = QWidget()
+        self.body_lay = QVBoxLayout(self.body)
+        self.body_lay.setContentsMargins(0, 0, 0, 0)
+        self.body_lay.setSpacing(10)
+        self.scroll.setWidget(self.body)
+        root.addWidget(self.scroll, 1)
+        self.refresh()
+
+    def schedules(self) -> list[dict]:
+        t = self.s.thermostat or {}
+        schedules = t.get("schedules") if isinstance(t.get("schedules"), list) else []
+        return copy.deepcopy(schedules)
+
+    def refresh(self):
+        while self.body_lay.count():
+            item = self.body_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+            elif item.layout():
+                while item.layout().count():
+                    child = item.layout().takeAt(0)
+                    if child.widget():
+                        child.widget().deleteLater()
+        schedules = self.schedules()
+        if not schedules:
+            empty = QLabel("No schedules yet. Tap + New to create one.")
+            empty.setAlignment(Qt.AlignCenter)
+            empty.setStyleSheet("color:#c4d0e5; background:rgba(255,255,255,0.05); border-radius:18px; padding:24px;")
+            self.body_lay.addWidget(empty)
+            self.body_lay.addStretch(1)
+            return
+        for sched in schedules:
+            self.body_lay.addWidget(self.schedule_row(sched))
+        self.body_lay.addStretch(1)
+
+    def schedule_row(self, sched: dict) -> QWidget:
+        panel = GlassPanel(radius=18)
+        lay = QHBoxLayout(panel)
+        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setSpacing(10)
+        people = sched.get("personEntityIds") or []
+        people_text = "Runs every day" if not people else f"{len(people)} person{'s' if len(people) != 1 else ''} required"
+        text = QLabel(f"<b>{sched.get('name') or 'Schedule'}</b><br>{sched.get('time') or '--:--'} • Cool {sched.get('coolSetpoint')}° • Heat {sched.get('heatSetpoint')}°<br>{people_text}")
+        text.setTextFormat(Qt.RichText)
+        text.setFont(font(11, QFont.Black))
+        text.setStyleSheet("background:transparent; border:0; color:#eef4ff;")
+        run = RoundButton("Run", active=True, min_h=42)
+        edit = RoundButton("Edit", active=False, min_h=42)
+        delete = RoundButton("Delete", active=False, kind="danger", min_h=42)
+        run.clicked.connect(lambda checked=False, s=sched: self.run_schedule(s))
+        edit.clicked.connect(lambda checked=False, s=sched: self.edit_schedule(s))
+        delete.clicked.connect(lambda checked=False, s=sched: self.delete_schedule(s))
+        lay.addWidget(text, 1)
+        lay.addWidget(run)
+        lay.addWidget(edit)
+        lay.addWidget(delete)
+        return panel
+
+    def save_schedules(self, schedules: list[dict]):
+        self.s.update_thermostat({"schedules": schedules})
+        self.changed.emit()
+        self.refresh()
+
+    def new_schedule(self):
+        dlg = ScheduleEditDialog(self.s, None, self)
+        dlg.saved.connect(self.upsert_schedule)
+        dlg.exec_()
+
+    def edit_schedule(self, sched: dict):
+        dlg = ScheduleEditDialog(self.s, sched, self)
+        dlg.saved.connect(self.upsert_schedule)
+        dlg.exec_()
+
+    def upsert_schedule(self, sched: dict):
+        schedules = self.schedules()
+        found = False
+        for i, existing in enumerate(schedules):
+            if str(existing.get("id")) == str(sched.get("id")):
+                schedules[i] = sched
+                found = True
+                break
+        if not found:
+            schedules.append(sched)
+        self.save_schedules(schedules)
+
+    def delete_schedule(self, sched: dict):
+        schedules = [s for s in self.schedules() if str(s.get("id")) != str(sched.get("id"))]
+        self.save_schedules(schedules)
+
+    def run_schedule(self, sched: dict):
+        mode = str((self.s.thermostat or {}).get("mode") or "cool").lower()
+        active = str((self.s.thermostat or {}).get("autoActiveMode") or "").lower()
+        effective = active if mode == "auto" and active in {"heat", "cool"} else mode
+        target = sched.get("heatSetpoint") if effective == "heat" else sched.get("coolSetpoint")
+        try:
+            self.s.update_thermostat({"targetTemp": int(float(target)), "lastComfortTarget": int(float(target))})
+            self.changed.emit()
+        except Exception as exc:
+            QMessageBox.warning(self, "Schedule", str(exc))
+
+
+
 class ThermostatScreen(Page):
     def __init__(self, app_state: AppState, parent=None):
         super().__init__(app_state, parent)
@@ -367,9 +816,15 @@ class ThermostatScreen(Page):
         left_col.addWidget(left_top)
         left_col.addWidget(self.door_card, 0, Qt.AlignCenter)
         left_col.addStretch(1)
-        hum = ValueTile("HUMIDITY", "45%")
-        self.humidity_tile = hum
-        left_col.addWidget(hum, 0, Qt.AlignCenter)
+        self.schedule_shortcuts = QWidget()
+        self.schedule_shortcuts_lay = QHBoxLayout(self.schedule_shortcuts)
+        self.schedule_shortcuts_lay.setContentsMargins(0, 0, 0, 0)
+        self.schedule_shortcuts_lay.setSpacing(6)
+        left_col.addWidget(self.schedule_shortcuts, 0, Qt.AlignCenter)
+        self.schedule_button = RoundButton("S", active=False, min_h=62)
+        self.schedule_button.setFixedSize(68, 62)
+        self.schedule_button.clicked.connect(self.open_schedule_manager)
+        left_col.addWidget(self.schedule_button, 0, Qt.AlignCenter)
         mid.addLayout(left_col, 0, 0, 2, 1)
         mid.addWidget(self.minus, 0, 1, 2, 1, Qt.AlignCenter)
 
@@ -687,6 +1142,40 @@ class ThermostatScreen(Page):
         except Exception as exc:
             self.requestToast.emit(f"Bypass failed: {exc}")
 
+    def refresh_schedule_shortcuts(self):
+        if not hasattr(self, "schedule_shortcuts_lay"):
+            return
+        while self.schedule_shortcuts_lay.count():
+            item = self.schedule_shortcuts_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        schedules = self.thermostat_view().get("schedules") or []
+        for sched in schedules[:3]:
+            name = str(sched.get("name") or "Schedule")[:10]
+            b = RoundButton(name, active=True, min_h=34)
+            b.setFixedHeight(34)
+            b.setMinimumWidth(70)
+            b.clicked.connect(lambda checked=False, s=copy.deepcopy(sched): self.apply_schedule_now(s))
+            self.schedule_shortcuts_lay.addWidget(b)
+
+    def open_schedule_manager(self):
+        dlg = ScheduleManagerDialog(self.s, self)
+        dlg.changed.connect(lambda: (self.sync(self.s.config, self.s.thermostat), self.refresh_schedule_shortcuts()))
+        dlg.exec_()
+        self.sync(self.s.config, self.s.thermostat)
+
+    def apply_schedule_now(self, sched: dict):
+        mode = str(self.thermostat_view().get("mode") or "cool").lower()
+        active = str(self.thermostat_view().get("autoActiveMode") or "").lower()
+        effective = active if mode == "auto" and active in {"heat", "cool"} else mode
+        target = sched.get("heatSetpoint") if effective == "heat" else sched.get("coolSetpoint")
+        try:
+            self.s.update_thermostat({"targetTemp": int(float(target)), "lastComfortTarget": int(float(target))})
+            self.sync(self.s.config, self.s.thermostat)
+        except Exception as exc:
+            self.requestToast.emit(f"Schedule failed: {exc}")
+
+
     def _mode_bar(self):
         # Floating mode buttons. No shared rail/border. These use a tighter,
         # fully rounded pill style so they do not look squared-off or overlap.
@@ -874,12 +1363,14 @@ class ThermostatScreen(Page):
             equipment = "Cooling"
         elif relays.get("heat"):
             equipment = "Heating"
+        elif t.get("coolingFanHold") or t.get("coolFanHoldUntil"):
+            equipment = "Idle • Fan Hold"
         elif relays.get("fan"):
             equipment = "Fan"
         mode_label = "Away" if away else mode.capitalize()
         self.status_badge.setText(f"• {mode_label} • {equipment}")
-        self.humidity_tile.setValue(f"{int(float(t.get('humidity') or 0))}%")
         self.notice.hide()
+        self.refresh_schedule_shortcuts()
         self.update_alert_banner()
         self.update()
         ha = nested_get(config, "integrations", "homeAssistant", default={}) or {}
