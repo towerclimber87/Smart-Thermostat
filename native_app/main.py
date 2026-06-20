@@ -395,7 +395,6 @@ class ThermostatScreen(Page):
                 self.s.update_thermostat({"away": not bool(self.thermostat.get("away"))})
             else:
                 self.s.update_thermostat({"mode": mode, "away": False})
-            self.requestToast.emit("Thermostat updated")
             self.sync(self.s.config, self.s.thermostat)
         except Exception as exc:
             self.requestToast.emit(f"Thermostat update failed: {exc}")
@@ -403,7 +402,6 @@ class ThermostatScreen(Page):
     def set_fan(self, fan: str):
         try:
             self.s.update_thermostat({"fan": fan})
-            self.requestToast.emit(f"Fan set to {fan}")
             self.sync(self.s.config, self.s.thermostat)
         except Exception as exc:
             self.requestToast.emit(f"Fan update failed: {exc}")
@@ -414,11 +412,12 @@ class ThermostatScreen(Page):
     def set_target(self, value: float):
         try:
             limits = self.thermostat.get("limits") or {}
-            mode = self.thermostat.get("mode") or "auto"
-            lim = limits.get(mode) or limits.get("auto") or {"min": 55, "max": 90}
+            mode = str(self.thermostat.get("mode") or "auto").lower()
+            active = str(self.thermostat.get("autoActiveMode") or self.thermostat.get("activeMode") or "").lower()
+            range_key = active if mode == "auto" and active in {"cool", "heat"} else mode
+            lim = limits.get(range_key) or limits.get(mode) or limits.get("auto") or {"min": 55, "max": 90}
             val = clamp(round(float(value)), float(lim.get("min", 55)), float(lim.get("max", 90)))
             self.s.update_thermostat({"targetTemp": val, "lastComfortTarget": val})
-            self.requestToast.emit(f"Set temperature {val:.0f}°")
             self.sync(self.s.config, self.s.thermostat)
         except Exception as exc:
             self.requestToast.emit(f"Set temp failed: {exc}")
@@ -443,7 +442,6 @@ class ThermostatScreen(Page):
                 "currentTempUpdatedAt": time.time(),
             })
             self.sync(self.s.config, self.s.thermostat)
-            self.requestToast.emit(f"Virtual temp {value:.0f}°")
         except Exception as exc:
             self.requestToast.emit(f"Virtual temp failed: {exc}")
 

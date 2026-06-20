@@ -265,9 +265,19 @@ class ThermostatDial(QWidget):
         if active_mode:
             self.active_mode = str(active_mode)
         if isinstance(limits, dict):
-            lim = limits.get(self.mode) or limits.get("auto") or {}
-            self.min_temp = float(lim.get("min", 60))
-            self.max_temp = float(lim.get("max", 80))
+            mode_key = str(self.mode or "auto").lower()
+            active_key = str(self.active_mode or "").lower()
+            range_key = active_key if mode_key == "auto" and active_key in {"cool", "heat"} else mode_key
+            lim = limits.get(range_key) or limits.get(mode_key) or limits.get("auto") or {}
+            try:
+                self.min_temp = float(lim.get("min", 60))
+                self.max_temp = float(lim.get("max", 80))
+            except Exception:
+                self.min_temp = 60.0
+                self.max_temp = 80.0
+            if self.max_temp <= self.min_temp:
+                self.max_temp = self.min_temp + 1
+            self.target = max(self.min_temp, min(self.max_temp, self.target))
         self.update()
 
     def sizeHint(self):
@@ -328,15 +338,19 @@ class ThermostatDial(QWidget):
         p.drawArc(arc_rect, start_angle, span)
         target_ang = self._angle_for_temp(self.target)
         target_span = int((target_ang - 225) * 16)
-        grad_pen = QPen(T.PURPLE if self.active_mode == "heat" else T.CYAN, side * 0.08, Qt.SolidLine, Qt.RoundCap)
+        heat_active = str(self.active_mode or self.mode).lower() == "heat"
+        heat_color = QColor(255, 72, 83)
+        cool_color = T.CYAN
+        grad_pen = QPen(heat_color if heat_active else cool_color, side * 0.08, Qt.SolidLine, Qt.RoundCap)
         p.setPen(grad_pen)
         p.drawArc(arc_rect, start_angle, target_span)
 
         inner = rect.adjusted(side * 0.29, side * 0.29, -side * 0.29, -side * 0.29)
         g = QRadialGradient(inner.center(), inner.width() / 2)
-        if self.active_mode == "heat":
-            g.setColorAt(0, QColor(146, 110, 255))
-            g.setColorAt(1, QColor(75, 122, 255))
+        if heat_active:
+            g.setColorAt(0, QColor(255, 95, 92))
+            g.setColorAt(0.58, QColor(232, 55, 70))
+            g.setColorAt(1, QColor(126, 26, 44))
         else:
             g.setColorAt(0, QColor(70, 225, 255))
             g.setColorAt(1, QColor(58, 108, 255))
