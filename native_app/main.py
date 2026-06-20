@@ -1207,49 +1207,154 @@ class SettingsDialog(QDialog):
         self.s = state
         self.setWindowTitle("Comfort Setup")
         self.setModal(True)
-        self.resize(1450, 850)
+        self.setMinimumSize(900, 540)
+        self.resize(1220, 720)
         self.setStyleSheet("""
-            QDialog { background:#081021; color:#f6f8ff; }
-            QLabel { color:#f6f8ff; font-family:Arial; }
-            QLineEdit { background:rgba(18,27,43,0.95); color:#f6f8ff; border:1px solid rgba(155,176,208,0.22); border-radius:14px; padding:12px; font-weight:900; }
+            QDialog {
+                background:#07101f;
+                color:#f7fbff;
+            }
+            QLabel {
+                color:#f7fbff;
+                font-family:Arial;
+            }
+            QLineEdit {
+                background:rgba(7,13,25,0.96);
+                color:#ffffff;
+                border:1px solid rgba(100,229,255,0.30);
+                border-radius:11px;
+                padding:7px 10px;
+                font-weight:900;
+                font-size:13px;
+                min-height:26px;
+            }
+            QScrollArea {
+                background:transparent;
+                border:0;
+            }
+            QScrollBar:vertical {
+                background:rgba(255,255,255,0.05);
+                width:12px;
+                margin:0;
+                border-radius:6px;
+            }
+            QScrollBar::handle:vertical {
+                background:rgba(70,223,255,0.72);
+                min-height:42px;
+                border-radius:6px;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height:0;
+            }
         """)
+
         root = QVBoxLayout(self)
-        root.setContentsMargins(16, 14, 16, 16)
+        root.setContentsMargins(10, 8, 10, 10)
+        root.setSpacing(6)
+
         header = QHBoxLayout()
-        title = QLabel("<span style='color:#46e8ff; letter-spacing:3px; font-size:10px; font-weight:900'>PANEL SETTINGS</span><br><span style='font-size:34px; font-weight:1000'>Comfort Setup</span>")
+        header.setSpacing(8)
+        title = QLabel("<span style='color:#46e8ff; letter-spacing:3px; font-size:9px; font-weight:900'>PANEL SETTINGS</span><br><span style='font-size:26px; font-weight:1000; color:#ffffff'>Comfort Setup</span>")
         title.setTextFormat(Qt.RichText)
-        header.addWidget(title); header.addStretch(1)
-        self.hardware = RoundButton("Hardware Information", active=True, min_h=48)
-        self.history = RoundButton("History", active=True, min_h=48)
-        self.done = RoundButton("Done", active=True, min_h=48)
-        header.addWidget(self.hardware); header.addWidget(self.history); header.addWidget(self.done)
+        title.setMinimumHeight(48)
+        title.setMaximumHeight(54)
+        header.addWidget(title)
+        header.addStretch(1)
+        self.hardware = RoundButton("Hardware Information", active=True, min_h=38)
+        self.history = RoundButton("History", active=True, min_h=38)
+        self.done = RoundButton("Done", active=True, min_h=38)
+        self.hardware.setMinimumWidth(190)
+        self.history.setMinimumWidth(112)
+        self.done.setMinimumWidth(104)
+        header.addWidget(self.hardware)
+        header.addWidget(self.history)
+        header.addWidget(self.done)
         root.addLayout(header)
-        scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.NoFrame); scroll.setStyleSheet("QScrollArea{background:transparent;border:0}")
-        body = QWidget(); self.grid = QGridLayout(body); self.grid.setSpacing(10); self.grid.setContentsMargins(0, 0, 0, 0)
-        scroll.setWidget(body); root.addWidget(scroll, 1)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        body = QWidget()
+        self.grid = QGridLayout(body)
+        self.grid.setSpacing(6)
+        self.grid.setContentsMargins(0, 0, 2, 0)
+        for col in range(4):
+            self.grid.setColumnStretch(col, 1)
+        scroll.setWidget(body)
+        root.addWidget(scroll, 1)
+
         self.controls: dict[str, QLabel] = {}
         self.build()
         self.done.clicked.connect(self.accept)
         self.hardware.clicked.connect(self.show_hardware)
         self.history.clicked.connect(self.show_history)
+        QTimer.singleShot(0, self.fit_to_screen)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.fit_to_screen()
+
+    def fit_to_screen(self):
+        screen = self.screen() or QApplication.primaryScreen()
+        if not screen:
+            return
+        geo = screen.availableGeometry()
+        w = min(1220, max(900, geo.width() - 24))
+        h = min(720, max(540, geo.height() - 24))
+        self.resize(w, h)
+        self.move(geo.x() + (geo.width() - w) // 2, geo.y() + (geo.height() - h) // 2)
+
+    def settings_panel(self, radius: int = 14) -> QFrame:
+        p = QFrame()
+        p.setStyleSheet(f"""
+            QFrame {{
+                background:qlineargradient(x1:0,y1:0,x2:1,y2:1,
+                    stop:0 rgba(27,39,59,0.96),
+                    stop:1 rgba(8,15,29,0.96));
+                border:1px solid rgba(111,139,166,0.38);
+                border-radius:{radius}px;
+            }}
+        """)
+        return p
 
     def build_value(self, key: str, label: str, value, row: int, col: int, low=None, high=None, suffix="°"):
-        panel = GlassPanel(radius=18)
-        lay = QHBoxLayout(panel); lay.setContentsMargins(10, 8, 10, 8)
-        lab = QLabel(label); lab.setFont(font(10, QFont.Black)); lab.setStyleSheet("color:#b8c1d3")
-        minus = RoundButton("−", min_h=34); minus.setFixedWidth(44)
-        val = QLabel(str(value) + suffix); val.setAlignment(Qt.AlignCenter); val.setMinimumWidth(70); val.setFont(font(12, QFont.Black))
-        plus = RoundButton("+", min_h=34); plus.setFixedWidth(44)
-        lay.addWidget(lab, 1); lay.addWidget(minus); lay.addWidget(val); lay.addWidget(plus)
+        panel = self.settings_panel(13)
+        panel.setMinimumHeight(46)
+        panel.setMaximumHeight(52)
+        lay = QHBoxLayout(panel)
+        lay.setContentsMargins(8, 5, 8, 5)
+        lay.setSpacing(6)
+        lab = QLabel(label)
+        lab.setFont(font(9, QFont.Black))
+        lab.setStyleSheet("color:#e7efff; background:transparent; border:0;")
+        lab.setWordWrap(False)
+        minus = RoundButton("−", min_h=30)
+        minus.setFixedSize(34, 30)
+        val = QLabel(str(value) + suffix)
+        val.setAlignment(Qt.AlignCenter)
+        val.setMinimumWidth(46)
+        val.setFont(font(11, QFont.Black))
+        val.setStyleSheet("color:#ffffff; background:transparent; border:0;")
+        plus = RoundButton("+", min_h=30)
+        plus.setFixedSize(34, 30)
+        lay.addWidget(lab, 1)
+        lay.addWidget(minus)
+        lay.addWidget(val)
+        lay.addWidget(plus)
         self.grid.addWidget(panel, row, col)
         self.controls[key] = val
         minus.clicked.connect(lambda: self.adjust_value(key, -1, low, high, suffix))
         plus.clicked.connect(lambda: self.adjust_value(key, 1, low, high, suffix))
 
-    def add_section(self, title: str, row: int, col: int, rowspan: int = 1, colspan: int = 1) -> GlassPanel:
-        p = GlassPanel(radius=18)
-        v = QVBoxLayout(p); v.setContentsMargins(12, 10, 12, 10); v.setSpacing(8)
-        lab = QLabel(title); lab.setFont(font(13, QFont.Black)); lab.setStyleSheet("color:#f6f8ff")
+    def add_section(self, title: str, row: int, col: int, rowspan: int = 1, colspan: int = 1) -> QFrame:
+        p = self.settings_panel(14)
+        v = QVBoxLayout(p)
+        v.setContentsMargins(10, 7, 10, 8)
+        v.setSpacing(5)
+        lab = QLabel(title)
+        lab.setFont(font(11, QFont.Black))
+        lab.setStyleSheet("color:#ffffff; background:transparent; border:0;")
         v.addWidget(lab)
         self.grid.addWidget(p, row, col, rowspan, colspan)
         return p
@@ -1260,44 +1365,59 @@ class SettingsDialog(QDialog):
         self.build_value("safetyHigh", "High Safety", t.get("safetyHigh", 85), 0, 1, 75, 100)
         self.build_value("awayHeat", "Heat Away", t.get("awayHeat", 55), 0, 2, 40, 75)
         self.build_value("awayCool", "Cool Away", t.get("awayCool", 85), 0, 3, 75, 100)
-        self.build_value("coolMin", "Cool Low Limit", nested_get(t, "limits", "cool", "min", default=65), 1, 0, 50, 90)
-        self.build_value("coolMax", "Cool High Limit", nested_get(t, "limits", "cool", "max", default=80), 1, 1, 50, 90)
-        self.build_value("heatMin", "Heat Low Limit", nested_get(t, "limits", "heat", "min", default=60), 1, 2, 40, 80)
-        self.build_value("heatMax", "Heat High Limit", nested_get(t, "limits", "heat", "max", default=78), 1, 3, 40, 85)
+        self.build_value("coolMin", "Cool Low", nested_get(t, "limits", "cool", "min", default=65), 1, 0, 50, 90)
+        self.build_value("coolMax", "Cool High", nested_get(t, "limits", "cool", "max", default=80), 1, 1, 50, 90)
+        self.build_value("heatMin", "Heat Low", nested_get(t, "limits", "heat", "min", default=60), 1, 2, 40, 80)
+        self.build_value("heatMax", "Heat High", nested_get(t, "limits", "heat", "max", default=78), 1, 3, 40, 85)
         self.build_value("autoCoolOutdoorTarget", "Cool Target", t.get("autoCoolOutdoorTarget", 70), 2, 0, 40, 100)
         self.build_value("autoHeatOutdoorTarget", "Heat Target", t.get("autoHeatOutdoorTarget", 65), 2, 1, 40, 100)
-        self.build_value("autoChangeoverLockoutMinutes", "Changeover Lockout", int(float(t.get("autoChangeoverLockoutMinutes", 120))/60), 2, 2, 0, 8, " hr")
-        self.build_value("coolFanRemainOnMinutes", "Cool Fan Remain On", t.get("coolFanRemainOnMinutes", 2), 2, 3, 0, 15, " min")
+        self.build_value("autoChangeoverLockoutMinutes", "Lockout", int(float(t.get("autoChangeoverLockoutMinutes", 120))/60), 2, 2, 0, 8, " hr")
+        self.build_value("coolFanRemainOnMinutes", "Cool Fan", t.get("coolFanRemainOnMinutes", 2), 2, 3, 0, 15, " min")
+
         temp_source = self.add_section("Current Temperature Source", 3, 0, 1, 2)
-        tv = QVBoxLayout(); temp_source.layout().addLayout(tv)
         source_name = t.get("currentTempSourceName") or "Virtual Temp"
-        a = QLabel(f"{source_name}\nUsing the virtual temp slider until a sensor is selected")
-        a.setFont(font(11, QFont.Black)); a.setStyleSheet("color:#dbe3f4")
-        tv.addWidget(a)
-        choose = RoundButton("Choose Sensor", active=True, min_h=48); choose.clicked.connect(self.choose_temp_sensor)
-        tv.addWidget(choose, 0, Qt.AlignRight)
+        a = QLabel(f"{source_name}\nUsing virtual temp until a sensor is selected")
+        a.setFont(font(10, QFont.Black))
+        a.setStyleSheet("color:#dfe9ff; background:transparent; border:0;")
+        temp_source.layout().addWidget(a)
+        choose = RoundButton("Choose Sensor", active=True, min_h=34)
+        choose.setMinimumWidth(150)
+        choose.clicked.connect(self.choose_temp_sensor)
+        temp_source.layout().addWidget(choose, 0, Qt.AlignRight)
+
         fan = self.add_section("Fan", 3, 2, 1, 2)
-        row = QHBoxLayout(); fan.layout().addLayout(row)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        fan.layout().addLayout(row)
         for f in ["off", "on", "auto"]:
-            b = RoundButton(f.capitalize(), active=(t.get("fan") or "auto") == f, min_h=46)
+            b = RoundButton(f.capitalize(), active=(t.get("fan") or "auto") == f, min_h=34)
             b.clicked.connect(lambda checked=False, x=f: self.set_thermostat({"fan": x}))
             row.addWidget(b)
         people = self.add_section("Auto Away / Home", 4, 0, 1, 2)
         note = QLabel("No people assigned. Tap + Person to add Home Assistant person entries.")
-        note.setFont(font(10, QFont.Black)); note.setStyleSheet("color:#aab4c7; border:1px dashed rgba(160,180,210,0.22); border-radius:12px; padding:12px;")
+        note.setWordWrap(True)
+        note.setFont(font(9, QFont.Black))
+        note.setStyleSheet("color:#c4d0e5; background:rgba(5,10,20,0.42); border:1px dashed rgba(160,180,210,0.26); border-radius:10px; padding:7px;")
         people.layout().addWidget(note)
-        theme = self.add_section("Theme", 4, 2, 1, 2)
-        row = QHBoxLayout(); theme.layout().addLayout(row)
+
+        theme = self.add_section("Theme", 5, 0, 1, 2)
+        theme_row = QHBoxLayout()
+        theme_row.setSpacing(8)
+        theme.layout().addLayout(theme_row)
         for name in ["Regular", "Star Trek", "Christmas"]:
-            b = RoundButton(name, active=name == "Regular", min_h=62)
-            row.addWidget(b)
-        code_sec = self.add_section("Security Code", 5, 0, 1, 2)
-        code = QLineEdit(str((self.s.config.get("alarm") or {}).get("disarmCode") or "")); code.setPlaceholderText("User access code")
+            b = RoundButton(name, active=name == "Regular", min_h=40)
+            theme_row.addWidget(b)
+
+        code_sec = self.add_section("Security Code", 5, 2, 1, 1)
+        code = QLineEdit(str((self.s.config.get("alarm") or {}).get("disarmCode") or ""))
+        code.setPlaceholderText("User access code")
         code_sec.layout().addWidget(code)
         code.textChanged.connect(lambda x: self.s.config.setdefault("alarm", {}).__setitem__("disarmCode", x))
-        save = RoundButton("Save Settings", active=True, min_h=54)
+
+        save = RoundButton("Save Settings", active=True, min_h=42)
         save.clicked.connect(self.save_all)
         self.grid.addWidget(save, 5, 3)
+        self.grid.setRowStretch(6, 1)
 
     def val_number(self, key):
         text = self.controls[key].text().split()[0].replace("°", "")
