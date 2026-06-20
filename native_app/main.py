@@ -1816,110 +1816,191 @@ class AlarmControlDialog(QDialog):
         super().__init__(parent)
         self.s = state
         self.entity = alarm_entity or {}
+        self.code_buffer = ""
         self.remaining = 0
-        self.pending_action = ""
         self.countdown_timer = QTimer(self)
         self.countdown_timer.timeout.connect(self.countdown_tick)
+
         self.setModal(True)
         self.setWindowTitle("Alarm Control")
-        self.setFixedSize(520, 410)
+        self.setFixedSize(470, 430)
         self.setStyleSheet("""
             QDialog {
                 background:qlineargradient(x1:0,y1:0,x2:1,y2:1,
-                    stop:0 #09111f,
+                    stop:0 #070d18,
                     stop:0.55 #101a32,
-                    stop:1 #220d18);
+                    stop:1 #210c17);
                 color:#f7fbff;
             }
             QLabel {
                 color:#f7fbff;
                 font-family:Arial;
             }
-            QLineEdit {
-                background:rgba(5,10,20,0.80);
-                color:#ffffff;
-                border:1px solid rgba(255,255,255,0.20);
-                border-radius:18px;
-                padding:12px 16px;
-                font-size:22px;
+            QPushButton {
+                font-family:Arial;
                 font-weight:900;
-                letter-spacing:5px;
             }
         """)
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(22, 20, 22, 20)
-        root.setSpacing(14)
+        self.root = QVBoxLayout(self)
+        self.root.setContentsMargins(22, 18, 22, 18)
+        self.root.setSpacing(12)
 
-        top = QHBoxLayout()
-        title = QLabel("ALARM CONTROL<br><span style='font-size:30px;color:#ffffff'>Alarmo</span>")
-        title.setTextFormat(Qt.RichText)
-        title.setFont(font(10, QFont.Black, 18))
-        title.setStyleSheet("color:#55f0ff; letter-spacing:3px;")
-        top.addWidget(title)
-        top.addStretch(1)
-        self.state_badge = QLabel("")
-        self.state_badge.setAlignment(Qt.AlignCenter)
-        self.state_badge.setMinimumSize(170, 54)
-        self.state_badge.setFont(font(14, QFont.Black))
-        top.addWidget(self.state_badge)
-        root.addLayout(top)
+        self.title = QLabel("")
+        self.title.setAlignment(Qt.AlignCenter)
+        self.title.setTextFormat(Qt.RichText)
+        self.root.addWidget(self.title)
 
-        self.message = QLabel("Choose an alarm mode.")
-        self.message.setAlignment(Qt.AlignCenter)
-        self.message.setWordWrap(True)
-        self.message.setFont(font(13, QFont.Black))
-        self.message.setStyleSheet("color:#dfe8ff; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); border-radius:18px; padding:13px;")
-        root.addWidget(self.message)
+        self.body = QVBoxLayout()
+        self.body.setSpacing(12)
+        self.root.addLayout(self.body, 1)
 
-        self.code = QLineEdit()
-        self.code.setEchoMode(QLineEdit.Password)
-        self.code.setMaxLength(12)
-        self.code.setPlaceholderText("Disarm code")
-        root.addWidget(self.code)
+        self.render()
 
-        buttons = QGridLayout()
-        buttons.setHorizontalSpacing(10)
-        buttons.setVerticalSpacing(10)
-        self.arm_home = RoundButton("Arm Home", active=True, min_h=58)
-        self.arm_away = RoundButton("Arm Away\n60 sec", active=True, kind="purple", min_h=58)
-        self.disarm = RoundButton("Disarm", active=False, kind="danger", min_h=58)
-        self.cancel = RoundButton("Cancel", active=False, min_h=50)
-        buttons.addWidget(self.arm_home, 0, 0)
-        buttons.addWidget(self.arm_away, 0, 1)
-        buttons.addWidget(self.disarm, 1, 0)
-        buttons.addWidget(self.cancel, 1, 1)
-        root.addLayout(buttons)
+    def clear_body(self):
+        while self.body.count():
+            item = self.body.takeAt(0)
+            widget = item.widget()
+            child_layout = item.layout()
+            if widget:
+                widget.deleteLater()
+            elif child_layout:
+                while child_layout.count():
+                    child = child_layout.takeAt(0)
+                    if child.widget():
+                        child.widget().deleteLater()
+
+    def current_state(self) -> str:
+        return str(self.entity.get("state") or "disarmed").lower()
+
+    def is_armed(self) -> bool:
+        state = self.current_state()
+        return state.startswith("armed") or state in {"arming", "pending", "triggered"}
+
+    def render(self):
+        self.clear_body()
+        if self.is_armed():
+            self.render_keypad()
+        else:
+            self.render_arm_options()
+
+    def render_arm_options(self):
+        self.setFixedSize(470, 320)
+        self.title.setText(
+            "<span style='color:#55f0ff; letter-spacing:3px; font-size:12px; font-weight:900'>ALARM DISARMED</span>"
+            "<br><span style='font-size:32px; font-weight:1000; color:#ffffff'>Select Arm Mode</span>"
+        )
+
+        buttons = QVBoxLayout()
+        buttons.setSpacing(12)
+
+        self.arm_home = RoundButton("Arm Home", active=True, min_h=62)
+        self.arm_away = RoundButton("Arm Away  •  60 sec", active=True, kind="purple", min_h=62)
+        self.cancel = RoundButton("Cancel", active=False, min_h=54)
 
         self.arm_home.clicked.connect(lambda: self.send_action("arm_home"))
         self.arm_away.clicked.connect(self.begin_arm_away_countdown)
-        self.disarm.clicked.connect(lambda: self.send_action("disarm"))
         self.cancel.clicked.connect(self.reject)
-        self.update_state_badge()
 
-    def current_state(self) -> str:
-        return str(self.entity.get("state") or "unknown").lower()
+        buttons.addWidget(self.arm_home)
+        buttons.addWidget(self.arm_away)
+        buttons.addWidget(self.cancel)
+        self.body.addLayout(buttons)
 
-    def update_state_badge(self):
-        state = self.current_state()
-        armed = state.startswith("armed") or state in {"arming", "pending"}
-        color = "#ff406f" if armed else "#4dffc3"
-        bg = "rgba(255,45,92,0.28)" if armed else "rgba(58,244,190,0.22)"
-        self.state_badge.setText(state.replace("_", " ").upper())
-        self.state_badge.setStyleSheet(f"color:{color}; background:{bg}; border:1px solid {color}; border-radius:22px; padding:8px;")
+    def render_keypad(self):
+        self.setFixedSize(470, 520)
+        self.title.setText(
+            "<span style='color:#ff4979; letter-spacing:3px; font-size:12px; font-weight:900'>ALARM ARMED</span>"
+            "<br><span style='font-size:32px; font-weight:1000; color:#ffffff'>Enter Code</span>"
+        )
 
-    def set_busy(self, busy: bool):
-        for w in [self.arm_home, self.arm_away, self.disarm, self.cancel, self.code]:
-            w.setEnabled(not busy)
+        self.code_display = QLabel("••••")
+        self.code_display.setAlignment(Qt.AlignCenter)
+        self.code_display.setFont(font(30, QFont.Black))
+        self.code_display.setStyleSheet("""
+            QLabel {
+                color:#ffffff;
+                background:rgba(255,255,255,0.07);
+                border:1px solid rgba(255,73,121,0.52);
+                border-radius:24px;
+                padding:12px;
+                letter-spacing:9px;
+            }
+        """)
+        self.body.addWidget(self.code_display)
+
+        keypad = QGridLayout()
+        keypad.setHorizontalSpacing(10)
+        keypad.setVerticalSpacing(10)
+
+        keys = [
+            ("1", 0, 0), ("2", 0, 1), ("3", 0, 2),
+            ("4", 1, 0), ("5", 1, 1), ("6", 1, 2),
+            ("7", 2, 0), ("8", 2, 1), ("9", 2, 2),
+            ("⌫", 3, 0), ("0", 3, 1), ("Cancel", 3, 2),
+        ]
+
+        for label, row, col in keys:
+            b = RoundButton(label, active=(label not in {"⌫", "Cancel"}), min_h=64)
+            if label == "Cancel":
+                b.setKind("danger")
+                b.clicked.connect(self.reject)
+            elif label == "⌫":
+                b.clicked.connect(self.backspace_code)
+            else:
+                b.clicked.connect(lambda checked=False, d=label: self.add_code_digit(d))
+            keypad.addWidget(b, row, col)
+
+        self.body.addLayout(keypad)
+
+    def update_code_display(self):
+        entered = "•" * len(self.code_buffer)
+        remaining = "·" * max(0, 4 - len(self.code_buffer))
+        self.code_display.setText(entered + remaining)
+
+    def add_code_digit(self, digit: str):
+        if len(self.code_buffer) >= 4:
+            return
+        self.code_buffer += digit
+        self.update_code_display()
+        if len(self.code_buffer) == 4:
+            QTimer.singleShot(120, self.auto_disarm)
+
+    def backspace_code(self):
+        self.code_buffer = self.code_buffer[:-1]
+        self.update_code_display()
+
+    def auto_disarm(self):
+        if len(self.code_buffer) == 4:
+            self.send_action("disarm", self.code_buffer)
 
     def begin_arm_away_countdown(self):
+        self.clear_body()
+        self.setFixedSize(470, 320)
         self.remaining = 60
-        self.pending_action = "arm_away"
-        self.arm_home.setEnabled(False)
-        self.arm_away.setEnabled(False)
-        self.disarm.setEnabled(False)
-        self.cancel.setText("Cancel Countdown")
-        self.message.setStyleSheet("color:#ffffff; background:rgba(255,74,111,0.22); border:1px solid rgba(255,74,111,0.55); border-radius:18px; padding:13px;")
+        self.title.setText(
+            "<span style='color:#ffb65c; letter-spacing:3px; font-size:12px; font-weight:900'>ARMING AWAY</span>"
+            "<br><span style='font-size:32px; font-weight:1000; color:#ffffff'>Exit Timer</span>"
+        )
+
+        self.countdown_label = QLabel("")
+        self.countdown_label.setAlignment(Qt.AlignCenter)
+        self.countdown_label.setFont(font(46, QFont.Black))
+        self.countdown_label.setStyleSheet("""
+            QLabel {
+                color:#ffffff;
+                background:rgba(255,91,121,0.16);
+                border:1px solid rgba(255,91,121,0.45);
+                border-radius:28px;
+                padding:18px;
+            }
+        """)
+        self.body.addWidget(self.countdown_label)
+
+        cancel = RoundButton("Cancel Countdown", active=False, kind="danger", min_h=58)
+        cancel.clicked.connect(self.reject)
+        self.body.addWidget(cancel)
+
         self.countdown_timer.start(1000)
         self.countdown_tick(first=True)
 
@@ -1930,23 +2011,21 @@ class AlarmControlDialog(QDialog):
             self.countdown_timer.stop()
             self.send_action("arm_away")
             return
-        self.message.setText(f"Arming Away in {self.remaining} seconds. Tap Cancel Countdown to stop.")
+        self.countdown_label.setText(str(self.remaining))
 
     def reject(self):
         if self.countdown_timer.isActive():
             self.countdown_timer.stop()
         super().reject()
 
-    def send_action(self, action: str):
-        if action == "disarm" and not self.code.text().strip():
-            self.message.setText("Enter the disarm code first.")
-            self.code.setFocus()
-            return
+    def set_busy(self, busy: bool):
+        for btn in self.findChildren(QPushButton):
+            btn.setEnabled(not busy)
+
+    def send_action(self, action: str, code: str = ""):
         self.set_busy(True)
-        self.message.setText(f"Sending {action.replace('_', ' ').title()}...")
         QApplication.processEvents()
         try:
-            code = self.code.text().strip() if action == "disarm" else ""
             result = self.s.api.post("/api/ha/alarm/action", self.s.ha_payload({
                 "entityId": self.entity.get("entityId") or "",
                 "action": action,
@@ -1955,13 +2034,14 @@ class AlarmControlDialog(QDialog):
             alarm = result.get("alarm") or {}
             if alarm:
                 self.entity.update(alarm)
-            self.update_state_badge()
-            self.message.setText(f"{action.replace('_', ' ').title()} sent.")
             self.actionDone.emit(alarm or self.entity, action)
-            QTimer.singleShot(550, self.accept)
+            self.accept()
         except Exception as exc:
             self.set_busy(False)
-            self.message.setText(f"Alarm action failed: {exc}")
+            if action == "disarm":
+                self.code_buffer = ""
+                self.update_code_display()
+            QMessageBox.warning(self, "Alarm Action Failed", str(exc))
 
 
 class MainWindow(Background):
