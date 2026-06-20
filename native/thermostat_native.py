@@ -193,6 +193,11 @@ class NativeThermostatApp:
         self.canvas.bind("<ButtonRelease-1>", self.on_release)
         self.drag_target = ""
         self.drag_last = 0.0
+        self.drag_origin_y = 0
+        self.drag_origin_target = 0.0
+        self.dial_area: tuple[int, int, int, int] | None = None
+        self.last_target_send = 0.0
+        self.last_target_value: float | None = None
         self.fonts: dict[tuple[str, int, str], tkfont.Font] = {}
         self._schedule_fetch(initial=True)
         self.root.after(100, self._process_jobs)
@@ -371,6 +376,7 @@ class NativeThermostatApp:
     def draw(self) -> None:
         self.canvas.delete("all")
         self.buttons = []
+        self.dial_area = None
         self.canvas.configure(bg=BG)
         self.draw_background()
         self.draw_header()
@@ -502,11 +508,16 @@ class NativeThermostatApp:
         self.label_chip(180, 168, "Wind", f"{wind:.0f} mph", 104)
         self.text(self.sx(58), self.sy(236), "Climate Control", 46, TEXT, "bold", "w")
 
-        if mode == "auto":
-            self.round_rect(self.sx(110), self.sy(310), self.sx(260), self.sy(382), self.sy(14), "#06233d", "#1e78a8", 1)
+        notice = self.auto_switch_notice()
+        if notice:
+            to_mode = str(notice.get("toMode") or notice.get("mode") or mode or "cool").lower()
+            switch_temp = as_float(notice.get("switchTemp"), current)
+            x1, y1, x2, y2 = self.sx(110), self.sy(310), self.sx(260), self.sy(382)
+            self.buttons.append(ButtonSpec(x1, y1, x2, y2, "auto-switch", lambda: self.open_auto_switch(), "#06233d", "#1e78a8", TEXT))
+            self.round_rect(x1, y1, x2, y2, self.sy(14), "#06233d", "#1e78a8", 1)
             self.text(self.sx(185), self.sy(326), "AUTO-SWITCHED", 8, CYAN_2, "bold")
-            self.text(self.sx(185), self.sy(350), "To Cool", 17, TEXT, "bold")
-            self.pill(self.sx(152), self.sy(364), self.sx(218), self.sy(384), f"INSIDE {current:.0f}°", fill="#1f3945", outline="#335d6e", color=TEXT, size=8)
+            self.text(self.sx(185), self.sy(350), f"To {title_case(to_mode)}", 17, TEXT, "bold")
+            self.pill(self.sx(152), self.sy(364), self.sx(218), self.sy(384), f"INSIDE {switch_temp:.0f}°", fill="#1f3945", outline="#335d6e", color=TEXT, size=8)
 
         self.pill(self.sx(575), self.sy(262), self.sx(705), self.sy(292), action_label, fill="#252b36", outline="#3a4351", color=TEXT, size=11, dot=action_color)
         self.draw_web_style_dial(current, target, action_label, action_color)
@@ -528,6 +539,7 @@ class NativeThermostatApp:
     def draw_web_style_dial(self, current: float, target: float, action_label: str, action_color: str) -> None:
         cx, cy = self.sx(640), self.sy(430)
         r = min(self.sx(152), self.sy(152))
+        self.dial_area = (cx-r-self.sx(30), cy-r-self.sy(30), cx+r+self.sx(30), cy+r+self.sy(30))
         self.canvas.create_oval(cx-r-14, cy-r-14, cx+r+14, cy+r+14, fill="#05080d", outline="#0b1118", width=3)
         self.canvas.create_oval(cx-r, cy-r, cx+r, cy+r, fill="#0b1118", outline="#161e28", width=2)
         for i in range(92):
@@ -711,6 +723,59 @@ class NativeThermostatApp:
             name = str(sched.get("name") or sched.get("label") or "Schedule")[:18]
             self.button(self.sx(x), self.sy(538), self.sx(x+210), self.sy(590), name, lambda s=sched: self.apply_schedule(s), fill="#12293a", text=TEXT)
             x += 220
+
+    def target_limits(self) -> tuple[float, float]:
+        mode = str(self.thermostat.get("mode", "cool")).lower()
+        limits_all = self.thermostat.get("limits", {}) if isinstance(self.thermostat.get("limits"), dict) else {}
+        limits = limits_all.get(mode) or limits_all.get("cool") or {}
+        return as_float(limits.get("min"), 45), as_float(limits.get("max"), 95)
+
+    def begin_dial_adjust(self, x: int, y: int) -> bool:
+        if self.locked:
+            self.show_toast("Panel locked")
+            return True
+        if not self.dial_area:
+            return False
+        x1, y1, x2, y2 = self.dial_area
+        if not (x1 <= x <= x2 and y1 <= y <= y2):
+            return False
+        cx, cy = self.sx(640), self.sy(430)
+        r = min(self.sx(152), self.sy(152))
+        dist = math.hypot(x - cx, y - cy)
+        self.drag_origin_y = y
+        self.drag_origin_target = as_float(self.thermostat.get("targetTemp", self.thermostat.get("target_temperature", 70)), 70)
+        if dist < r * 0.55:
+            self.drag_target = "dial_linear"
+            return True
+        self.drag_target = "dial_arc"
+        self.apply_target_from_point(x, y, final=False)
+        return True
+
+    def apply_target_from_point(self, x: int, y: int, final: bool = False) -> None:
+        minimum, maximum = self.target_limits()
+        if self.drag_target == "dial_linear":
+            value = self.drag_origin_target + (self.drag_origin_y - y) / max(6, self.sy(8))
+        else:
+            cx, cy = self.sx(640), self.sy(430)
+            angle = math.degrees(math.atan2(y - cy, x - cx))
+            if angle < 0:
+                angle += 360
+            start, span = 218.0, 284.0
+            mapped = angle
+            if mapped < start:
+                mapped += 360
+            pos = clamp((mapped - start) / span, 0.0, 1.0)
+            value = minimum + pos * (maximum - minimum)
+        value = round(clamp(value, minimum, maximum))
+        if self.last_target_value == value and not final:
+            return
+        self.last_target_value = value
+        self.thermostat["targetTemp"] = value
+        self.draw()
+        now = time.time()
+        if final or now - self.last_target_send >= 0.25:
+            self.last_target_send = now
+            self._run_async("Target", lambda v=value: self.control({"targetTemp": v}))
 
     def change_target(self, delta: float) -> None:
         target = as_float(self.thermostat.get("targetTemp", self.thermostat.get("target_temperature", 70)), 70) + delta
@@ -1111,7 +1176,55 @@ class NativeThermostatApp:
             self.draw_hardware_modal(x1,y1,x2,y2)
         elif self.modal == "schedule":
             self.draw_schedule_modal(x1,y1,x2,y2)
+        elif self.modal == "auto_switch":
+            self.draw_auto_switch_modal(x1,y1,x2,y2)
 
+
+    def auto_switch_notice(self) -> dict[str, Any] | None:
+        notice = self.thermostat.get("autoSwitchNotice") if isinstance(self.thermostat, dict) else None
+        if not isinstance(notice, dict) or not as_bool(notice.get("active")):
+            return None
+        return notice
+
+    def empty_auto_switch_notice(self) -> dict[str, Any]:
+        return {"active": False, "source": "", "fromMode": "", "toMode": "", "switchTemp": 0, "outdoorTemp": 0, "coolTarget": 0, "heatTarget": 0, "createdAt": 0}
+
+    def open_auto_switch(self) -> None:
+        if not self.auto_switch_notice():
+            return
+        self.modal = "auto_switch"
+        self.modal_data = {}
+        self.draw()
+
+    def draw_auto_switch_modal(self, x1:int,y1:int,x2:int,y2:int) -> None:
+        notice = self.auto_switch_notice() or {}
+        from_mode = title_case(notice.get("fromMode") or "previous mode")
+        to_mode = title_case(notice.get("toMode") or notice.get("mode") or self.thermostat.get("mode") or "cool")
+        room_temp = as_float(notice.get("switchTemp"), as_float(self.thermostat.get("currentTemp", self.thermostat.get("current_temperature", 0)), 0))
+        heat_target = as_float(notice.get("heatTarget"), as_float(self.thermostat.get("autoHeatOutdoorTarget"), 68))
+        cool_target = as_float(notice.get("coolTarget"), as_float(self.thermostat.get("autoCoolOutdoorTarget"), 74))
+        self.text((x1+x2)//2, y1+self.sy(42), f"Auto-switched to {to_mode}", 28, TEXT, "bold")
+        self.text((x1+x2)//2, y1+self.sy(92), f"Inside is {room_temp:.0f}°. Heat target {heat_target:.0f}° / Cool target {cool_target:.0f}°.", 16, MUTED, "bold")
+        self.text((x1+x2)//2, y1+self.sy(128), "Dismiss the notice or revert until the next room temperature swing.", 14, MUTED, "bold")
+        self.button(x1+self.sx(110), y1+self.sy(210), x1+self.sx(330), y1+self.sy(278), f"Revert to {from_mode}", lambda: self.revert_auto_switch_notice(), fill="#173246", text=TEXT)
+        self.button(x1+self.sx(360), y1+self.sy(210), x1+self.sx(555), y1+self.sy(278), "Dismiss", lambda: self.dismiss_auto_switch_notice(), fill="#163d2a", text=GREEN)
+        self.button(x2-self.sx(190), y2-self.sy(90), x2-self.sx(45), y2-self.sy(35), "Close", lambda: self.close_modal(), fill="#173246")
+
+    def dismiss_auto_switch_notice(self) -> None:
+        self.thermostat["autoSwitchNotice"] = self.empty_auto_switch_notice()
+        self.close_modal()
+        self._run_busy("Auto Switch", lambda: self.control({"autoSwitchNotice": self.empty_auto_switch_notice()}))
+
+    def revert_auto_switch_notice(self) -> None:
+        notice = self.auto_switch_notice() or {}
+        from_mode = str(notice.get("fromMode") or "").strip().lower()
+        if from_mode not in {"cool", "heat", "auto", "off"}:
+            from_mode = "auto"
+        self.thermostat["mode"] = from_mode
+        self.thermostat["autoSwitchNotice"] = self.empty_auto_switch_notice()
+        hold = {"active": True, "source": "native", "mode": from_mode}
+        self.close_modal()
+        self._run_busy("Auto Switch", lambda: self.control({"mode": from_mode, "autoSwitchNotice": self.empty_auto_switch_notice(), "autoSwitchHold": hold}))
 
     def draw_info_modal(self, x1:int,y1:int,x2:int,y2:int) -> None:
         info = self.system_info or {}
@@ -1420,14 +1533,19 @@ class NativeThermostatApp:
             if b.x1 <= x <= b.x2 and b.y1 <= y <= b.y2:
                 b.action()
                 return
+        if not self.modal and self.page == "thermostat" and self.begin_dial_adjust(x, y):
+            return
         # allow tap outside modal to close only if not busy
         if self.modal and not self.busy:
             pass
 
     def on_drag(self, event: tk.Event) -> None:
-        pass
+        if self.drag_target in {"dial_arc", "dial_linear"}:
+            self.apply_target_from_point(int(event.x), int(event.y), final=False)
 
     def on_release(self, event: tk.Event) -> None:
+        if self.drag_target in {"dial_arc", "dial_linear"}:
+            self.apply_target_from_point(int(event.x), int(event.y), final=True)
         self.drag_target = ""
 
 
