@@ -1247,10 +1247,24 @@ class ThermostatScreen(Page):
                 item.widget().deleteLater()
         schedules = self.thermostat_view().get("schedules") or []
         for sched in schedules[:3]:
-            name = str(sched.get("name") or "Schedule")[:10]
-            b = RoundButton(name, active=True, min_h=34)
-            b.setFixedHeight(34)
-            b.setMinimumWidth(70)
+            name = str(sched.get("name") or "Schedule").strip()[:18] or "Schedule"
+            b = RoundButton(name, active=False, min_h=36)
+            b.setFixedHeight(36)
+            b.setMinimumWidth(max(88, min(190, 42 + len(name) * 11)))
+            b.setStyleSheet("""
+                QPushButton {
+                    background:rgba(255,255,255,0.075);
+                    color:#eaf3ff;
+                    border:1px solid rgba(130,229,255,0.28);
+                    border-radius:18px;
+                    padding:0 16px;
+                    font-weight:900;
+                }
+                QPushButton:pressed {
+                    background:rgba(71,224,255,0.30);
+                    border-color:rgba(71,224,255,0.72);
+                }
+            """)
             b.clicked.connect(lambda checked=False, s=copy.deepcopy(sched): self.apply_schedule_now(s))
             self.schedule_shortcuts_lay.addWidget(b)
 
@@ -2981,7 +2995,7 @@ class SettingsDialog(QDialog):
         self.build_value("autoHeatOutdoorTarget", "Heat Mode Switch", t.get("autoHeatOutdoorTarget", 65), 2, 1, 40, 100)
         self.build_value("autoChangeoverLockoutMinutes", "Auto Delay", int(float(t.get("autoChangeoverLockoutMinutes", 120))/60), 2, 2, 0, 8, " hr")
         self.build_value("manualChangeoverLockoutMinutes", "Manual Delay", t.get("manualChangeoverLockoutMinutes", 10), 2, 3, 0, 60, " min")
-        self.build_value("coolFanRemainOnMinutes", "Cool Fan", t.get("coolFanRemainOnMinutes", 2), 4, 2, 0, 15, " min")
+        self.build_value("coolFanRemainOnMinutes", "Cool Fan", t.get("coolFanRemainOnMinutes", 2), 5, 2, 0, 15, " min")
 
         temp_source = self.add_section("Current Temperature Source", 3, 0, 1, 2)
         selected_temp = nested_get(self.s.config, "integrations", "homeAssistant", "currentTempEntity", default=None)
@@ -3008,6 +3022,23 @@ class SettingsDialog(QDialog):
             b = RoundButton(f.capitalize(), active=(t.get("fan") or "auto") == f, min_h=34)
             b.clicked.connect(lambda checked=False, x=f: self.set_thermostat({"fan": x}))
             row.addWidget(b)
+        outdoor_source = self.add_section("Outside Temperature Source", 4, 2, 1, 2)
+        selected_outdoor = nested_get(self.s.config, "integrations", "homeAssistant", "outdoorTempEntity", default=None) or nested_get(self.s.config, "integrations", "homeAssistant", "weatherEntity", default=None)
+        if isinstance(selected_outdoor, dict):
+            outdoor_name = selected_outdoor.get("name") or selected_outdoor.get("friendly_name") or selected_outdoor.get("entityId") or "Outside Sensor"
+            outdoor_line = f"Using {selected_outdoor.get('entityId') or 'selected entry'}"
+        else:
+            outdoor_name = "Not selected"
+            outdoor_line = "Choose a Home Assistant outside temp entry"
+        self.outdoor_source_label = QLabel(f"{outdoor_name}\n{outdoor_line}")
+        self.outdoor_source_label.setFont(font(10, QFont.Black))
+        self.outdoor_source_label.setStyleSheet("color:#dfe9ff; background:transparent; border:0;")
+        outdoor_source.layout().addWidget(self.outdoor_source_label)
+        choose_outdoor = RoundButton("Choose Outside", active=True, min_h=34)
+        choose_outdoor.setMinimumWidth(160)
+        choose_outdoor.clicked.connect(self.choose_outdoor_temp_sensor)
+        outdoor_source.layout().addWidget(choose_outdoor, 0, Qt.AlignRight)
+
         people = self.add_section("Auto Away / Home", 4, 0, 1, 2)
         people_head = QHBoxLayout()
         self.people_summary = QLabel(self.people_summary_text())
@@ -3191,6 +3222,75 @@ class SettingsDialog(QDialog):
                 QMessageBox.warning(self, "Choose Sensor", str(exc))
         dlg.selected.connect(apply)
         dlg.exec_()
+
+    def choose_outdoor_temp_sensor(self):
+        ha = self.s.ha()
+        stored = ha.get("weatherAvailableEntities") or []
+        existing = ha.get("outdoorTempEntity") or ha.get("weatherEntity")
+        if isinstance(existing, dict):
+            stored = [existing] + list(stored)
+        entities = []
+        try:
+            data = self.s.api.post("/api/ha/entities", self.s.ha_payload({"domains": ["sensor", "weather"]}))
+            entities = data.get("entities") or []
+        except Exception:
+            entities = []
+
+        by_id = {}
+        for item in list(entities) + list(stored):
+            if not isinstance(item, dict):
+                continue
+            eid = str(item.get("entityId") or item.get("entity_id") or "").strip()
+            if not eid:
+                continue
+            domain = str(item.get("domain") or (eid.split(".", 1)[0] if "." in eid else "") or "sensor")
+            by_id[eid] = {
+                "entityId": eid,
+                "name": str(item.get("name") or item.get("friendly_name") or eid),
+                "domain": domain,
+                "state": item.get("state"),
+                "unitOfMeasurement": item.get("unitOfMeasurement") or item.get("unit_of_measurement") or "",
+            }
+        entities = list(by_id.values())
+        if not entities:
+            QMessageBox.warning(self, "Outside Temperature", "No Home Assistant sensor/weather entries found.")
+            return
+
+        dlg = EntityPickerDialog("Choose Outside Temperature", entities, self)
+        def apply(e):
+            try:
+                eid = str(e.get("entityId") or e.get("entity_id") or "").strip()
+                if not eid:
+                    return
+                domain = str(e.get("domain") or (eid.split(".", 1)[0] if "." in eid else "sensor"))
+                selected = {
+                    "entityId": eid,
+                    "name": str(e.get("name") or e.get("friendly_name") or eid),
+                    "domain": domain,
+                    "unitOfMeasurement": str(e.get("unitOfMeasurement") or e.get("unit_of_measurement") or ""),
+                }
+                ha = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
+                ha["outdoorTempEntity"] = selected
+                if domain == "weather":
+                    ha["weatherEntity"] = selected
+                available = [selected]
+                for item in entities:
+                    if isinstance(item, dict) and str(item.get("entityId") or "") != eid:
+                        available.append(item)
+                ha["weatherAvailableEntities"] = available
+                self.s.save_config()
+                self.s.update_thermostat({
+                    "outdoorTempSource": "home-assistant",
+                    "outdoorTempSourceName": selected["name"],
+                })
+                if hasattr(self, "outdoor_source_label"):
+                    self.outdoor_source_label.setText(f"{selected['name']}\\nUsing {selected['entityId']}")
+                self.saved.emit()
+            except Exception as exc:
+                QMessageBox.warning(self, "Outside Temperature", str(exc))
+        dlg.selected.connect(apply)
+        dlg.exec_()
+
 
     def show_hardware(self):
         try:

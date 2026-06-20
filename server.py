@@ -619,6 +619,10 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             base["currentTempSource"] = str(source.get("currentTempSource") or "virtual").strip()[:80] or "virtual"
         if "currentTempSourceName" in source:
             base["currentTempSourceName"] = str(source.get("currentTempSourceName") or "Virtual Temp").strip()[:120] or "Virtual Temp"
+        if "outdoorTempSource" in source:
+            base["outdoorTempSource"] = str(source.get("outdoorTempSource") or "").strip()[:80]
+        if "outdoorTempSourceName" in source:
+            base["outdoorTempSourceName"] = str(source.get("outdoorTempSourceName") or "").strip()[:120]
 
         hvac_mode = source.get("hvac_mode", source.get("hvacMode", source.get("mode")))
         if hvac_mode is not None:
@@ -804,6 +808,8 @@ THERMOSTAT_RUNTIME_KEYS = (
     "outdoorTemp",
     "outdoorWindSpeed",
     "outdoorWindUnit",
+    "outdoorTempSource",
+    "outdoorTempSourceName",
     "autoPendingMode",
     "autoLockoutUntil",
     "manualPendingMode",
@@ -1707,6 +1713,7 @@ def _apply_runtime_thermostat_logic(record: dict, *, notify: bool = True) -> dic
     thermostat = record.get("thermostat") or {}
     thermostat = _clear_expired_virtual_temp_override(thermostat)
     thermostat = _apply_selected_ha_temperature_sensor_if_needed(thermostat)
+    thermostat = _apply_selected_ha_outdoor_temperature_sensor_if_needed(thermostat)
     thermostat = _apply_local_temperature_sensor_if_needed({"thermostat": thermostat})
     updated = _apply_presence_away_logic(thermostat)
     updated = _apply_comfort_auto_switch_logic(updated, notify=notify)
@@ -1790,7 +1797,14 @@ def _thermostat_outputs(thermostat: dict) -> dict:
             cool = False
             active_mode = "lockout"
             manual_lockout_until = until
-    cooling_fan_hold = (not cool) and _number(thermostat.get("coolFanHoldUntil"), 0, 0) > now_ms
+    active_hold_until = _number(thermostat.get("coolFanHoldUntil"), 0, 0)
+    remain_minutes = _number(thermostat.get("coolFanRemainOnMinutes"), 2, 0, 15)
+    # If cooling was on in the last control pass and this pass turns cooling
+    # off, keep the fan output high immediately. _mark_thermostat_equipment_run
+    # will then write coolFanHoldUntil, but the relay never sees a false/true
+    # blip in between.
+    starting_cool_fan_hold = bool(thermostat.get("coolRelayWasOn")) and (not cool) and remain_minutes > 0
+    cooling_fan_hold = (not cool) and (active_hold_until > now_ms or starting_cool_fan_hold)
     fan = bool(cool or cooling_fan_hold or thermostat.get("fan") == "on")
     action = "heating" if heat else "cooling" if cool else "fan" if fan else "idle"
     return {
@@ -2754,6 +2768,66 @@ def _apply_selected_ha_temperature_sensor_if_needed(thermostat: dict) -> dict:
         return updated
     except Exception as exc:
         print(f"Home Assistant temperature sensor update failed for {entity_id}: {exc}", flush=True)
+        return thermostat
+
+
+def _selected_ha_outdoor_temperature_entity() -> dict | None:
+    try:
+        record = _read_panel_config_record()
+        config = record.get("config") if isinstance(record, dict) else {}
+        ha = (((config or {}).get("integrations") or {}).get("homeAssistant") or {})
+        selected = ha.get("outdoorTempEntity") or ha.get("outsideTempEntity") or ha.get("weatherEntity")
+        if isinstance(selected, dict):
+            eid = str(selected.get("entityId") or selected.get("entity_id") or "").strip()
+            if eid:
+                return {"entityId": eid, "name": str(selected.get("name") or selected.get("friendly_name") or eid)}
+        if isinstance(selected, str) and selected.strip():
+            eid = selected.strip()
+            return {"entityId": eid, "name": eid}
+    except Exception:
+        return None
+    return None
+
+
+def _apply_selected_ha_outdoor_temperature_sensor_if_needed(thermostat: dict) -> dict:
+    source = _selected_ha_outdoor_temperature_entity()
+    if not source:
+        return thermostat
+    ha_url, token = _ha_credentials_from_panel_config()
+    if not ha_url or not token:
+        return thermostat
+    entity_id = str(source.get("entityId") or "").strip()
+    if not entity_id:
+        return thermostat
+    try:
+        item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
+        if not isinstance(item, dict):
+            return thermostat
+        attrs = item.get("attributes") or {}
+        label = str(source.get("name") or attrs.get("friendly_name") or entity_id).strip() or entity_id
+        updated = dict(thermostat)
+
+        if entity_id.startswith("weather."):
+            weather = _normalize_weather_item(item)
+            if weather.get("temperature") is not None:
+                updated["outdoorTemp"] = round(float(weather.get("temperature")), 1)
+            if weather.get("windSpeed") is not None:
+                updated["outdoorWindSpeed"] = round(float(weather.get("windSpeed")), 1)
+            if weather.get("windSpeedUnit"):
+                updated["outdoorWindUnit"] = str(weather.get("windSpeedUnit") or "mph")
+        else:
+            temp_f, _unit = _temperature_from_ha_state_item(item)
+            if temp_f is None:
+                return thermostat
+            updated["outdoorTemp"] = temp_f
+
+        updated["outdoorTempSource"] = "home-assistant"
+        updated["outdoorTempSourceName"] = label
+        if updated != thermostat:
+            _write_thermostat_record(updated, persist=False)
+        return updated
+    except Exception as exc:
+        print(f"Home Assistant outdoor temperature update failed for {entity_id}: {exc}", flush=True)
         return thermostat
 
 
