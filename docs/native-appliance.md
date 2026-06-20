@@ -1,69 +1,6 @@
-# Native / Hybrid Thermostat Appliance Mode
-
-## Current recommended mode: Hybrid HTML WebView
-
-The wall display now defaults to the hybrid HTML runtime.  That means the screen shows the same polished HTML/CSS interface you see from a browser, but it is hosted by `native/html_panel.py` in a small GTK/WebKit full-screen shell instead of the full Chromium kiosk stack.
-
-```bash
-cd ~/Smart-Thermostat-Development
-chmod +x scripts/*.sh native/html_panel.py
-./scripts/install-pi.sh
-./scripts/display-mode.sh hybrid
-```
-
-Use the older Tk/canvas native UI only as a fallback:
-
-```bash
-./scripts/display-mode.sh native
-```
-
-Use Chromium only as a troubleshooting fallback:
-
-```bash
-./scripts/display-mode.sh kiosk
-```
-
-More detail is in `docs/html-hybrid-webview.md`.
-
----
-
 # Native Thermostat Appliance Mode
 
 This build adds a native Raspberry Pi touchscreen client so the wall controller no longer needs Chromium for the on-device display.
-
-## Hybrid native/web runtime
-
-The wall screen now uses a hybrid runtime:
-
-- `smart-thermostat-web.service` keeps running as the local FastAPI control engine, Home Assistant bridge, settings/config store, update endpoint, and optional browser/admin UI.
-- `smart-thermostat-native.service` is the on-device touchscreen display. It talks to the local API over `127.0.0.1` and draws the web-inspired UI directly with Tk/canvas.
-- `smart-thermostat-kiosk.service` is only a fallback. It is disabled in normal appliance mode so Chromium does not sit on the Pi consuming CPU, memory, browser cache, and compositor resources.
-
-Use the native display mode command after updating:
-
-```bash
-cd ~/Smart-Thermostat-Development
-chmod +x scripts/*.sh
-./scripts/display-mode.sh native
-```
-
-To temporarily go back to the Chromium fallback for troubleshooting:
-
-```bash
-./scripts/display-mode.sh kiosk
-```
-
-To check what is running:
-
-```bash
-./scripts/display-mode.sh status
-```
-
-Chromium is not installed by default anymore. If you specifically want the fallback browser installed on the Pi, run:
-
-```bash
-SMART_INSTALL_CHROMIUM=1 ./scripts/install-pi.sh
-```
 
 ## Services
 

@@ -8629,11 +8629,11 @@
         "selectedMediaPlayerId": "media_player.livingroom_sonos",
         "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIxMzJhMzM2ZjMxNmM0YWRmODE2NDQxNTkwNDgwNzIxZSIsImlhdCI6MTc4MTU0NTI1MSwiZXhwIjoyMDk2OTA1MjUxfQ.dDAeuZM1BRON10g7qbzLkUKZgNR8u8Xw1-Dw6HX_UTY",
         "url": "http://192.168.1.135:8123/",
-        "weatherAvailableEntities": [],
         "weatherEntity": {
           "entityId": "weather.home",
           "name": "Home"
-        }
+        },
+        "weatherAvailableEntities": []
       }
     },
     "lights": {
@@ -8882,10 +8882,6 @@
         }
       }
     },
-    "security": {
-      "userAccessCode": "3762"
-    },
-    "settingsAccessCode": "3762",
     "thermostat": {
       "autoActiveMode": "heat",
       "autoChangeoverLockoutMinutes": 120,
@@ -8915,89 +8911,12 @@
       "mode": "auto",
       "name": "Livingroom Test",
       "outdoorTemp": 40,
-      "outdoorWindSpeed": 0,
-      "outdoorWindUnit": "mph",
       "targetTemp": 73,
-      "schedules": [
-        {
-          "id": "home",
-          "name": "Home",
-          "time": "06:00",
-          "enabled": true,
-          "coolSetpoint": 73,
-          "heatSetpoint": 70,
-          "personEntityIds": []
-        },
-        {
-          "id": "evening",
-          "name": "Evening",
-          "time": "18:00",
-          "enabled": true,
-          "coolSetpoint": 72,
-          "heatSetpoint": 70,
-          "personEntityIds": []
-        },
-        {
-          "id": "sleep",
-          "name": "Sleep",
-          "time": "22:30",
-          "enabled": true,
-          "coolSetpoint": 70,
-          "heatSetpoint": 67,
-          "personEntityIds": []
-        },
-        {
-          "id": "away",
-          "name": "Away",
-          "time": "08:00",
-          "enabled": true,
-          "coolSetpoint": 85,
-          "heatSetpoint": 55,
-          "personEntityIds": []
-        }
-      ]
+      "outdoorWindSpeed": 0,
+      "outdoorWindUnit": "mph"
     },
-    "userAccessCode": "3762",
-    "version": 11,
-    "schedules": [
-      {
-        "id": "home",
-        "name": "Home",
-        "time": "06:00",
-        "enabled": true,
-        "coolSetpoint": 73,
-        "heatSetpoint": 70,
-        "personEntityIds": []
-      },
-      {
-        "id": "evening",
-        "name": "Evening",
-        "time": "18:00",
-        "enabled": true,
-        "coolSetpoint": 72,
-        "heatSetpoint": 70,
-        "personEntityIds": []
-      },
-      {
-        "id": "sleep",
-        "name": "Sleep",
-        "time": "22:30",
-        "enabled": true,
-        "coolSetpoint": 70,
-        "heatSetpoint": 67,
-        "personEntityIds": []
-      },
-      {
-        "id": "away",
-        "name": "Away",
-        "time": "08:00",
-        "enabled": true,
-        "coolSetpoint": 85,
-        "heatSetpoint": 55,
-        "personEntityIds": []
-      }
-    ]
+    "version": 11
   },
-  "updatedAt": "2026-06-19T23:43:05Z",
-  "version": 1781912585890
+  "updatedAt": 1781548290,
+  "version": 607
 }

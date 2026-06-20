@@ -280,6 +280,19 @@
               </div>
             </div>
 
+            <div class="virtual-section virtual-sensor-section">
+              <label class="virtual-sensor-label" for="virtualTempSlider">
+                <span>Virtual Temp</span>
+                <strong id="virtualTempValue">70°</strong>
+              </label>
+              <input id="virtualTempSlider" class="virtual-temp-slider" type="range" min="50" max="90" step="0.1" value="70" aria-label="Set virtual current temperature" />
+              <div class="virtual-temp-range" aria-hidden="true">
+                <span>50°</span>
+                <span>90°</span>
+              </div>
+              <p id="virtualTempOverrideStatus" class="virtual-temp-override-status">Manual test source</p>
+            </div>
+
           </aside>
 
           <div id="safetyWarningBanner" class="safety-warning-banner" aria-live="assertive" aria-hidden="true">
@@ -676,17 +689,17 @@
 
           <div class="settings-section current-temp-source-section">
             <div>
-              <h3>Current Temperature Entry</h3>
-              <p class="settings-hint">Choose the Home Assistant temperature entry used as the thermostat's current room temperature. This is the only room-temperature source shown on the panel.</p>
+              <h3>Current Temperature Source</h3>
+              <p class="settings-hint">Choose the Home Assistant sensor used as the room temperature. Moving the virtual temp slider temporarily overrides this source for 2 minutes.</p>
             </div>
             <div class="current-temp-source-card">
               <div class="current-temp-source-copy">
-                <strong id="currentTempSourceName">No Entry Selected</strong>
-                <span id="currentTempSourceId">No Home Assistant temperature entry selected</span>
-                <em id="currentTempSourceStatus">Choose a Home Assistant temperature entry.</em>
+                <strong id="currentTempSourceName">Virtual Temp</strong>
+                <span id="currentTempSourceId">No Home Assistant sensor selected</span>
+                <em id="currentTempSourceStatus">Using the virtual temp slider until a sensor is selected</em>
               </div>
               <div class="current-temp-source-actions">
-                <button id="chooseCurrentTempSensorButton" class="scene-btn choose-current-temp-sensor" type="button">Choose Entry</button>
+                <button id="chooseCurrentTempSensorButton" class="scene-btn choose-current-temp-sensor" type="button">Choose Sensor</button>
                 <button id="clearCurrentTempSensorButton" class="scene-btn clear-current-temp-sensor" type="button" hidden>Clear</button>
               </div>
             </div>

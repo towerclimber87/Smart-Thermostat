@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import atexit
 import json
-import math
 import mimetypes
 import os
 import signal
@@ -31,7 +30,6 @@ DATA_DIR = ROOT / "data"
 VERSION_FILE = ROOT / "VERSION"
 THERMOSTAT_STATE_FILE = DATA_DIR / "thermostat-state.json"
 PANEL_CONFIG_FILE = DATA_DIR / "panel-config.json"
-DEFAULT_PANEL_CONFIG_FILE = PUBLIC / "config" / "default-config.json"
 HVAC_HISTORY_FILE = DATA_DIR / "hvac-history.json"
 APP_STARTED_AT = time.time()
 HA_STATES_CACHE_TTL_SECONDS = float(os.environ.get("SMART_THERMOSTAT_HA_STATES_CACHE_TTL_SECONDS", "1.0"))
@@ -77,7 +75,6 @@ LOCAL_TEMP_SENSOR_STALE_SECONDS = max(15.0, float(os.environ.get("SMART_THERMOST
 LOCAL_TEMP_SENSOR_ADDRESS = os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_I2C_ADDRESS", "").strip()
 LOCAL_TEMP_SENSOR_TYPE = os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_TYPE", "auto").strip().lower() or "auto"
 LOCAL_TEMP_SOURCE_NAMES = {"onboard", "local", "i2c", "hardware", "onboard-fallback"}
-HA_CURRENT_TEMP_POLL_SECONDS = max(1.0, float(os.environ.get("SMART_THERMOSTAT_HA_CURRENT_TEMP_POLL_SECONDS", "2") or "2"))
 
 _HARDWARE_LOCK = threading.RLock()
 _HARDWARE_RELAY_BACKEND = None
@@ -89,8 +86,6 @@ _HARDWARE_RGB = {"on": False, "color": "#35eaff"}
 _HARDWARE_LAST_I2C_SCAN = {"at": 0.0, "payload": None}
 _LOCAL_TEMP_SENSOR_LOCK = threading.RLock()
 _LOCAL_TEMP_SENSOR_CACHE = {"at": 0.0, "payload": None}
-_HA_CURRENT_TEMP_LOCK = threading.RLock()
-_HA_CURRENT_TEMP_CACHE = {"at": 0.0, "entityId": "", "payload": None, "error": ""}
 _CONTROL_LOOP_THREAD_STARTED = False
 _CONTROL_LOOP_STOP = threading.Event()
 
@@ -110,8 +105,8 @@ DEFAULT_THERMOSTAT = {
     "name": "IHA Thermostat",
     "currentTemp": 70,
     "currentTempUpdatedAt": 0,
-    "currentTempSource": "home-assistant",
-    "currentTempSourceName": "No Entry Selected",
+    "currentTempSource": "virtual",
+    "currentTempSourceName": "Virtual Temp",
     "targetTemp": 70,
     "lastComfortTarget": 70,
     "mode": "cool",
@@ -246,23 +241,6 @@ def _migrate_panel_config(config: object) -> dict | None:
             integrations["homeAssistant"],
         )
         migrated["integrations"] = integrations
-
-    # Keep every UI path on the same access-code source.  Older configs did
-    # not persist this field because the browser UI used the hard-coded
-    # default.  Native mode reads the saved config too, so explicitly carry
-    # the long-standing code forward when a restored config is missing it.
-    saved_access_code = str(
-        migrated.get("userAccessCode")
-        or migrated.get("settingsAccessCode")
-        or ((migrated.get("security") or {}).get("userAccessCode") if isinstance(migrated.get("security"), dict) else "")
-        or "3762"
-    ).strip()
-    saved_access_code = "".join(ch for ch in saved_access_code if ch.isdigit())[:4] or "3762"
-    migrated["userAccessCode"] = saved_access_code
-    migrated["settingsAccessCode"] = saved_access_code
-    security = migrated.get("security") if isinstance(migrated.get("security"), dict) else {}
-    security["userAccessCode"] = saved_access_code
-    migrated["security"] = security
 
     return migrated
 
@@ -627,10 +605,9 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             if name:
                 base["name"] = name[:80]
         if "currentTempSource" in source:
-            raw_source = str(source.get("currentTempSource") or "home-assistant").strip().lower()[:80] or "home-assistant"
-            base["currentTempSource"] = raw_source if raw_source in LOCAL_TEMP_SOURCE_NAMES or raw_source == "home-assistant" else "home-assistant"
+            base["currentTempSource"] = str(source.get("currentTempSource") or "virtual").strip()[:80] or "virtual"
         if "currentTempSourceName" in source:
-            base["currentTempSourceName"] = str(source.get("currentTempSourceName") or "No Entry Selected").strip()[:120] or "No Entry Selected"
+            base["currentTempSourceName"] = str(source.get("currentTempSourceName") or "Virtual Temp").strip()[:120] or "Virtual Temp"
 
         hvac_mode = source.get("hvac_mode", source.get("hvacMode", source.get("mode")))
         if hvac_mode is not None:
@@ -953,44 +930,8 @@ def _normalize_panel_config(config: object) -> dict | None:
     return _migrate_panel_config(config)
 
 
-def _read_default_panel_config_record() -> dict | None:
-    """Load the bundled known-good config if live data was deleted.
-
-    This is a safety net for appliance recovery: if data/panel-config.json is
-    missing or was wiped during manual file replacement, the panel can still
-    come back with the user's Home Assistant bindings, rooms, schedules and
-    access code from public/config/default-config.json.
-    """
-    if not DEFAULT_PANEL_CONFIG_FILE.exists():
-        return None
-    try:
-        raw = json.loads(DEFAULT_PANEL_CONFIG_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-
-    version = 1
-    updated_at = 0
-    config = None
-    if isinstance(raw, dict):
-        version = int(raw.get("version", 1) or 1) if "config" in raw else 1
-        updated_at = int(raw.get("updatedAt", 0) or 0) if "config" in raw else 0
-        if isinstance(raw.get("config"), dict):
-            config = _normalize_panel_config(raw.get("config"))
-        elif any(key in raw for key in ("thermostat", "alarm", "blinds", "lights", "roomControl", "integrations")):
-            config = _normalize_panel_config(raw)
-
-    if not isinstance(config, dict):
-        return None
-    return {"version": version, "updatedAt": updated_at, "config": config}
-
-
 def _read_panel_config_record() -> dict:
     if not PANEL_CONFIG_FILE.exists():
-        fallback = _read_default_panel_config_record()
-        if fallback is not None:
-            DATA_DIR.mkdir(parents=True, exist_ok=True)
-            _atomic_write_json(PANEL_CONFIG_FILE, fallback)
-            return fallback
         return {"version": 1, "updatedAt": 0, "config": None}
 
     try:
@@ -1005,15 +946,8 @@ def _read_panel_config_record() -> dict:
         version = int(raw.get("version", 1) or 1)
         updated_at = int(raw.get("updatedAt", 0) or 0)
         config = _normalize_panel_config(raw.get("config"))
-        if config is None and any(key in raw for key in ("thermostat", "alarm", "blinds", "lights", "roomControl", "integrations")):
+        if config is None and any(key in raw for key in ("thermostat", "alarm", "blinds", "lights", "integrations")):
             config = _normalize_panel_config(raw)
-
-    if config is None:
-        fallback = _read_default_panel_config_record()
-        if fallback is not None:
-            DATA_DIR.mkdir(parents=True, exist_ok=True)
-            _atomic_write_json(PANEL_CONFIG_FILE, fallback)
-            return fallback
 
     return {"version": version, "updatedAt": updated_at, "config": config}
 
@@ -1527,9 +1461,7 @@ def _thermostat_outputs(thermostat: dict) -> dict:
 
 def _thermostat_status_payload() -> dict:
     record = _read_thermostat_record()
-    thermostat = _apply_home_assistant_temperature_if_needed(record)
-    record["thermostat"] = thermostat
-    thermostat = _apply_local_temperature_sensor_if_needed(record)
+    thermostat = record["thermostat"]
     outputs = _thermostat_outputs(thermostat)
     _apply_thermostat_outputs_to_hardware(outputs)
     hvac_mode = "heat_cool" if thermostat["mode"] == "auto" else thermostat["mode"]
@@ -2318,121 +2250,6 @@ def _read_local_temperature_sensor(force: bool = False) -> dict:
         return _deepcopy_json(payload)
 
 
-def _home_assistant_temperature_entity_config() -> tuple[str, str, dict] | None:
-    """Return the saved HA temperature entry without forcing browser-side JS.
-
-    Native mode has no web page running JavaScript, so the local server must be
-    able to pull the selected Home Assistant temperature entry itself. The
-    result is cached at the HA fetch layer so this does not create SD writes and
-    does not hammer Home Assistant.
-    """
-    record = _read_panel_config_record()
-    cfg = record.get("config") if isinstance(record.get("config"), dict) else {}
-    integrations = cfg.get("integrations") if isinstance(cfg.get("integrations"), dict) else {}
-    ha = integrations.get("homeAssistant") if isinstance(integrations.get("homeAssistant"), dict) else {}
-    url = str(ha.get("url") or "").strip()
-    token = str(ha.get("token") or "").strip()
-    ent = ha.get("currentTempEntity")
-    if isinstance(ent, str):
-        ent = {"entityId": ent, "name": ent}
-    if not isinstance(ent, dict):
-        return None
-    entity_id = str(ent.get("entityId") or ent.get("entity_id") or "").strip()
-    if not url or not token or not entity_id or "." not in entity_id:
-        return None
-    return url, token, {**ent, "entityId": entity_id}
-
-
-def _optional_temperature_number(raw: object) -> float | None:
-    if raw is None or raw == "":
-        return None
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(value):
-        return None
-    return value
-
-
-def _ha_temperature_from_state_item(item: dict) -> float | None:
-    attrs = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
-    value = _optional_temperature_number(item.get("state"))
-    if value is None:
-        value = _optional_temperature_number(attrs.get("current_temperature"))
-    if value is None:
-        value = _optional_temperature_number(attrs.get("temperature"))
-    if value is None:
-        return None
-    unit = str(attrs.get("unit_of_measurement") or attrs.get("temperature_unit") or "°F").strip().lower()
-    if unit in {"°c", "c", "celsius"}:
-        value = value * 9 / 5 + 32
-    elif unit in {"k", "kelvin"}:
-        value = (value - 273.15) * 9 / 5 + 32
-    if not -40 <= value <= 130:
-        return None
-    return round(value, 1)
-
-
-def _fetch_home_assistant_current_temperature() -> dict | None:
-    cfg = _home_assistant_temperature_entity_config()
-    if not cfg:
-        return None
-    ha_url, token, ent = cfg
-    entity_id = ent["entityId"]
-    now = time.monotonic()
-    with _HA_CURRENT_TEMP_LOCK:
-        cached_entity = str(_HA_CURRENT_TEMP_CACHE.get("entityId") or "")
-        cached_payload = _HA_CURRENT_TEMP_CACHE.get("payload")
-        if cached_entity == entity_id and now - float(_HA_CURRENT_TEMP_CACHE.get("at") or 0) < HA_CURRENT_TEMP_POLL_SECONDS:
-            return _deepcopy_json(cached_payload) if cached_payload else None
-
-    try:
-        item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}", timeout=1.5)
-        if not isinstance(item, dict):
-            return None
-        temp_f = _ha_temperature_from_state_item(item)
-        if temp_f is None:
-            return None
-        attrs = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
-        payload = {
-            "entityId": entity_id,
-            "name": str(attrs.get("friendly_name") or ent.get("name") or entity_id),
-            "temperatureF": temp_f,
-            "source": "home-assistant",
-        }
-        with _HA_CURRENT_TEMP_LOCK:
-            _HA_CURRENT_TEMP_CACHE.update({"at": now, "entityId": entity_id, "payload": _deepcopy_json(payload), "error": ""})
-        return payload
-    except Exception as exc:
-        with _HA_CURRENT_TEMP_LOCK:
-            _HA_CURRENT_TEMP_CACHE.update({"at": now, "entityId": entity_id, "payload": None, "error": str(exc)[:240]})
-        return None
-
-
-def _apply_home_assistant_temperature_if_needed(record: dict) -> dict:
-    thermostat = record.get("thermostat") or {}
-    source = str(thermostat.get("currentTempSource") or "home-assistant").strip().lower()
-    if source != "home-assistant":
-        return thermostat
-    reading = _fetch_home_assistant_current_temperature()
-    if not reading:
-        return thermostat
-    next_temp = reading.get("temperatureF")
-    if next_temp is None:
-        return thermostat
-    updated = dict(thermostat)
-    updated["currentTemp"] = round(float(next_temp), 1)
-    updated["currentTempUpdatedAt"] = int(time.time())
-    updated["currentTempSource"] = "home-assistant"
-    updated["currentTempSourceName"] = str(reading.get("name") or reading.get("entityId") or "Home Assistant Entry")[:120]
-    updated["runtimeTempSource"] = "home-assistant"
-    updated["runtimeTempSourceName"] = updated["currentTempSourceName"]
-    if updated != thermostat:
-        _write_thermostat_record(updated, persist=False)
-    return updated
-
-
 def _thermostat_should_use_local_temp_sensor(thermostat: dict, now: float) -> bool:
     mode = LOCAL_TEMP_SENSOR_MODE
     if mode in {"always", "on", "force"}:
@@ -2481,8 +2298,6 @@ def _thermostat_control_loop() -> None:
     while not _CONTROL_LOOP_STOP.wait(CONTROL_LOOP_INTERVAL_SECONDS):
         try:
             record = _read_thermostat_record()
-            thermostat = _apply_home_assistant_temperature_if_needed(record)
-            record["thermostat"] = thermostat
             thermostat = _apply_local_temperature_sensor_if_needed(record)
             outputs = _thermostat_outputs(thermostat)
             _apply_thermostat_outputs_to_hardware(outputs)
@@ -2606,22 +2421,11 @@ def _run_git_command(args: list[str]) -> subprocess.CompletedProcess[str]:
 
 
 def _schedule_service_restart() -> None:
-    services_raw = os.environ.get(
-        "SMART_THERMOSTAT_RESTART_SERVICES",
-        os.environ.get("SMART_THERMOSTAT_SERVICE", "smart-thermostat-web.service"),
-    )
-    services = [item.strip() for item in services_raw.replace(";", ",").split(",") if item.strip()]
-    if not services:
-        services = ["smart-thermostat-web.service"]
+    service_name = os.environ.get("SMART_THERMOSTAT_SERVICE", "smart-thermostat-web.service")
 
     def _restart() -> None:
-        # Give the HTTP response time to leave the process before restarting.
         time.sleep(1.5)
-        for service_name in services:
-            subprocess.run(["sudo", "-n", "systemctl", "restart", service_name], check=False)
-            # When restarting the API service itself first, give systemd a brief
-            # moment before restarting the display client that consumes it.
-            time.sleep(0.6)
+        subprocess.run(["sudo", "systemctl", "restart", service_name], check=False)
 
     threading.Thread(target=_restart, daemon=True).start()
 
@@ -2810,7 +2614,7 @@ def _fetch_ha_covers(ha_url: str, token: str) -> list[dict]:
         method="GET",
     )
     try:
-        with request.urlopen(req, timeout=timeout) as resp:
+        with request.urlopen(req, timeout=12) as resp:
             raw = resp.read()
     except error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[:500]
@@ -2857,7 +2661,7 @@ def _fetch_ha_cover_states_for_entities(ha_url: str, token: str, entity_ids: lis
     return [by_id[entity_id] for entity_id in wanted if entity_id in by_id]
 
 
-def _ha_json_request(ha_url: str, token: str, method: str, path: str, payload: dict | None = None, timeout: float = 12.0) -> object:
+def _ha_json_request(ha_url: str, token: str, method: str, path: str, payload: dict | None = None) -> object:
     ha_url = _normalize_ha_url(ha_url)
     token = (token or "").strip()
     if not token:

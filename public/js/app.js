@@ -1,11 +1,3 @@
-const RUNTIME_QUERY = new URLSearchParams(window.location.search || "");
-const RUNTIME_MODE = (RUNTIME_QUERY.get("runtime") || "").toLowerCase();
-const IS_HYBRID_WEBVIEW_RUNTIME = RUNTIME_MODE === "hybrid-webview";
-const IS_CHROMIUM_KIOSK_RUNTIME = RUNTIME_MODE === "chromium-kiosk" || RUNTIME_MODE === "kiosk";
-const IS_WALL_RUNTIME = RUNTIME_QUERY.get("wall") === "1" || IS_HYBRID_WEBVIEW_RUNTIME || IS_CHROMIUM_KIOSK_RUNTIME;
-const IS_PERFORMANCE_RUNTIME = RUNTIME_QUERY.get("performance") === "1" || IS_CHROMIUM_KIOSK_RUNTIME;
-const runtimeInterval = (normalMs, wallMs = normalMs) => IS_WALL_RUNTIME ? wallMs : normalMs;
-
 const ABS_MIN = 45;
 const ABS_MAX = 95;
 const VIRTUAL_TEMP_MIN = 50;
@@ -15,7 +7,7 @@ const DIAL_START_DEG = 225;
 const LEGACY_CONFIG_STORAGE_KEY = "smartThermostat.config.v2";
 const CONFIG_API_ENDPOINT = "/api/config";
 const HISTORY_API_ENDPOINT = "/api/history";
-const HA_SYNC_INTERVAL_MS = runtimeInterval(5000, 8000);
+const HA_SYNC_INTERVAL_MS = 5000;
 const HA_SYNC_AFTER_COMMAND_DELAYS = [900, 2400, 5200, 9800, 18000];
 const BLIND_COMMAND_HOLD_MS = 90000;
 const BLIND_POSITION_TOLERANCE = 2;
@@ -24,21 +16,21 @@ const COVER_FEATURE_CLOSE_TILT = 32;
 const COVER_FEATURE_STOP_TILT = 64;
 const COVER_FEATURE_SET_TILT_POSITION = 128;
 const COVER_TILT_FEATURE_MASK = COVER_FEATURE_OPEN_TILT | COVER_FEATURE_CLOSE_TILT | COVER_FEATURE_STOP_TILT | COVER_FEATURE_SET_TILT_POSITION;
-const HA_AUDIO_SYNC_INTERVAL_MS = runtimeInterval(5000, 7000);
+const HA_AUDIO_SYNC_INTERVAL_MS = 5000;
 const HA_AUDIO_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
-const HA_LIGHT_SYNC_INTERVAL_MS = runtimeInterval(5000, 8000);
+const HA_LIGHT_SYNC_INTERVAL_MS = 5000;
 const HA_LIGHT_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
-const HA_ROOM_SYNC_INTERVAL_MS = runtimeInterval(5000, 8000);
+const HA_ROOM_SYNC_INTERVAL_MS = 5000;
 const HA_ROOM_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
 const INACTIVE_PAGE_SYNC_INTERVAL_MS = 5 * 60 * 1000;
-const HA_ALARM_SYNC_INTERVAL_MS = runtimeInterval(5000, 8000);
+const HA_ALARM_SYNC_INTERVAL_MS = 5000;
 const HA_ALARM_SYNC_AFTER_COMMAND_DELAYS = [700, 2200, 5000];
-const HA_DOOR_SYNC_INTERVAL_MS = runtimeInterval(5000, 8000);
-const HA_PRESENCE_SYNC_INTERVAL_MS = runtimeInterval(5000, 10000);
-const HA_PAUSE_FUNCTION_SYNC_INTERVAL_MS = runtimeInterval(5000, 8000);
+const HA_DOOR_SYNC_INTERVAL_MS = 5000;
+const HA_PRESENCE_SYNC_INTERVAL_MS = 5000;
+const HA_PAUSE_FUNCTION_SYNC_INTERVAL_MS = 5000;
 const HA_PAUSE_FUNCTION_FAST_SYNC_INTERVAL_MS = 1000;
 const HA_WEATHER_SYNC_INTERVAL_MS = 60000;
-const HA_TEMP_SENSOR_SYNC_INTERVAL_MS = runtimeInterval(5000, 7000);
+const HA_TEMP_SENSOR_SYNC_INTERVAL_MS = 5000;
 const LOCAL_THERMOSTAT_SYNC_INTERVAL_MS = 1000;
 const VIRTUAL_TEMP_OVERRIDE_MS = 2 * 60 * 1000;
 const LOCAL_THERMOSTAT_PUSH_DEBOUNCE_MS = 300;
@@ -94,8 +86,8 @@ const DEFAULT_SCREEN_TIMEOUT_MINUTES = 5;
 const MIN_SCREEN_TIMEOUT_MINUTES = 1;
 const MAX_SCREEN_TIMEOUT_MINUTES = 120;
 const SCREEN_TIMEOUT_CHECK_INTERVAL_MS = 5000;
-const HARDWARE_STATUS_INTERVAL_MS = runtimeInterval(5000, 15000);
-const HISTORY_STATUS_INTERVAL_MS = runtimeInterval(30000, 60000);
+const HARDWARE_STATUS_INTERVAL_MS = 5000;
+const HISTORY_STATUS_INTERVAL_MS = 30000;
 const SCHEDULE_CHECK_INTERVAL_MS = 15000;
 const DEFAULT_PAUSE_FUNCTION_MINUTES = 5;
 const PAUSE_FUNCTION_RESUME_MS = 5 * 60 * 1000;
@@ -321,8 +313,8 @@ const state = {
   thermostat: {
     name: "IHA Thermostat",
     currentTemp: 70,
-    currentTempSource: "home-assistant",
-    currentTempSourceName: "No Entry Selected",
+    currentTempSource: "virtual",
+    currentTempSourceName: "Virtual Temp",
     targetTemp: 70,
     lastComfortTarget: 70,
     mode: "cool",
@@ -1100,8 +1092,8 @@ function buildThermostatSettingsConfig() {
   // are kept in RAM so outages do not churn the SD card.
   return {
     name: state.thermostat.name || "IHA Thermostat",
-    currentTempSource: state.thermostat.currentTempSource || "home-assistant",
-    currentTempSourceName: state.thermostat.currentTempSourceName || "No Entry Selected",
+    currentTempSource: state.thermostat.currentTempSource || "virtual",
+    currentTempSourceName: state.thermostat.currentTempSourceName || "Virtual Temp",
     targetTemp: state.thermostat.targetTemp,
     lastComfortTarget: state.thermostat.lastComfortTarget,
     mode: state.thermostat.mode,
@@ -1217,8 +1209,8 @@ function applySavedConfig(saved = {}) {
     state.thermostat.pauseFunction.previousTargetTemp = null;
     state.thermostat.pauseFunction.previousLastComfortTarget = null;
     state.thermostat.pauseFunction.activeEntityIds = [];
-    state.thermostat.currentTempSource = normalizeCurrentTempSource(state.thermostat.currentTempSource);
-    state.thermostat.currentTempSourceName = String(state.thermostat.currentTempSourceName || "No Entry Selected");
+    state.thermostat.currentTempSource = String(state.thermostat.currentTempSource || "virtual");
+    state.thermostat.currentTempSourceName = String(state.thermostat.currentTempSourceName || "Virtual Temp");
     state.thermostat.safetyLow = clamp(Math.round(Number(state.thermostat.safetyLow) || 55), ABS_MIN, ABS_MAX - 2);
     state.thermostat.safetyHigh = clamp(Math.round(Number(state.thermostat.safetyHigh) || 85), state.thermostat.safetyLow + 2, ABS_MAX);
     state.thermostat.autoHeatOutdoorTarget = Math.min(state.thermostat.autoHeatOutdoorTarget, state.thermostat.autoCoolOutdoorTarget - 1);
@@ -1259,9 +1251,6 @@ function applySavedConfig(saved = {}) {
       ...saved.integrations.homeAssistant,
     };
   }
-  const selectedTempEntry = getCurrentTempEntity();
-  state.thermostat.currentTempSource = normalizeCurrentTempSource(state.thermostat.currentTempSource);
-  state.thermostat.currentTempSourceName = selectedTempEntry?.name || selectedTempEntry?.entityId || "No Entry Selected";
 }
 
 function readLegacySavedConfig() {
@@ -1360,8 +1349,8 @@ function localThermostatPayload() {
       ...buildThermostatSettingsConfig(),
       currentTemp: Number(state.thermostat.currentTemp || 0),
       currentTempUpdatedAt: Number(state.thermostat.currentTempUpdatedAt || 0),
-      currentTempSource: state.thermostat.currentTempSource || "home-assistant",
-      currentTempSourceName: state.thermostat.currentTempSourceName || "No Entry Selected",
+      currentTempSource: state.thermostat.currentTempSource || "virtual",
+      currentTempSourceName: state.thermostat.currentTempSourceName || "Virtual Temp",
       humidity: Number(state.thermostat.humidity || 0),
       outdoorTemp: Number(state.thermostat.outdoorTemp || 0),
       outdoorWindSpeed: Number(state.thermostat.outdoorWindSpeed || 0),
@@ -1488,12 +1477,6 @@ function getCurrentTempEntity() {
   return null;
 }
 
-function normalizeCurrentTempSource(value) {
-  const source = String(value || "").trim().toLowerCase();
-  if (["onboard", "local", "i2c", "hardware", "onboard-fallback"].includes(source)) return source;
-  return "home-assistant";
-}
-
 function isVirtualTempOverrideActive(now = Date.now()) {
   return Boolean(virtualTempOverrideUntil && virtualTempOverrideUntil > now);
 }
@@ -1579,8 +1562,7 @@ function applyCurrentTempSensorEntity(entity = {}, options = {}) {
     changed = true;
   }
   t.currentTempSource = "home-assistant";
-  t.currentTempSourceName = entity.name || entity.entityId || "Home Assistant Entry";
-  t.currentTempUpdatedAt = Math.floor(Date.now() / 1000);
+  t.currentTempSourceName = entity.name || entity.entityId || "Home Assistant Sensor";
   const ha = state.integrations.homeAssistant || {};
   if (ha.currentTempEntity?.entityId === entity.entityId) {
     ha.currentTempEntity = { ...ha.currentTempEntity, ...entity, state: entity.state };
@@ -1589,10 +1571,10 @@ function applyCurrentTempSensorEntity(entity = {}, options = {}) {
     applyAutoSwitch({ notify: true });
     if (t.away) applyAwayTarget();
     renderThermostat();
+    scheduleLocalThermostatPush();
   } else {
     renderCurrentTempSourceSettings();
   }
-  scheduleLocalThermostatPush();
   return changed;
 }
 
@@ -1638,23 +1620,29 @@ async function pollHomeAssistantCurrentTempSensor(options = {}) {
 
 function renderCurrentTempSourceSettings() {
   const entity = getCurrentTempEntity();
-  const hasEntity = Boolean(entity?.entityId);
-  if (elements.currentTempSourceName) elements.currentTempSourceName.textContent = hasEntity ? (entity.name || entity.entityId) : "No Entry Selected";
-  if (elements.currentTempSourceId) elements.currentTempSourceId.textContent = hasEntity ? entity.entityId : "No Home Assistant temperature entry selected";
+  const overrideActive = isVirtualTempOverrideActive();
+  const remaining = getVirtualTempOverrideRemainingMs();
+  if (elements.currentTempSourceName) elements.currentTempSourceName.textContent = entity?.name || "Virtual Temp";
+  if (elements.currentTempSourceId) elements.currentTempSourceId.textContent = entity?.entityId || "No Home Assistant sensor selected";
   if (elements.currentTempSourceStatus) {
-    elements.currentTempSourceStatus.textContent = hasEntity
-      ? "Using this Home Assistant entry for current room temperature"
-      : "Choose a Home Assistant temperature entry.";
+    elements.currentTempSourceStatus.textContent = overrideActive
+      ? `Virtual override active for ${formatShortDuration(remaining)}`
+      : entity?.entityId
+        ? "Using Home Assistant for current room temperature"
+        : "Using the virtual temp slider until a sensor is selected";
   }
   if (elements.virtualTempOverrideStatus) {
-    elements.virtualTempOverrideStatus.textContent = "Home Assistant entry only";
-    elements.virtualTempOverrideStatus.classList.remove("active");
+    elements.virtualTempOverrideStatus.textContent = overrideActive
+      ? `Manual override ${formatShortDuration(remaining)}`
+      : entity?.entityId
+        ? "Slider overrides for 2 min"
+        : "Manual test source";
+    elements.virtualTempOverrideStatus.classList.toggle("active", overrideActive);
   }
   if (elements.clearCurrentTempSensorButton) {
-    elements.clearCurrentTempSensorButton.hidden = !hasEntity;
+    elements.clearCurrentTempSensorButton.hidden = !entity?.entityId;
   }
 }
-
 
 function assignCurrentTempSensor(entity = {}) {
   if (!entity?.entityId) return;
@@ -1678,13 +1666,13 @@ function assignCurrentTempSensor(entity = {}) {
 function clearCurrentTempSensor() {
   const ha = state.integrations.homeAssistant;
   ha.currentTempEntity = null;
-  state.thermostat.currentTempSource = "home-assistant";
-  state.thermostat.currentTempSourceName = "No Entry Selected";
+  state.thermostat.currentTempSource = "virtual";
+  state.thermostat.currentTempSourceName = "Virtual Temp";
   virtualTempOverrideUntil = 0;
   scheduleVirtualTempOverrideExpiry();
   renderThermostat();
   saveConfig({ toast: true });
-  showToast("Current temp entry cleared");
+  showToast("Using virtual temp slider");
 }
 
 function applyLocalThermostatState(remote = {}) {
@@ -4754,17 +4742,24 @@ function setTargetTemp(temp, options = {}) {
 }
 
 function setVirtualCurrentTemp(temp) {
-  // Retained for backward compatibility with older cached markup, but the visible
-  // panel no longer exposes a virtual room-temperature slider. Current room
-  // temperature is driven by the selected Home Assistant entry.
   const next = clamp(Number(temp), VIRTUAL_TEMP_MIN, VIRTUAL_TEMP_MAX);
-  if (!Number.isFinite(next)) return;
+  const hasHaSensor = Boolean(getCurrentTempEntity()?.entityId);
+  if (hasHaSensor) {
+    virtualTempOverrideUntil = Date.now() + VIRTUAL_TEMP_OVERRIDE_MS;
+    scheduleVirtualTempOverrideExpiry();
+    state.thermostat.currentTempSource = "virtual-override";
+    state.thermostat.currentTempSourceName = "Virtual Temp Override";
+  } else {
+    virtualTempOverrideUntil = 0;
+    state.thermostat.currentTempSource = "virtual";
+    state.thermostat.currentTempSourceName = "Virtual Temp";
+  }
   state.thermostat.currentTemp = next;
-  state.thermostat.currentTempSource = "home-assistant";
-  state.thermostat.currentTempSourceName = getCurrentTempEntity()?.name || "No Entry Selected";
+  applyAutoSwitch({ notify: true });
+  if (state.thermostat.away) applyAwayTarget();
   renderThermostat();
+  saveConfig();
 }
-
 
 function setVirtualOutdoorTemp(temp) {
   const next = clamp(Number(temp), 40, 100);
@@ -9182,7 +9177,7 @@ function getAudioPickerMeta(kind) {
     help: "Select any useful Home Assistant entity. Automations are hidden, and the card will choose the icon, status, and action from its domain and device class."
   };
   if (kind === "thermostatPerson") return { domain: "person", title: "Add Person", help: "Select the Home Assistant person entry that should control Home/Away mode." };
-  if (kind === "thermostatTemp") return { domain: "sensor", title: "Choose Current Temp Entry", help: "Select the Home Assistant temperature sensor entry used for the thermostat current room temperature." };
+  if (kind === "thermostatTemp") return { domain: "sensor", title: "Choose Current Temp Sensor", help: "Select the Home Assistant sensor used for the thermostat current room temperature. The virtual slider will temporarily override it for 2 minutes." };
   if (kind === "pauseFunction") return { domain: "entity", domains: ["binary_sensor", "cover", "switch", "input_boolean"], title: "Add Pause Entry", help: "Select doors, windows, covers, switches, or input_booleans. Any selected entry that stays open/on past the delay will pause comfort." };
   if (kind === "light") return { domain: "light", title: "Assign Light", help: "Select the Home Assistant light entry for this slider." };
   return { domain: "", title: "Assign Entity", help: "Select the Home Assistant entity for this control." };
@@ -9435,7 +9430,7 @@ function bindEvents() {
     const step = event.target.closest("[data-schedule-step]");
     if (step) adjustScheduleDraftSetpoint(step.dataset.scheduleStep, Number(step.dataset.delta || 0));
   });
-  // Virtual temperature slider removed: current room temperature comes from the selected Home Assistant entry.
+  elements.virtualTempSlider?.addEventListener("input", (event) => setVirtualCurrentTemp(event.target.value));
   elements.outdoorTempSlider?.addEventListener("input", (event) => setVirtualOutdoorTemp(event.target.value));
   elements.doorWidget?.addEventListener("click", () => {
     if (Date.now() - doorPickerOpenedAt < 900) return;
@@ -9910,19 +9905,7 @@ function dismissBootOverlay(delay = 1800) {
   }, delay);
 }
 
-function applyRuntimeClasses() {
-  const root = document.documentElement;
-  const classTargets = [root, document.body, elements.app].filter(Boolean);
-  classTargets.forEach((target) => {
-    target.classList.toggle("wall-runtime", IS_WALL_RUNTIME);
-    target.classList.toggle("runtime-hybrid-webview", IS_HYBRID_WEBVIEW_RUNTIME);
-    target.classList.toggle("runtime-chromium-kiosk", IS_CHROMIUM_KIOSK_RUNTIME);
-    target.classList.toggle("runtime-performance", IS_PERFORMANCE_RUNTIME);
-  });
-}
-
 async function init() {
-  applyRuntimeClasses();
   await loadSavedConfig();
   applyPanelTheme(state.theme, { save: false });
   dismissBootOverlay(normalizePanelTheme(state.theme) === "star-trek" ? 2600 : 1200);
@@ -9952,7 +9935,7 @@ async function init() {
   setInterval(() => checkThermostatSchedules(), SCHEDULE_CHECK_INTERVAL_MS);
   checkThermostatSchedules();
   setInterval(() => fetchLocalThermostatStatus(), LOCAL_THERMOSTAT_SYNC_INTERVAL_MS);
-  // Current room temperature is supplied by the selected Home Assistant entry.
+  // The virtual temperature slider is now the temporary sensor input.
   // setInterval(mockSensorDrift, 4500);
   setInterval(mockTrackProgress, 1200);
   setInterval(() => maybeApplyScreenTimeout(), SCREEN_TIMEOUT_CHECK_INTERVAL_MS);
