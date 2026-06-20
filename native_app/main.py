@@ -762,6 +762,45 @@ class ThermostatScreen(Page):
         self.notice.setWordWrap(True)
         self.notice.setStyleSheet("background:rgba(2,78,130,0.65); color:#f6f8ff; border:1px solid rgba(71,224,255,0.45); border-radius:22px; padding:12px 18px;")
         self.notice.mousePressEvent = lambda event: self.show_auto_switch_menu()
+        self.bypass_pill = RoundButton("Bypass", active=True, kind="purple", min_h=42)
+        self.bypass_pill.setFixedWidth(180)
+        self.bypass_pill.clicked.connect(self.bypass_changeover_lockout)
+        self.bypass_pill.hide()
+        self.away_overlay = QWidget(self)
+        self.away_overlay.setObjectName("awayOverlay")
+        self.away_overlay.setStyleSheet("""
+            QWidget#awayOverlay {
+                background:qlineargradient(x1:0,y1:0,x2:1,y2:1,
+                    stop:0 rgba(45,21,82,238),
+                    stop:0.55 rgba(96,55,180,232),
+                    stop:1 rgba(22,13,40,242));
+                border:1px solid rgba(221,188,255,0.32);
+                border-radius:32px;
+            }
+        """)
+        away_lay = QVBoxLayout(self.away_overlay)
+        away_lay.setContentsMargins(36, 32, 36, 32)
+        away_lay.setSpacing(14)
+        self.away_title = QLabel("AWAY MODE")
+        self.away_title.setAlignment(Qt.AlignCenter)
+        self.away_title.setFont(font(36, QFont.Black, 4))
+        self.away_title.setStyleSheet("color:#ffffff; letter-spacing:4px; background:transparent; border:0;")
+        self.away_body = QLabel("Tap to return Home")
+        self.away_body.setAlignment(Qt.AlignCenter)
+        self.away_body.setWordWrap(True)
+        self.away_body.setFont(font(18, QFont.Black))
+        self.away_body.setStyleSheet("color:#e7d8ff; background:transparent; border:0;")
+        self.away_home_button = RoundButton("Return Home", active=True, min_h=62)
+        self.away_home_button.setMinimumWidth(260)
+        self.away_home_button.clicked.connect(self.return_home_from_away)
+        away_lay.addStretch(1)
+        away_lay.addWidget(self.away_title)
+        away_lay.addWidget(self.away_body)
+        away_lay.addSpacing(10)
+        away_lay.addWidget(self.away_home_button, 0, Qt.AlignCenter)
+        away_lay.addStretch(1)
+        self.away_overlay.mousePressEvent = lambda event: self.return_home_from_away()
+        self.away_overlay.hide()
         self.door_card = InfoTile("Inside Doors", "CLOSED", "▯", good=True)
         self.alarm_card = InfoTile("Alarmo", "DISARMED", "盾", good=True)
         self.virtual_panel = VirtualOutputsPanel()
@@ -812,6 +851,7 @@ class ThermostatScreen(Page):
         left_top_lay = QVBoxLayout(left_top)
         left_top_lay.setContentsMargins(0, 0, 0, 0)
         left_top_lay.addStretch(1)
+        left_top_lay.addWidget(self.bypass_pill, 0, Qt.AlignCenter)
         left_top_lay.addWidget(self.notice, 0, Qt.AlignCenter)
         left_col.addWidget(left_top)
         left_col.addWidget(self.door_card, 0, Qt.AlignCenter)
@@ -917,6 +957,15 @@ class ThermostatScreen(Page):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.position_alert_banner()
+        self.position_away_overlay()
+
+    def position_away_overlay(self):
+        if not hasattr(self, "away_overlay"):
+            return
+        margin = 30
+        self.away_overlay.setGeometry(margin, margin, max(10, self.width() - margin * 2), max(10, self.height() - margin * 2))
+        if self.away_overlay.isVisible():
+            self.away_overlay.raise_()
 
     def position_alert_banner(self):
         if not hasattr(self, "alert_banner"):
@@ -1014,6 +1063,7 @@ class ThermostatScreen(Page):
             elif current > high:
                 safety_mode = "cool"
         if safety_mode in {"heat", "cool"}:
+            self.bypass_pill.hide()
             if safety_mode == "heat":
                 title = "Safety Heat Engaged"
                 body = f"Room is {fmt_temp(current)}. Heating will stay active until the room is back above {fmt_temp(low)}."
@@ -1032,19 +1082,28 @@ class ThermostatScreen(Page):
         auto_until = self.safe_float(t.get("autoLockoutUntil"), 0.0)
         if pending in {"heat", "cool"} and until > now_ms:
             remaining = self.format_remaining((until - now_ms) / 1000)
-            self.notice.hide()
-            self.alert_banner.set_alert("lockout", f"{pending.capitalize()} Cooldown", f"Changeover delay is active. {pending.capitalize()} starts in {remaining}, or tap Bypass.", dismiss=False, revert=False, bypass=True)
-            self.position_alert_banner()
+            self.alert_banner.hide()
+            self.bypass_pill.show()
+            self.notice.setText(f"COOLDOWN\n{pending.capitalize()} in {remaining}")
+            self.notice.setStyleSheet("background:qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 rgba(91,48,170,0.90), stop:1 rgba(20,14,42,0.90)); color:#ffffff; border:1px solid rgba(194,155,255,0.72); border-radius:22px; padding:12px 18px;")
+            self.notice.show()
+            self.bypass_pill.raise_()
+            self.notice.raise_()
             return
         if auto_pending in {"heat", "cool"} and auto_until > now_ms:
             remaining = self.format_remaining((auto_until - now_ms) / 1000)
-            self.notice.hide()
-            self.alert_banner.set_alert("lockout", f"Auto {auto_pending.capitalize()} Cooldown", f"Auto mode is waiting on changeover delay. {auto_pending.capitalize()} starts in {remaining}, or tap Bypass.", dismiss=False, revert=False, bypass=True)
-            self.position_alert_banner()
+            self.alert_banner.hide()
+            self.bypass_pill.show()
+            self.notice.setText(f"AUTO COOLDOWN\n{auto_pending.capitalize()} in {remaining}")
+            self.notice.setStyleSheet("background:qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 rgba(91,48,170,0.90), stop:1 rgba(20,14,42,0.90)); color:#ffffff; border:1px solid rgba(194,155,255,0.72); border-radius:22px; padding:12px 18px;")
+            self.notice.show()
+            self.bypass_pill.raise_()
+            self.notice.raise_()
             return
 
         notice = t.get("autoSwitchNotice") if isinstance(t.get("autoSwitchNotice"), dict) else {}
         if notice.get("active"):
+            self.bypass_pill.hide()
             self.alert_banner.hide()
             to_mode = str(notice.get("toMode") or self.active_visual_mode()).lower()
             switch_temp = notice.get("switchTemp") or current
@@ -1057,6 +1116,7 @@ class ThermostatScreen(Page):
             self.notice.show()
             self.notice.raise_()
             return
+        self.bypass_pill.hide()
         self.notice.hide()
         self.alert_banner.hide()
 
@@ -1241,12 +1301,20 @@ class ThermostatScreen(Page):
     def set_mode(self, mode: str):
         try:
             if mode == "away":
-                self.s.update_thermostat({"away": not bool(self.thermostat.get("away"))})
+                going_away = not bool(self.thermostat.get("away"))
+                self.s.update_thermostat({"away": going_away, "awaySource": "manual" if going_away else ""})
             else:
-                self.s.update_thermostat({"mode": mode, "away": False})
+                self.s.update_thermostat({"mode": mode, "away": False, "awaySource": ""})
             self.sync(self.s.config, self.s.thermostat)
         except Exception as exc:
             self.requestToast.emit(f"Thermostat update failed: {exc}")
+
+    def return_home_from_away(self):
+        try:
+            self.s.update_thermostat({"away": False, "awaySource": "", "manualAwayPresenceLatch": None})
+            self.sync(self.s.config, self.s.thermostat)
+        except Exception as exc:
+            self.requestToast.emit(f"Home failed: {exc}")
 
     def set_fan(self, fan: str):
         try:
@@ -1371,6 +1439,17 @@ class ThermostatScreen(Page):
         self.status_badge.setText(f"• {mode_label} • {equipment}")
         self.notice.hide()
         self.refresh_schedule_shortcuts()
+        if away:
+            source = str(t.get("awaySource") or "").lower()
+            if source == "presence":
+                self.away_body.setText("No assigned people are home. Tap to return Home, or it will return automatically when someone comes home.")
+            else:
+                self.away_body.setText("Tap to return Home and resume normal comfort.")
+            self.position_away_overlay()
+            self.away_overlay.show()
+            self.away_overlay.raise_()
+        else:
+            self.away_overlay.hide()
         self.update_alert_banner()
         self.update()
         ha = nested_get(config, "integrations", "homeAssistant", default={}) or {}
@@ -2454,6 +2533,138 @@ class CodeKeypadDialog(QDialog):
 
 
 
+class PeopleSelectionDialog(QDialog):
+    saved = pyqtSignal(list)
+
+    def __init__(self, state: AppState, selected_people: list[dict] | None = None, parent=None):
+        super().__init__(parent)
+        self.s = state
+        self.selected_people = copy.deepcopy(selected_people or [])
+        self.available_people: list[dict] = []
+        self.buttons: dict[str, RoundButton] = {}
+        self.setModal(True)
+        self.setWindowTitle("Auto Away / Home")
+        self.setFixedSize(720, 620)
+        self.setStyleSheet("""
+            QDialog { background:#09111f; color:#f7fbff; }
+            QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
+        """)
+        self.load_people()
+        self.build()
+
+    def load_people(self):
+        by_id: dict[str, dict] = {}
+        for p in self.selected_people:
+            if isinstance(p, dict):
+                eid = str(p.get("entityId") or p.get("entity_id") or "").strip()
+                if eid:
+                    by_id[eid] = {"entityId": eid, "name": str(p.get("name") or p.get("friendly_name") or eid), "state": str(p.get("state") or "")}
+        try:
+            data = self.s.api.post("/api/ha/entities", self.s.ha_payload({"domains": ["person"]}))
+            for p in data.get("entities") or []:
+                eid = str(p.get("entityId") or p.get("entity_id") or "").strip()
+                if eid:
+                    by_id[eid] = {"entityId": eid, "name": str(p.get("name") or p.get("friendly_name") or eid), "state": str(p.get("state") or "")}
+        except Exception:
+            pass
+        self.available_people = sorted(by_id.values(), key=lambda x: str(x.get("name") or x.get("entityId")).lower())
+
+    def selected_ids(self) -> set[str]:
+        return {str(p.get("entityId") or p.get("entity_id") or "").strip() for p in self.selected_people if isinstance(p, dict)}
+
+    def build(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 18, 20, 18)
+        root.setSpacing(12)
+        header = QHBoxLayout()
+        title = QLabel("AUTO AWAY / HOME")
+        title.setFont(font(24, QFont.Black))
+        title.setStyleSheet("color:#55f0ff; letter-spacing:3px;")
+        select_all = RoundButton("Select All", active=True, min_h=44)
+        clear = RoundButton("Clear", active=False, kind="danger", min_h=44)
+        header.addWidget(title)
+        header.addStretch(1)
+        header.addWidget(select_all)
+        header.addWidget(clear)
+        root.addLayout(header)
+
+        note = QLabel("Select the Home Assistant person entries that keep the room in Home mode. If none of them are home, the thermostat enters Away. When any selected person comes home, it returns to Home automatically.")
+        note.setWordWrap(True)
+        note.setFont(font(10, QFont.Black))
+        note.setStyleSheet("color:#cdd8ee; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.10); border-radius:14px; padding:10px;")
+        root.addWidget(note)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea{background:transparent;border:0;}")
+        body = QWidget()
+        self.body_lay = QVBoxLayout(body)
+        self.body_lay.setContentsMargins(0, 0, 0, 0)
+        self.body_lay.setSpacing(8)
+        scroll.setWidget(body)
+        root.addWidget(scroll, 1)
+
+        bottom = QHBoxLayout()
+        cancel = RoundButton("Cancel", active=False, min_h=50)
+        save = RoundButton("Save Selected", active=True, min_h=50)
+        bottom.addStretch(1)
+        bottom.addWidget(cancel)
+        bottom.addWidget(save)
+        root.addLayout(bottom)
+
+        select_all.clicked.connect(self.select_all)
+        clear.clicked.connect(self.clear_all)
+        cancel.clicked.connect(self.reject)
+        save.clicked.connect(self.save)
+        self.refresh()
+
+    def refresh(self):
+        while self.body_lay.count():
+            item = self.body_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.buttons = {}
+        if not self.available_people:
+            none = QLabel("No Home Assistant person entities found.")
+            none.setWordWrap(True)
+            none.setStyleSheet("color:#c4d0e5; background:rgba(255,255,255,0.05); border-radius:12px; padding:12px;")
+            self.body_lay.addWidget(none)
+            return
+        selected = self.selected_ids()
+        for person in self.available_people:
+            eid = str(person.get("entityId") or "")
+            name = str(person.get("name") or eid)
+            state = str(person.get("state") or "")
+            b = RoundButton(("✓  " if eid in selected else "○  ") + name + (f"  ({state})" if state else ""), active=eid in selected, min_h=52)
+            b.clicked.connect(lambda checked=False, p=person: self.toggle_person(p))
+            self.buttons[eid] = b
+            self.body_lay.addWidget(b)
+        self.body_lay.addStretch(1)
+
+    def toggle_person(self, person: dict):
+        eid = str(person.get("entityId") or "").strip()
+        if not eid:
+            return
+        if eid in self.selected_ids():
+            self.selected_people = [p for p in self.selected_people if str(p.get("entityId") or "") != eid]
+        else:
+            self.selected_people.append({"entityId": eid, "name": str(person.get("name") or eid), "state": str(person.get("state") or "")})
+        self.refresh()
+
+    def select_all(self):
+        self.selected_people = [{"entityId": str(p.get("entityId") or ""), "name": str(p.get("name") or p.get("entityId") or ""), "state": str(p.get("state") or "")} for p in self.available_people if str(p.get("entityId") or "")]
+        self.refresh()
+
+    def clear_all(self):
+        self.selected_people = []
+        self.refresh()
+
+    def save(self):
+        self.saved.emit(self.selected_people)
+        self.accept()
+
+
+
 class SettingsDialog(QDialog):
     saved = pyqtSignal()
 
@@ -2691,6 +2902,36 @@ class SettingsDialog(QDialog):
         self.saved.emit()
 
 
+    def people_summary_text(self) -> str:
+        people = self.s.thermostat.get("people") if isinstance(self.s.thermostat, dict) else []
+        names = []
+        if isinstance(people, list):
+            for person in people:
+                if isinstance(person, dict):
+                    names.append(str(person.get("name") or person.get("entityId") or "").strip())
+        names = [x for x in names if x]
+        if not names:
+            return "No people assigned. Tap + Person to add Home Assistant person entries."
+        shown = ", ".join(names[:3])
+        if len(names) > 3:
+            shown += f" +{len(names)-3} more"
+        return f"Auto away uses: {shown}"
+
+    def choose_auto_away_people(self):
+        current = self.s.thermostat.get("people") if isinstance(self.s.thermostat, dict) else []
+        dlg = PeopleSelectionDialog(self.s, current if isinstance(current, list) else [], self)
+        def apply(people):
+            try:
+                self.s.update_thermostat({"people": people})
+                if hasattr(self, "people_summary"):
+                    self.people_summary.setText(self.people_summary_text())
+                self.saved.emit()
+            except Exception as exc:
+                QMessageBox.warning(self, "Auto Away / Home", str(exc))
+        dlg.saved.connect(apply)
+        dlg.exec_()
+
+
     def build(self):
         t = self.s.thermostat or {}
         self.build_value("safetyLow", "Low Safety", t.get("safetyLow", 55), 0, 0, 40, 75)
@@ -2708,8 +2949,14 @@ class SettingsDialog(QDialog):
         self.build_value("coolFanRemainOnMinutes", "Cool Fan", t.get("coolFanRemainOnMinutes", 2), 4, 2, 0, 15, " min")
 
         temp_source = self.add_section("Current Temperature Source", 3, 0, 1, 2)
-        source_name = t.get("currentTempSourceName") or "Virtual Temp"
-        a = QLabel(f"{source_name}\nUsing virtual temp until a sensor is selected")
+        selected_temp = nested_get(self.s.config, "integrations", "homeAssistant", "currentTempEntity", default=None)
+        if isinstance(selected_temp, dict):
+            source_name = selected_temp.get("name") or selected_temp.get("friendly_name") or selected_temp.get("entityId") or "Home Assistant Sensor"
+            source_line = f"Using {selected_temp.get('entityId') or 'selected sensor'}"
+        else:
+            source_name = t.get("currentTempSourceName") or "Virtual Temp"
+            source_line = "Using virtual temp until a sensor is selected"
+        a = QLabel(f"{source_name}\n{source_line}")
         a.setFont(font(10, QFont.Black))
         a.setStyleSheet("color:#dfe9ff; background:transparent; border:0;")
         temp_source.layout().addWidget(a)
@@ -2727,11 +2974,16 @@ class SettingsDialog(QDialog):
             b.clicked.connect(lambda checked=False, x=f: self.set_thermostat({"fan": x}))
             row.addWidget(b)
         people = self.add_section("Auto Away / Home", 4, 0, 1, 2)
-        note = QLabel("No people assigned. Tap + Person to add Home Assistant person entries.")
-        note.setWordWrap(True)
-        note.setFont(font(9, QFont.Black))
-        note.setStyleSheet("color:#c4d0e5; background:rgba(5,10,20,0.42); border:1px dashed rgba(160,180,210,0.26); border-radius:10px; padding:7px;")
-        people.layout().addWidget(note)
+        people_head = QHBoxLayout()
+        self.people_summary = QLabel(self.people_summary_text())
+        self.people_summary.setWordWrap(True)
+        self.people_summary.setFont(font(9, QFont.Black))
+        self.people_summary.setStyleSheet("color:#c4d0e5; background:rgba(5,10,20,0.42); border:1px dashed rgba(160,180,210,0.26); border-radius:10px; padding:7px;")
+        add_people = RoundButton("+ Person", active=True, min_h=34)
+        add_people.clicked.connect(self.choose_auto_away_people)
+        people_head.addWidget(self.people_summary, 1)
+        people_head.addWidget(add_people)
+        people.layout().addLayout(people_head)
 
         code_sec = self.add_section("Security Code", 5, 0, 1, 1)
         current_security = str((self.s.config.get("alarm") or {}).get("disarmCode") or "")
@@ -2812,9 +3064,24 @@ class SettingsDialog(QDialog):
                 QMessageBox.warning(self, "Failed", str(exc)); return
         dlg = EntityPickerDialog("Choose Temperature Sensor", entities, self)
         def apply(e):
-            self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})["currentTempEntity"] = e
-            self.s.save_config()
-            self.saved.emit()
+            try:
+                eid = str(e.get("entityId") or e.get("entity_id") or "").strip()
+                if not eid:
+                    return
+                selected = {"entityId": eid, "name": str(e.get("name") or e.get("friendly_name") or eid), "domain": str(e.get("domain") or "sensor")}
+                ha = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
+                ha["currentTempEntity"] = selected
+                available = ha.get("currentTempAvailableEntities")
+                if not isinstance(available, list):
+                    available = []
+                if all(str(item.get("entityId") or "") != eid for item in available if isinstance(item, dict)):
+                    available.append(selected)
+                ha["currentTempAvailableEntities"] = available
+                self.s.save_config()
+                self.s.update_thermostat({"currentTempSource": "home-assistant", "currentTempSourceName": selected["name"]})
+                self.saved.emit()
+            except Exception as exc:
+                QMessageBox.warning(self, "Choose Sensor", str(exc))
         dlg.selected.connect(apply)
         dlg.exec_()
 

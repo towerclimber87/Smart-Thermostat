@@ -630,6 +630,94 @@ class BlindPreview(QWidget):
             p.drawLine(QPointF(inner.left()+22, y+2), QPointF(inner.right()-22, y+1))
 
 
+class MiniTextKeyboardDialog(QDialog):
+    def __init__(self, title: str, value: str = "", parent=None):
+        super().__init__(parent)
+        self.result_text = str(value or "")
+        self.setModal(True)
+        self.setWindowTitle(title)
+        self.setFixedSize(640, 390)
+        self.setStyleSheet("""
+            QDialog { background:#09111f; color:#f7fbff; }
+            QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
+        """)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 16, 18, 16)
+        root.setSpacing(10)
+        title_label = QLabel(title)
+        title_label.setAlignment(Qt.AlignCenter)
+        title_label.setFont(font(22, QFont.Black))
+        root.addWidget(title_label)
+        self.display = QLabel("")
+        self.display.setAlignment(Qt.AlignCenter)
+        self.display.setFont(font(22, QFont.Black))
+        self.display.setStyleSheet("background:rgba(255,255,255,0.08); border:1px solid rgba(85,240,255,0.34); border-radius:18px; padding:12px;")
+        root.addWidget(self.display)
+
+        rows = [
+            "1234567890",
+            "QWERTYUIOP",
+            "ASDFGHJKL",
+            "ZXCVBNM._-",
+        ]
+        for row_text in rows:
+            row = QHBoxLayout()
+            row.setSpacing(6)
+            for ch in row_text:
+                b = QPushButton(ch)
+                b.setFixedHeight(42)
+                b.setStyleSheet(button_style(False))
+                b.clicked.connect(lambda checked=False, c=ch: self.add_char(c.lower()))
+                row.addWidget(b)
+            root.addLayout(row)
+
+        bottom = QHBoxLayout()
+        space = QPushButton("Space")
+        back = QPushButton("⌫")
+        clear = QPushButton("Clear")
+        cancel = QPushButton("Cancel")
+        done = QPushButton("Done")
+        for b in [space, back, clear, cancel, done]:
+            b.setFixedHeight(46)
+            b.setStyleSheet(button_style(b is done))
+        space.clicked.connect(lambda: self.add_char(" "))
+        back.clicked.connect(self.backspace)
+        clear.clicked.connect(self.clear_text)
+        cancel.clicked.connect(self.reject)
+        done.clicked.connect(self.accept)
+        bottom.addWidget(space, 2)
+        bottom.addWidget(back)
+        bottom.addWidget(clear)
+        bottom.addWidget(cancel)
+        bottom.addWidget(done)
+        root.addLayout(bottom)
+        self.refresh()
+
+    def refresh(self):
+        self.display.setText(self.result_text or "Search")
+
+    def add_char(self, ch: str):
+        if len(self.result_text) < 80:
+            self.result_text += ch
+            self.refresh()
+
+    def backspace(self):
+        self.result_text = self.result_text[:-1]
+        self.refresh()
+
+    def clear_text(self):
+        self.result_text = ""
+        self.refresh()
+
+    @staticmethod
+    def get_text(parent, title: str, value: str = "") -> str | None:
+        dlg = MiniTextKeyboardDialog(title, value, parent)
+        if dlg.exec_() == QDialog.Accepted:
+            return dlg.result_text.strip()
+        return None
+
+
+
 class EntityPickerDialog(QDialog):
     selected = pyqtSignal(dict)
 
@@ -654,6 +742,7 @@ class EntityPickerDialog(QDialog):
         lay.addWidget(label)
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search Home Assistant entities…")
+        self.search.mousePressEvent = lambda event: self.open_search_keyboard()
         lay.addWidget(self.search)
         self.list = QListWidget()
         lay.addWidget(self.list, 1)
@@ -667,6 +756,12 @@ class EntityPickerDialog(QDialog):
         self.list.itemDoubleClicked.connect(lambda item: self._choose_item(item))
         self.search.textChanged.connect(self.refresh)
         self.refresh()
+
+    def open_search_keyboard(self):
+        value = MiniTextKeyboardDialog.get_text(self, "Search", self.search.text())
+        if value is not None:
+            self.search.setText(value)
+            self.refresh()
 
     def refresh(self):
         q = self.search.text().strip().lower()

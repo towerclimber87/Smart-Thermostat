@@ -1649,9 +1649,49 @@ def _apply_thermostat_schedules(thermostat: dict) -> dict:
     return thermostat
 
 
+
+def _thermostat_person_entity_ids(thermostat: dict) -> list[str]:
+    ids: list[str] = []
+    seen: set[str] = set()
+    for person in thermostat.get("people") or []:
+        if not isinstance(person, dict):
+            continue
+        entity_id = str(person.get("entityId") or person.get("entity_id") or "").strip()
+        if entity_id and entity_id not in seen:
+            seen.add(entity_id)
+            ids.append(entity_id)
+    return ids
+
+
+def _apply_presence_away_logic(thermostat: dict) -> dict:
+    entity_ids = _thermostat_person_entity_ids(thermostat)
+    if not entity_ids:
+        return thermostat
+    states = _person_states_for_schedule(entity_ids, thermostat)
+    if not states:
+        return thermostat
+    any_home = any(states.get(entity_id) == "home" for entity_id in entity_ids)
+    updated = dict(thermostat)
+    away_source = str(updated.get("awaySource") or "").strip().lower()
+    if any_home:
+        if bool(updated.get("away")) and away_source in {"presence", "auto", ""}:
+            updated["away"] = False
+            updated["awaySource"] = "presence"
+            updated["manualAwayPresenceLatch"] = None
+            if updated.get("lastComfortTarget"):
+                updated["targetTemp"] = updated.get("lastComfortTarget")
+    else:
+        if not bool(updated.get("away")) and away_source in {"presence", "auto", ""}:
+            updated["away"] = True
+            updated["awaySource"] = "presence"
+            updated["manualAwayPresenceLatch"] = None
+    return _merge_thermostat_state(updated)
+
+
 def _apply_runtime_thermostat_logic(record: dict, *, notify: bool = True) -> dict:
     thermostat = _apply_local_temperature_sensor_if_needed(record)
-    updated = _apply_comfort_auto_switch_logic(thermostat, notify=notify)
+    updated = _apply_presence_away_logic(thermostat)
+    updated = _apply_comfort_auto_switch_logic(updated, notify=notify)
     scheduled = _apply_thermostat_schedules(updated)
     if scheduled != updated:
         _write_thermostat_record(scheduled, persist=True)
