@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import math
 import os
 import sys
 import time
@@ -219,6 +220,76 @@ class AppState:
         return self.thermostat
 
 
+class ThermostatActionBanner(GlassPanel):
+    dismissClicked = pyqtSignal()
+    revertClicked = pyqtSignal()
+    bypassClicked = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent, radius=24, strong=True)
+        self.kind = "info"
+        self.setFixedWidth(520)
+        self.setMinimumHeight(134)
+        self.setMaximumHeight(190)
+        self.title = QLabel("", self)
+        self.title.setFont(font(17, QFont.Black))
+        self.title.setStyleSheet("color:#ffffff; background:transparent; border:0;")
+        self.body = QLabel("", self)
+        self.body.setWordWrap(True)
+        self.body.setFont(font(11, QFont.Black))
+        self.body.setStyleSheet("color:#dfe8ff; background:transparent; border:0;")
+        self.dismiss = RoundButton("Dismiss", active=False, min_h=38)
+        self.revert = RoundButton("Revert", active=True, min_h=38)
+        self.bypass = RoundButton("Bypass", active=True, kind="purple", min_h=38)
+        self.dismiss.setFixedWidth(120)
+        self.revert.setFixedWidth(120)
+        self.bypass.setFixedWidth(120)
+        buttons = QHBoxLayout()
+        buttons.setContentsMargins(0, 0, 0, 0)
+        buttons.setSpacing(10)
+        buttons.addStretch(1)
+        buttons.addWidget(self.dismiss)
+        buttons.addWidget(self.revert)
+        buttons.addWidget(self.bypass)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(7)
+        layout.addWidget(self.title)
+        layout.addWidget(self.body)
+        layout.addLayout(buttons)
+        self.dismiss.clicked.connect(self.dismissClicked.emit)
+        self.revert.clicked.connect(self.revertClicked.emit)
+        self.bypass.clicked.connect(self.bypassClicked.emit)
+        self.hide()
+
+    def set_alert(self, kind: str, title: str, body: str, *, dismiss=False, revert=False, bypass=False):
+        self.kind = kind or "info"
+        self.title.setText(title)
+        self.body.setText(body)
+        self.dismiss.setVisible(bool(dismiss))
+        self.revert.setVisible(bool(revert))
+        self.bypass.setVisible(bool(bypass))
+        color = {
+            "heat": "rgba(255,72,83,0.58)",
+            "cool": "rgba(65,225,255,0.48)",
+            "lockout": "rgba(188,132,255,0.50)",
+            "auto": "rgba(72,214,255,0.42)",
+            "safety": "rgba(255,72,83,0.56)" if "Heat" in title else "rgba(65,225,255,0.50)",
+        }.get(self.kind, "rgba(72,214,255,0.38)")
+        self.setStyleSheet(f"""
+            ThermostatActionBanner {{
+                background:qlineargradient(x1:0,y1:0,x2:1,y2:1,
+                    stop:0 {color},
+                    stop:1 rgba(11,18,35,0.92));
+                border:1px solid rgba(255,255,255,0.20);
+                border-radius:24px;
+            }}
+        """)
+        self.adjustSize()
+        self.show()
+        self.raise_()
+
+
 class ThermostatScreen(Page):
     def __init__(self, app_state: AppState, parent=None):
         super().__init__(app_state, parent)
@@ -327,6 +398,237 @@ class ThermostatScreen(Page):
         self.door_card.clicked.connect(lambda: self.requestToast.emit("Door status is synced from Home Assistant."))
         self.alarm_card.clicked.connect(self.show_alarm_dialog)
 
+        self.fx_phase = 0
+        self.alert_banner = ThermostatActionBanner(self)
+        self.alert_banner.dismissClicked.connect(self.dismiss_auto_switch)
+        self.alert_banner.revertClicked.connect(self.revert_auto_switch)
+        self.alert_banner.bypassClicked.connect(self.bypass_changeover_lockout)
+        self.fx_timer = QTimer(self)
+        self.fx_timer.timeout.connect(self.animate_environment)
+        self.fx_timer.start(700)
+        self.notice.hide()
+        QTimer.singleShot(0, self.position_alert_banner)
+
+    def value(self, key: str, default=None):
+        src = self.thermostat if isinstance(self.thermostat, dict) else {}
+        if key in src:
+            return src.get(key)
+        inner = src.get("thermostat") if isinstance(src.get("thermostat"), dict) else {}
+        if key in inner:
+            return inner.get(key)
+        outputs = src.get("outputs") if isinstance(src.get("outputs"), dict) else {}
+        if key in outputs:
+            return outputs.get(key)
+        return default
+
+    def thermostat_view(self) -> dict:
+        src = self.thermostat if isinstance(self.thermostat, dict) else {}
+        inner = src.get("thermostat") if isinstance(src.get("thermostat"), dict) else {}
+        merged = dict(inner)
+        merged.update(src)
+        if isinstance(src.get("outputs"), dict):
+            merged["outputs"] = src.get("outputs")
+        return merged
+
+    def animate_environment(self):
+        self.fx_phase = (self.fx_phase + 1) % 10000
+        self.update()
+        if self.alert_banner.isVisible():
+            self.alert_banner.raise_()
+
+    def safe_float(self, value, default=0.0):
+        try:
+            return float(value)
+        except Exception:
+            return default
+
+    def active_visual_mode(self) -> str:
+        t = self.thermostat_view()
+        outputs = t.get("outputs") if isinstance(t.get("outputs"), dict) else {}
+        safety = str(t.get("safetyMode") or outputs.get("safetyMode") or "").lower()
+        if safety in {"heat", "cool"}:
+            return safety
+        active = str(t.get("autoActiveMode") or t.get("activeMode") or t.get("mode") or "cool").lower()
+        return active if active in {"heat", "cool"} else "cool"
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.position_alert_banner()
+
+    def position_alert_banner(self):
+        if not hasattr(self, "alert_banner"):
+            return
+        w = min(520, max(420, self.width() - 120))
+        self.alert_banner.setFixedWidth(w)
+        self.alert_banner.adjustSize()
+        x = max(12, (self.width() - self.alert_banner.width()) // 2)
+        y = 72
+        self.alert_banner.move(x, y)
+        if self.alert_banner.isVisible():
+            self.alert_banner.raise_()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
+        r = self.rect()
+        t = self.thermostat_view()
+        current = self.safe_float(t.get("currentTemp"), 70.0)
+        low = self.safe_float(t.get("safetyLow"), 55.0)
+        high = self.safe_float(t.get("safetyHigh"), 85.0)
+        heat_mode = self.active_visual_mode() == "heat"
+        # Temperature ambience. Cold rooms get a blue wash and snow accents;
+        # hot rooms get a darker red/orange wash and a sun pulse.
+        cold_ratio = clamp((68.0 - current) / 14.0, 0.0, 1.0)
+        hot_ratio = clamp((current - 76.0) / 14.0, 0.0, 1.0)
+        safety_cold = current < low
+        safety_hot = current > high
+        if safety_cold:
+            cold_ratio = max(cold_ratio, 0.65)
+        if safety_hot:
+            hot_ratio = max(hot_ratio, 0.65)
+        if cold_ratio > 0:
+            g = QRadialGradient(QPointF(r.width() * 0.25, r.height() * 0.45), r.width() * 0.72)
+            g.setColorAt(0.0, QColor(40, 190, 255, int(80 * cold_ratio)))
+            g.setColorAt(0.58, QColor(20, 82, 155, int(52 * cold_ratio)))
+            g.setColorAt(1.0, QColor(0, 0, 0, 0))
+            p.fillRect(r, g)
+            p.setPen(QPen(QColor(190, 246, 255, int(115 * cold_ratio)), 2, Qt.SolidLine, Qt.RoundCap))
+            for i in range(7):
+                x = 86 + i * 118
+                y = 112 + ((i * 37 + self.fx_phase * 9) % 190)
+                size = 10 + (i % 3) * 3
+                p.drawLine(QPointF(x - size, y), QPointF(x + size, y))
+                p.drawLine(QPointF(x, y - size), QPointF(x, y + size))
+                p.drawLine(QPointF(x - size * 0.7, y - size * 0.7), QPointF(x + size * 0.7, y + size * 0.7))
+                p.drawLine(QPointF(x - size * 0.7, y + size * 0.7), QPointF(x + size * 0.7, y - size * 0.7))
+        if hot_ratio > 0 or heat_mode:
+            ratio = max(hot_ratio, 0.32 if heat_mode else 0.0)
+            g = QRadialGradient(QPointF(r.width() * 0.78, r.height() * 0.42), r.width() * 0.72)
+            g.setColorAt(0.0, QColor(255, 84, 48, int(88 * ratio)))
+            g.setColorAt(0.55, QColor(128, 29, 40, int(62 * ratio)))
+            g.setColorAt(1.0, QColor(0, 0, 0, 0))
+            p.fillRect(r, g)
+            cx = r.width() - 165
+            cy = 120
+            pulse = 1.0 + 0.08 * math.sin(self.fx_phase * 0.9)
+            sun_r = 20 * pulse
+            p.setBrush(QColor(255, 184, 66, int(145 * ratio)))
+            p.setPen(QPen(QColor(255, 224, 137, int(165 * ratio)), 2))
+            p.drawEllipse(QPointF(cx, cy), sun_r, sun_r)
+            for a in range(0, 360, 45):
+                rad = math.radians(a + self.fx_phase * 4)
+                p.drawLine(QPointF(cx + math.cos(rad) * (sun_r + 8), cy + math.sin(rad) * (sun_r + 8)),
+                           QPointF(cx + math.cos(rad) * (sun_r + 22), cy + math.sin(rad) * (sun_r + 22)))
+        super().paintEvent(event)
+
+    def format_remaining(self, seconds: float) -> str:
+        seconds = max(0, int(seconds))
+        minutes, sec = divmod(seconds, 60)
+        if minutes >= 60:
+            h, m = divmod(minutes, 60)
+            return f"{h}h {m:02d}m"
+        return f"{minutes}m {sec:02d}s"
+
+    def update_alert_banner(self):
+        if not hasattr(self, "alert_banner"):
+            return
+        t = self.thermostat_view()
+        outputs = t.get("outputs") if isinstance(t.get("outputs"), dict) else {}
+        current = self.safe_float(t.get("currentTemp"), 70.0)
+        safety_mode = str(t.get("safetyMode") or outputs.get("safetyMode") or "").lower()
+        low = self.safe_float(t.get("safetyLow"), 55.0)
+        high = self.safe_float(t.get("safetyHigh"), 85.0)
+        if not safety_mode:
+            if current < low:
+                safety_mode = "heat"
+            elif current > high:
+                safety_mode = "cool"
+        if safety_mode in {"heat", "cool"}:
+            if safety_mode == "heat":
+                title = "Safety Heat Engaged"
+                body = f"Room is {fmt_temp(current)}. Heating will stay active until the room is back above {fmt_temp(low)}."
+            else:
+                title = "Safety Cool Engaged"
+                body = f"Room is {fmt_temp(current)}. Cooling will stay active until the room is back below {fmt_temp(high)}."
+            self.alert_banner.set_alert("safety", title, body, dismiss=False, revert=False, bypass=False)
+            self.position_alert_banner()
+            return
+
+        now_ms = time.time() * 1000
+        pending = str(t.get("manualPendingMode") or outputs.get("pendingMode") or "").lower()
+        until = self.safe_float(t.get("manualLockoutUntil") or outputs.get("manualLockoutUntil"), 0.0)
+        auto_pending = str(t.get("autoPendingMode") or "").lower()
+        auto_until = self.safe_float(t.get("autoLockoutUntil"), 0.0)
+        if pending in {"heat", "cool"} and until > now_ms:
+            remaining = self.format_remaining((until - now_ms) / 1000)
+            self.alert_banner.set_alert("lockout", f"{pending.capitalize()} Delay", f"Changeover protection is active. {pending.capitalize()} is available in {remaining}.", dismiss=False, revert=False, bypass=True)
+            self.position_alert_banner()
+            return
+        if auto_pending in {"heat", "cool"} and auto_until > now_ms:
+            remaining = self.format_remaining((auto_until - now_ms) / 1000)
+            self.alert_banner.set_alert("lockout", f"Auto {auto_pending.capitalize()} Delay", f"Auto mode is waiting on changeover protection. {auto_pending.capitalize()} is available in {remaining}.", dismiss=False, revert=False, bypass=True)
+            self.position_alert_banner()
+            return
+
+        notice = t.get("autoSwitchNotice") if isinstance(t.get("autoSwitchNotice"), dict) else {}
+        if notice.get("active"):
+            to_mode = str(notice.get("toMode") or self.active_visual_mode()).lower()
+            from_mode = str(notice.get("fromMode") or "").lower()
+            switch_temp = notice.get("switchTemp") or current
+            title = f"Auto-Switched to {to_mode.capitalize()}"
+            body = f"Inside is {fmt_temp(switch_temp)}. The panel changed from {from_mode.capitalize() or 'the previous mode'} to {to_mode.capitalize()} based on your comfort rules."
+            self.alert_banner.set_alert(to_mode or "auto", title, body, dismiss=True, revert=from_mode in {"heat", "cool"}, bypass=False)
+            self.position_alert_banner()
+            return
+        self.alert_banner.hide()
+
+    def dismiss_auto_switch(self):
+        try:
+            self.s.update_thermostat({"autoSwitchNotice": {"active": False, "source": "", "fromMode": "", "toMode": "", "switchTemp": 0, "outdoorTemp": 0, "coolTarget": 0, "heatTarget": 0, "createdAt": 0}})
+            self.sync(self.s.config, self.s.thermostat)
+        except Exception as exc:
+            self.requestToast.emit(f"Dismiss failed: {exc}")
+
+    def revert_auto_switch(self):
+        t = self.thermostat_view()
+        notice = t.get("autoSwitchNotice") if isinstance(t.get("autoSwitchNotice"), dict) else {}
+        from_mode = str(notice.get("fromMode") or "").lower()
+        if from_mode not in {"heat", "cool"}:
+            self.dismiss_auto_switch()
+            return
+        try:
+            self.s.update_thermostat({
+                "mode": from_mode,
+                "away": False,
+                "autoSwitchNotice": {"active": False, "source": "", "fromMode": "", "toMode": "", "switchTemp": 0, "outdoorTemp": 0, "coolTarget": 0, "heatTarget": 0, "createdAt": 0},
+            })
+            self.sync(self.s.config, self.s.thermostat)
+        except Exception as exc:
+            self.requestToast.emit(f"Revert failed: {exc}")
+
+    def bypass_changeover_lockout(self):
+        t = self.thermostat_view()
+        outputs = t.get("outputs") if isinstance(t.get("outputs"), dict) else {}
+        pending = str(t.get("manualPendingMode") or outputs.get("pendingMode") or t.get("autoPendingMode") or "").lower()
+        if pending not in {"heat", "cool"}:
+            self.requestToast.emit("No changeover delay active")
+            return
+        try:
+            changes = {
+                "manualPendingMode": "",
+                "manualLockoutUntil": 0,
+                "autoPendingMode": "",
+                "autoLockoutUntil": 0,
+            }
+            if str(t.get("mode") or "").lower() == "auto":
+                changes["autoActiveMode"] = pending
+            else:
+                changes["mode"] = pending
+            self.s.update_thermostat(changes)
+            self.sync(self.s.config, self.s.thermostat)
+        except Exception as exc:
+            self.requestToast.emit(f"Bypass failed: {exc}")
+
     def _mode_bar(self):
         # Floating mode buttons. No shared rail/border. These use a tighter,
         # fully rounded pill style so they do not look squared-off or overlap.
@@ -411,9 +713,10 @@ class ThermostatScreen(Page):
 
     def set_target(self, value: float):
         try:
-            limits = self.thermostat.get("limits") or {}
-            mode = str(self.thermostat.get("mode") or "auto").lower()
-            active = str(self.thermostat.get("autoActiveMode") or self.thermostat.get("activeMode") or "").lower()
+            t = self.thermostat_view()
+            limits = t.get("limits") or {}
+            mode = str(t.get("mode") or "auto").lower()
+            active = str(t.get("autoActiveMode") or t.get("activeMode") or "").lower()
             range_key = active if mode == "auto" and active in {"cool", "heat"} else mode
             lim = limits.get(range_key) or limits.get(mode) or limits.get("auto") or {"min": 55, "max": 90}
             val = clamp(round(float(value)), float(lim.get("min", 55)), float(lim.get("max", 90)))
@@ -488,7 +791,7 @@ class ThermostatScreen(Page):
 
     def sync(self, config: dict, thermostat: dict):
         super().sync(config, thermostat)
-        t = thermostat or {}
+        t = self.thermostat_view()
         mode = str(t.get("mode") or "auto")
         away = bool(t.get("away"))
         active = str(t.get("autoActiveMode") or t.get("activeMode") or mode)
@@ -515,10 +818,9 @@ class ThermostatScreen(Page):
         mode_label = "Away" if away else mode.capitalize()
         self.status_badge.setText(f"• {mode_label} • {equipment}")
         self.humidity_tile.setValue(f"{int(float(t.get('humidity') or 0))}%")
-        self.notice.setVisible(bool((t.get("autoSwitchNotice") or {}).get("active")))
-        if self.notice.isVisible():
-            n = t.get("autoSwitchNotice") or {}
-            self.notice.setText(f"AUTO-SWITCHED\nTo {str(n.get('toMode') or active).capitalize()}\nINSIDE {fmt_temp(t.get('currentTemp'))}")
+        self.notice.hide()
+        self.update_alert_banner()
+        self.update()
         ha = nested_get(config, "integrations", "homeAssistant", default={}) or {}
         alarm = ha.get("alarmEntity") or {}
         self.alarm_card.setValue(str(alarm.get("state") or "disarmed").upper())
@@ -1809,22 +2111,32 @@ class SettingsDialog(QDialog):
         return field
 
     def edit_security_code(self):
-        current = str((self.s.config.get("alarm") or {}).get("disarmCode") or "")
         code = CodeKeypadDialog.get_code(self, "Security Code", "New 4-Digit Code")
         if code is None:
             return
         self.s.config.setdefault("alarm", {})["disarmCode"] = code
+        try:
+            self.s.save_config()
+        except Exception as exc:
+            QMessageBox.warning(self, "Save failed", str(exc))
+            return
         if hasattr(self, "security_code_field"):
             self.security_code_field.setText(self.masked_code(code))
+        self.saved.emit()
 
     def edit_settings_code(self):
-        current = str((self.s.config.get("security") or {}).get("settingsCode") or "")
         code = CodeKeypadDialog.get_code(self, "Settings Code", "New 4-Digit Code")
         if code is None:
             return
         self.s.config.setdefault("security", {})["settingsCode"] = code
+        try:
+            self.s.save_config()
+        except Exception as exc:
+            QMessageBox.warning(self, "Save failed", str(exc))
+            return
         if hasattr(self, "settings_code_field"):
             self.settings_code_field.setText(self.masked_code(code))
+        self.saved.emit()
 
 
     def build(self):
@@ -1935,6 +2247,10 @@ class SettingsDialog(QDialog):
         try:
             self.s.save_config()
             self.saved.emit()
+            if hasattr(self, "security_code_field"):
+                self.security_code_field.setText(self.masked_code(str((self.s.config.get("alarm") or {}).get("disarmCode") or "")))
+            if hasattr(self, "settings_code_field"):
+                self.settings_code_field.setText(self.masked_code(str((self.s.config.get("security") or {}).get("settingsCode") or "")))
             QMessageBox.information(self, "Saved", "Settings saved.")
         except Exception as exc:
             QMessageBox.warning(self, "Save failed", str(exc))
@@ -2143,7 +2459,7 @@ class AlarmControlDialog(QDialog):
         if len(self.code_buffer) != 4:
             return
         expected = str((self.s.config.get("alarm") or {}).get("disarmCode") or "").strip()
-        if expected and self.code_buffer != expected:
+        if not expected or self.code_buffer != expected:
             self.invalid_disarm_code()
             return
         self.send_action("disarm", self.code_buffer)
@@ -2397,7 +2713,9 @@ class MainWindow(Background):
         dlg.exec_()
 
     def show_settings(self):
-        settings_code = str((self.s.config.get("security") or {}).get("settingsCode") or "").strip()
+        security = self.s.config.get("security") or {}
+        alarm = self.s.config.get("alarm") or {}
+        settings_code = str(security.get("settingsCode") or alarm.get("settingsCode") or alarm.get("disarmCode") or "").strip()
         if settings_code:
             entered = CodeKeypadDialog.get_code(self, "Settings Locked", "Enter Settings Code", settings_code)
             if entered is None:
