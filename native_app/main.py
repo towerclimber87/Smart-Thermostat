@@ -1101,6 +1101,19 @@ class ThermostatScreen(Page):
             self.notice.raise_()
             return
 
+        hold = t.get("autoSwitchHold") if isinstance(t.get("autoSwitchHold"), dict) else {}
+        if hold.get("active") and str(hold.get("source") or "").lower() == "manual" and not hold.get("dismissed"):
+            manual_mode = str(hold.get("mode") or "").lower()
+            suggested = str(hold.get("suggestedMode") or "").lower()
+            if manual_mode in {"heat", "cool"} and suggested in {"heat", "cool"} and manual_mode != suggested:
+                self.bypass_pill.hide()
+                self.alert_banner.hide()
+                self.notice.setText(f"MANUAL OVERRIDE\n{manual_mode.capitalize()} allowed\nAUTO WOULD {suggested.upper()}")
+                self.notice.setStyleSheet("background:qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 rgba(91,48,170,0.92), stop:1 rgba(18,13,40,0.92)); color:#ffffff; border:1px solid rgba(194,155,255,0.78); border-radius:22px; padding:12px 18px;")
+                self.notice.show()
+                self.notice.raise_()
+                return
+
         notice = t.get("autoSwitchNotice") if isinstance(t.get("autoSwitchNotice"), dict) else {}
         if notice.get("active"):
             self.bypass_pill.hide()
@@ -1123,7 +1136,8 @@ class ThermostatScreen(Page):
     def show_auto_switch_menu(self):
         t = self.thermostat_view()
         notice = t.get("autoSwitchNotice") if isinstance(t.get("autoSwitchNotice"), dict) else {}
-        if not notice.get("active"):
+        hold = t.get("autoSwitchHold") if isinstance(t.get("autoSwitchHold"), dict) else {}
+        if not notice.get("active") and not (hold.get("active") and str(hold.get("source") or "").lower() == "manual"):
             return
         menu = QMenu(self)
         menu.setStyleSheet("""
@@ -1145,17 +1159,39 @@ class ThermostatScreen(Page):
                 color:#06101f;
             }
         """)
-        from_mode = str(notice.get("fromMode") or "").lower()
-        if from_mode in {"heat", "cool"}:
-            revert = menu.addAction(f"Revert to {from_mode.capitalize()}")
-            revert.triggered.connect(self.revert_auto_switch)
-        dismiss = menu.addAction("Dismiss")
-        dismiss.triggered.connect(self.dismiss_auto_switch)
+        if notice.get("active"):
+            from_mode = str(notice.get("fromMode") or "").lower()
+            if from_mode in {"heat", "cool"}:
+                revert = menu.addAction(f"Revert to {from_mode.capitalize()}")
+                revert.triggered.connect(self.revert_auto_switch)
+            dismiss = menu.addAction("Dismiss")
+            dismiss.triggered.connect(self.dismiss_auto_switch)
+        else:
+            manual_mode = str(hold.get("mode") or "").lower()
+            suggested = str(hold.get("suggestedMode") or "").lower()
+            if suggested in {"heat", "cool"}:
+                follow = menu.addAction(f"Follow Auto {suggested.capitalize()}")
+                follow.triggered.connect(lambda checked=False, m=suggested: self.set_mode(m))
+            dismiss = menu.addAction("Dismiss Notice")
+            dismiss.triggered.connect(self.dismiss_manual_override_notice)
         menu.exec_(self.notice.mapToGlobal(self.notice.rect().bottomLeft()))
 
     def dismiss_auto_switch(self):
         try:
             self.s.update_thermostat({"autoSwitchNotice": {"active": False, "source": "", "fromMode": "", "toMode": "", "switchTemp": 0, "outdoorTemp": 0, "coolTarget": 0, "heatTarget": 0, "createdAt": 0}})
+            self.sync(self.s.config, self.s.thermostat)
+        except Exception as exc:
+            self.requestToast.emit(f"Dismiss failed: {exc}")
+
+    def dismiss_manual_override_notice(self):
+        t = self.thermostat_view()
+        hold = t.get("autoSwitchHold") if isinstance(t.get("autoSwitchHold"), dict) else {}
+        if not hold.get("active"):
+            return
+        try:
+            next_hold = dict(hold)
+            next_hold["dismissed"] = True
+            self.s.update_thermostat({"autoSwitchHold": next_hold})
             self.sync(self.s.config, self.s.thermostat)
         except Exception as exc:
             self.requestToast.emit(f"Dismiss failed: {exc}")
@@ -1304,6 +1340,11 @@ class ThermostatScreen(Page):
                 going_away = not bool(self.thermostat.get("away"))
                 self.s.update_thermostat({"away": going_away, "awaySource": "manual" if going_away else ""})
             else:
+                # Physical/manual button taps should visibly win immediately.
+                self.s.thermostat["mode"] = mode
+                self.s.thermostat["away"] = False
+                self.s.thermostat["awaySource"] = ""
+                self.sync(self.s.config, self.s.thermostat)
                 self.s.update_thermostat({"mode": mode, "away": False, "awaySource": ""})
             self.sync(self.s.config, self.s.thermostat)
         except Exception as exc:

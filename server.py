@@ -153,7 +153,7 @@ DEFAULT_THERMOSTAT = {
         "activeEntityIds": [],
     },
     "autoSwitchNotice": {"active": False, "source": "", "fromMode": "", "toMode": "", "switchTemp": 0, "outdoorTemp": 0, "coolTarget": 0, "heatTarget": 0, "createdAt": 0},
-    "autoSwitchHold": {"active": False, "source": "", "mode": ""},
+    "autoSwitchHold": {"active": False, "source": "", "mode": "", "suggestedMode": "", "reason": "", "dismissed": False, "createdAt": 0},
     "limits": {
         "cool": {"min": 65, "max": 80},
         "heat": {"min": 60, "max": 78},
@@ -590,7 +590,17 @@ def _normalize_auto_switch_hold(value: object) -> dict:
     active = bool(value.get("active")) and source in {"auto", "manual"} and mode
     if not active:
         return _deepcopy_json(DEFAULT_THERMOSTAT["autoSwitchHold"])
-    return {"active": True, "source": source, "mode": mode}
+    suggested = _normalize_pending_mode(value.get("suggestedMode"))
+    reason = str(value.get("reason") or "").strip().lower()[:40]
+    return {
+        "active": True,
+        "source": source,
+        "mode": mode,
+        "suggestedMode": suggested,
+        "reason": reason,
+        "dismissed": bool(value.get("dismissed")),
+        "createdAt": _number(value.get("createdAt"), int(time.time() * 1000), 0, None),
+    }
 
 
 def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None = None) -> dict:
@@ -1498,20 +1508,22 @@ def _apply_comfort_auto_switch_logic(thermostat: dict, *, notify: bool = True) -
     hold_mode = str(hold.get("mode") or "").lower()
     hold_until = _number(hold.get("until"), 0, 0, None)
     if hold_active and hold_source == "manual" and mode != "auto":
+        # A physical mode tap wins over comfort auto-switch. Keep the selected
+        # manual mode while the room-temp rule would have recommended the
+        # opposite mode. Once the rule no longer conflicts, clear the notice.
         if (
             hold_mode not in {"heat", "cool"}
             or not _mode_available_for_auto_switch(t, hold_mode)
             or not signal
             or signal == hold_mode
-            or (hold_until and now_ms >= hold_until)
         ):
             t["autoSwitchHold"] = _empty_auto_switch_hold()
         else:
             if t.get("mode") != hold_mode:
                 t["mode"] = hold_mode
-                t["manualPendingMode"] = ""
-                t["manualLockoutUntil"] = 0
                 _clamp_comfort_target_to_mode(t)
+            t["manualPendingMode"] = ""
+            t["manualLockoutUntil"] = 0
             return t
 
     if mode == "auto":
@@ -1914,15 +1926,27 @@ def _handle_thermostat_update(payload: dict) -> dict:
     requested_mode = incoming.get("mode", incoming.get("hvac_mode", incoming.get("hvacMode")))
     requested_mode = _normalize_mode(requested_mode, "") if requested_mode is not None else ""
     if requested_mode in {"heat", "cool"}:
+        # Manual / physical mode changes always win. If the comfort auto-switch
+        # rule would have chosen the other side, hold the manual mode and show
+        # the UI notice instead of silently switching it back.
+        merged["autoSwitchNotice"] = _empty_auto_switch_notice()
+        merged["autoPendingMode"] = ""
+        merged["autoLockoutUntil"] = 0
         signal = _auto_switch_signal(merged)
         if signal and signal != requested_mode and _mode_available_for_auto_switch(merged, signal):
             merged["autoSwitchHold"] = {
                 "active": True,
                 "source": "manual",
                 "mode": requested_mode,
-                "until": int(time.time() * 1000) + 3000,
-                "reason": "ack",
+                "suggestedMode": signal,
+                "reason": "manual-override",
+                "dismissed": False,
+                "createdAt": int(time.time() * 1000),
             }
+        else:
+            merged["autoSwitchHold"] = _empty_auto_switch_hold()
+    elif requested_mode == "auto":
+        merged["autoSwitchHold"] = _empty_auto_switch_hold()
 
     merged = _apply_comfort_auto_switch_logic(merged, notify=True)
     _write_thermostat_record(merged)
