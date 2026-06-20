@@ -23,7 +23,8 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
   xinit \
   x11-xserver-utils \
   xserver-xorg-legacy \
-  unclutter
+  unclutter \
+  dbus-x11
 
 # Let systemd launch the appliance X server as the pi user.
 mkdir -p /etc/X11
@@ -40,6 +41,12 @@ for svc in smart-thermostat-kiosk.service smart-thermostat-web.service smart-the
   systemctl stop "$svc" 2>/dev/null || true
   systemctl disable "$svc" 2>/dev/null || true
 done
+
+# The native UI owns tty1. If getty keeps tty1, xinit can hang and leave the terminal visible.
+systemctl disable --now getty@tty1.service 2>/dev/null || true
+
+# Make sure the touch UI user can access display, input, and GPU devices on Raspberry Pi OS.
+usermod -aG tty,video,input,render "$APP_USER" 2>/dev/null || true
 
 sed -e "s|@APP_DIR@|$APP_DIR|g" -e "s|@APP_USER@|$APP_USER|g" -e "s|@APP_HOME@|$APP_HOME|g" \
   "$APP_DIR/systemd/smart-thermostat-backend.service.template" > /etc/systemd/system/smart-thermostat-backend.service

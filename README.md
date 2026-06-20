@@ -4,46 +4,58 @@ This package removes Chromium from the touchscreen UI and replaces it with a nat
 
 The package intentionally does not include the old `public/` web UI or the old Tkinter native file.
 
-## Included from the current panel
+## Important security note
 
-- `data/panel-config.json` copied from the uploaded panel, including the panel name, Home Assistant URL/token, assigned room controls, blinds, lights, audio controls, alarm entity, and thermostat settings.
-- `data/thermostat-state.json` copied from the uploaded panel.
+`data/panel-config.json` may contain your Home Assistant URL and long-lived access token. Do not push this repository to a public GitHub repo with real panel data inside `data/`.
 
-Do not share this folder publicly because the config contains a Home Assistant long-lived access token.
+## Install or update on the Pi
 
-## Install on the Pi
-
-From the folder you extracted:
+From the repo folder:
 
 ```bash
-cd ~/SmartThermostatNative
-chmod +x scripts/install-native.sh
+cd ~/Smart-Thermostat-Development
+chmod +x scripts/*.sh
 sudo ./scripts/install-native.sh
 ```
 
-Then reboot:
+The installer:
 
-```bash
-sudo reboot
-```
+- installs the native Qt/X dependencies,
+- writes `/etc/X11/Xwrapper.config`,
+- disables old Chromium/web kiosk services if present,
+- disables `getty@tty1.service` so the native UI owns the touchscreen terminal,
+- installs `smart-thermostat-backend.service`,
+- installs `smart-thermostat-native.service`,
+- starts the backend and native UI.
 
-The installer disables the old Chromium kiosk services if they exist, installs Qt dependencies, enables the local backend on `127.0.0.1:8080`, and starts the full-screen native UI.
-
-## Manual test without installing services
-
-```bash
-cd ~/SmartThermostatNative
-python3 server.py --host 127.0.0.1 --port 8080
-```
-
-In a second terminal/X session:
-
-```bash
-cd ~/SmartThermostatNative
-python3 native_app/main.py
-```
+The native UI service launches X directly with `xinit` on `tty1`. This avoids the earlier issue where `startx` stayed running but the screen remained on the terminal.
 
 ## Services
 
-- `smart-thermostat-backend.service` runs `server.py`.
-- `smart-thermostat-native.service` launches the Qt full-screen UI through X.
+- `smart-thermostat-backend.service` runs `server.py` on `127.0.0.1:8080`.
+- `smart-thermostat-native.service` launches the Qt full-screen UI through X on `tty1`.
+
+## Useful checks
+
+```bash
+systemctl status smart-thermostat-backend.service smart-thermostat-native.service --no-pager -l
+pgrep -a -f 'Xorg|xinit|native_app/main.py'
+tail -120 ~/Smart-Thermostat-Development/data/logs/native-ui.log
+journalctl -u smart-thermostat-native.service -n 120 --no-pager
+```
+
+## Manual test without installing services
+
+Backend:
+
+```bash
+cd ~/Smart-Thermostat-Development
+python3 server.py --host 127.0.0.1 --port 8080
+```
+
+Native UI from an existing X session:
+
+```bash
+cd ~/Smart-Thermostat-Development
+python3 native_app/main.py
+```

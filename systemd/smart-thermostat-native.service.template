@@ -1,22 +1,35 @@
 [Unit]
 Description=Smart Thermostat Native Touch UI
-After=smart-thermostat-backend.service systemd-user-sessions.service
+After=smart-thermostat-backend.service systemd-user-sessions.service systemd-logind.service
 Requires=smart-thermostat-backend.service
+Conflicts=getty@tty1.service
 
 [Service]
 Type=simple
 User=@APP_USER@
+Group=@APP_USER@
 WorkingDirectory=@APP_DIR@
 Environment=HOME=@APP_HOME@
+Environment=USER=@APP_USER@
+Environment=LOGNAME=@APP_USER@
 Environment=DISPLAY=:0
+Environment=XAUTHORITY=@APP_HOME@/.Xauthority
+Environment=QT_QPA_PLATFORM=xcb
+Environment=QT_X11_NO_MITSHM=1
+Environment=LIBGL_ALWAYS_SOFTWARE=1
+Environment=PYTHONUNBUFFERED=1
 Environment=SMART_THERMOSTAT_API=http://127.0.0.1:8080
-ExecStart=/usr/bin/startx @APP_DIR@/scripts/native-xinit.sh -- :0 -nolisten tcp -nocursor
-Restart=always
-RestartSec=2
+PAMName=login
 TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
 StandardInput=tty
 StandardOutput=journal
 StandardError=journal
+ExecStart=/usr/bin/xinit @APP_DIR@/scripts/native-xinit.sh -- /usr/bin/Xorg :0 vt1 -nolisten tcp -keeptty -nocursor
+Restart=always
+RestartSec=2
 
 [Install]
 WantedBy=multi-user.target
