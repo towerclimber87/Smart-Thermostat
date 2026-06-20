@@ -181,6 +181,7 @@ class NativeThermostatApp:
         self.alarm_state: dict[str, Any] | None = None
         self.door_state: dict[str, Any] | None = None
         self.ha_cache: dict[str, Any] = {}
+        self.weather_state: dict[str, Any] | None = None
         self.last_error = ""
         self.last_fast_fetch = 0.0
         self.last_slow_fetch = 0.0
@@ -265,6 +266,8 @@ class NativeThermostatApp:
                 self.hardware = payload.get("hardware") or self.hardware
                 self.alarm_state = payload.get("alarm")
                 self.door_state = payload.get("door")
+                if payload.get("weather"):
+                    self.weather_state = payload.get("weather")
             elif kind == "error":
                 self.last_error = str(payload)
             elif kind == "toast":
@@ -338,6 +341,15 @@ class NativeThermostatApp:
         out: dict[str, Any] = {}
         alarm_ent = ha.get("alarmEntity") or cfg.get("alarmEntity")
         door_ent = ha.get("doorEntity") or cfg.get("doorEntity")
+        weather_ent = ha.get("weatherEntity") or cfg.get("weatherEntity")
+        if url and token and weather_ent:
+            ent = weather_ent.get("entityId", weather_ent) if isinstance(weather_ent, dict) else weather_ent
+            try:
+                data = self.api.post("/api/ha/weather/state", {"url": url, "token": token, "entityId": ent}, timeout=4)
+                if data.get("weather"):
+                    out["weather"] = data.get("weather")
+            except Exception:
+                pass
         if url and token and alarm_ent:
             data = self.api.post("/api/ha/alarm/states", {"url": url, "token": token, "entityIds": [alarm_ent.get("entityId", alarm_ent) if isinstance(alarm_ent, dict) else alarm_ent]}, timeout=4)
             alarms = data.get("alarms") or []
@@ -496,10 +508,12 @@ class NativeThermostatApp:
         self.buttons.append(ButtonSpec(x1, y1, x2, y2, label, self.toggle_lock, fill, outline, color, "panel-lock"))
         self.round_rect_shadow(x1, y1, x2, y2, self.sy(15), fill, outline, 1, shadow="#06090d", offset=self.sy(2))
         self.text((x1+x2)//2, (y1+y2)//2, label, 8, color, "bold")
-        # Right-side clock/info/settings chips.
-        self.pill(self.sx(1121), self.sy(32), self.sx(1178), self.sy(62), time.strftime("%I:%M %p").lstrip("0"), fill="#242a33", outline="#3b4551", color=TEXT, size=9)
-        self.circle_button(1214, 47, 18, "i", lambda: self.open_info(), fill="#123244", outline="#2d6c83", color=CYAN_2, size=16)
-        self.circle_button(1248, 47, 18, "⚙", lambda: self.open_settings(), fill="#242b34", outline="#3b4551", color=MUTED, size=14)
+        # Right-side clock/info/settings chips. Keep them away from the physical
+        # edge so the 10-inch bezel and touch calibration do not make them feel
+        # crowded or hard to press.
+        self.pill(self.sx(1088), self.sy(32), self.sx(1152), self.sy(62), time.strftime("%I:%M %p").lstrip("0"), fill="#242a33", outline="#3b4551", color=TEXT, size=9)
+        self.circle_button(1186, 47, 18, "i", lambda: self.open_info(), fill="#123244", outline="#2d6c83", color=CYAN_2, size=16)
+        self.circle_button(1232, 47, 18, "⚙", lambda: self.open_settings(), fill="#242b34", outline="#3b4551", color=MUTED, size=14)
 
 
     def draw_top_nav(self) -> None:
@@ -544,8 +558,9 @@ class NativeThermostatApp:
         fan = str(t.get("fan", t.get("fan_mode", "auto"))).lower()
         away = as_bool(t.get("away"))
         relays = t.get("relays") or {}
-        outdoor = as_float(t.get("outdoorTemp", t.get("outdoor_temperature", 0)), 0)
-        wind = as_float(t.get("outdoorWindSpeed", t.get("outdoor_wind_speed", 0)), 0)
+        weather = self.weather_state or {}
+        outdoor = as_float(weather.get("temperature"), as_float(t.get("outdoorTemp", t.get("outdoor_temperature", 0)), 0))
+        wind = as_float(weather.get("windSpeed"), as_float(t.get("outdoorWindSpeed", t.get("outdoor_wind_speed", 0)), 0))
         hum = as_float(t.get("humidity", 0), 0)
         if mode == "auto":
             active_side = self.effective_limit_mode()
@@ -1355,6 +1370,8 @@ class NativeThermostatApp:
             self.draw_schedule_modal(x1,y1,x2,y2)
         elif self.modal == "auto_switch":
             self.draw_auto_switch_modal(x1,y1,x2,y2)
+        elif self.modal == "text_input":
+            self.draw_text_input_modal(x1,y1,x2,y2)
 
 
     def auto_switch_notice(self) -> dict[str, Any] | None:
@@ -1453,30 +1470,60 @@ class NativeThermostatApp:
 
     def draw_code_modal(self, x1:int,y1:int,x2:int,y2:int) -> None:
         target = self.modal_data.get("target", "settings")
-        self.text((x1+x2)//2, y1+self.sy(42), "Enter Code", 30, TEXT, "bold")
-        self.text((x1+x2)//2, y1+self.sy(88), "●" * len(self.code_buffer), 36, CYAN, "bold")
-        keys = ["1","2","3","4","5","6","7","8","9","C","0","OK"]
+        self.text((x1+x2)//2, y1+self.sy(42), "Enter Panel Code", 28, TEXT, "bold")
+        self.text((x1+x2)//2, y1+self.sy(72), "The code unlocks automatically after 4 digits.", 12, MUTED, "bold")
+        # Modern code dots instead of the old-school text row.
+        cx = (x1+x2)//2 - self.sx(72)
+        cy = y1+self.sy(118)
+        for i in range(4):
+            filled = i < len(self.code_buffer)
+            self.canvas.create_oval(cx+self.sx(i*48), cy-self.sy(12), cx+self.sx(i*48)+self.sx(24), cy+self.sy(12), fill=CYAN if filled else "#182833", outline="#3d6678", width=2)
+        keys = ["1","2","3","4","5","6","7","8","9","⌫","0","Clear"]
+        pad_w, pad_h = self.sx(96), self.sy(64)
+        start_x = (x1+x2)//2 - self.sx(158)
+        start_y = y1+self.sy(158)
         for idx,k in enumerate(keys):
             col=idx%3; row=idx//3
-            bx=x1+self.sx(210+col*120); by=y1+self.sy(135+row*78)
-            self.button(bx,by,bx+self.sx(90),by+self.sy(58),k,lambda kk=k,t=target:self.handle_code_key(kk,t),fill="#173246")
-        self.button(x2-self.sx(190), y2-self.sy(90), x2-self.sx(45), y2-self.sy(35), "Cancel", lambda: self.close_modal(), fill="#34202a")
+            bx=start_x+self.sx(col*110); by=start_y+self.sy(row*76)
+            fill = "#122d3d" if k.isdigit() else "#263141"
+            self.button(bx,by,bx+pad_w,by+pad_h,k,lambda kk=k,t=target:self.handle_code_key(kk,t),fill=fill,outline="#46606e",text=TEXT,size=20 if k.isdigit() else 13,radius=18)
+        self.button(x2-self.sx(190), y2-self.sy(82), x2-self.sx(45), y2-self.sy(34), "Cancel", lambda: self.close_modal(), fill="#34202a", size=14)
 
     def handle_code_key(self, key: str, target: str) -> None:
-        if key == "C":
+        if key in {"C", "Clear"}:
             self.code_buffer = ""
-        elif key == "OK":
-            code = self._access_code()
-            if self.code_buffer == code or self.code_buffer == DEFAULT_ACCESS_CODE:
-                if target == "unlock":
-                    self.locked = False; self.close_modal(); self.show_toast("Unlocked")
-                else:
-                    self.modal = "settings"; self.modal_data = {}; self.code_buffer = ""
+            self.draw()
+            return
+        if key in {"⌫", "Back"}:
+            self.code_buffer = self.code_buffer[:-1]
+            self.draw()
+            return
+        if key == "OK":
+            self.validate_code(target)
+            return
+        if key.isdigit():
+            self.code_buffer = (self.code_buffer + key)[-4:]
+            if len(self.code_buffer) >= 4:
+                self.validate_code(target)
             else:
-                self.show_toast("Wrong code"); self.code_buffer = ""
+                self.draw()
+
+    def validate_code(self, target: str) -> None:
+        code = self._access_code()
+        if self.code_buffer == code or self.code_buffer == DEFAULT_ACCESS_CODE:
+            if target == "unlock":
+                self.locked = False
+                self.close_modal()
+                self.show_toast("Unlocked")
+            else:
+                self.modal = "settings"
+                self.modal_data = {}
+                self.code_buffer = ""
+                self.draw()
         else:
-            self.code_buffer = (self.code_buffer + key)[-8:]
-        self.draw()
+            self.show_toast("Wrong code")
+            self.code_buffer = ""
+            self.draw()
 
     def draw_settings_modal(self, x1:int,y1:int,x2:int,y2:int) -> None:
         t = self.thermostat
@@ -1527,18 +1574,15 @@ class NativeThermostatApp:
                 {"label":"Release Manual", "key":"relayRelease", "kind":"release"},
             ],
             "security": [
-                {"label":"Panel Code", "value": "****", "kind":"value"},
-                {"label":"Alarm Code", "value": "****" if (cfg.get("alarm") or {}).get("disarmCode") else "Not set", "kind":"value"},
-                {"label":"Panel Lock", "value": "Locked" if self.locked else "Unlocked", "kind":"lock"},
+                {"label":"Panel Code", "value": "****", "kind":"edit", "edit":"panel_code", "numeric": True, "maxlen": 4},
+                {"label":"Alarm Code", "value": "****" if (cfg.get("alarm") or {}).get("disarmCode") else "Not set", "kind":"edit", "edit":"alarm_code", "numeric": True, "maxlen": 12},
                 {"label":"Settings Protected", "value":"Enabled", "kind":"value"},
-                {"label":"Upload Config", "value":"Restore backup", "kind":"upload"},
-                {"label":"Fetch Update", "value":"GitHub Development", "kind":"update"},
             ],
             "ha": [
                 {"label":"HA URL", "value": (self._ha() or ("Not configured", ""))[0], "kind":"value"},
                 {"label":"Alarm Entity", "value": self._entity_label((cfg.get("integrations") or {}).get("homeAssistant", {}).get("alarmEntity")), "kind":"value"},
                 {"label":"Door Entity", "value": self._entity_label((cfg.get("integrations") or {}).get("homeAssistant", {}).get("doorEntity")), "kind":"value"},
-                {"label":"Weather Entity", "value": self._entity_label((cfg.get("integrations") or {}).get("homeAssistant", {}).get("weatherEntity")), "kind":"value"},
+                {"label":"Weather Entity", "value": self._entity_label((cfg.get("integrations") or {}).get("homeAssistant", {}).get("weatherEntity")), "kind":"edit", "edit":"weather_entity", "numeric": False, "maxlen": 80},
                 {"label":"Media Player", "value": str(((cfg.get("integrations") or {}).get("homeAssistant", {}) or {}).get("selectedMediaPlayerId", "")) or "Not selected", "kind":"value"},
                 {"label":"People", "value": str(len(t.get("people") or [])), "kind":"value"},
             ],
@@ -1604,10 +1648,125 @@ class NativeThermostatApp:
             self.small_button(x+w-self.sx(120), y+self.sy(18), x+w-self.sx(12), y+self.sy(52), "Restart", lambda: self.restart_panel(), fill="#402817", text=YELLOW, size=12)
         elif kind == "lock":
             self.small_button(x+w-self.sx(120), y+self.sy(18), x+w-self.sx(12), y+self.sy(52), "Unlock" if self.locked else "Lock", lambda: self.toggle_lock(), fill="#173246", size=12)
+        elif kind == "edit":
+            value = item.get("value", self.thermostat.get(key, ""))
+            display = "****" if str(item.get("edit", "")).endswith("code") else str(value or "Tap to set")
+            self.text(x+w-self.sx(130), y+self.sy(42), display[:24], 12, TEXT, "bold", "e")
+            self.small_button(x+w-self.sx(112), y+self.sy(18), x+w-self.sx(12), y+self.sy(52), "Edit", lambda it=item: self.open_text_input(it), fill="#173246", text=CYAN_2, size=12)
         else:
             value = item.get("value", self.thermostat.get(key, ""))
             self.text(x+w-self.sx(14), y+self.sy(42), str(value)[:28], 12, TEXT, "bold", "e")
 
+
+    def open_text_input(self, item: dict[str, Any]) -> None:
+        edit = str(item.get("edit") or "")
+        cfg = self.config if isinstance(self.config, dict) else {}
+        value = ""
+        if edit == "panel_code":
+            value = self._access_code()
+        elif edit == "alarm_code":
+            value = str((cfg.get("alarm") or {}).get("disarmCode") or "")
+        elif edit == "weather_entity":
+            ha = ((cfg.get("integrations") or {}).get("homeAssistant") or {})
+            ent = ha.get("weatherEntity") or {}
+            value = str(ent.get("entityId") if isinstance(ent, dict) else ent or "weather.home")
+        self.modal = "text_input"
+        self.modal_data = {
+            "label": item.get("label", "Value"),
+            "edit": edit,
+            "value": value,
+            "numeric": bool(item.get("numeric")),
+            "maxlen": int(item.get("maxlen") or 64),
+        }
+        self.draw()
+
+    def draw_text_input_modal(self, x1:int,y1:int,x2:int,y2:int) -> None:
+        label = str(self.modal_data.get("label") or "Value")
+        value = str(self.modal_data.get("value") or "")
+        numeric = bool(self.modal_data.get("numeric"))
+        self.text((x1+x2)//2, y1+self.sy(42), label, 27, TEXT, "bold")
+        self.round_rect(x1+self.sx(90), y1+self.sy(84), x2-self.sx(90), y1+self.sy(136), self.sy(14), "#111d27", "#38556a", 2)
+        shown = "•" * len(value) if "code" in str(self.modal_data.get("edit")) else value
+        self.text((x1+x2)//2, y1+self.sy(111), shown or "Tap keys below", 18, CYAN_2, "bold")
+        if numeric:
+            keys = ["1","2","3","4","5","6","7","8","9","⌫","0","Clear"]
+            pad_w, pad_h = self.sx(96), self.sy(58)
+            start_x = (x1+x2)//2 - self.sx(158)
+            start_y = y1+self.sy(164)
+            for idx,k in enumerate(keys):
+                col=idx%3; row=idx//3
+                bx=start_x+self.sx(col*110); by=start_y+self.sy(row*70)
+                self.button(bx,by,bx+pad_w,by+pad_h,k,lambda kk=k:self.handle_text_key(kk),fill="#122d3d" if k.isdigit() else "#263141",outline="#46606e",size=18 if k.isdigit() else 12,radius=17)
+        else:
+            rows = ["1234567890", "qwertyuiop", "asdfghjkl._", "zxcvbnm:-"]
+            start_y = y1+self.sy(160)
+            for r,row in enumerate(rows):
+                key_w = self.sx(46)
+                row_w = key_w * len(row)
+                start_x = (x1+x2)//2 - row_w//2
+                for i,ch in enumerate(row):
+                    bx = start_x + i*key_w
+                    by = start_y + self.sy(r*58)
+                    self.button(bx, by, bx+self.sx(40), by+self.sy(48), ch, lambda cc=ch:self.handle_text_key(cc), fill="#122d3d", outline="#46606e", size=13, radius=12)
+            self.button(x1+self.sx(220), y1+self.sy(404), x1+self.sx(392), y1+self.sy(456), "Space", lambda:self.handle_text_key(" "), fill="#263141", size=13)
+            self.button(x1+self.sx(408), y1+self.sy(404), x1+self.sx(580), y1+self.sy(456), "Backspace", lambda:self.handle_text_key("⌫"), fill="#263141", size=13)
+        self.button(x1+self.sx(90), y2-self.sy(78), x1+self.sx(250), y2-self.sy(30), "Cancel", lambda: self.close_modal(), fill="#34202a", size=14)
+        self.button(x2-self.sx(250), y2-self.sy(78), x2-self.sx(90), y2-self.sy(30), "Save", lambda: self.save_text_input(), fill="#164d3d", text=GREEN, size=14)
+
+    def handle_text_key(self, key: str) -> None:
+        value = str(self.modal_data.get("value") or "")
+        maxlen = int(self.modal_data.get("maxlen") or 64)
+        numeric = bool(self.modal_data.get("numeric"))
+        if key in {"Clear", "C"}:
+            value = ""
+        elif key in {"⌫", "Backspace"}:
+            value = value[:-1]
+        else:
+            if numeric and not key.isdigit():
+                return
+            value = (value + key)[:maxlen]
+        self.modal_data["value"] = value
+        self.draw()
+
+    def save_text_input(self) -> None:
+        edit = str(self.modal_data.get("edit") or "")
+        value = str(self.modal_data.get("value") or "").strip()
+        if edit in {"panel_code", "alarm_code"}:
+            value = "".join(ch for ch in value if ch.isdigit())
+        if edit == "panel_code" and len(value) != 4:
+            return self.show_toast("Panel code must be 4 digits")
+        if edit == "weather_entity" and value and not value.startswith("weather."):
+            return self.show_toast("Weather entity must be weather.*")
+        self._run_busy("Save Setting", lambda e=edit,v=value: self.save_config_edit(e, v))
+        self.close_modal()
+
+    def save_config_edit(self, edit: str, value: str) -> str:
+        cfg = json.loads(json.dumps(self.config if isinstance(self.config, dict) else {}))
+        if edit == "panel_code":
+            cfg["userAccessCode"] = value
+            cfg["settingsAccessCode"] = value
+            security = cfg.setdefault("security", {})
+            if isinstance(security, dict):
+                security["userAccessCode"] = value
+                security["settingsAccessCode"] = value
+        elif edit == "alarm_code":
+            alarm = cfg.setdefault("alarm", {})
+            if isinstance(alarm, dict):
+                alarm["disarmCode"] = value
+        elif edit == "weather_entity":
+            integrations = cfg.setdefault("integrations", {})
+            if not isinstance(integrations, dict):
+                cfg["integrations"] = integrations = {}
+            ha = integrations.setdefault("homeAssistant", {})
+            if not isinstance(ha, dict):
+                integrations["homeAssistant"] = ha = {}
+            ha["weatherEntity"] = {"entityId": value or "weather.home", "name": value or "Home"}
+        result = self.api.post("/api/config", {"config": cfg}, timeout=8)
+        if not result.get("ok", True):
+            raise RuntimeError(result.get("error", "Config save failed"))
+        self.config = result.get("config") or cfg
+        self.fetch_slow()
+        return "Saved"
 
     def get_limit_value(self, mode: str, bound: str) -> float:
         limits_all = self.thermostat.get("limits", {}) if isinstance(self.thermostat.get("limits"), dict) else {}
