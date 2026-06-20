@@ -317,15 +317,15 @@ class ThermostatScreen(Page):
         self.alarm_card.clicked.connect(self.toggle_alarm)
 
     def _mode_bar(self):
-        # Floating mode buttons. Keep the buttons, remove the shared rail/border,
-        # and spread them out as independent touch targets.
+        # Floating mode buttons. No shared rail/border. Keep them compact enough
+        # for the 1280x800 DSI panel so the four buttons never overlap.
         lay = QHBoxLayout()
-        lay.setContentsMargins(0, 6, 0, 0)
-        lay.setSpacing(22)
+        lay.setContentsMargins(0, 2, 0, 0)
+        lay.setSpacing(18)
         lay.addStretch(1)
         for mode in ["cool", "heat", "auto", "away"]:
-            b = RoundButton(mode.capitalize(), active=False, min_h=44)
-            b.setMinimumWidth(128)
+            b = RoundButton(mode.capitalize(), active=False, min_h=38)
+            b.setFixedWidth(86)
             b.clicked.connect(lambda checked=False, m=mode: self.set_mode(m))
             self.mode_buttons[mode] = b
             lay.addWidget(b)
@@ -333,16 +333,15 @@ class ThermostatScreen(Page):
         return lay
 
     def _fan_bar(self):
-        # Single floating status pill. Tap it for Off / On / Auto instead of
-        # keeping three always-visible buttons grouped in a bordered rail.
+        # Compact floating fan status pill. Tap it for Off / On / Auto.
         lay = QHBoxLayout()
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(10)
+        lay.setSpacing(8)
         label = QLabel("FAN")
         label.setFont(font(8, QFont.Black, 15))
         label.setStyleSheet("color:#9ca6bb; background:transparent; border:0;")
-        self.fan_status_button = RoundButton("Fan   Auto", active=False, min_h=54)
-        self.fan_status_button.setMinimumWidth(230)
+        self.fan_status_button = RoundButton("Auto", active=False, min_h=38)
+        self.fan_status_button.setFixedWidth(118)
         self.fan_status_button.clicked.connect(self.show_fan_menu)
         lay.addStretch(1)
         lay.addWidget(label)
@@ -443,7 +442,7 @@ class ThermostatScreen(Page):
             b.setActive((m == mode and not away) or (m == "away" and away))
         fan = str(t.get("fan") or "auto").lower()
         if self.fan_status_button:
-            self.fan_status_button.setText(f"Fan   {fan.capitalize()}")
+            self.fan_status_button.setText(fan.capitalize())
             self.fan_status_button.setActive(False)
         out = t.get("outdoorTemp") or t.get("outdoor_temperature") or "--"
         wind = t.get("outdoorWindSpeed") or t.get("outdoor_wind_speed") or 0
