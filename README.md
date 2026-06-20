@@ -1,84 +1,44 @@
-# IHA
+# Smart Thermostat
 
-A Raspberry Pi wall-panel interface starter project for the IHA thermostat, Sonos-style audio controller, and room/blind controls.
+Version: `12.0-html-display-force-webview-6/19/2026`
 
-This first version is intentionally frontend-only. The buttons, sliders, page swipes, and placeholder states work locally so the interface can be tested before wiring GPIO, I2C sensors, relays, Home Assistant, or Sonos integrations.
+This build keeps the local FastAPI/web UI on port `8080`, and makes the wall display show that same HTML/CSS UI through a lightweight native GTK/WebKit host instead of full Chromium kiosk.
 
-## Current screens
+## Important wall-display change
 
-- **Thermostat**
-  - Cool / Heat mode only
-  - No auto heat/cool mode
-  - Away mode with safety setpoints
-  - Interactive setpoint buttons
-  - Placeholder humidity, runtime, and current temperature
-
-- **Audio**
-  - Sonos placeholder page
-  - Play/pause, next, previous
-  - Volume, gain, bass, and treble sliders
-  - Now-playing placeholder card
-
-- **Blinds**
-  - Living Room: 4 blinds
-  - Kitchen: 3 blinds
-  - Room-level open/close/stop
-  - Independent blind sliders and actions
-
-## Navigation
-
-- Tap the left/right side of the screen to change pages.
-- Use the bottom nav buttons.
-- Swipe right/left on a touchscreen.
-- On desktop, use left/right arrow keys.
-- Use +/- keys to change the thermostat setpoint.
-
-## Run locally
-
-From the project root:
-
-```bash
-python3 server.py --host 0.0.0.0 --port 8080
-```
-
-Then open:
+The normal display path is now:
 
 ```text
-http://localhost:8080
+smart-thermostat-web.service      # API + HTML UI on port 8080
+smart-thermostat-hybrid.service   # native WebKit host showing that HTML UI
 ```
 
-On another computer on the same network, use the Pi/computer IP address:
+The old blocky Tk/canvas native screen is no longer the normal native path. For compatibility, `scripts/native-launch.sh` forwards old native launches to the HTML WebKit host.
 
-```text
-http://<device-ip>:8080
-```
-
-
-
-## Raspberry Pi wall-panel display
-
-The recommended wall display is now the hybrid HTML runtime. The Pi runs the local Python web/API server and shows the same polished HTML UI inside a lightweight native GTK/WebKit host instead of launching full Chromium kiosk. The old blocky Tk/canvas native screen is no longer the normal native display path.
-
-Install on the Pi:
+## Apply and force the HTML display
 
 ```bash
 cd ~/Smart-Thermostat-Development
 chmod +x scripts/*.sh native/*.py
 ./scripts/force-html-display.sh
-sudo reboot
 ```
 
-Services installed:
+That script installs the WebKit runtime packages, writes the updated systemd units, disables Chromium kiosk and the old native canvas path, and starts the HTML hybrid display.
 
-- `smart-thermostat-web.service` — local API/static web server
-- `smart-thermostat-hybrid.service` — full-screen native WebKit host for the HTML UI
-- `smart-thermostat-native.service` — legacy alias; forwards to the HTML host in this build
-- `smart-thermostat-kiosk.service` — Chromium fallback
-- `smart-thermostat-network-watchdog.service` — Ethernet priority and Wi-Fi reconnect watchdog
+## Display controls
 
-Hybrid configuration is stored in `/etc/smart-thermostat/hybrid.env`. More details are in `docs/html-hybrid-webview.md`.
+```bash
+./scripts/display-mode.sh hybrid
+./scripts/display-mode.sh html
+./scripts/display-mode.sh native   # alias to HTML hybrid in this build
+./scripts/display-mode.sh canvas   # emergency old canvas fallback only
+./scripts/display-mode.sh kiosk    # full Chromium fallback only
+./scripts/display-mode.sh status
+```
 
-If the wall panel still shows the old blocky native screen after updating, run:
+## If the screen still looks blocky
+
+Run:
 
 ```bash
 cd ~/Smart-Thermostat-Development
@@ -86,45 +46,27 @@ cd ~/Smart-Thermostat-Development
 sudo reboot
 ```
 
-## Home Assistant auto-discovery
+Then check:
 
-This build includes a no-MQTT Home Assistant path. The Raspberry Pi server exposes a local thermostat API and advertises `_iha-thermostat._tcp.local.` over mDNS/Zeroconf. The included custom integration in `custom_components/iha` turns the panel into a Home Assistant `climate` entity after the discovered device is accepted.
-
-See `docs/home-assistant.md` for install steps and the manual-add fallback.
-
-## Project structure
-
-```text
-Smart-Thermostat/
-├── public/
-│   ├── index.html
-│   ├── css/styles.css
-│   └── js/app.js
-├── docs/
-│   ├── integration-plan.md
-│   └── raspberry-pi-notes.md
-├── scripts/
-│   └── install-pi.sh
-├── systemd/
-│   └── smart-thermostat-web.service
-├── .gitignore
-├── LICENSE
-├── package.json
-└── README.md
+```bash
+journalctl -u smart-thermostat-hybrid.service -n 120 --no-pager
 ```
 
-## Future direction
+## 12.1 hard switch to HTML wall display
 
-The intended production architecture is:
+If the wall screen still shows the old blocky Tk/canvas display, the installed `smart-thermostat-native.service` is still launching `native/thermostat_native.py`.
 
-```text
-Touch UI
-  ↓
-Local control service
-  ↓
-GPIO/I2C/relay interface hardware
-  ↓
-HVAC / sensors / blinds / audio bridge
+Run:
+
+```bash
+cd ~/Smart-Thermostat-Development
+chmod +x scripts/*.sh native/*.py
+./scripts/hard-switch-html-display.sh
+sudo reboot
 ```
 
-Home Assistant should eventually be an integration layer, not the required path for local thermostat changes.
+After the fix, this command should show `native/html_panel.py`, not `native/thermostat_native.py`:
+
+```bash
+ps -ef | grep -E 'thermostat_native.py|html_panel.py|hybrid-xinit|xinit' | grep -v grep
+```
