@@ -99,6 +99,25 @@ def title_case(value: Any) -> str:
     return str(value or "").replace("_", " ").replace("-", " ").strip().title()
 
 
+def hex_to_rgb(value: str) -> tuple[int, int, int]:
+    value = str(value or "#000000").strip().lstrip("#")
+    if len(value) == 3:
+        value = "".join(ch * 2 for ch in value)
+    if len(value) != 6:
+        return (0, 0, 0)
+    try:
+        return (int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16))
+    except ValueError:
+        return (0, 0, 0)
+
+
+def blend_hex(a: str, b: str, amount: float) -> str:
+    amount = clamp(amount, 0.0, 1.0)
+    ar, ag, ab = hex_to_rgb(a)
+    br, bg, bb = hex_to_rgb(b)
+    return f"#{round(ar + (br - ar) * amount):02x}{round(ag + (bg - ag) * amount):02x}{round(ab + (bb - ab) * amount):02x}"
+
+
 class ApiClient:
     def __init__(self, base: str = DEFAULT_API_BASE) -> None:
         self.base = base.rstrip("/")
@@ -456,27 +475,153 @@ class NativeThermostatApp:
         if self.modal:
             self.draw_modal()
 
-    def draw_background(self) -> None:
-        """Low-cost glass dashboard background.
+    def climate_temperature_tone(self) -> tuple[str, float, float]:
+        """Match the web app's temperature atmosphere logic.
 
-        This intentionally stays vector-only.  No PNGs, no blur filters, and no
-        per-pixel effects so the Pi 3B stays responsive, but the result is much
-        closer to the old web UI: dark glass, soft color blooms, and a subtle
-        blueprint grid.
+        The browser UI drives the animated climate backdrop from room
+        temperature around 71°F.  Keep the native appliance on the same rule so
+        warm rooms feel amber/red, cold rooms feel blue/cyan, and comfortable
+        rooms stay dark/neutral.
         """
-        self.canvas.create_rectangle(0, 0, self.width, self.height, fill="#0d1219", outline="")
-        # Subtle grid, scaled to the current display.
-        grid = max(18, self.sx(42))
+        temp = as_float((self.thermostat or {}).get("currentTemp", (self.thermostat or {}).get("current_temperature")), 71.0)
+        cold = clamp((71.0 - temp) / 9.0, 0.0, 1.0)
+        heat = clamp((temp - 71.0) / 9.0, 0.0, 1.0)
+        if cold > heat and cold > 0.01:
+            return "cold", cold, heat
+        if heat > 0.01:
+            return "hot", cold, heat
+        return "neutral", cold, heat
+
+    def climate_palette(self) -> dict[str, str | float]:
+        tone, cold, heat = self.climate_temperature_tone()
+        away = as_bool((self.thermostat or {}).get("away"))
+        intensity = max(cold, heat, 0.18)
+        if away:
+            tone = "away"
+            intensity = max(intensity, 0.42)
+        if tone == "hot":
+            return {
+                "tone": tone,
+                "intensity": intensity,
+                "base": blend_hex("#0c1018", "#3c1018", min(0.72, 0.32 + heat * 0.46)),
+                "primary": blend_hex("#1a1018", "#a2252e", 0.22 + heat * 0.48),
+                "secondary": blend_hex("#14121c", "#ff744a", 0.14 + heat * 0.30),
+                "accent": blend_hex("#243244", "#ffb75b", 0.22 + heat * 0.46),
+                "line": blend_hex("#283241", "#ff8a62", 0.28 + heat * 0.42),
+            }
+        if tone == "cold":
+            return {
+                "tone": tone,
+                "intensity": intensity,
+                "base": blend_hex("#08111a", "#08284a", min(0.72, 0.32 + cold * 0.46)),
+                "primary": blend_hex("#071824", "#0b69b0", 0.22 + cold * 0.48),
+                "secondary": blend_hex("#0b1320", "#19d9ff", 0.12 + cold * 0.26),
+                "accent": blend_hex("#1d3242", "#5bf1ff", 0.22 + cold * 0.40),
+                "line": blend_hex("#273341", "#52ddff", 0.24 + cold * 0.38),
+            }
+        if tone == "away":
+            return {
+                "tone": tone,
+                "intensity": intensity,
+                "base": "#120f22",
+                "primary": "#2b174f",
+                "secondary": "#24143a",
+                "accent": "#8c78ff",
+                "line": "#6e8cff",
+            }
+        return {
+            "tone": tone,
+            "intensity": intensity,
+            "base": "#0b1119",
+            "primary": "#0f2530",
+            "secondary": "#10182a",
+            "accent": "#2de0c4",
+            "line": "#32485a",
+        }
+
+    def draw_climate_symbol(self, tone: str, color: str, phase: float) -> None:
+        """Draw the faint web-style climate icon without using image assets."""
+        cx = self.sx(1088 + math.sin(phase * 0.45) * 14)
+        cy = self.sy(314 + math.cos(phase * 0.38) * 10)
+        if tone == "hot":
+            outer = self.sx(124)
+            inner = self.sx(78)
+            self.canvas.create_oval(cx-outer, cy-outer, cx+outer, cy+outer, outline=blend_hex(color, "#111821", 0.25), width=max(1, self.sx(2)))
+            self.canvas.create_oval(cx-inner, cy-inner, cx+inner, cy+inner, outline=blend_hex(color, "#111821", 0.18), width=max(1, self.sx(3)))
+            for i in range(12):
+                a = phase * 0.15 + i * math.tau / 12
+                r1 = outer + self.sx(20)
+                r2 = outer + self.sx(86)
+                x1 = cx + math.cos(a) * r1
+                y1 = cy + math.sin(a) * r1
+                x2 = cx + math.cos(a) * r2
+                y2 = cy + math.sin(a) * r2
+                self.canvas.create_line(x1, y1, x2, y2, fill=blend_hex(color, "#111821", 0.38), width=max(1, self.sx(8)), capstyle="round")
+            return
+        if tone == "cold":
+            arm = self.sx(150)
+            for i in range(6):
+                a = phase * 0.12 + i * math.tau / 6
+                x1 = cx + math.cos(a) * self.sx(22)
+                y1 = cy + math.sin(a) * self.sy(22)
+                x2 = cx + math.cos(a) * arm
+                y2 = cy + math.sin(a) * arm
+                self.canvas.create_line(x1, y1, x2, y2, fill=blend_hex(color, "#111821", 0.28), width=max(1, self.sx(5)), capstyle="round")
+                for off in (0.68, 0.82):
+                    bx = cx + math.cos(a) * arm * off
+                    by = cy + math.sin(a) * arm * off
+                    for branch in (-0.7, 0.7):
+                        ba = a + branch
+                        self.canvas.create_line(bx, by, bx + math.cos(ba) * self.sx(30), by + math.sin(ba) * self.sy(30), fill=blend_hex(color, "#111821", 0.34), width=max(1, self.sx(3)), capstyle="round")
+            self.canvas.create_oval(cx-self.sx(20), cy-self.sy(20), cx+self.sx(20), cy+self.sy(20), outline=blend_hex(color, "#111821", 0.20), width=max(1, self.sx(3)))
+
+    def draw_temperature_waves(self, color: str, phase: float) -> None:
+        for row in range(3):
+            y = self.sy(585 + row * 48)
+            points: list[int] = []
+            for i in range(0, 17):
+                x = self.sx(i * 82 - 26)
+                offset = math.sin(phase * 0.85 + row * 0.9 + i * 0.75) * self.sy(10 + row * 3)
+                points.extend([x, int(y + offset)])
+            self.canvas.create_line(*points, fill=blend_hex(color, "#0b1119", 0.45 + row * 0.12), width=max(1, self.sy(2)), smooth=True)
+
+    def draw_background(self) -> None:
+        """Modern web-inspired animated climate backdrop.
+
+        The native app cannot use CSS radial gradients/blur, so this draws a
+        lightweight vector version: temperature-dependent color blooms, a faint
+        climate symbol, and slowly moving waves.  It updates every native tick
+        and stays cheap enough for the Pi display.
+        """
+        palette = self.climate_palette()
+        tone = str(palette["tone"])
+        phase = time.time()
+        self.canvas.create_rectangle(0, 0, self.width, self.height, fill=str(palette["base"]), outline="")
+
+        # Subtle blueprint grid like the web shell, but keep it buried under the
+        # atmosphere so it does not dirty the screen.
+        grid = max(22, self.sx(56))
+        grid_color = blend_hex(str(palette["base"]), "#ffffff", 0.035)
         for x in range(0, self.width + grid, grid):
-            self.canvas.create_line(x, 0, x, self.height, fill="#141b24", width=1)
+            self.canvas.create_line(x, 0, x, self.height, fill=grid_color, width=1)
         for y in range(0, self.height + grid, grid):
-            self.canvas.create_line(0, y, self.width, y, fill="#141b24", width=1)
-        # Cheap glow fields that mimic the web gradient without CSS blur.
-        self.canvas.create_oval(self.sx(360), self.sy(120), self.sx(1030), self.sy(780), fill="#111a3a", outline="")
-        self.canvas.create_oval(self.sx(-160), self.sy(110), self.sx(410), self.sy(820), fill="#0c2430", outline="")
-        self.canvas.create_oval(self.sx(840), self.sy(260), self.sx(1380), self.sy(900), fill="#111623", outline="")
-        # Outer glass frame.
-        self.round_rect_shadow(self.sx(12), self.sy(14), self.sx(1268), self.sy(786), self.sx(28), "#111821", "#26313d", 2, offset=self.sy(4))
+            self.canvas.create_line(0, y, self.width, y, fill=grid_color, width=1)
+
+        # Animated climate glows.  These are deliberately oversized and low
+        # contrast to mimic the browser's radial-gradient backdrop.
+        drift_x = math.sin(phase * 0.32) * self.sx(28)
+        drift_y = math.cos(phase * 0.27) * self.sy(24)
+        self.canvas.create_oval(self.sx(-170) + drift_x, self.sy(100) - drift_y, self.sx(520) + drift_x, self.sy(835) - drift_y, fill=str(palette["primary"]), outline="")
+        self.canvas.create_oval(self.sx(360) - drift_x * 0.5, self.sy(60) + drift_y * 0.6, self.sx(1130) - drift_x * 0.5, self.sy(850) + drift_y * 0.6, fill=str(palette["secondary"]), outline="")
+        self.canvas.create_oval(self.sx(790) + drift_x * 0.8, self.sy(142) + drift_y * 0.3, self.sx(1440) + drift_x * 0.8, self.sy(760) + drift_y * 0.3, fill=blend_hex(str(palette["primary"]), "#050812", 0.22), outline="")
+        self.draw_climate_symbol(tone, str(palette["accent"]), phase)
+        self.draw_temperature_waves(str(palette["line"]), phase)
+
+        # Soft vignette and outer glass frame.  Do not paint an opaque full-page
+        # panel here; that would hide the animated atmosphere underneath.
+        self.canvas.create_oval(self.sx(160), self.sy(30), self.sx(1120), self.sy(850), outline=blend_hex(str(palette["accent"]), "#07101a", 0.72), width=max(1, self.sx(1)))
+        frame = blend_hex(str(palette["accent"]), "#182230", 0.72)
+        self.round_rect(self.sx(12), self.sy(14), self.sx(1268), self.sy(786), self.sx(28), "", frame, 1)
 
     def pill(self, x1:int, y1:int, x2:int, y2:int, text:str, fill:str="#232a34", outline:str="#37414d", color:str=TEXT, size:int=14, weight:str="bold", dot:str|None=None) -> None:
         self.round_rect(x1, y1, x2, y2, max(8, (y2-y1)//2), fill, outline, 1)
@@ -668,6 +813,19 @@ class NativeThermostatApp:
         self._run_busy("Bypass", lambda: self.control({"autoLockoutUntil": 0, "manualLockoutUntil": 0, "autoPendingMode": ""}))
 
 
+    def draw_temperature_value(self, x: int, y: int, value: float, number_size: int, degree_size: int, fill: str = TEXT, weight: str = "bold", degree_lift: int = 18) -> None:
+        """Draw a clean thermostat number with a smaller raised degree mark."""
+        number = f"{value:.0f}"
+        degree = "°"
+        number_font = self.font(number_size, weight)
+        degree_font = self.font(degree_size, weight)
+        number_width = number_font.measure(number)
+        degree_width = degree_font.measure(degree)
+        total_width = number_width + degree_width + self.sx(4)
+        left = int(x - total_width / 2)
+        self.canvas.create_text(left, y, text=number, fill=fill, font=number_font, anchor="w")
+        self.canvas.create_text(left + number_width + self.sx(4), y - self.sy(degree_lift), text=degree, fill=fill, font=degree_font, anchor="w")
+
     def draw_web_style_dial(self, current: float, target: float, action_label: str, action_color: str) -> None:
         """Draw the thermostat dial using the old web dial geometry.
 
@@ -744,37 +902,33 @@ class NativeThermostatApp:
         marker(current_pct, 5, False)
         marker(target_pct, 4, True)
 
-        # Inner face.  No oval/shine overlay; the previous highlight looked like
-        # an off-center oblong blob on the physical display.
-        inner = int(r * 0.61)
-        if "heat" in action_label.lower():
-            inner_fill = "#d85b42"
-            inner_dark = "#381514"
-            pill_fill = "#5a2823"
-            pill_outline = "#dc7665"
-        elif "cool" in action_label.lower():
-            inner_fill = "#168bff"
-            inner_dark = "#061a3a"
-            pill_fill = "#145eb7"
-            pill_outline = "#39cfff"
-        elif action_label.lower() == "idle":
-            inner_fill = "#19c95f"
-            inner_dark = "#052b19"
-            pill_fill = "#124d31"
-            pill_outline = "#42db83"
+        # Inner face: match the web UI's dark glass dial instead of a bright
+        # floating blue bubble.  The room temperature, set label, and setpoint
+        # are one centered stack, fully inside the puck.
+        inner = int(r * 0.64)
+        action_lower = action_label.lower()
+        if "heat" in action_lower:
+            accent = "#ff8065"
+            glow = "#3b1716"
+        elif "cool" in action_lower:
+            accent = "#53f0ff"
+            glow = "#082e66"
+        elif "away" in action_lower:
+            accent = "#b986ff"
+            glow = "#251845"
         else:
-            inner_fill = "#16a86a"
-            inner_dark = "#06291d"
-            pill_fill = "#143b33"
-            pill_outline = "#45d6aa"
-        self.canvas.create_oval(cx-inner-10, cy-inner-10, cx+inner+10, cy+inner+10, fill=inner_dark, outline="#111a25", width=1)
-        self.canvas.create_oval(cx-inner, cy-inner, cx+inner, cy+inner, fill=inner_fill, outline="#2fb8ff" if "cool" in action_label.lower() else "#2bd986", width=1)
+            accent = "#4ee083"
+            glow = "#0b2a1d"
+        self.canvas.create_oval(cx-inner-self.sx(14), cy-inner-self.sy(14), cx+inner+self.sx(14), cy+inner+self.sy(14), fill="#030811", outline=blend_hex(accent, "#07101a", 0.62), width=max(1, self.sx(2)))
+        self.canvas.create_oval(cx-inner-self.sx(4), cy-inner-self.sy(4), cx+inner+self.sx(4), cy+inner+self.sy(4), fill=glow, outline=blend_hex(accent, "#07101a", 0.42), width=max(1, self.sx(1)))
+        self.canvas.create_oval(cx-inner+self.sx(9), cy-inner+self.sy(9), cx+inner-self.sx(9), cy+inner-self.sy(9), fill="#07111e", outline="#1d3346", width=1)
+        self.canvas.create_oval(cx-inner+self.sx(24), cy-inner+self.sy(18), cx+inner-self.sx(24), cy+self.sy(22), fill=blend_hex(glow, "#07111e", 0.42), outline="")
+        self.canvas.create_arc(cx-inner+self.sx(12), cy-inner+self.sy(12), cx+inner-self.sx(12), cy+inner+self.sy(86), start=200, extent=140, style="arc", outline=blend_hex(accent, "#ffffff", 0.18), width=max(1, self.sy(2)))
 
-        # The status is already shown in the clean pill above the dial. Keep the
-        # dial center focused on room temperature and the setpoint only.
-        self.text(cx, cy-self.sy(34), f"{current:.0f}°", 64, TEXT, "bold")
-        self.text(cx, cy+self.sy(30), "SET TEMPERATURE", 10, "#d7f4ff", "bold")
-        self.text(cx, cy+self.sy(64), f"{target:.0f}°", 30, TEXT, "bold")
+        # Status/action lives in the pill above the dial. Keep this center clean.
+        self.draw_temperature_value(cx, cy-self.sy(30), current, 66, 26, TEXT, "bold", degree_lift=26)
+        self.text(cx, cy+self.sy(38), "Set Temperature", 8, "#bdd2e6", "bold")
+        self.draw_temperature_value(cx, cy+self.sy(70), target, 30, 14, "#d8f7ff" if "cool" in action_lower else "#ffe2d6" if "heat" in action_lower else TEXT, "bold", degree_lift=12)
         self.pill(cx-self.sx(142), cy+self.sy(124), cx-self.sx(98), cy+self.sy(148), f"{minimum:.0f}°", fill="#080c12", outline="#111820", color=TEXT, size=10)
         self.pill(cx+self.sx(98), cy+self.sy(124), cx+self.sx(142), cy+self.sy(148), f"{maximum:.0f}°", fill="#080c12", outline="#111820", color=TEXT, size=10)
 
