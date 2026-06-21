@@ -24,8 +24,13 @@ fi
 
 # Native DSI display setup.
 # DSI panel reports 800x1280 physically, but the UI is landscape.
+# Current panel is flipped 180 degrees from the previous install to move the
+# broken touchscreen edge to the opposite side. Override with:
+#   SMART_THERMOSTAT_SCREEN_ROTATION=left|right|normal|inverted
+DISPLAY_OUTPUT="${SMART_THERMOSTAT_DISPLAY_OUTPUT:-DSI-1}"
+SCREEN_ROTATION="${SMART_THERMOSTAT_SCREEN_ROTATION:-right}"
 if command -v xrandr >/dev/null 2>&1; then
-  xrandr --output DSI-1 --rotate left || true
+  xrandr --output "$DISPLAY_OUTPUT" --rotate "$SCREEN_ROTATION" || true
 fi
 
 # Goodix touchscreen calibration.
@@ -38,7 +43,7 @@ if command -v xinput >/dev/null 2>&1; then
     echo "Configuring Goodix touch pointer id: $TOUCH_ID"
     xinput set-prop "$TOUCH_ID" "libinput Calibration Matrix" 1 0 0 0 1 0 0 0 1 || true
     xinput set-prop "$TOUCH_ID" "Coordinate Transformation Matrix" 1 0 0 0 1 0 0 0 1 || true
-    xinput map-to-output "$TOUCH_ID" DSI-1 || true
+    xinput map-to-output "$TOUCH_ID" "$DISPLAY_OUTPUT" || true
     xinput list-props "$TOUCH_ID" | grep -Ei "Coordinate Transformation Matrix|libinput Calibration Matrix|Device Node" || true
   else
     echo "Goodix touch pointer device not found."

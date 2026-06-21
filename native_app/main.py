@@ -197,6 +197,24 @@ class AppState:
     def ha_payload(self, extra: dict | None = None) -> dict:
         return ApiClient.ha_payload(self.config, extra)
 
+    def refresh_alarm_state(self):
+        """Read the current Alarmo/HA alarm state instead of trusting saved config."""
+        ha = self.ha()
+        entity = ha.get("alarmEntity") or {}
+        if not isinstance(entity, dict):
+            return None
+        eid = str(entity.get("entityId") or entity.get("entity_id") or "").strip()
+        if not eid:
+            return None
+        data = self.api.post("/api/ha/alarm/states", self.ha_payload({"entityIds": [eid]}))
+        alarms = data.get("alarms") or []
+        if not alarms:
+            return None
+        fresh = alarms[0]
+        entity.update(fresh)
+        ha["alarmEntity"] = entity
+        return fresh
+
     def save_config(self):
         record = self.api.save_config(self.config)
         self.config = record.get("config") or self.config
@@ -1443,6 +1461,12 @@ class ThermostatScreen(Page):
         if not eid:
             self.requestToast.emit("No alarm entity assigned")
             return
+        try:
+            fresh = self.s.refresh_alarm_state()
+            if fresh:
+                entity.update(fresh)
+        except Exception:
+            pass
         dlg = AlarmControlDialog(self.s, entity, self)
         def applied(alarm, action):
             if alarm:
@@ -3659,6 +3683,10 @@ class MainWindow(Background):
             if not self.api.wait_until_ready(5):
                 self.toast.show_message("Backend is not responding on 127.0.0.1:8080")
             self.s.load()
+            try:
+                self.s.refresh_alarm_state()
+            except Exception:
+                pass
             self.sync_runtime_only()
             self.sync_visible_page(self.current_name)
             self.toast.show_message("Native panel ready")
@@ -3679,12 +3707,11 @@ class MainWindow(Background):
         now = time.monotonic()
         self._last_page_change_at = now
         # Touchscreens can emit a ghost release after a nav tap. Do not let
-        # that release open the info button while the page is changing.
+        # that release open the nearby info button while the page is changing.
         self._ignore_info_until = now + 1.25
         self.stack.setCurrentWidget(self.pages[name])
         self.header.set_page(name)
-        # Load the page immediately. Rebuild/sync shortly after the tap settles,
-        # and do not wait for fresh Home Assistant data.
+        # Show the page immediately, even if fresh HA data is still catching up.
         QTimer.singleShot(60, lambda n=name: self.sync_visible_page(n))
 
     def sync_visible_page(self, name: str | None = None):
