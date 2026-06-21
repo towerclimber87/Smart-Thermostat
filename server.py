@@ -3447,6 +3447,7 @@ def _fetch_ha_state_items_for_entities(
     entity_ids: list[str] | None,
     domains: set[str] | None = None,
     all_states_threshold: int = 3,
+    use_cache: bool = True,
 ) -> list[dict]:
     """Fetch selected HA entity states in order with fewer REST calls.
 
@@ -3461,12 +3462,30 @@ def _fetch_ha_state_items_for_entities(
     if len(wanted) < max(2, int(all_states_threshold or 3)):
         items: list[dict] = []
         for entity_id in wanted:
-            item = _ha_state_cached(ha_url, token, entity_id)
+            item = _ha_state_cached(ha_url, token, entity_id) if use_cache else _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
             if isinstance(item, dict) and item:
                 items.append(item)
+                if not use_cache:
+                    try:
+                        cache_key = (_normalize_ha_url(ha_url), (token or "").strip(), entity_id)
+                        with _HA_ENTITY_STATE_CACHE_LOCK:
+                            _HA_ENTITY_STATE_CACHE[cache_key] = (time.monotonic(), _deepcopy_json(item))
+                    except Exception:
+                        pass
         return items
 
-    states = _ha_all_states_cached(ha_url, token)
+    if use_cache:
+        states = _ha_all_states_cached(ha_url, token)
+    else:
+        states = _ha_json_request(ha_url, token, "GET", "/api/states")
+        if not isinstance(states, list):
+            states = []
+        try:
+            cache_key = (_normalize_ha_url(ha_url), (token or "").strip())
+            with _HA_STATES_CACHE_LOCK:
+                _HA_STATES_CACHE[cache_key] = (time.monotonic(), states)
+        except Exception:
+            pass
     by_id = {str(item.get("entity_id", "")): item for item in states if isinstance(item, dict)}
     return [by_id[entity_id] for entity_id in wanted if entity_id in by_id]
 
@@ -4034,17 +4053,17 @@ def _fetch_ha_light_state(ha_url: str, token: str, entity_id: str) -> dict:
     return _normalize_light_item(item)
 
 
-def _fetch_ha_light_states_for_entities(ha_url: str, token: str, entity_ids: list[str]) -> list[dict]:
+def _fetch_ha_light_states_for_entities(ha_url: str, token: str, entity_ids: list[str], fresh: bool = False) -> list[dict]:
     wanted = _ordered_unique_entity_ids(entity_ids, {"light"})
-    if len(wanted) == 1:
+    if len(wanted) == 1 and not fresh:
         return [_fetch_ha_light_state(ha_url, token, wanted[0])]
-    items = _fetch_ha_state_items_for_entities(ha_url, token, wanted, {"light"}, all_states_threshold=2)
+    items = _fetch_ha_state_items_for_entities(ha_url, token, wanted, {"light"}, all_states_threshold=2, use_cache=not fresh)
     lights = [_normalize_light_item(item) for item in items]
     by_id = {item["entityId"]: item for item in lights}
     return [by_id[entity_id] for entity_id in wanted if entity_id in by_id]
 
 
-def _call_light_service(ha_url: str, token: str, entity_id: str, action: str, brightness: int | float | None = None, color: str | None = None) -> dict:
+def _call_light_service(ha_url: str, token: str, entity_id: str, action: str, brightness: int | float | None = None, color: str | None = None, transition: int | float | None = None, refresh: bool = True) -> dict:
     entity_id = (entity_id or "").strip()
     if not entity_id.startswith("light."):
         raise ValueError("Entity must be a light.* entity")
@@ -4053,7 +4072,13 @@ def _call_light_service(ha_url: str, token: str, entity_id: str, action: str, br
         raise ValueError("Unsupported light action")
 
     if action == "off":
-        _ha_json_request(ha_url, token, "POST", "/api/services/light/turn_off", {"entity_id": entity_id})
+        payload = {"entity_id": entity_id}
+        try:
+            if transition is not None:
+                payload["transition"] = max(0.0, min(5.0, float(transition)))
+        except (TypeError, ValueError):
+            pass
+        _ha_json_request(ha_url, token, "POST", "/api/services/light/turn_off", payload)
     elif action == "toggle":
         _ha_json_request(ha_url, token, "POST", "/api/services/light/toggle", {"entity_id": entity_id})
     else:
@@ -4063,15 +4088,19 @@ def _call_light_service(ha_url: str, token: str, entity_id: str, action: str, br
                 payload["brightness_pct"] = max(0, min(100, int(round(float(brightness)))))
             except (TypeError, ValueError):
                 pass
+        try:
+            if transition is not None:
+                payload["transition"] = max(0.0, min(5.0, float(transition)))
+        except (TypeError, ValueError):
+            pass
         rgb_color = _hex_to_rgb(color)
         if action == "color" and rgb_color:
             payload["rgb_color"] = rgb_color
         _ha_json_request(ha_url, token, "POST", "/api/services/light/turn_on", payload)
 
     _invalidate_ha_state_cache(ha_url, token)
-    try:
-        return _fetch_ha_light_state(ha_url, token, entity_id)
-    except Exception:
+
+    def fallback_state() -> dict:
         fallback_brightness = 0
         if action != "off":
             try:
@@ -4087,6 +4116,14 @@ def _call_light_service(ha_url: str, token: str, entity_id: str, action: str, br
             "colorSupported": bool(_hex_to_rgb(color)),
             "colorHex": f"#{str(color or '').strip().lstrip('#').lower()}" if _hex_to_rgb(color) else "#ffd76f",
         }
+
+    if not refresh:
+        return fallback_state()
+
+    try:
+        return _fetch_ha_light_state(ha_url, token, entity_id)
+    except Exception:
+        return fallback_state()
 
 
 def _normalize_number_control(item: dict, kind: str | None = None) -> dict:
@@ -4468,6 +4505,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                     payload.get("url", ""),
                     payload.get("token", ""),
                     payload.get("entityIds", []),
+                    bool(payload.get("fresh", False)),
                 )
                 return _json(self, 200, {"ok": True, "lights": lights, "count": len(lights)})
 
@@ -4479,6 +4517,8 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                     payload.get("action", "on"),
                     payload.get("brightness"),
                     payload.get("color"),
+                    payload.get("transition"),
+                    bool(payload.get("refresh", True)),
                 )
                 return _json(self, 200, {"ok": True, "light": light})
 

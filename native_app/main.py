@@ -5,6 +5,7 @@ import copy
 import math
 import os
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -2019,10 +2020,23 @@ class RoomScreen(Page):
 
 
 class LightsScreen(Page):
+    _lightActionCompleted = pyqtSignal(object)
+    _lightPollCompleted = pyqtSignal(object)
+
     def __init__(self, app_state: AppState, parent=None):
         super().__init__(app_state, parent)
         self.cards: list[LightCard] = []
         self.room_buttons = {}
+        self._card_by_entity: dict[str, LightCard] = {}
+        self._light_send_timers: dict[str, QTimer] = {}
+        self._light_pending: dict[str, dict] = {}
+        self._light_inflight: set[str] = set()
+        self._light_settle_until: dict[str, float] = {}
+        self._light_poll_running = False
+        self._last_light_error = ""
+        self._lightActionCompleted.connect(self._handle_light_action_completed)
+        self._lightPollCompleted.connect(self._handle_light_poll_completed)
+
         root = QVBoxLayout(self)
         # Tighten the light page shell so the controls can use the full glass panel
         # height instead of leaving a large unused strip at the bottom.
@@ -2079,11 +2093,14 @@ class LightsScreen(Page):
         try: self.s.save_config()
         except Exception: pass
         self.rebuild()
+        # Do not wait for the normal poll cadence when changing rooms.
+        QTimer.singleShot(80, self.poll)
 
     def populate_cards(self):
         for c in self.cards:
             c.setParent(None); c.deleteLater()
         self.cards = []
+        self._card_by_entity = {}
         while self.grid.count():
             item = self.grid.takeAt(0)
             if item.widget(): item.widget().deleteLater()
@@ -2097,6 +2114,9 @@ class LightsScreen(Page):
             card.brightnessChanged.connect(self.set_brightness)
             card.colorRequested.connect(self.open_light_color_picker)
             self.cards.append(card)
+            eid = str(light.get("haEntityId") or "")
+            if eid:
+                self._card_by_entity[eid] = card
             self.grid.addWidget(card, idx // 6, idx % 6)
         for col in range(6):
             self.grid.setColumnStretch(col, 1)
@@ -2121,13 +2141,50 @@ class LightsScreen(Page):
             active = nested_get(config, "lights", "room", default="living")
             lights = nested_get(config, "lights", "rooms", active, "lights", default=[]) or []
             for card, light in zip(self.cards, lights):
-                card.setLight(light)
+                eid = str(light.get("haEntityId") or "")
+                card.setLight(light, preserve_slider=self._light_is_busy(eid))
+
+    def _active_lights(self) -> list[dict]:
+        active = nested_get(self.config, "lights", "room", default="living")
+        return [x for x in nested_get(self.config, "lights", "rooms", active, "lights", default=[]) or [] if x.get("haEntityId")]
+
+    def _light_is_busy(self, entity_id: str) -> bool:
+        entity_id = str(entity_id or "")
+        if not entity_id:
+            return False
+        card = self._card_by_entity.get(entity_id)
+        if card is not None and card.isSliderActive():
+            return True
+        if entity_id in self._light_pending or entity_id in self._light_inflight:
+            return True
+        return time.monotonic() < self._light_settle_until.get(entity_id, 0.0)
+
+    def _set_light_optimistic(self, light: dict, value: int | None = None, action: str | None = None, color: str | None = None):
+        if value is not None:
+            value = int(clamp(value, 0, 100))
+            light["brightness"] = value
+            light["on"] = value > 0
+            if value > 0:
+                light["lastBrightness"] = value
+        if action == "off":
+            light["on"] = False
+            light["brightness"] = 0
+        elif action in {"on", "brightness", "color"}:
+            light["on"] = True
+            if value is None and int(light.get("brightness") or 0) <= 0:
+                value = int(light.get("lastBrightness") or 100)
+                light["brightness"] = value
+                light["lastBrightness"] = value
+        if color:
+            light["color"] = LightColorDialog.clean_color(color)
+            light["colorSupported"] = True
+        self.sync(self.s.config, self.s.thermostat)
 
     def room_action(self, turn_on: bool):
-        active = nested_get(self.config, "lights", "room", default="living")
-        lights = [x for x in nested_get(self.config, "lights", "rooms", active, "lights", default=[]) or [] if x.get("haEntityId")]
+        lights = self._active_lights()
         for light in lights:
-            self._send_light(light, "on" if turn_on else "off", light.get("lastBrightness") or 100 if turn_on else 0)
+            bright = int(light.get("lastBrightness") or light.get("brightness") or 100)
+            self._send_light(light, "on" if turn_on else "off", bright if turn_on else 0)
         self.requestToast.emit("Room lights updated")
 
     def _open_live_color_dialog(self, lights: list[dict], current: str, title: str):
@@ -2160,12 +2217,7 @@ class LightsScreen(Page):
             color = LightColorDialog.clean_color(color)
             pending["color"] = color
             for item in targets:
-                item["color"] = color
-                item["colorSupported"] = True
-                item["on"] = True
-                if int(item.get("brightness") or 0) <= 0:
-                    item["brightness"] = brightness_for(item)
-            self.sync(self.s.config, self.s.thermostat)
+                self._set_light_optimistic(item, brightness_for(item), action="color", color=color)
             live_timer.start(90)
 
         live_timer.timeout.connect(flush_color)
@@ -2176,8 +2228,7 @@ class LightsScreen(Page):
             flush_color()
 
     def open_room_color_picker(self):
-        active = nested_get(self.config, "lights", "room", default="living")
-        lights = [x for x in nested_get(self.config, "lights", "rooms", active, "lights", default=[]) or [] if x.get("haEntityId")]
+        lights = self._active_lights()
         rgb_lights = [x for x in lights if bool(x.get("colorSupported"))]
         if not rgb_lights:
             self.requestToast.emit("No RGB lights in this room")
@@ -2201,70 +2252,156 @@ class LightsScreen(Page):
             self.requestAssign.emit("light", light, "light")
             return
         action = "off" if bool(light.get("on")) else "on"
-        bright = light.get("lastBrightness") or 100 if action == "on" else 0
+        bright = int(light.get("lastBrightness") or light.get("brightness") or 100) if action == "on" else 0
         self._send_light(light, action, bright)
 
+    def _timer_for_light(self, entity_id: str) -> QTimer:
+        timer = self._light_send_timers.get(entity_id)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(lambda eid=entity_id: self._flush_light_send(eid))
+            self._light_send_timers[entity_id] = timer
+        return timer
+
     def set_brightness(self, light: dict, value: int):
-        if not light.get("haEntityId"):
+        entity_id = str(light.get("haEntityId") or "")
+        if not entity_id:
             return
-        action = "off" if value <= 0 else "on"
-        self._send_light(light, action, value)
+        value = int(clamp(value, 0, 100))
+        self._set_light_optimistic(light, value, action="brightness")
+        # Protect the local slider while HA catches up so a half-second-old HA
+        # state cannot snap the knob back under the user's finger.
+        self._light_settle_until[entity_id] = time.monotonic() + 1.35
+        self._light_pending[entity_id] = {"light": light, "value": value}
+        timer = self._timer_for_light(entity_id)
+        if entity_id in self._light_inflight:
+            return
+        if not timer.isActive():
+            # Small debounce: quick enough to feel live, light enough for the Pi
+            # and Home Assistant when the slider generates many touch events.
+            timer.start(90)
+
+    def _flush_light_send(self, entity_id: str):
+        pending = self._light_pending.get(entity_id)
+        if not pending:
+            return
+        if entity_id in self._light_inflight:
+            return
+        light = pending.get("light") or {}
+        value = int(clamp(pending.get("value", 0), 0, 100))
+        action = "off" if value <= 0 else "brightness"
+        self._light_inflight.add(entity_id)
+        payload = self.s.ha_payload({
+            "entityId": entity_id,
+            "action": action,
+            "brightness": value,
+            "transition": 0.25,
+            "refresh": False,
+        })
+        api = self.s.api
+
+        def worker():
+            try:
+                result = api.post("/api/ha/light/action", payload)
+                self._lightActionCompleted.emit({"entityId": entity_id, "light": light, "value": value, "result": result, "error": None})
+            except Exception as exc:
+                self._lightActionCompleted.emit({"entityId": entity_id, "light": light, "value": value, "result": None, "error": str(exc)})
+
+        threading.Thread(target=worker, name=f"light-brightness-{entity_id}", daemon=True).start()
+
+    def _handle_light_action_completed(self, info: object):
+        data = info if isinstance(info, dict) else {}
+        entity_id = str(data.get("entityId") or "")
+        value = int(clamp(data.get("value", 0), 0, 100))
+        self._light_inflight.discard(entity_id)
+        if data.get("error"):
+            err = str(data.get("error"))
+            if err != self._last_light_error:
+                self._last_light_error = err
+                self.requestToast.emit(f"Light failed: {err}")
+        latest = self._light_pending.get(entity_id)
+        if latest and int(clamp(latest.get("value", value), 0, 100)) != value:
+            self._timer_for_light(entity_id).start(70)
+            return
+        self._light_pending.pop(entity_id, None)
+        # Let the physical light finish transitioning before accepting HA state
+        # back into the slider.
+        self._light_settle_until[entity_id] = time.monotonic() + 0.80
+        QTimer.singleShot(950, self.poll)
 
     def _send_light(self, light: dict, action: str, brightness: int | None = None, color: str | None = None):
+        entity_id = str(light.get("haEntityId") or "")
+        if not entity_id:
+            return
         try:
-            payload = {"entityId": light.get("haEntityId"), "action": action}
+            payload = {"entityId": entity_id, "action": action, "refresh": False}
             if brightness is not None:
-                payload["brightness"] = int(brightness)
+                payload["brightness"] = int(clamp(brightness, 0, 100))
+                payload["transition"] = 0.25
             if color:
                 payload["color"] = color
             elif light.get("colorSupported") and light.get("color"):
                 payload["color"] = light.get("color")
-            result = self.s.api.post("/api/ha/light/action", self.s.ha_payload(payload))
-            st = result.get("light") or {}
-            light["on"] = action != "off"
-            if brightness is not None:
-                light["brightness"] = int(brightness)
-                if brightness > 0:
-                    light["lastBrightness"] = int(brightness)
-            if st.get("brightnessPct") is not None:
-                light["brightness"] = int(st.get("brightnessPct") or 0)
-            elif st.get("brightness") is not None:
-                light["brightness"] = int(st.get("brightness") or 0)
-            if st.get("colorHex") or color:
-                light["color"] = st.get("colorHex") or color
-                light["colorSupported"] = True
-            if st.get("colorSupported") is not None:
-                light["colorSupported"] = bool(st.get("colorSupported"))
-            light["haName"] = st.get("name") or light.get("haName")
-            self.s.save_config()
-            self.sync(self.s.config, self.s.thermostat)
+            self._set_light_optimistic(light, payload.get("brightness"), action=action, color=payload.get("color"))
+            self.s.api.post("/api/ha/light/action", self.s.ha_payload(payload))
+            self._light_settle_until[entity_id] = time.monotonic() + 0.80
+            QTimer.singleShot(950, self.poll)
         except Exception as exc:
             self.requestToast.emit(f"Light failed: {exc}")
 
-    def poll(self):
-        active = nested_get(self.config, "lights", "room", default="living")
-        lights = [x for x in nested_get(self.config, "lights", "rooms", active, "lights", default=[]) or [] if x.get("haEntityId")]
-        if not lights:
+    def _apply_light_state(self, light: dict, st: dict):
+        if not st:
             return
-        try:
-            result = self.s.api.post("/api/ha/light/states", self.s.ha_payload({"entityIds": [l["haEntityId"] for l in lights]}))
-            by_id = {x.get("entityId"): x for x in result.get("lights") or []}
-            for light in lights:
-                st = by_id.get(light.get("haEntityId"))
-                if st:
-                    light["on"] = as_bool_state(st.get("state"))
-                    if st.get("brightnessPct") is not None:
-                        light["brightness"] = int(st.get("brightnessPct") or 0)
-                    elif st.get("brightness") is not None:
-                        light["brightness"] = int(st.get("brightness") or 0)
-                    if st.get("colorHex"):
-                        light["color"] = st.get("colorHex")
-                    if st.get("colorSupported") is not None:
-                        light["colorSupported"] = bool(st.get("colorSupported"))
-                    light["haName"] = st.get("name") or light.get("haName")
-            self.sync(self.s.config, self.s.thermostat)
-        except Exception:
-            pass
+        light["on"] = as_bool_state(st.get("state"))
+        if st.get("brightnessPct") is not None:
+            light["brightness"] = int(st.get("brightnessPct") or 0)
+        elif st.get("brightness") is not None:
+            light["brightness"] = int(st.get("brightness") or 0)
+        if light.get("brightness"):
+            light["lastBrightness"] = int(light.get("brightness") or 0)
+        if st.get("colorHex"):
+            light["color"] = st.get("colorHex")
+        if st.get("colorSupported") is not None:
+            light["colorSupported"] = bool(st.get("colorSupported"))
+        light["haName"] = st.get("name") or light.get("haName")
+
+    def poll(self):
+        lights = self._active_lights()
+        if not lights or self._light_poll_running:
+            return
+        active = nested_get(self.config, "lights", "room", default="living")
+        entity_ids = [l["haEntityId"] for l in lights]
+        payload = self.s.ha_payload({"entityIds": entity_ids, "fresh": True})
+        api = self.s.api
+        self._light_poll_running = True
+
+        def worker():
+            try:
+                result = api.post("/api/ha/light/states", payload)
+                self._lightPollCompleted.emit({"room": active, "result": result, "error": None})
+            except Exception as exc:
+                self._lightPollCompleted.emit({"room": active, "result": None, "error": str(exc)})
+
+        threading.Thread(target=worker, name="light-state-poll", daemon=True).start()
+
+    def _handle_light_poll_completed(self, info: object):
+        self._light_poll_running = False
+        data = info if isinstance(info, dict) else {}
+        if data.get("error"):
+            return
+        if data.get("room") != nested_get(self.config, "lights", "room", default="living"):
+            return
+        result = data.get("result") or {}
+        by_id = {x.get("entityId"): x for x in result.get("lights") or []}
+        for light in self._active_lights():
+            entity_id = str(light.get("haEntityId") or "")
+            if self._light_is_busy(entity_id):
+                continue
+            st = by_id.get(entity_id)
+            if st:
+                self._apply_light_state(light, st)
+        self.sync(self.s.config, self.s.thermostat)
 
 
 class BlindCard(GlassPanel):
@@ -4351,8 +4488,31 @@ class MainWindow(Background):
         self._ignore_info_until = now + 1.25
         self.stack.setCurrentWidget(self.pages[name])
         self.header.set_page(name)
-        # Show the page immediately, even if fresh HA data is still catching up.
+        # Show the page immediately, then kick a fresh Lights poll so it does not
+        # sit on saved config for several seconds after navigation.
         QTimer.singleShot(60, lambda n=name: self.sync_visible_page(n))
+        QTimer.singleShot(140, lambda n=name: self.poll_visible_page_now(n))
+
+    def poll_visible_page_now(self, name: str | None = None):
+        try:
+            if name is not None and name != self.current_name:
+                return
+            if getattr(self, "_poll_busy", False):
+                return
+            if QApplication.activeModalWidget() is not None:
+                return
+            if self.current_name != "Lights":
+                return
+            page = self.pages.get(self.current_name)
+            if page is None:
+                return
+            self._poll_busy = True
+            self._last_poll_by_page[self.current_name] = time.monotonic()
+            page.poll()
+        except Exception:
+            pass
+        finally:
+            self._poll_busy = False
 
     def sync_visible_page(self, name: str | None = None):
         try:

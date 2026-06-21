@@ -576,7 +576,7 @@ class LightCard(HoldCard):
         self.slider.setValue(int(light.get("brightness") or 0))
         self.slider.setStyleSheet(SLIDER_V)
         self.slider.sliderReleased.connect(self._release)
-        self.slider.valueChanged.connect(lambda v: self.update())
+        self.slider.valueChanged.connect(self._value_changed)
         self.slider.setCursor(Qt.PointingHandCursor)
 
         self._power_pressed = False
@@ -603,13 +603,26 @@ class LightCard(HoldCard):
         bottom = 60
         self.slider.setGeometry(int(self.width() / 2 - 21), top, 42, max(78, self.height() - top - bottom))
 
-    def setLight(self, light: dict):
+    def isSliderActive(self) -> bool:
+        return bool(self.slider.isSliderDown())
+
+    def setLight(self, light: dict, preserve_slider: bool = False):
         self.light = light
         self.dashed = not bool(light.get("haEntityId"))
         val = int(light.get("brightness") or 0)
-        if not self.slider.isSliderDown():
+        if not preserve_slider and not self.slider.isSliderDown():
+            # External HA updates should not be interpreted as user input.
+            was_blocked = self.slider.blockSignals(True)
             self.slider.setValue(val)
+            self.slider.blockSignals(was_blocked)
         self.update()
+
+    def _value_changed(self, value: int):
+        self.update()
+        # While the user is actively sliding, emit live previews so the light can
+        # follow the finger. Programmatic setLight() updates are signal-blocked.
+        if self.slider.isSliderDown():
+            self.brightnessChanged.emit(self.light, int(value))
 
     def _release(self):
         self.brightnessChanged.emit(self.light, int(self.slider.value()))
