@@ -562,6 +562,7 @@ class RoomControlCard(HoldCard):
 
 class LightCard(HoldCard):
     brightnessChanged = pyqtSignal(dict, int)
+    powerClicked = pyqtSignal(dict)
     colorRequested = pyqtSignal(dict)
 
     def __init__(self, light: dict, parent=None):
@@ -577,7 +578,9 @@ class LightCard(HoldCard):
         self.slider.setStyleSheet(SLIDER_V)
         self.slider.sliderReleased.connect(self._release)
         self.slider.valueChanged.connect(self._value_changed)
+        self.slider.installEventFilter(self)
         self.slider.setCursor(Qt.PointingHandCursor)
+        self._slider_dragging = False
 
         self._power_pressed = False
         self._power_held = False
@@ -595,6 +598,37 @@ class LightCard(HoldCard):
     def _power_hit_rect(self) -> QRectF:
         return self._power_rect().adjusted(-30.0, -24.0, 30.0, 24.0)
 
+    def _slider_value_from_pos(self, pos) -> int:
+        y = max(0.0, min(float(self.slider.height() - 1), float(pos.y())))
+        span = max(1.0, float(self.slider.height() - 1))
+        pct = 1.0 - (y / span)
+        raw = self.slider.minimum() + pct * (self.slider.maximum() - self.slider.minimum())
+        return int(max(self.slider.minimum(), min(self.slider.maximum(), round(raw))))
+
+    def _set_slider_from_pos(self, pos):
+        self.slider.setValue(self._slider_value_from_pos(pos))
+
+    def eventFilter(self, obj, event):
+        if obj is self.slider:
+            if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                self._slider_dragging = True
+                self.slider.setSliderDown(True)
+                self._set_slider_from_pos(event.pos())
+                event.accept()
+                return True
+            if event.type() == QEvent.MouseMove and self._slider_dragging:
+                self._set_slider_from_pos(event.pos())
+                event.accept()
+                return True
+            if event.type() == QEvent.MouseButtonRelease and self._slider_dragging:
+                self._set_slider_from_pos(event.pos())
+                self._slider_dragging = False
+                self._release()
+                self.slider.setSliderDown(False)
+                event.accept()
+                return True
+        return super().eventFilter(obj, event)
+
     def resizeEvent(self, event):
         top = 128 if self.height() >= 320 else 118
         # Leave just enough room for the percent/brightness labels; the light
@@ -604,7 +638,7 @@ class LightCard(HoldCard):
         self.slider.setGeometry(int(self.width() / 2 - 21), top, 42, max(78, self.height() - top - bottom))
 
     def isSliderActive(self) -> bool:
-        return bool(self.slider.isSliderDown())
+        return bool(self.slider.isSliderDown() or self._slider_dragging)
 
     def setLight(self, light: dict, preserve_slider: bool = False):
         self.light = light
@@ -650,8 +684,8 @@ class LightCard(HoldCard):
             self._power_pressed = False
             self._power_held = False
             if pressed_inside and not was_held:
-                # A normal tap on the power plate still toggles the light.
-                self.clicked.emit()
+                # Only the dedicated top plate toggles the light.
+                self.powerClicked.emit(self.light)
             event.accept()
             return
         super().mouseReleaseEvent(event)
@@ -709,9 +743,6 @@ class LightCard(HoldCard):
             p.setBrush(color)
             p.setPen(QPen(QColor(255,255,255,150), 1))
             p.drawEllipse(QPointF(plate.right()-7, plate.bottom()-7), 7, 7)
-            p.setFont(font(6, QFont.Black, 10))
-            p.setPen(QColor(205, 246, 255, 200))
-            p.drawText(QRectF(0, plate.bottom()+4, r.width(), 13), Qt.AlignCenter, "HOLD RGB")
 
         p.setFont(font(18, QFont.Black))
         p.setPen(T.TEXT if on else T.TEXT_DIM)

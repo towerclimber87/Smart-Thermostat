@@ -2109,7 +2109,7 @@ class LightsScreen(Page):
         self.title.setText(f"<span style='color:#46e8ff; letter-spacing:4px; font-size:11px; font-weight:900'>LIGHT CONTROL</span><br><span style='font-size:38px; font-weight:1000; color:#ffffff'>{room.get('label') or active}</span>")
         for idx, light in enumerate(room.get("lights") or []):
             card = LightCard(light)
-            card.clicked.connect(lambda checked=False, l=light: self.toggle_light(l))
+            card.powerClicked.connect(self.toggle_light)
             card.held.connect(lambda l=light: self.requestAssign.emit("light", l, "light"))
             card.brightnessChanged.connect(self.set_brightness)
             card.colorRequested.connect(self.open_light_color_picker)
