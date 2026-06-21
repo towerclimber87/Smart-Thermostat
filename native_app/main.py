@@ -48,6 +48,7 @@ from widgets import (
     HoldCard,
     IconCircle,
     LightCard,
+    MiniTextKeyboardDialog,
     NavBar,
     RoomControlCard,
     RoundButton,
@@ -77,6 +78,48 @@ def nested_get(data: dict, *keys, default=None):
             return default
         cur = cur.get(key)
     return default if cur is None else cur
+
+
+def slug_room_key(label: str, rooms: dict) -> str:
+    base = "".join(ch.lower() if ch.isalnum() else "-" for ch in str(label or "room")).strip("-")
+    base = "-".join(part for part in base.split("-") if part) or "room"
+    key = base
+    idx = 2
+    while key in rooms:
+        key = f"{base}-{idx}"
+        idx += 1
+    return key
+
+
+class HoldRoundButton(RoundButton):
+    held = pyqtSignal()
+
+    def __init__(self, *args, hold_ms: int = 700, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._hold_fired = False
+        self._hold_timer = QTimer(self)
+        self._hold_timer.setSingleShot(True)
+        self._hold_timer.setInterval(hold_ms)
+        self._hold_timer.timeout.connect(self._fire_hold)
+
+    def _fire_hold(self):
+        self._hold_fired = True
+        self.held.emit()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._hold_fired = False
+            self._hold_timer.start()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._hold_timer.isActive():
+            self._hold_timer.stop()
+        if self._hold_fired:
+            self.setDown(False)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
 
 class StatusToast(GlassPanel):
@@ -1877,8 +1920,8 @@ class RoomScreen(Page):
         top.addLayout(self.room_tabs)
         self.lay.addLayout(top)
         self.grid = QGridLayout()
-        self.grid.setHorizontalSpacing(14)
-        self.grid.setVerticalSpacing(14)
+        self.grid.setHorizontalSpacing(10)
+        self.grid.setVerticalSpacing(10)
         self.lay.addLayout(self.grid, 1)
 
     def rebuild(self):
@@ -1922,6 +1965,10 @@ class RoomScreen(Page):
             card.held.connect(lambda ctl=control: self.requestAssign.emit("room", ctl, "room"))
             self.cards.append(card)
             self.grid.addWidget(card, idx // 6, idx % 6)
+        for col in range(6):
+            self.grid.setColumnStretch(col, 1)
+        for row in range(3):
+            self.grid.setRowStretch(row, 1)
         self.grid.setRowStretch((len(controls) + 5) // 6, 1)
 
     def sync(self, config: dict, thermostat: dict):
@@ -1991,8 +2038,8 @@ class LightsScreen(Page):
         self.lay.addLayout(top)
         center_buttons = QHBoxLayout()
         center_buttons.addStretch(1)
-        self.on_btn = RoundButton("Room On", active=True, min_h=44)
-        self.off_btn = RoundButton("Room Off", kind="purple", min_h=44)
+        self.on_btn = HoldRoundButton("Room On", active=True, min_h=44)
+        self.off_btn = HoldRoundButton("Room Off", kind="purple", min_h=44)
         self.on_btn.setMinimumWidth(148); self.off_btn.setMinimumWidth(148)
         center_buttons.addWidget(self.on_btn); center_buttons.addWidget(self.off_btn)
         center_buttons.addStretch(1)
@@ -2003,6 +2050,8 @@ class LightsScreen(Page):
         self.lay.addLayout(self.grid, 1)
         self.on_btn.clicked.connect(lambda: self.room_action(True))
         self.off_btn.clicked.connect(lambda: self.room_action(False))
+        self.on_btn.held.connect(self.open_room_color_picker)
+        self.off_btn.held.connect(self.open_room_color_picker)
 
     def rebuild(self):
         while self.room_tabs.count():
@@ -2041,8 +2090,10 @@ class LightsScreen(Page):
             card.held.connect(lambda l=light: self.requestAssign.emit("light", l, "light"))
             card.brightnessChanged.connect(self.set_brightness)
             self.cards.append(card)
-            self.grid.addWidget(card, 0, idx)
-        self.grid.setColumnStretch(len(self.cards), 1)
+            self.grid.addWidget(card, idx // 6, idx % 6)
+        for col in range(6):
+            self.grid.setColumnStretch(col, 1)
+        self.grid.setRowStretch((len(self.cards) + 5) // 6, 1)
 
     def sync(self, config, thermostat):
         first = self.config is not config
@@ -2062,6 +2113,24 @@ class LightsScreen(Page):
             self._send_light(light, "on" if turn_on else "off", light.get("lastBrightness") or 100 if turn_on else 0)
         self.requestToast.emit("Room lights updated")
 
+    def open_room_color_picker(self):
+        active = nested_get(self.config, "lights", "room", default="living")
+        lights = [x for x in nested_get(self.config, "lights", "rooms", active, "lights", default=[]) or [] if x.get("haEntityId")]
+        rgb_lights = [x for x in lights if bool(x.get("colorSupported"))]
+        if not rgb_lights:
+            self.requestToast.emit("No RGB lights in this room")
+            return
+        current = rgb_lights[0].get("color") or rgb_lights[0].get("colorHex") or "#ffd76f"
+        color = LightColorDialog.get_color(self, current, "Room RGB Color")
+        if not color:
+            return
+        for light in rgb_lights:
+            brightness = int(light.get("brightness") or light.get("lastBrightness") or 100)
+            if brightness <= 0:
+                brightness = int(light.get("lastBrightness") or 100)
+            self._send_light(light, "color", brightness, color=color)
+        self.requestToast.emit("Room RGB color updated")
+
     def toggle_light(self, light: dict):
         if not light.get("haEntityId"):
             self.requestAssign.emit("light", light, "light")
@@ -2076,22 +2145,31 @@ class LightsScreen(Page):
         action = "off" if value <= 0 else "on"
         self._send_light(light, action, value)
 
-    def _send_light(self, light: dict, action: str, brightness: int | None = None):
+    def _send_light(self, light: dict, action: str, brightness: int | None = None, color: str | None = None):
         try:
             payload = {"entityId": light.get("haEntityId"), "action": action}
             if brightness is not None:
                 payload["brightness"] = int(brightness)
-            if light.get("colorSupported") and light.get("color"):
+            if color:
+                payload["color"] = color
+            elif light.get("colorSupported") and light.get("color"):
                 payload["color"] = light.get("color")
             result = self.s.api.post("/api/ha/light/action", self.s.ha_payload(payload))
             st = result.get("light") or {}
-            light["on"] = action == "on"
+            light["on"] = action != "off"
             if brightness is not None:
                 light["brightness"] = int(brightness)
                 if brightness > 0:
                     light["lastBrightness"] = int(brightness)
-            if st.get("brightness") is not None:
+            if st.get("brightnessPct") is not None:
+                light["brightness"] = int(st.get("brightnessPct") or 0)
+            elif st.get("brightness") is not None:
                 light["brightness"] = int(st.get("brightness") or 0)
+            if st.get("colorHex") or color:
+                light["color"] = st.get("colorHex") or color
+                light["colorSupported"] = True
+            if st.get("colorSupported") is not None:
+                light["colorSupported"] = bool(st.get("colorSupported"))
             light["haName"] = st.get("name") or light.get("haName")
             self.s.save_config()
             self.sync(self.s.config, self.s.thermostat)
@@ -2110,8 +2188,14 @@ class LightsScreen(Page):
                 st = by_id.get(light.get("haEntityId"))
                 if st:
                     light["on"] = as_bool_state(st.get("state"))
-                    if st.get("brightness") is not None:
+                    if st.get("brightnessPct") is not None:
+                        light["brightness"] = int(st.get("brightnessPct") or 0)
+                    elif st.get("brightness") is not None:
                         light["brightness"] = int(st.get("brightness") or 0)
+                    if st.get("colorHex"):
+                        light["color"] = st.get("colorHex")
+                    if st.get("colorSupported") is not None:
+                        light["colorSupported"] = bool(st.get("colorSupported"))
                     light["haName"] = st.get("name") or light.get("haName")
             self.sync(self.s.config, self.s.thermostat)
         except Exception:
@@ -2848,6 +2932,285 @@ class PeopleSelectionDialog(QDialog):
     def save(self):
         self.saved.emit(self.selected_people)
         self.accept()
+
+
+
+class LightColorDialog(QDialog):
+    COLORS = [
+        ("Warm", "#ffd76f"),
+        ("White", "#ffffff"),
+        ("Red", "#ff3b30"),
+        ("Orange", "#ff9500"),
+        ("Yellow", "#ffe600"),
+        ("Green", "#34c759"),
+        ("Cyan", "#32d7ff"),
+        ("Blue", "#007aff"),
+        ("Purple", "#af52de"),
+        ("Pink", "#ff2d8d"),
+    ]
+
+    def __init__(self, current: str = "#ffd76f", title: str = "RGB Color", parent=None):
+        super().__init__(parent)
+        self.selected_color = self.clean_color(current)
+        self.setWindowTitle(title)
+        self.setModal(True)
+        self.resize(940, 420)
+        self.setStyleSheet("""
+            QDialog { background:#09111f; color:#f7fbff; }
+            QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
+        """)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 22, 24, 22)
+        root.setSpacing(14)
+
+        header = QLabel(title)
+        header.setAlignment(Qt.AlignCenter)
+        header.setFont(font(26, QFont.Black))
+        root.addWidget(header)
+
+        hint = QLabel("Tap a color to apply it to the RGB lights in this room.")
+        hint.setAlignment(Qt.AlignCenter)
+        hint.setFont(font(11, QFont.Black))
+        hint.setStyleSheet("color:#c9d5ea;")
+        root.addWidget(hint)
+
+        self.preview = QLabel(self.selected_color.upper())
+        self.preview.setAlignment(Qt.AlignCenter)
+        self.preview.setFont(font(16, QFont.Black))
+        self.preview.setFixedHeight(54)
+        root.addWidget(self.preview)
+        self.refresh_preview()
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(12)
+        for idx, (name, color) in enumerate(self.COLORS):
+            btn = QPushButton(name)
+            btn.setMinimumHeight(70)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setFont(font(13, QFont.Black))
+            btn.setStyleSheet(self.color_button_style(color, selected=(self.selected_color.lower() == color.lower())))
+            btn.clicked.connect(lambda checked=False, c=color: self.pick(c))
+            grid.addWidget(btn, idx // 5, idx % 5)
+        root.addLayout(grid, 1)
+
+        bottom = QHBoxLayout()
+        cancel = RoundButton("Cancel", min_h=48)
+        apply = RoundButton("Apply Color", active=True, min_h=48)
+        cancel.setMinimumWidth(150)
+        apply.setMinimumWidth(190)
+        cancel.clicked.connect(self.reject)
+        apply.clicked.connect(self.accept)
+        bottom.addStretch(1)
+        bottom.addWidget(cancel)
+        bottom.addWidget(apply)
+        root.addLayout(bottom)
+
+    @staticmethod
+    def clean_color(value: str, fallback: str = "#ffd76f") -> str:
+        raw = str(value or fallback).strip()
+        if not raw.startswith("#"):
+            raw = "#" + raw
+        raw = raw[:7]
+        c = QColor(raw)
+        return raw.lower() if c.isValid() else fallback
+
+    def color_button_style(self, color: str, selected: bool = False) -> str:
+        c = QColor(color)
+        text = "#06121d" if (c.red() * 0.299 + c.green() * 0.587 + c.blue() * 0.114) > 150 else "#ffffff"
+        border = "4px solid #ffffff" if selected else "1px solid rgba(255,255,255,0.28)"
+        return f"background:{color}; color:{text}; border:{border}; border-radius:22px; font-weight:900;"
+
+    def pick(self, color: str):
+        self.selected_color = self.clean_color(color)
+        self.refresh_preview()
+
+    def refresh_preview(self):
+        color = self.clean_color(self.selected_color)
+        c = QColor(color)
+        text = "#06121d" if (c.red() * 0.299 + c.green() * 0.587 + c.blue() * 0.114) > 150 else "#ffffff"
+        self.preview.setText(color.upper())
+        self.preview.setStyleSheet(f"background:{color}; color:{text}; border:2px solid rgba(255,255,255,0.28); border-radius:22px; padding:10px;")
+
+    @staticmethod
+    def get_color(parent, current: str = "#ffd76f", title: str = "RGB Color") -> str | None:
+        dlg = LightColorDialog(current, title, parent)
+        if dlg.exec_() == QDialog.Accepted:
+            return dlg.selected_color
+        return None
+
+
+class RoomManagerSettingsDialog(QDialog):
+    saved = pyqtSignal()
+
+    PROFILES = {
+        "Blinds": ("blinds", "Shade Rooms", "blinds", "Blind"),
+        "Lights": ("lights", "Light Rooms", "lights", "Light"),
+        "Room": ("roomControl", "Room Control Rooms", "controls", "Control"),
+    }
+
+    def __init__(self, state: AppState, page_name: str, parent=None):
+        super().__init__(parent)
+        self.s = state
+        self.page_name = page_name
+        self.domain, title, self.item_key, self.item_label = self.PROFILES.get(page_name, self.PROFILES["Room"])
+        self.selected_key = str((self.s.config.get(self.domain) or {}).get("room") or "")
+        self.setWindowTitle(title)
+        self.setModal(True)
+        self.resize(900, 560)
+        self.setStyleSheet("""
+            QDialog { background:#09111f; color:#f7fbff; }
+            QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
+        """)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 22, 24, 22)
+        root.setSpacing(14)
+
+        self.header = QLabel(title)
+        self.header.setAlignment(Qt.AlignCenter)
+        self.header.setFont(font(27, QFont.Black))
+        root.addWidget(self.header)
+
+        self.hint = QLabel("Add or delete page rooms. Entries inside each room stay on that page and are assigned by pressing/holding an entry.")
+        self.hint.setWordWrap(True)
+        self.hint.setAlignment(Qt.AlignCenter)
+        self.hint.setFont(font(11, QFont.Black))
+        self.hint.setStyleSheet("color:#c9d5ea;")
+        root.addWidget(self.hint)
+
+        self.room_panel = GlassPanel(radius=24, strong=True)
+        root.addWidget(self.room_panel, 1)
+        self.room_lay = QGridLayout(self.room_panel)
+        self.room_lay.setContentsMargins(18, 18, 18, 18)
+        self.room_lay.setHorizontalSpacing(12)
+        self.room_lay.setVerticalSpacing(12)
+
+        bottom = QHBoxLayout()
+        self.add_btn = RoundButton("Add Room", active=True, min_h=50)
+        self.delete_btn = RoundButton("Delete Selected", kind="danger", min_h=50)
+        close_btn = RoundButton("Close", min_h=50)
+        self.add_btn.setMinimumWidth(160)
+        self.delete_btn.setMinimumWidth(190)
+        close_btn.setMinimumWidth(150)
+        self.add_btn.clicked.connect(self.add_room)
+        self.delete_btn.clicked.connect(self.delete_selected_room)
+        close_btn.clicked.connect(self.accept)
+        bottom.addWidget(self.add_btn)
+        bottom.addWidget(self.delete_btn)
+        bottom.addStretch(1)
+        bottom.addWidget(close_btn)
+        root.addLayout(bottom)
+        self.rebuild()
+
+    def ensure_model(self) -> tuple[dict, dict]:
+        section = self.s.config.setdefault(self.domain, {})
+        rooms = section.setdefault("rooms", {})
+        if not rooms:
+            rooms["living"] = {"label": "Living Room", self.item_key: []}
+            section["room"] = "living"
+        for key, room in rooms.items():
+            room.setdefault("label", str(key).replace("-", " ").title())
+            room.setdefault(self.item_key, [])
+        if section.get("room") not in rooms:
+            section["room"] = next(iter(rooms))
+        if self.selected_key not in rooms:
+            self.selected_key = section.get("room") or next(iter(rooms))
+        return section, rooms
+
+    def rebuild(self):
+        while self.room_lay.count():
+            item = self.room_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        section, rooms = self.ensure_model()
+        for idx, (key, room) in enumerate(rooms.items()):
+            count = len(room.get(self.item_key) or [])
+            label = room.get("label") or key
+            btn = RoundButton(f"{label}\n{count} {self.item_label}{'' if count == 1 else 's'}", active=key == self.selected_key, min_h=82)
+            btn.setMinimumWidth(170)
+            btn.clicked.connect(lambda checked=False, k=key: self.select_room(k))
+            self.room_lay.addWidget(btn, idx // 4, idx % 4)
+        self.delete_btn.setEnabled(len(rooms) > 1)
+
+    def select_room(self, key: str):
+        self.selected_key = key
+        self.s.config.setdefault(self.domain, {})["room"] = key
+        try:
+            self.s.save_config()
+            self.saved.emit()
+        except Exception:
+            pass
+        self.rebuild()
+
+    def add_room(self):
+        section, rooms = self.ensure_model()
+        label = MiniTextKeyboardDialog.get_text(self, "New Room Name", "")
+        label = str(label or "").strip()
+        if not label:
+            return
+        key = slug_room_key(label, rooms)
+        rooms[key] = {"label": label, self.item_key: []}
+        section["room"] = key
+        self.selected_key = key
+        try:
+            self.s.save_config()
+            self.saved.emit()
+            self.rebuild()
+        except Exception as exc:
+            QMessageBox.warning(self, "Save failed", str(exc))
+
+    def delete_selected_room(self):
+        section, rooms = self.ensure_model()
+        key = self.selected_key or section.get("room")
+        if key not in rooms:
+            return
+        if len(rooms) <= 1:
+            QMessageBox.information(self, "Room Required", "At least one room must remain.")
+            return
+        label = rooms.get(key, {}).get("label") or key
+        if QMessageBox.question(self, "Delete Room", f"Delete {label}? This removes that room and its {self.item_label.lower()} entries from this page.") != QMessageBox.Yes:
+            return
+        rooms.pop(key, None)
+        section["room"] = next(iter(rooms))
+        self.selected_key = section["room"]
+        try:
+            self.s.save_config()
+            self.saved.emit()
+            self.rebuild()
+        except Exception as exc:
+            QMessageBox.warning(self, "Save failed", str(exc))
+
+
+class SimplePageSettingsDialog(QDialog):
+    def __init__(self, page_name: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"{page_name} Settings")
+        self.setModal(True)
+        self.resize(680, 320)
+        self.setStyleSheet("""
+            QDialog { background:#09111f; color:#f7fbff; }
+            QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
+        """)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 22, 24, 22)
+        title = QLabel(f"{page_name} Settings")
+        title.setAlignment(Qt.AlignCenter)
+        title.setFont(font(27, QFont.Black))
+        root.addWidget(title)
+        msg = QLabel("This page does not use the thermostat setup panel. Page-specific controls can be added here later.")
+        msg.setWordWrap(True)
+        msg.setAlignment(Qt.AlignCenter)
+        msg.setFont(font(13, QFont.Black))
+        msg.setStyleSheet("color:#c9d5ea; padding:18px;")
+        root.addWidget(msg, 1)
+        close = RoundButton("Close", active=True, min_h=50)
+        close.setMinimumWidth(150)
+        close.clicked.connect(self.accept)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(close)
+        root.addLayout(row)
 
 
 
@@ -3921,8 +4284,14 @@ class MainWindow(Background):
                 if entered is None:
                     self._settings_reopen_block_until = time.monotonic() + 1.5
                     return
-            dlg = SettingsDialog(self.s, self)
-            dlg.saved.connect(self.reload_all)
+            if self.current_name == "Thermostat":
+                dlg = SettingsDialog(self.s, self)
+                dlg.saved.connect(self.reload_all)
+            elif self.current_name in {"Blinds", "Lights", "Room"}:
+                dlg = RoomManagerSettingsDialog(self.s, self.current_name, self)
+                dlg.saved.connect(self.reload_all)
+            else:
+                dlg = SimplePageSettingsDialog(self.current_name, self)
             dlg.exec_()
             self.reload_all()
         finally:

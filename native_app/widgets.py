@@ -484,7 +484,11 @@ class RoomControlCard(HoldCard):
     def __init__(self, control: dict, parent=None):
         super().__init__(parent, dashed=not bool(control.get("haEntityId")))
         self.control = control
-        self.setMinimumSize(218, 210)
+        # The Room page is designed for a 6 x 3 grid on the 10.1" panel.
+        # Keep cards compact enough to avoid overlap while still scaling up
+        # when the window has more space.
+        self.setMinimumSize(132, 142)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
     def setControl(self, control: dict):
         self.control = control
@@ -507,24 +511,28 @@ class RoomControlCard(HoldCard):
             p.setPen(QPen(QColor(86, 255, 206, 120), 2))
             p.drawRoundedRect(r.adjusted(1.5,1.5,-1.5,-1.5), self.radius, self.radius)
 
+        pad = max(10, min(18, int(r.width() * 0.10)))
+        icon_size = max(42, min(62, int(r.height() * 0.38)))
+
         # icon glass square
-        icon = QRectF(20, 18, 78, 78)
+        icon = QRectF(pad, 12, icon_size, icon_size)
         g = QLinearGradient(icon.topLeft(), icon.bottomRight())
         g.setColorAt(0, QColor(98, 140, 152, 94))
         g.setColorAt(1, QColor(42, 54, 71, 170))
         p.setBrush(g)
         p.setPen(QPen(QColor(89, 229, 249, 66), 1.2))
-        p.drawRoundedRect(icon, 16, 16)
-        p.setFont(font(34, QFont.Black))
+        p.drawRoundedRect(icon, 14, 14)
+        p.setFont(font(max(22, int(icon_size * 0.45)), QFont.Black))
         p.setPen(T.GREEN if active else T.CYAN if not assigned else QColor(186, 220, 230, 145))
         symbol = "⏻" if assigned else "+"
         p.drawText(icon, Qt.AlignCenter, symbol)
 
-        badge = QRectF(r.width()-70, 20, 50, 26)
+        badge_w = max(42, min(54, int(r.width() * 0.36)))
+        badge = QRectF(r.width()-badge_w-pad, 18, badge_w, 24)
         p.setBrush(QColor(93, 255, 206, 90 if active else 45))
         p.setPen(Qt.NoPen)
         p.drawRoundedRect(badge, 14, 14)
-        p.setFont(font(8, QFont.Black, 10))
+        p.setFont(font(7, QFont.Black, 10))
         p.setPen(T.TEXT if active else T.TEXT_DIM)
         p.drawText(badge, Qt.AlignCenter, "ON" if active else "OFF" if assigned else "ASSIGN")
 
@@ -540,16 +548,16 @@ class RoomControlCard(HoldCard):
                 cur = (cur + " " + w).strip()
         if cur: lines.append(cur)
         lines = lines[:2]
-        p.setFont(font(16, QFont.Black))
+        p.setFont(font(max(10, min(14, int(r.width() * 0.085))), QFont.Black))
         p.setPen(T.TEXT if assigned else T.TEXT_DIM)
-        p.drawText(QRectF(20, r.height()-82, r.width()-34, 48), Qt.AlignLeft | Qt.AlignVCenter, "\n".join(lines))
-        p.setFont(font(7, QFont.Black, 12))
+        p.drawText(QRectF(pad, r.height()-64, r.width()-(pad*2), 36), Qt.AlignLeft | Qt.AlignVCenter, "\n".join(lines))
+        p.setFont(font(6, QFont.Black, 10))
         p.setPen(T.TEXT_MUTED)
-        p.drawText(QRectF(20, r.height()-42, r.width()-34, 16), Qt.AlignLeft, (self.control.get("domain") or "switch").upper() if assigned else "UNASSIGNED")
+        p.drawText(QRectF(pad, r.height()-31, r.width()-(pad*2), 13), Qt.AlignLeft, (self.control.get("domain") or "switch").upper() if assigned else "UNASSIGNED")
         p.setPen(T.CYAN)
-        p.drawText(QRectF(20, r.height()-24, r.width()-34, 16), Qt.AlignLeft, "HOLD TO ASSIGN")
+        p.drawText(QRectF(pad, r.height()-18, r.width()-(pad*2), 13), Qt.AlignLeft, "HOLD TO ASSIGN")
         p.setPen(QPen(QColor(160, 180, 210, 42), 2))
-        p.drawLine(20, int(r.height()-12), int(r.width()-20), int(r.height()-12))
+        p.drawLine(pad, int(r.height()-8), int(r.width()-pad), int(r.height()-8))
 
 
 class LightCard(HoldCard):
@@ -559,7 +567,8 @@ class LightCard(HoldCard):
     def __init__(self, light: dict, parent=None):
         super().__init__(parent, dashed=not bool(light.get("haEntityId")))
         self.light = light
-        self.setMinimumSize(190, 380)
+        self.setMinimumSize(132, 330)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.slider = QSlider(Qt.Vertical, self)
         self.slider.setRange(0, 100)
         self.slider.setValue(int(light.get("brightness") or 0))
@@ -569,7 +578,9 @@ class LightCard(HoldCard):
         self.slider.setCursor(Qt.PointingHandCursor)
 
     def resizeEvent(self, event):
-        self.slider.setGeometry(int(self.width()/2 - 22), 166, 44, max(132, self.height() - 246))
+        top = 150
+        bottom = 74
+        self.slider.setGeometry(int(self.width()/2 - 22), top, 44, max(110, self.height() - top - bottom))
 
     def setLight(self, light: dict):
         self.light = light
@@ -599,7 +610,7 @@ class LightCard(HoldCard):
             glow.setColorAt(0, QColor(color.red(), color.green(), color.blue(), 88))
             glow.setColorAt(1, QColor(0,0,0,0))
             p.fillRect(self.rect(), glow)
-        p.setFont(font(17, QFont.Black))
+        p.setFont(font(max(11, min(15, int(r.width() * 0.10))), QFont.Black))
         p.setPen(T.TEXT if assigned else T.TEXT_DIM)
         lines = []
         cur = ""
@@ -609,7 +620,7 @@ class LightCard(HoldCard):
             else:
                 cur = (cur + " " + w).strip()
         if cur: lines.append(cur)
-        p.drawText(QRectF(18, 16, r.width()-36, 56), Qt.AlignLeft | Qt.AlignTop, "\n".join(lines[:2]))
+        p.drawText(QRectF(14, 16, r.width()-28, 54), Qt.AlignLeft | Qt.AlignTop, "\n".join(lines[:2]))
         # bulb plate
         plate = QRectF(r.width()/2 - 30, 82, 60, 60)
         p.setBrush(QColor(73, 86, 105, 130))
