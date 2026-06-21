@@ -203,9 +203,9 @@ class TopPill(QWidget):
 class SectionTitle(QLabel):
     def __init__(self, eyebrow: str, title: str, parent=None):
         super().__init__(parent)
-        self.setText(f"<span style='color:#46e8ff; letter-spacing:4px; font-size:11px; font-weight:900'>{eyebrow.upper()}</span><br><span style='font-size:46px; font-weight:1000; color:#ffffff'>{title}</span>")
+        self.setText(f"<span style='color:#46e8ff; letter-spacing:3px; font-size:10px; font-weight:900'>{eyebrow.upper()}</span><br><span style='font-size:38px; font-weight:1000; color:#ffffff'>{title}</span>")
         self.setTextFormat(Qt.RichText)
-        self.setMinimumHeight(106)
+        self.setMinimumHeight(82)
 
 
 class NavBar(QWidget):
@@ -392,12 +392,12 @@ class ThermostatDial(QWidget):
         p.setPen(T.TEXT)
         # The mode/equipment text is already shown above the dial, so keep the
         # center clean and make the current temperature the visual focus.
-        p.setFont(font(max(56, int(side * 0.18)), QFont.Black))
-        p.drawText(QRectF(inner.x(), inner.y() + inner.height() * 0.28, inner.width(), inner.height() * 0.34), Qt.AlignCenter, fmt_temp(self.current).replace("°", ""))
-        p.setFont(font(max(18, int(side * 0.043)), QFont.Black))
-        p.drawText(QRectF(inner.x() + inner.width() * 0.63, inner.y() + inner.height() * 0.35, 44, 30), Qt.AlignLeft | Qt.AlignTop, "°F")
+        p.setFont(font(max(50, int(side * 0.162)), QFont.Black))
+        p.drawText(QRectF(inner.x(), inner.y() + inner.height() * 0.22, inner.width(), inner.height() * 0.44), Qt.AlignCenter, fmt_temp(self.current).replace("°", ""))
+        p.setFont(font(max(16, int(side * 0.039)), QFont.Black))
+        p.drawText(QRectF(inner.x() + inner.width() * 0.62, inner.y() + inner.height() * 0.33, 44, 34), Qt.AlignLeft | Qt.AlignVCenter, "°F")
 
-        set_rect = QRectF(inner.x(), inner.y() + inner.height() * 0.64, inner.width(), 34)
+        set_rect = QRectF(inner.x(), inner.y() + inner.height() * 0.66, inner.width(), 34)
         p.setFont(font(12, QFont.Black))
         p.setPen(QColor(224, 241, 255))
         p.drawText(set_rect, Qt.AlignCenter, f"Set Temp  {fmt_temp(self.target)}")
@@ -484,7 +484,7 @@ class RoomControlCard(HoldCard):
     def __init__(self, control: dict, parent=None):
         super().__init__(parent, dashed=not bool(control.get("haEntityId")))
         self.control = control
-        self.setMinimumSize(260, 260)
+        self.setMinimumSize(218, 210)
 
     def setControl(self, control: dict):
         self.control = control
@@ -508,19 +508,19 @@ class RoomControlCard(HoldCard):
             p.drawRoundedRect(r.adjusted(1.5,1.5,-1.5,-1.5), self.radius, self.radius)
 
         # icon glass square
-        icon = QRectF(26, 24, 96, 96)
+        icon = QRectF(20, 18, 78, 78)
         g = QLinearGradient(icon.topLeft(), icon.bottomRight())
         g.setColorAt(0, QColor(98, 140, 152, 94))
         g.setColorAt(1, QColor(42, 54, 71, 170))
         p.setBrush(g)
         p.setPen(QPen(QColor(89, 229, 249, 66), 1.2))
-        p.drawRoundedRect(icon, 18, 18)
-        p.setFont(font(42, QFont.Black))
+        p.drawRoundedRect(icon, 16, 16)
+        p.setFont(font(34, QFont.Black))
         p.setPen(T.GREEN if active else T.CYAN if not assigned else QColor(186, 220, 230, 145))
         symbol = "⏻" if assigned else "+"
         p.drawText(icon, Qt.AlignCenter, symbol)
 
-        badge = QRectF(r.width()-78, 26, 54, 28)
+        badge = QRectF(r.width()-70, 20, 50, 26)
         p.setBrush(QColor(93, 255, 206, 90 if active else 45))
         p.setPen(Qt.NoPen)
         p.drawRoundedRect(badge, 14, 14)
@@ -540,16 +540,16 @@ class RoomControlCard(HoldCard):
                 cur = (cur + " " + w).strip()
         if cur: lines.append(cur)
         lines = lines[:2]
-        p.setFont(font(19, QFont.Black))
+        p.setFont(font(16, QFont.Black))
         p.setPen(T.TEXT if assigned else T.TEXT_DIM)
-        p.drawText(QRectF(24, r.height()-96, r.width()-42, 54), Qt.AlignLeft | Qt.AlignVCenter, "\n".join(lines))
-        p.setFont(font(8, QFont.Black, 12))
+        p.drawText(QRectF(20, r.height()-82, r.width()-34, 48), Qt.AlignLeft | Qt.AlignVCenter, "\n".join(lines))
+        p.setFont(font(7, QFont.Black, 12))
         p.setPen(T.TEXT_MUTED)
-        p.drawText(QRectF(24, r.height()-54, r.width()-42, 18), Qt.AlignLeft, (self.control.get("domain") or "switch").upper() if assigned else "UNASSIGNED")
+        p.drawText(QRectF(20, r.height()-42, r.width()-34, 16), Qt.AlignLeft, (self.control.get("domain") or "switch").upper() if assigned else "UNASSIGNED")
         p.setPen(T.CYAN)
-        p.drawText(QRectF(24, r.height()-32, r.width()-42, 18), Qt.AlignLeft, "HOLD TO ASSIGN")
+        p.drawText(QRectF(20, r.height()-24, r.width()-34, 16), Qt.AlignLeft, "HOLD TO ASSIGN")
         p.setPen(QPen(QColor(160, 180, 210, 42), 2))
-        p.drawLine(24, int(r.height()-17), int(r.width()-24), int(r.height()-17))
+        p.drawLine(20, int(r.height()-12), int(r.width()-20), int(r.height()-12))
 
 
 class LightCard(HoldCard):
@@ -559,7 +559,7 @@ class LightCard(HoldCard):
     def __init__(self, light: dict, parent=None):
         super().__init__(parent, dashed=not bool(light.get("haEntityId")))
         self.light = light
-        self.setMinimumSize(230, 490)
+        self.setMinimumSize(190, 380)
         self.slider = QSlider(Qt.Vertical, self)
         self.slider.setRange(0, 100)
         self.slider.setValue(int(light.get("brightness") or 0))
@@ -569,7 +569,7 @@ class LightCard(HoldCard):
         self.slider.setCursor(Qt.PointingHandCursor)
 
     def resizeEvent(self, event):
-        self.slider.setGeometry(int(self.width()/2 - 25), 205, 50, max(170, self.height() - 295))
+        self.slider.setGeometry(int(self.width()/2 - 22), 166, 44, max(132, self.height() - 246))
 
     def setLight(self, light: dict):
         self.light = light
@@ -599,7 +599,7 @@ class LightCard(HoldCard):
             glow.setColorAt(0, QColor(color.red(), color.green(), color.blue(), 88))
             glow.setColorAt(1, QColor(0,0,0,0))
             p.fillRect(self.rect(), glow)
-        p.setFont(font(21, QFont.Black))
+        p.setFont(font(17, QFont.Black))
         p.setPen(T.TEXT if assigned else T.TEXT_DIM)
         lines = []
         cur = ""
@@ -609,34 +609,34 @@ class LightCard(HoldCard):
             else:
                 cur = (cur + " " + w).strip()
         if cur: lines.append(cur)
-        p.drawText(QRectF(22, 20, r.width()-44, 70), Qt.AlignLeft | Qt.AlignTop, "\n".join(lines[:2]))
+        p.drawText(QRectF(18, 16, r.width()-36, 56), Qt.AlignLeft | Qt.AlignTop, "\n".join(lines[:2]))
         # bulb plate
-        plate = QRectF(r.width()/2 - 36, 104, 72, 72)
+        plate = QRectF(r.width()/2 - 30, 82, 60, 60)
         p.setBrush(QColor(73, 86, 105, 130))
         p.setPen(QPen(QColor(180, 200, 225, 43), 1.2))
-        p.drawRoundedRect(plate, 20, 20)
+        p.drawRoundedRect(plate, 16, 16)
         p.setBrush(color if on else QColor(105, 112, 124, 120))
         p.setPen(Qt.NoPen)
-        p.drawRoundedRect(QRectF(plate.x()+22, plate.y()+20, 28, 32), 6, 6)
+        p.drawRoundedRect(QRectF(plate.x()+18, plate.y()+17, 24, 27), 6, 6)
         p.setBrush(T.TEXT if on else QColor(130,140,150,90))
-        p.drawRoundedRect(QRectF(plate.x()+19, plate.y()+17, 34, 8), 4, 4)
+        p.drawRoundedRect(QRectF(plate.x()+16, plate.y()+14, 28, 7), 4, 4)
         if self.light.get("colorSupported"):
             p.setBrush(color)
             p.setPen(QPen(QColor(255,255,255,120),1))
             p.drawEllipse(QPointF(plate.right()-8, plate.bottom()-8), 8, 8)
-        p.setFont(font(22, QFont.Black))
+        p.setFont(font(18, QFont.Black))
         p.setPen(T.TEXT if on else T.TEXT_DIM)
-        p.drawText(QRectF(0, r.height()-70, r.width(), 28), Qt.AlignCenter, f"{bright}%")
+        p.drawText(QRectF(0, r.height()-58, r.width(), 24), Qt.AlignCenter, f"{bright}%")
         p.setFont(font(8, QFont.Black, 18))
         p.setPen(T.TEXT_DIM)
-        p.drawText(QRectF(0, r.height()-43, r.width(), 20), Qt.AlignCenter, "BRIGHTNESS")
+        p.drawText(QRectF(0, r.height()-34, r.width(), 18), Qt.AlignCenter, "BRIGHTNESS")
 
 
 class BlindPreview(QWidget):
     def __init__(self, position: int = 100, parent=None):
         super().__init__(parent)
         self.position = position
-        self.setMinimumHeight(250)
+        self.setMinimumHeight(180)
 
     def setPosition(self, pos):
         try: self.position = int(pos)

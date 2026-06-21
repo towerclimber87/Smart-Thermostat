@@ -863,8 +863,9 @@ class ThermostatScreen(Page):
         self.schedule_shortcuts_lay.setContentsMargins(0, 0, 0, 0)
         self.schedule_shortcuts_lay.setSpacing(6)
         left_col.addWidget(self.schedule_shortcuts, 0, Qt.AlignLeft)
-        self.schedule_button = RoundButton("S", active=False, min_h=46)
+        self.schedule_button = RoundButton("◷", active=False, min_h=46)
         self.schedule_button.setFixedSize(50, 46)
+        self.schedule_button.setFont(font(22, QFont.Black))
         self.schedule_button.clicked.connect(self.open_schedule_manager)
         left_col.addWidget(self.schedule_button, 0, Qt.AlignLeft)
         mid.addLayout(left_col, 0, 0, 2, 1)
@@ -1825,12 +1826,12 @@ class RoomScreen(Page):
         self.cards: list[RoomControlCard] = []
         self.room_buttons: dict[str, RoundButton] = {}
         root = QVBoxLayout(self)
-        root.setContentsMargins(44, 0, 44, 30)
-        root.setSpacing(12)
+        root.setContentsMargins(30, 0, 30, 22)
+        root.setSpacing(8)
         self.panel = GlassPanel(radius=30)
         root.addWidget(self.panel, 1)
         self.lay = QVBoxLayout(self.panel)
-        self.lay.setContentsMargins(32, 26, 32, 32)
+        self.lay.setContentsMargins(24, 18, 24, 22)
         top = QHBoxLayout()
         self.title = SectionTitle("Room Control", "Living Room")
         top.addWidget(self.title)
@@ -1839,8 +1840,8 @@ class RoomScreen(Page):
         top.addLayout(self.room_tabs)
         self.lay.addLayout(top)
         self.grid = QGridLayout()
-        self.grid.setHorizontalSpacing(22)
-        self.grid.setVerticalSpacing(24)
+        self.grid.setHorizontalSpacing(14)
+        self.grid.setVerticalSpacing(14)
         self.lay.addLayout(self.grid, 1)
 
     def rebuild(self):
@@ -1853,8 +1854,8 @@ class RoomScreen(Page):
         rooms = nested_get(self.config, "roomControl", "rooms", default={}) or {}
         active = nested_get(self.config, "roomControl", "room", default="living")
         for key, room in rooms.items():
-            b = RoundButton(room.get("label") or key, active=key == active, min_h=46)
-            b.setMinimumWidth(138)
+            b = RoundButton(room.get("label") or key, active=key == active, min_h=38)
+            b.setMinimumWidth(112)
             b.clicked.connect(lambda checked=False, k=key: self.set_room(k))
             self.room_buttons[key] = b
             self.room_tabs.addWidget(b)
@@ -1876,7 +1877,7 @@ class RoomScreen(Page):
             if item.widget(): item.widget().deleteLater()
         active = nested_get(self.config, "roomControl", "room", default="living")
         room = nested_get(self.config, "roomControl", "rooms", active, default={}) or {}
-        self.title.setText(f"<span style='color:#46e8ff; letter-spacing:4px; font-size:11px; font-weight:900'>ROOM CONTROL</span><br><span style='font-size:46px; font-weight:1000; color:#ffffff'>{room.get('label') or active}</span>")
+        self.title.setText(f"<span style='color:#46e8ff; letter-spacing:4px; font-size:11px; font-weight:900'>ROOM CONTROL</span><br><span style='font-size:38px; font-weight:1000; color:#ffffff'>{room.get('label') or active}</span>")
         controls = room.get("controls") or []
         for idx, control in enumerate(controls):
             card = RoomControlCard(control)
@@ -1939,11 +1940,11 @@ class LightsScreen(Page):
         self.cards: list[LightCard] = []
         self.room_buttons = {}
         root = QVBoxLayout(self)
-        root.setContentsMargins(44, 0, 44, 30)
+        root.setContentsMargins(30, 0, 30, 22)
         self.panel = GlassPanel(radius=30)
         root.addWidget(self.panel, 1)
         self.lay = QVBoxLayout(self.panel)
-        self.lay.setContentsMargins(32, 26, 32, 28)
+        self.lay.setContentsMargins(24, 18, 24, 22)
         top = QHBoxLayout()
         self.title = SectionTitle("Light Control", "Living Room")
         top.addWidget(self.title)
@@ -1953,15 +1954,15 @@ class LightsScreen(Page):
         self.lay.addLayout(top)
         center_buttons = QHBoxLayout()
         center_buttons.addStretch(1)
-        self.on_btn = RoundButton("Room On", active=True, min_h=52)
-        self.off_btn = RoundButton("Room Off", kind="purple", min_h=52)
-        self.on_btn.setMinimumWidth(180); self.off_btn.setMinimumWidth(180)
+        self.on_btn = RoundButton("Room On", active=True, min_h=44)
+        self.off_btn = RoundButton("Room Off", kind="purple", min_h=44)
+        self.on_btn.setMinimumWidth(148); self.off_btn.setMinimumWidth(148)
         center_buttons.addWidget(self.on_btn); center_buttons.addWidget(self.off_btn)
         center_buttons.addStretch(1)
         self.lay.addLayout(center_buttons)
         self.grid = QGridLayout()
-        self.grid.setHorizontalSpacing(22)
-        self.grid.setVerticalSpacing(18)
+        self.grid.setHorizontalSpacing(14)
+        self.grid.setVerticalSpacing(12)
         self.lay.addLayout(self.grid, 1)
         self.on_btn.clicked.connect(lambda: self.room_action(True))
         self.off_btn.clicked.connect(lambda: self.room_action(False))
@@ -1996,7 +1997,7 @@ class LightsScreen(Page):
             if item.widget(): item.widget().deleteLater()
         active = nested_get(self.config, "lights", "room", default="living")
         room = nested_get(self.config, "lights", "rooms", active, default={}) or {}
-        self.title.setText(f"<span style='color:#46e8ff; letter-spacing:4px; font-size:11px; font-weight:900'>LIGHT CONTROL</span><br><span style='font-size:46px; font-weight:1000; color:#ffffff'>{room.get('label') or active}</span>")
+        self.title.setText(f"<span style='color:#46e8ff; letter-spacing:4px; font-size:11px; font-weight:900'>LIGHT CONTROL</span><br><span style='font-size:38px; font-weight:1000; color:#ffffff'>{room.get('label') or active}</span>")
         for idx, light in enumerate(room.get("lights") or []):
             card = LightCard(light)
             card.clicked.connect(lambda checked=False, l=light: self.toggle_light(l))
@@ -2088,11 +2089,11 @@ class BlindCard(GlassPanel):
     def __init__(self, blind: dict, parent=None):
         super().__init__(parent, radius=24)
         self.blind = blind
-        self.setMinimumSize(300, 560)
+        self.setMinimumSize(244, 406)
         self.name = QLabel(self)
         self.pos = QLabel(self)
-        self.open_btn = RoundButton("Open", active=False, min_h=43, parent=self)
-        self.close_btn = RoundButton("Close", active=False, min_h=43, parent=self)
+        self.open_btn = RoundButton("Open", active=False, min_h=38, parent=self)
+        self.close_btn = RoundButton("Close", active=False, min_h=38, parent=self)
         self.preview = BlindPreview(parent=self)
         self.open_btn.setStyleSheet(button_style(False) + "QPushButton{background:#ffe8a6;color:#2b2116;border-radius:18px;}" )
         self.close_btn.setStyleSheet(button_style(False) + "QPushButton{background:#f2eee4;color:#2b2116;border-radius:18px;}" )
@@ -2101,20 +2102,20 @@ class BlindCard(GlassPanel):
         self.updateData(blind)
 
     def resizeEvent(self, event):
-        self.name.setGeometry(18, 18, self.width()-112, 30)
-        self.pos.setGeometry(self.width()-92, 18, 76, 30)
-        self.open_btn.setGeometry(18, 58, self.width()-36, 42)
-        self.preview.setGeometry(18, 112, self.width()-36, self.height()-184)
-        self.close_btn.setGeometry(18, self.height()-58, self.width()-36, 42)
+        self.name.setGeometry(14, 14, self.width()-96, 28)
+        self.pos.setGeometry(self.width()-80, 14, 66, 28)
+        self.open_btn.setGeometry(14, 48, self.width()-28, 38)
+        self.preview.setGeometry(14, 96, self.width()-28, self.height()-148)
+        self.close_btn.setGeometry(14, self.height()-48, self.width()-28, 38)
 
     def updateData(self, blind: dict):
         self.blind = blind
         self.name.setText(blind.get("haName") or blind.get("name") or "Blind")
-        self.name.setFont(font(13, QFont.Black))
+        self.name.setFont(font(11, QFont.Black))
         self.name.setStyleSheet("color:#f6f8ff;")
         self.pos.setText(f"{int(blind.get('position') or 0)}%")
         self.pos.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.pos.setFont(font(12, QFont.Black))
+        self.pos.setFont(font(10, QFont.Black))
         self.pos.setStyleSheet("color:#ffe8a6;")
         self.preview.setPosition(int(blind.get("position") or 0))
 
@@ -2134,11 +2135,11 @@ class BlindsScreen(Page):
         self.cards: list[BlindCard] = []
         self.room_buttons = {}
         root = QVBoxLayout(self)
-        root.setContentsMargins(44, 0, 44, 30)
+        root.setContentsMargins(30, 0, 30, 22)
         self.panel = GlassPanel(radius=30)
         root.addWidget(self.panel, 1)
         self.lay = QVBoxLayout(self.panel)
-        self.lay.setContentsMargins(32, 26, 32, 28)
+        self.lay.setContentsMargins(24, 18, 24, 22)
         top = QHBoxLayout()
         self.title = SectionTitle("Shade Control", "Living Room")
         top.addWidget(self.title)
@@ -2148,13 +2149,13 @@ class BlindsScreen(Page):
         self.lay.addLayout(top)
         buttons = QHBoxLayout()
         buttons.addStretch(1)
-        self.open_room = RoundButton("Open Room", active=True, min_h=52)
-        self.close_room = RoundButton("Close Room", kind="purple", min_h=52)
-        self.open_room.setMinimumWidth(180); self.close_room.setMinimumWidth(180)
+        self.open_room = RoundButton("Open Room", active=True, min_h=44)
+        self.close_room = RoundButton("Close Room", kind="purple", min_h=44)
+        self.open_room.setMinimumWidth(148); self.close_room.setMinimumWidth(148)
         buttons.addWidget(self.open_room); buttons.addWidget(self.close_room); buttons.addStretch(1)
         self.lay.addLayout(buttons)
         self.grid = QGridLayout()
-        self.grid.setHorizontalSpacing(22)
+        self.grid.setHorizontalSpacing(14)
         self.lay.addLayout(self.grid, 1)
         self.open_room.clicked.connect(lambda: self.room_action("open"))
         self.close_room.clicked.connect(lambda: self.room_action("close"))
@@ -2166,8 +2167,8 @@ class BlindsScreen(Page):
         rooms = nested_get(self.config, "blinds", "rooms", default={}) or {}
         active = nested_get(self.config, "blinds", "room", default="living")
         for key, room in rooms.items():
-            b = RoundButton(room.get("label") or key, active=key == active, min_h=46)
-            b.setMinimumWidth(138)
+            b = RoundButton(room.get("label") or key, active=key == active, min_h=38)
+            b.setMinimumWidth(112)
             b.clicked.connect(lambda checked=False, k=key: self.set_room(k))
             self.room_tabs.addWidget(b)
         self.populate_cards()
@@ -2187,7 +2188,7 @@ class BlindsScreen(Page):
             if item.widget(): item.widget().deleteLater()
         active = nested_get(self.config, "blinds", "room", default="living")
         room = nested_get(self.config, "blinds", "rooms", active, default={}) or {}
-        self.title.setText(f"<span style='color:#46e8ff; letter-spacing:4px; font-size:11px; font-weight:900'>SHADE CONTROL</span><br><span style='font-size:46px; font-weight:1000; color:#ffffff'>{room.get('label') or active}</span>")
+        self.title.setText(f"<span style='color:#46e8ff; letter-spacing:4px; font-size:11px; font-weight:900'>SHADE CONTROL</span><br><span style='font-size:38px; font-weight:1000; color:#ffffff'>{room.get('label') or active}</span>")
         for idx, blind in enumerate(room.get("blinds") or []):
             card = BlindCard(blind)
             card.openClicked.connect(lambda b: self.blind_action(b, "open"))
@@ -2254,8 +2255,8 @@ class AudioScreen(Page):
         super().__init__(app_state, parent)
         self.player_state: dict = {}
         root = QHBoxLayout(self)
-        root.setContentsMargins(72, 26, 72, 54)
-        root.setSpacing(30)
+        root.setContentsMargins(36, 8, 36, 24)
+        root.setSpacing(18)
         self.left = GlassPanel(radius=28, strong=True)
         self.right = GlassPanel(radius=28, strong=True)
         root.addWidget(self.left, 5)
@@ -2265,11 +2266,11 @@ class AudioScreen(Page):
 
     def build_left(self):
         lay = QVBoxLayout(self.left)
-        lay.setContentsMargins(38, 30, 38, 38)
+        lay.setContentsMargins(26, 20, 26, 24)
         top = QHBoxLayout()
         for text, icon, kind in [("Movie Mode", "⚙", "normal"), ("Show Mode", "♙", "normal"), ("40% Volume", "♬", "normal"), ("Max", "♬", "danger")]:
-            b = RoundButton(f"{icon}\n{text}", kind=kind, min_h=104)
-            b.setMinimumWidth(148)
+            b = RoundButton(f"{icon}\n{text}", kind=kind, min_h=76)
+            b.setMinimumWidth(118)
             top.addWidget(b)
             if "40" in text:
                 b.clicked.connect(lambda: self.media_action("volume", 0.40))
@@ -2288,21 +2289,21 @@ class AudioScreen(Page):
         mid = QHBoxLayout()
         self.art = QLabel("NP")
         self.art.setAlignment(Qt.AlignCenter)
-        self.art.setFont(font(70, QFont.Black))
+        self.art.setFont(font(52, QFont.Black))
         self.art.setStyleSheet("background:qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #49e5ff, stop:1 #6d4dd0); color:rgba(15,35,57,0.92); border-radius:34px;")
-        self.art.setFixedSize(265, 265)
+        self.art.setFixedSize(198, 198)
         self.track = QLabel("Nothing\nPlaying")
-        self.track.setFont(font(54, QFont.Black))
+        self.track.setFont(font(38, QFont.Black))
         self.track.setStyleSheet("color:#f6f8ff;")
         self.source_label = QLabel("Livingroom Sonos")
-        self.source_label.setFont(font(20, QFont.Black))
+        self.source_label.setFont(font(15, QFont.Black))
         self.source_label.setStyleSheet("color:#d9e0ee;")
         text_col = QVBoxLayout()
         text_col.addWidget(self.track)
         text_col.addWidget(self.source_label)
         text_col.addStretch(1)
         mid.addWidget(self.art)
-        mid.addSpacing(42)
+        mid.addSpacing(24)
         mid.addLayout(text_col, 1)
         lay.addLayout(mid)
         lay.addStretch(1)
@@ -2314,10 +2315,10 @@ class AudioScreen(Page):
 
     def build_right(self):
         lay = QVBoxLayout(self.right)
-        lay.setContentsMargins(30, 28, 30, 28)
+        lay.setContentsMargins(22, 20, 22, 22)
         header = QHBoxLayout()
         self.room_title = QLabel("Livingroom Sonos")
-        self.room_title.setFont(font(32, QFont.Black))
+        self.room_title.setFont(font(24, QFont.Black))
         self.room_title.setStyleSheet("color:#f6f8ff;")
         self.state_pill = QLabel("Idle")
         self.state_pill.setFont(font(9, QFont.Black))
@@ -2331,18 +2332,18 @@ class AudioScreen(Page):
         header.addWidget(self.source)
         lay.addLayout(header)
         controls = QHBoxLayout()
-        controls.setSpacing(22)
-        self.sub = RoundButton("Sub", active=False, min_h=72)
-        self.prev = IconCircle("◀◀", "previous", 74)
-        self.play = IconCircle("▶", "play_pause", 96, active=True)
-        self.next = IconCircle("▶▶", "next", 74)
-        self.sur = RoundButton("Surround", active=False, min_h=72)
+        controls.setSpacing(12)
+        self.sub = RoundButton("Sub", active=False, min_h=56)
+        self.prev = IconCircle("◀◀", "previous", 58)
+        self.play = IconCircle("▶", "play_pause", 74, active=True)
+        self.next = IconCircle("▶▶", "next", 58)
+        self.sur = RoundButton("Surround", active=False, min_h=56)
         for w in [self.sub, self.prev, self.play, self.next, self.sur]:
             controls.addWidget(w)
         lay.addLayout(controls)
         vol_panel = GlassPanel(radius=22)
         vol_lay = QVBoxLayout(vol_panel)
-        vol_lay.setContentsMargins(20,18,20,18)
+        vol_lay.setContentsMargins(16,14,16,14)
         self.vol_label = QLabel("Volume                                                              --%")
         self.vol_label.setFont(font(12, QFont.Black))
         self.vol_label.setStyleSheet("color:#dbe3f4;")
@@ -2359,7 +2360,7 @@ class AudioScreen(Page):
         self.eq_sliders = {}
         for name in ["Gain", "Bass", "Treble"]:
             card = GlassPanel(radius=22)
-            card.setMinimumHeight(220)
+            card.setMinimumHeight(165)
             v = QVBoxLayout(card)
             label = QLabel(f"{name}\n--")
             label.setAlignment(Qt.AlignCenter)
@@ -3774,32 +3775,74 @@ class MainWindow(Background):
     def show_info(self):
         try:
             info = self.s.api.get("/api/system/info")
-            msg = (
-                f"Thermostat Info\n\n"
-                f"Name: {info.get('thermostatName') or info.get('name')}\n"
-                f"IP / Port: {info.get('address')}\n"
-                f"Version: {info.get('version')}\n"
-                f"Uptime: {info.get('uptime')}\n"
-                f"Thermal: {info.get('thermal')}"
-            )
-            box = QMessageBox(self)
-            box.setWindowTitle("Thermostat Info")
-            box.setText(msg)
-            fetch = box.addButton("Fetch Update", QMessageBox.ActionRole)
-            reboot = box.addButton("Restart", QMessageBox.ActionRole)
-            export = box.addButton("Download Config", QMessageBox.ActionRole)
-            upload = box.addButton("Upload Config", QMessageBox.ActionRole)
-            box.addButton("Close", QMessageBox.AcceptRole)
-            box.exec_()
-            clicked = box.clickedButton()
-            if clicked == fetch:
-                self.do_fetch_update()
-            elif clicked == reboot:
-                self.do_restart()
-            elif clicked == export:
-                self.export_config()
-            elif clicked == upload:
-                self.import_config()
+            dlg = QDialog(self)
+            dlg.setModal(True)
+            dlg.setWindowTitle("Thermostat Info")
+            dlg.setFixedSize(620, 430)
+            dlg.setStyleSheet("""
+                QDialog {
+                    background:qlineargradient(x1:0,y1:0,x2:1,y2:1,
+                        stop:0 #071222,
+                        stop:0.52 #101d35,
+                        stop:1 #0b1020);
+                    color:#f7fbff;
+                }
+                QLabel {
+                    color:#f7fbff;
+                    background:transparent;
+                    border:0;
+                    font-family:Arial;
+                }
+            """)
+            root = QVBoxLayout(dlg)
+            root.setContentsMargins(26, 24, 26, 22)
+            root.setSpacing(14)
+
+            title = QLabel("<span style='color:#46e8ff; letter-spacing:4px; font-size:11px; font-weight:900'>THERMOSTAT</span><br><span style='font-size:31px; font-weight:1000; color:#ffffff'>Panel Information</span>")
+            title.setTextFormat(Qt.RichText)
+            root.addWidget(title)
+
+            grid_panel = GlassPanel(radius=22)
+            grid = QGridLayout(grid_panel)
+            grid.setContentsMargins(18, 16, 18, 16)
+            grid.setHorizontalSpacing(14)
+            grid.setVerticalSpacing(10)
+            rows = [
+                ("Name", info.get("thermostatName") or info.get("name") or "Smart Thermostat"),
+                ("IP / Port", info.get("address") or "--"),
+                ("Version", info.get("version") or "--"),
+                ("Uptime", info.get("uptime") or "--"),
+                ("Thermal", info.get("thermal") or "--"),
+            ]
+            for row, (label, value) in enumerate(rows):
+                l = QLabel(str(label).upper())
+                l.setFont(font(8, QFont.Black, 20))
+                l.setStyleSheet("color:#96a7c2;")
+                v = QLabel(str(value))
+                v.setFont(font(13, QFont.Black))
+                v.setStyleSheet("color:#ffffff;")
+                grid.addWidget(l, row, 0)
+                grid.addWidget(v, row, 1)
+            root.addWidget(grid_panel, 1)
+
+            buttons = QHBoxLayout()
+            buttons.setSpacing(10)
+            fetch = RoundButton("Fetch Update", active=True, min_h=44)
+            reboot = RoundButton("Restart", kind="purple", min_h=44)
+            export = RoundButton("Download Config", active=False, min_h=44)
+            upload = RoundButton("Upload Config", active=False, min_h=44)
+            close = RoundButton("Close", active=False, min_h=44)
+            for b in [fetch, reboot, export, upload, close]:
+                b.setMinimumWidth(108)
+                buttons.addWidget(b)
+            root.addLayout(buttons)
+
+            fetch.clicked.connect(lambda: (dlg.accept(), self.do_fetch_update()))
+            reboot.clicked.connect(lambda: (dlg.accept(), self.do_restart()))
+            export.clicked.connect(lambda: (dlg.accept(), self.export_config()))
+            upload.clicked.connect(lambda: (dlg.accept(), self.import_config()))
+            close.clicked.connect(dlg.accept)
+            dlg.exec_()
         except Exception as exc:
             self.toast.show_message(f"Info failed: {exc}")
 
