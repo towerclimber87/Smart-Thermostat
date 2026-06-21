@@ -16,7 +16,7 @@ ROOT_DIR = APP_DIR.parent
 sys.path.insert(0, str(APP_DIR))
 
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QCursor, QFont, QIcon, QPainter, QPen, QBrush, QLinearGradient, QPainterPath, QRadialGradient
+from PyQt5.QtGui import QColor, QCursor, QFont, QIcon, QImage, QPainter, QPen, QBrush, QLinearGradient, QPainterPath, QRadialGradient
 from PyQt5.QtWidgets import (
     QApplication,
     QComboBox,
@@ -2089,6 +2089,7 @@ class LightsScreen(Page):
             card.clicked.connect(lambda checked=False, l=light: self.toggle_light(l))
             card.held.connect(lambda l=light: self.requestAssign.emit("light", l, "light"))
             card.brightnessChanged.connect(self.set_brightness)
+            card.colorRequested.connect(self.open_light_color_picker)
             self.cards.append(card)
             self.grid.addWidget(card, idx // 6, idx % 6)
         for col in range(6):
@@ -2130,6 +2131,24 @@ class LightsScreen(Page):
                 brightness = int(light.get("lastBrightness") or 100)
             self._send_light(light, "color", brightness, color=color)
         self.requestToast.emit("Room RGB color updated")
+
+    def open_light_color_picker(self, light: dict):
+        if not light.get("haEntityId"):
+            self.requestAssign.emit("light", light, "light")
+            return
+        if not bool(light.get("colorSupported")):
+            self.requestToast.emit("That light is not marked as RGB")
+            return
+        name = light.get("haName") or light.get("name") or "RGB Light"
+        current = light.get("color") or light.get("colorHex") or "#ffd76f"
+        color = LightColorDialog.get_color(self, current, f"{compact_name(name, 24)} RGB Color")
+        if not color:
+            return
+        brightness = int(light.get("brightness") or light.get("lastBrightness") or 100)
+        if brightness <= 0:
+            brightness = int(light.get("lastBrightness") or 100)
+        self._send_light(light, "color", brightness, color=color)
+        self.requestToast.emit(f"{compact_name(name, 22)} color updated")
 
     def toggle_light(self, light: dict):
         if not light.get("haEntityId"):
@@ -2935,6 +2954,108 @@ class PeopleSelectionDialog(QDialog):
 
 
 
+class ColorWheelWidget(QWidget):
+    colorChanged = pyqtSignal(QColor)
+
+    def __init__(self, color: str = "#ffd76f", parent=None):
+        super().__init__(parent)
+        self.selected = QColor(color if str(color or "").startswith("#") else f"#{color}")
+        if not self.selected.isValid():
+            self.selected = QColor("#ffd76f")
+        self.setMinimumSize(330, 330)
+        self.setCursor(Qt.PointingHandCursor)
+        self._cached_side = 0
+        self._cached_image = None
+
+    def _wheel_image(self, side: int):
+        side = max(32, int(side))
+        if self._cached_image is not None and self._cached_side == side:
+            return self._cached_image
+        img = QImage(side, side, QImage.Format_ARGB32)
+        img.fill(Qt.transparent)
+        cx = cy = side / 2.0
+        radius = (side / 2.0) - 2.0
+        for y in range(side):
+            dy = y - cy
+            for x in range(side):
+                dx = x - cx
+                dist = math.sqrt(dx * dx + dy * dy)
+                if dist <= radius:
+                    hue = (math.atan2(dy, dx) / (2.0 * math.pi) + 1.0) % 1.0
+                    sat = max(0.0, min(1.0, dist / radius))
+                    img.setPixelColor(x, y, QColor.fromHsvF(hue, sat, 1.0, 1.0))
+        self._cached_side = side
+        self._cached_image = img
+        return img
+
+    def set_color(self, color: str | QColor, notify: bool = True):
+        c = QColor(color)
+        if not c.isValid():
+            return
+        self.selected = c
+        self.update()
+        if notify:
+            self.colorChanged.emit(QColor(self.selected))
+
+    def _select_from_pos(self, pos):
+        side = min(self.width(), self.height())
+        left = (self.width() - side) / 2.0
+        top = (self.height() - side) / 2.0
+        cx = left + side / 2.0
+        cy = top + side / 2.0
+        radius = (side / 2.0) - 2.0
+        dx = float(pos.x()) - cx
+        dy = float(pos.y()) - cy
+        dist = math.sqrt(dx * dx + dy * dy)
+        if dist > radius:
+            dx *= radius / max(1.0, dist)
+            dy *= radius / max(1.0, dist)
+            dist = radius
+        hue = (math.atan2(dy, dx) / (2.0 * math.pi) + 1.0) % 1.0
+        sat = max(0.0, min(1.0, dist / radius))
+        self.set_color(QColor.fromHsvF(hue, sat, 1.0, 1.0))
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._select_from_pos(event.pos())
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.LeftButton:
+            self._select_from_pos(event.pos())
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
+        side = min(self.width(), self.height())
+        left = int((self.width() - side) / 2)
+        top = int((self.height() - side) / 2)
+        image = self._wheel_image(side)
+        p.drawImage(left, top, image)
+        wheel = QRectF(left + 2, top + 2, side - 4, side - 4)
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(QColor(255, 255, 255, 130), 3))
+        p.drawEllipse(wheel)
+
+        hue, sat, value, alpha = self.selected.getHsvF()
+        if hue < 0:
+            hue = 0.0
+        radius = (side / 2.0) - 2.0
+        angle = hue * 2.0 * math.pi
+        x = left + side / 2.0 + math.cos(angle) * sat * radius
+        y = top + side / 2.0 + math.sin(angle) * sat * radius
+        p.setBrush(QColor(self.selected))
+        p.setPen(QPen(QColor(255, 255, 255), 4))
+        p.drawEllipse(QPointF(x, y), 12, 12)
+        p.setPen(QPen(QColor(0, 0, 0, 160), 2))
+        p.drawEllipse(QPointF(x, y), 8, 8)
+
+
 class LightColorDialog(QDialog):
     COLORS = [
         ("Warm", "#ffd76f"),
@@ -2954,45 +3075,62 @@ class LightColorDialog(QDialog):
         self.selected_color = self.clean_color(current)
         self.setWindowTitle(title)
         self.setModal(True)
-        self.resize(940, 420)
+        self.resize(900, 500)
         self.setStyleSheet("""
             QDialog { background:#09111f; color:#f7fbff; }
             QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
         """)
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 22, 24, 22)
-        root.setSpacing(14)
+        root.setContentsMargins(22, 18, 22, 18)
+        root.setSpacing(10)
 
         header = QLabel(title)
         header.setAlignment(Qt.AlignCenter)
-        header.setFont(font(26, QFont.Black))
+        header.setFont(font(24, QFont.Black))
         root.addWidget(header)
 
-        hint = QLabel("Tap a color to apply it to the RGB lights in this room.")
+        hint = QLabel("Tap or drag the wheel for gradients, or choose one of the primary colors.")
         hint.setAlignment(Qt.AlignCenter)
-        hint.setFont(font(11, QFont.Black))
+        hint.setFont(font(10, QFont.Black))
         hint.setStyleSheet("color:#c9d5ea;")
         root.addWidget(hint)
 
+        body = QHBoxLayout()
+        body.setSpacing(18)
+        self.wheel = ColorWheelWidget(self.selected_color, self)
+        self.wheel.colorChanged.connect(lambda c: self.pick(c.name()))
+        body.addWidget(self.wheel, 1)
+
+        right = QVBoxLayout()
+        right.setSpacing(12)
         self.preview = QLabel(self.selected_color.upper())
         self.preview.setAlignment(Qt.AlignCenter)
-        self.preview.setFont(font(16, QFont.Black))
-        self.preview.setFixedHeight(54)
-        root.addWidget(self.preview)
+        self.preview.setFont(font(17, QFont.Black))
+        self.preview.setFixedHeight(62)
+        right.addWidget(self.preview)
         self.refresh_preview()
 
+        presets_title = QLabel("PRIMARY COLORS")
+        presets_title.setAlignment(Qt.AlignCenter)
+        presets_title.setFont(font(10, QFont.Black))
+        presets_title.setStyleSheet("color:#46e8ff; letter-spacing:3px;")
+        right.addWidget(presets_title)
+
         grid = QGridLayout()
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(12)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(10)
+        self.preset_buttons = []
         for idx, (name, color) in enumerate(self.COLORS):
             btn = QPushButton(name)
-            btn.setMinimumHeight(70)
+            btn.setMinimumSize(92, 52)
             btn.setCursor(Qt.PointingHandCursor)
-            btn.setFont(font(13, QFont.Black))
-            btn.setStyleSheet(self.color_button_style(color, selected=(self.selected_color.lower() == color.lower())))
-            btn.clicked.connect(lambda checked=False, c=color: self.pick(c))
-            grid.addWidget(btn, idx // 5, idx % 5)
-        root.addLayout(grid, 1)
+            btn.setFont(font(11, QFont.Black))
+            btn.clicked.connect(lambda checked=False, c=color: self.pick(c, sync_wheel=True))
+            self.preset_buttons.append((btn, color))
+            grid.addWidget(btn, idx // 2, idx % 2)
+        right.addLayout(grid, 1)
+        body.addLayout(right, 1)
+        root.addLayout(body, 1)
 
         bottom = QHBoxLayout()
         cancel = RoundButton("Cancel", min_h=48)
@@ -3005,6 +3143,8 @@ class LightColorDialog(QDialog):
         bottom.addWidget(cancel)
         bottom.addWidget(apply)
         root.addLayout(bottom)
+
+        self.refresh_presets()
 
     @staticmethod
     def clean_color(value: str, fallback: str = "#ffd76f") -> str:
@@ -3019,11 +3159,18 @@ class LightColorDialog(QDialog):
         c = QColor(color)
         text = "#06121d" if (c.red() * 0.299 + c.green() * 0.587 + c.blue() * 0.114) > 150 else "#ffffff"
         border = "4px solid #ffffff" if selected else "1px solid rgba(255,255,255,0.28)"
-        return f"background:{color}; color:{text}; border:{border}; border-radius:22px; font-weight:900;"
+        return f"background:{color}; color:{text}; border:{border}; border-radius:18px; font-weight:900;"
 
-    def pick(self, color: str):
+    def pick(self, color: str, sync_wheel: bool = False):
         self.selected_color = self.clean_color(color)
+        if sync_wheel:
+            self.wheel.set_color(self.selected_color, notify=False)
         self.refresh_preview()
+        self.refresh_presets()
+
+    def refresh_presets(self):
+        for btn, color in getattr(self, "preset_buttons", []):
+            btn.setStyleSheet(self.color_button_style(color, selected=(self.selected_color.lower() == color.lower())))
 
     def refresh_preview(self):
         color = self.clean_color(self.selected_color)

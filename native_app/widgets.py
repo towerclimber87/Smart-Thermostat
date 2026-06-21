@@ -567,7 +567,9 @@ class LightCard(HoldCard):
     def __init__(self, light: dict, parent=None):
         super().__init__(parent, dashed=not bool(light.get("haEntityId")))
         self.light = light
-        self.setMinimumSize(132, 330)
+        # Six cards have to fit across the 10.1" panel. Keep the card narrow,
+        # then spend the vertical room on the brightness slider.
+        self.setMinimumSize(118, 340)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.slider = QSlider(Qt.Vertical, self)
         self.slider.setRange(0, 100)
@@ -577,10 +579,21 @@ class LightCard(HoldCard):
         self.slider.valueChanged.connect(lambda v: self.update())
         self.slider.setCursor(Qt.PointingHandCursor)
 
+        self._power_pressed = False
+        self._power_held = False
+        self._power_timer = QTimer(self)
+        self._power_timer.setSingleShot(True)
+        self._power_timer.setInterval(650)
+        self._power_timer.timeout.connect(self._fire_power_hold)
+
+    def _power_rect(self) -> QRectF:
+        w = float(self.width())
+        return QRectF(w / 2.0 - 31.0, 66.0, 62.0, 50.0)
+
     def resizeEvent(self, event):
-        top = 150
-        bottom = 74
-        self.slider.setGeometry(int(self.width()/2 - 22), top, 44, max(110, self.height() - top - bottom))
+        top = 128 if self.height() >= 320 else 118
+        bottom = 66
+        self.slider.setGeometry(int(self.width() / 2 - 21), top, 42, max(78, self.height() - top - bottom))
 
     def setLight(self, light: dict):
         self.light = light
@@ -592,6 +605,34 @@ class LightCard(HoldCard):
 
     def _release(self):
         self.brightnessChanged.emit(self.light, int(self.slider.value()))
+
+    def _fire_power_hold(self):
+        self._power_held = True
+        self.colorRequested.emit(self.light)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self._power_rect().contains(QPointF(event.pos())):
+            self._power_pressed = True
+            self._power_held = False
+            self._power_timer.start()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._power_pressed:
+            if self._power_timer.isActive():
+                self._power_timer.stop()
+            pressed_inside = self._power_rect().contains(QPointF(event.pos()))
+            was_held = self._power_held
+            self._power_pressed = False
+            self._power_held = False
+            if pressed_inside and not was_held:
+                # A normal tap on the power plate still toggles the light.
+                self.clicked.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def paintEvent(self, event):
         super().paintEvent(event)
@@ -606,41 +647,56 @@ class LightCard(HoldCard):
         if not color.isValid():
             color = T.YELLOW
         if on:
-            glow = QRadialGradient(QPointF(r.width()*0.50, r.height()*0.48), r.width()*0.65)
-            glow.setColorAt(0, QColor(color.red(), color.green(), color.blue(), 88))
+            glow = QRadialGradient(QPointF(r.width()*0.50, r.height()*0.50), r.width()*0.70)
+            glow.setColorAt(0, QColor(color.red(), color.green(), color.blue(), 94))
             glow.setColorAt(1, QColor(0,0,0,0))
             p.fillRect(self.rect(), glow)
-        p.setFont(font(max(11, min(15, int(r.width() * 0.10))), QFont.Black))
+
+        # Name area. Keep it compact so the power button and slider get the room.
+        p.setFont(font(max(10, min(13, int(r.width() * 0.095))), QFont.Black))
         p.setPen(T.TEXT if assigned else T.TEXT_DIM)
         lines = []
         cur = ""
-        for w in str(name).split():
-            if len((cur + " " + w).strip()) > 14 and cur:
+        for w in str(name).replace("-", "-").split():
+            if len((cur + " " + w).strip()) > 13 and cur:
                 lines.append(cur); cur = w
             else:
                 cur = (cur + " " + w).strip()
         if cur: lines.append(cur)
-        p.drawText(QRectF(14, 16, r.width()-28, 54), Qt.AlignLeft | Qt.AlignTop, "\n".join(lines[:2]))
-        # bulb plate
-        plate = QRectF(r.width()/2 - 30, 82, 60, 60)
-        p.setBrush(QColor(73, 86, 105, 130))
-        p.setPen(QPen(QColor(180, 200, 225, 43), 1.2))
-        p.drawRoundedRect(plate, 16, 16)
-        p.setBrush(color if on else QColor(105, 112, 124, 120))
-        p.setPen(Qt.NoPen)
-        p.drawRoundedRect(QRectF(plate.x()+18, plate.y()+17, 24, 27), 6, 6)
-        p.setBrush(T.TEXT if on else QColor(130,140,150,90))
-        p.drawRoundedRect(QRectF(plate.x()+16, plate.y()+14, 28, 7), 4, 4)
+        p.drawText(QRectF(12, 13, r.width()-24, 48), Qt.AlignLeft | Qt.AlignTop, "\n".join(lines[:2]))
+
+        # Dedicated on/off plate. Tapping toggles. Holding opens RGB color picker.
+        plate = self._power_rect()
+        pg = QLinearGradient(plate.topLeft(), plate.bottomRight())
+        if on:
+            pg.setColorAt(0, QColor(color.red(), color.green(), color.blue(), 220))
+            pg.setColorAt(1, QColor(30, 44, 70, 220))
+        else:
+            pg.setColorAt(0, QColor(85, 100, 122, 150))
+            pg.setColorAt(1, QColor(32, 41, 60, 210))
+        p.setBrush(pg)
+        p.setPen(QPen(QColor(255,255,255,90 if on else 42), 1.3))
+        p.drawRoundedRect(plate, 17, 17)
+        p.setFont(font(17, QFont.Black))
+        p.setPen(T.TEXT if on else QColor(170, 188, 208, 160))
+        p.drawText(plate.adjusted(0, -6, 0, -4), Qt.AlignCenter, "⏻" if assigned else "+")
+        p.setFont(font(7, QFont.Black, 12))
+        p.setPen(T.TEXT if on else T.TEXT_DIM)
+        p.drawText(plate.adjusted(0, 24, 0, -3), Qt.AlignCenter, "ON" if on else "OFF" if assigned else "ASSIGN")
         if self.light.get("colorSupported"):
             p.setBrush(color)
-            p.setPen(QPen(QColor(255,255,255,120),1))
-            p.drawEllipse(QPointF(plate.right()-8, plate.bottom()-8), 8, 8)
+            p.setPen(QPen(QColor(255,255,255,150), 1))
+            p.drawEllipse(QPointF(plate.right()-7, plate.bottom()-7), 7, 7)
+            p.setFont(font(6, QFont.Black, 10))
+            p.setPen(QColor(205, 246, 255, 200))
+            p.drawText(QRectF(0, plate.bottom()+4, r.width(), 13), Qt.AlignCenter, "HOLD RGB")
+
         p.setFont(font(18, QFont.Black))
         p.setPen(T.TEXT if on else T.TEXT_DIM)
-        p.drawText(QRectF(0, r.height()-58, r.width(), 24), Qt.AlignCenter, f"{bright}%")
-        p.setFont(font(8, QFont.Black, 18))
+        p.drawText(QRectF(0, r.height()-55, r.width(), 23), Qt.AlignCenter, f"{bright}%")
+        p.setFont(font(7, QFont.Black, 16))
         p.setPen(T.TEXT_DIM)
-        p.drawText(QRectF(0, r.height()-34, r.width(), 18), Qt.AlignCenter, "BRIGHTNESS")
+        p.drawText(QRectF(0, r.height()-33, r.width(), 18), Qt.AlignCenter, "BRIGHTNESS")
 
 
 class BlindPreview(QWidget):
