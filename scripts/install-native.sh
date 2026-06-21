@@ -7,8 +7,32 @@ if [[ "${EUID}" -ne 0 ]]; then
 fi
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_USER="${SUDO_USER:-$(logname 2>/dev/null || echo david)}"
-APP_HOME="$(eval echo "~${APP_USER}")"
+
+# Prefer the real owner of the project folder. The panel Fetch Update path runs
+# this installer from a root-owned transient systemd unit, where SUDO_USER and
+# logname can be empty or wrong. If we guess the wrong user here, the native
+# service gets written with the wrong HOME/XAUTHORITY and the screen can land at
+# a black tty with a blinking cursor.
+APP_USER="${SUDO_USER:-}"
+if [[ -z "$APP_USER" || "$APP_USER" == "root" ]]; then
+  APP_USER="$(stat -c '%U' "$APP_DIR" 2>/dev/null || true)"
+fi
+if [[ -z "$APP_USER" || "$APP_USER" == "UNKNOWN" || "$APP_USER" == "root" ]]; then
+  APP_USER="$(logname 2>/dev/null || true)"
+fi
+if [[ -z "$APP_USER" || "$APP_USER" == "root" ]]; then
+  if id david >/dev/null 2>&1; then
+    APP_USER="david"
+  elif id pi >/dev/null 2>&1; then
+    APP_USER="pi"
+  else
+    APP_USER="root"
+  fi
+fi
+APP_HOME="$(getent passwd "$APP_USER" | cut -d: -f6)"
+if [[ -z "$APP_HOME" || ! -d "$APP_HOME" ]]; then
+  APP_HOME="$(eval echo "~${APP_USER}")"
+fi
 
 if [[ ! -f "$APP_DIR/server.py" || ! -f "$APP_DIR/native_app/main.py" ]]; then
   echo "This does not look like the SmartThermostatNative folder: $APP_DIR" >&2

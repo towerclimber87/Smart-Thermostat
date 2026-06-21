@@ -3087,25 +3087,57 @@ exec >>{shlex.quote(str(log_path))} 2>&1
 echo "===== Smart Thermostat self-update started: $(date) ====="
 cd {shlex.quote(str(ROOT))}
 
-ts=$(date +%F-%H%M%S)
-mkdir -p "$HOME/thermostat-pi-data-backups/$ts"
-cp -av data/. "$HOME/thermostat-pi-data-backups/$ts/."
+APP_USER="$(stat -c '%U' . 2>/dev/null || true)"
+if [[ -z "$APP_USER" || "$APP_USER" == "UNKNOWN" || "$APP_USER" == "root" ]]; then
+  APP_USER="$(logname 2>/dev/null || true)"
+fi
+if [[ -z "$APP_USER" || "$APP_USER" == "root" ]]; then
+  if id david >/dev/null 2>&1; then
+    APP_USER="david"
+  elif id pi >/dev/null 2>&1; then
+    APP_USER="pi"
+  else
+    APP_USER="root"
+  fi
+fi
+APP_HOME="$(getent passwd "$APP_USER" | cut -d: -f6)"
+if [[ -z "$APP_HOME" || ! -d "$APP_HOME" ]]; then
+  APP_HOME="$HOME"
+fi
+BACKUP_ROOT="$APP_HOME/thermostat-pi-data-backups"
 
-git fetch origin Development
-git reset --hard origin/Development
-git clean -fd
+run_as_app_user() {{
+  if [[ "$(id -u)" -eq 0 && "$APP_USER" != "root" ]]; then
+    if command -v runuser >/dev/null 2>&1; then
+      runuser -u "$APP_USER" -- "$@"
+    else
+      su -s /bin/bash "$APP_USER" -c "$(printf '%q ' "$@")"
+    fi
+  else
+    "$@"
+  fi
+}}
+
+ts=$(date +%F-%H%M%S)
+mkdir -p "$BACKUP_ROOT/$ts"
+cp -av data/. "$BACKUP_ROOT/$ts/."
+
+# Match the terminal update path: git operations run as the project owner, not
+# root. This avoids Git safe-directory failures and root-owned checkout files.
+run_as_app_user git fetch origin Development
+run_as_app_user git reset --hard origin/Development
+run_as_app_user git clean -fd
 
 mkdir -p data
-cp -av "$HOME/thermostat-pi-data-backups/$ts/." data/.
+cp -av "$BACKUP_ROOT/$ts/." data/.
 chmod +x scripts/*.sh
 
-# This transient unit runs as root, so do not call sudo inside it.
+# This transient unit already runs as root. install-native.sh now resolves the
+# correct app user from the project folder owner before writing the services.
 ./scripts/install-native.sh
 
 systemctl daemon-reload
-systemctl restart smart-thermostat-backend.service
-sleep 2
-systemctl restart smart-thermostat-native.service
+systemctl restart smart-thermostat-backend.service smart-thermostat-native.service
 
 sleep 8
 systemctl status smart-thermostat-backend.service smart-thermostat-native.service --no-pager -l || true
