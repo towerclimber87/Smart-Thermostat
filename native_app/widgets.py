@@ -633,13 +633,14 @@ class LightCard(HoldCard):
 
 
 class BlindPreview(QWidget):
-    tiltRequested = pyqtSignal(int)
+    positionPreviewed = pyqtSignal(int)
+    positionRequested = pyqtSignal(int)
 
     def __init__(self, position: int = 100, parent=None):
         super().__init__(parent)
         self.position = position
-        self.tilt_position = 100
-        self.setMinimumHeight(210)
+        self.dragging = False
+        self.setMinimumHeight(230)
         self.setCursor(Qt.PointingHandCursor)
         self.setAttribute(Qt.WA_AcceptTouchEvents, True)
 
@@ -650,39 +651,49 @@ class BlindPreview(QWidget):
             self.position = 0
         self.update()
 
-    def setTiltPosition(self, pos):
-        try:
-            self.tilt_position = max(0, min(100, int(pos)))
-        except Exception:
-            self.tilt_position = 100
-        self.update()
-
-    def tilt_from_pos(self, pos) -> int:
-        r = QRectF(self.rect()).adjusted(18, 26, -18, -18)
+    def position_from_pos(self, pos) -> int:
+        # Top of preview = open/up/100. Bottom = closed/down/0.
+        r = QRectF(self.rect()).adjusted(18, 24, -18, -18)
         pct = 100.0 - ((float(pos.y()) - r.top()) / max(1.0, r.height()) * 100.0)
         return int(max(0, min(100, round(pct))))
 
-    def emit_tilt_from_pos(self, pos):
-        value = self.tilt_from_pos(pos)
-        self.setTiltPosition(value)
-        self.tiltRequested.emit(value)
+    def preview_position_from_pos(self, pos):
+        value = self.position_from_pos(pos)
+        self.setPosition(value)
+        self.positionPreviewed.emit(value)
+        return value
 
     def mousePressEvent(self, event):
-        self.emit_tilt_from_pos(event.pos())
+        self.dragging = True
+        self.preview_position_from_pos(event.pos())
         event.accept()
 
     def mouseMoveEvent(self, event):
-        if event.buttons() & Qt.LeftButton:
-            self.emit_tilt_from_pos(event.pos())
+        if self.dragging and event.buttons() & Qt.LeftButton:
+            self.preview_position_from_pos(event.pos())
             event.accept()
             return
         super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self.dragging:
+            value = self.preview_position_from_pos(event.pos())
+            self.dragging = False
+            self.positionRequested.emit(value)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def event(self, event):
         if event.type() in (QEvent.TouchBegin, QEvent.TouchUpdate, QEvent.TouchEnd):
             pts = event.touchPoints()
             if pts:
-                self.emit_tilt_from_pos(pts[0].pos().toPoint())
+                value = self.preview_position_from_pos(pts[0].pos().toPoint())
+                if event.type() == QEvent.TouchEnd:
+                    self.dragging = False
+                    self.positionRequested.emit(value)
+                else:
+                    self.dragging = True
                 event.accept()
                 return True
         return super().event(event)
@@ -702,42 +713,40 @@ class BlindPreview(QWidget):
         inner = r.adjusted(14, 18, -14, -14)
         p.fillRect(inner, bg)
 
-        # Header cassette / stack. Open = slats are pulled up at the top.
-        p.setBrush(QColor(238, 235, 220, 210))
+        # Header cassette. Home Assistant cover position is 100=open and 0=closed.
+        p.setBrush(QColor(238, 235, 220, 215))
         p.setPen(QPen(QColor(255, 255, 255, 190), 1.6))
         cassette = QRectF(inner.left() + 14, inner.top() + 6, inner.width() - 28, 10)
         p.drawRoundedRect(cassette, 5, 5)
 
-        count = 18
-        clamped_position = max(0, min(100, int(self.position)))
-        # HA cover position is normally 100=open, 0=closed.
-        # Visually invert the slat body: open means the blind is up, closed means it is down.
-        covered_count = int(round(count * (100 - clamped_position) / 100))
-        stack_count = max(2, int(round(count * clamped_position / 100)))
-        gap = (inner.height() - 46) / count
-        tilt_offset = (max(0, min(100, int(self.tilt_position))) - 50) / 50.0 * 5.5
+        count = 20
+        pos = max(0, min(100, int(self.position)))
+        # Draw open as a tight stack at the top, closed as slats filling the window.
+        covered_count = int(round(count * (100 - pos) / 100))
+        stacked_count = max(2, int(round(7 * pos / 100)))
+        gap = (inner.height() - 40) / count
 
-        # Compact slats stacked at the top when open.
-        for i in range(min(stack_count, 6)):
-            y = inner.top() + 24 + i * 2.5
-            alpha = max(70, 170 - i * 14)
-            p.setPen(QPen(QColor(255, 255, 255, alpha), 1.3))
+        # The pulled-up stack grows when opening.
+        for i in range(stacked_count):
+            y = inner.top() + 24 + i * 2.3
+            alpha = max(80, 184 - i * 13)
+            p.setPen(QPen(QColor(255, 255, 255, alpha), 1.5))
             p.drawLine(QPointF(inner.left() + 22, y), QPointF(inner.right() - 22, y))
 
-        # Lower visible slats when closed/partially closed.
+        # The lowered section grows downward as the blind closes.
         for i in range(covered_count):
-            y = inner.top() + 34 + i * gap
-            p.setPen(QPen(QColor(255, 255, 255, 185), 1.5))
-            p.drawLine(QPointF(inner.left() + 20, y), QPointF(inner.right() - 20, y - tilt_offset))
+            y = inner.top() + 38 + i * gap
+            p.setPen(QPen(QColor(255, 255, 255, 186), 1.45))
+            p.drawLine(QPointF(inner.left() + 20, y), QPointF(inner.right() - 20, y))
             p.setPen(QPen(QColor(0, 0, 0, 45), 1))
-            p.drawLine(QPointF(inner.left() + 22, y + 2), QPointF(inner.right() - 22, y + 2 - tilt_offset))
+            p.drawLine(QPointF(inner.left() + 22, y + 2), QPointF(inner.right() - 22, y + 2))
 
-        guide_y = inner.top() + (100 - max(0, min(100, int(self.tilt_position)))) / 100.0 * inner.height()
-        p.setPen(QPen(QColor(73, 224, 255, 120), 1, Qt.DashLine))
-        p.drawLine(QPointF(inner.left() + 10, guide_y), QPointF(inner.right() - 10, guide_y))
-        p.setFont(font(7, QFont.Black, 15))
-        p.setPen(QColor(222, 244, 255, 185))
-        p.drawText(QRectF(inner.left(), inner.bottom() - 18, inner.width(), 16), Qt.AlignCenter, f"TAP / DRAG TO TILT  {int(self.tilt_position)}%")
+        # Small thumb marker only; no text/guide line.
+        thumb_y = inner.top() + (100 - pos) / 100.0 * inner.height()
+        thumb = QRectF(inner.right() - 13, thumb_y - 10, 8, 20)
+        p.setBrush(QColor(73, 224, 255, 180))
+        p.setPen(QPen(QColor(210, 248, 255, 145), 1))
+        p.drawRoundedRect(thumb, 4, 4)
 
 
 class MiniTextKeyboardDialog(QDialog):
