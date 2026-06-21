@@ -80,8 +80,40 @@ SYSTEMD_RUN_BIN="$(command -v systemd-run || echo /usr/bin/systemd-run)"
 SYSTEMCTL_BIN="$(command -v systemctl || echo /usr/bin/systemctl)"
 MOUNT_BIN="$(command -v mount || echo /usr/bin/mount)"
 UMOUNT_BIN="$(command -v umount || echo /usr/bin/umount)"
-mkdir -p "$APP_DIR/data/usb-mounts"
-chown -R "$APP_USER:$APP_USER" "$APP_DIR/data/usb-mounts"
+
+# USB config backups must never mount inside the Git checkout. Older builds used
+# data/usb-mounts, which can make git clean fail with "Device or resource busy".
+# Clean that legacy folder up and use a runtime folder outside the repo instead.
+LEGACY_USB_ROOT="$APP_DIR/data/usb-mounts"
+if [[ -d "$LEGACY_USB_ROOT" ]]; then
+  python3 - <<PY_CLEANUP
+from pathlib import Path
+import shutil, subprocess
+root = Path(${LEGACY_USB_ROOT@Q})
+mounts = []
+try:
+    for line in Path('/proc/mounts').read_text(errors='ignore').splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        mount = Path(parts[1].replace('\\040', ' '))
+        try:
+            mount.resolve().relative_to(root.resolve())
+            mounts.append(mount)
+        except Exception:
+            continue
+except Exception as exc:
+    print(f'Could not inspect legacy USB mounts: {exc}')
+for mount in sorted(mounts, key=lambda p: len(str(p)), reverse=True):
+    print(f'Unmounting legacy USB mount: {mount}')
+    subprocess.run(['umount', str(mount)], check=False)
+shutil.rmtree(root, ignore_errors=True)
+PY_CLEANUP
+fi
+RUNTIME_USB_ROOT="/tmp/smart-thermostat-usb"
+mkdir -p "$RUNTIME_USB_ROOT"
+chown "$APP_USER:$APP_USER" "$RUNTIME_USB_ROOT" 2>/dev/null || true
+
 cat >"$SUDOERS_FILE" <<EOF
 $APP_USER ALL=(root) NOPASSWD: $SYSTEMD_RUN_BIN, $SYSTEMCTL_BIN, $MOUNT_BIN, $UMOUNT_BIN
 EOF

@@ -40,8 +40,19 @@ ACCESS_LOGS_ENABLED = os.environ.get("SMART_THERMOSTAT_ACCESS_LOGS", "0").strip(
 HISTORY_PERSISTENCE_MODE = os.environ.get("SMART_THERMOSTAT_HISTORY_PERSISTENCE", "daily").strip().lower() or "daily"
 HISTORY_SAVE_ON_SHUTDOWN = os.environ.get("SMART_THERMOSTAT_HISTORY_SAVE_ON_SHUTDOWN", "0").strip().lower() in {"1", "true", "yes", "on"}
 USB_CONFIG_FILENAME = os.environ.get("SMART_THERMOSTAT_USB_CONFIG_FILENAME", "smart-thermostat-config-backup.json").strip() or "smart-thermostat-config-backup.json"
+# Never mount USB drives inside the Git checkout. A previous version used
+# data/usb-mounts, which makes git clean fail with "Device or resource busy"
+# when a thumb drive is still mounted there. Use a runtime folder outside the
+# repo instead.
+USB_RUNTIME_MOUNT_ROOT = Path(os.environ.get("SMART_THERMOSTAT_USB_RUNTIME_MOUNT_ROOT", "/tmp/smart-thermostat-usb")).expanduser()
+USB_LEGACY_MOUNT_ROOT = DATA_DIR / "usb-mounts"
 USB_MOUNT_ROOTS = tuple(
-    x for x in os.environ.get("SMART_THERMOSTAT_USB_MOUNT_ROOTS", "/media:/run/media:/mnt").split(":") if x.strip()
+    x.strip()
+    for x in os.environ.get(
+        "SMART_THERMOSTAT_USB_MOUNT_ROOTS",
+        f"/media:/run/media:/mnt:{USB_RUNTIME_MOUNT_ROOT}",
+    ).split(":")
+    if x.strip()
 )
 MANUAL_CHANGEOVER_LOCKOUT_MINUTES = 10
 _HA_STATES_CACHE_LOCK = threading.Lock()
@@ -1395,6 +1406,79 @@ def _decode_proc_mount_field(value: str) -> str:
     )
 
 
+def _mounted_paths() -> list[dict]:
+    mounts: list[dict] = []
+    try:
+        lines = Path("/proc/mounts").read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        lines = []
+    for line in lines:
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        mounts.append({
+            "device": _decode_proc_mount_field(parts[0]),
+            "path": _decode_proc_mount_field(parts[1]),
+            "fsType": _decode_proc_mount_field(parts[2]).lower(),
+        })
+    return mounts
+
+
+def _path_is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except Exception:
+        return False
+
+
+def _safe_usb_mount_name(device_path: str) -> str:
+    name = Path(str(device_path or "usb")).name.strip() or "usb"
+    safe = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in name)
+    return safe or "usb"
+
+
+def _run_command_quiet(cmd: list[str], timeout: float = 10.0) -> tuple[bool, str]:
+    try:
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        detail = "\n".join(x for x in (result.stdout.strip(), result.stderr.strip()) if x).strip()
+        return result.returncode == 0, detail
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _cleanup_legacy_repo_usb_mounts() -> None:
+    """Unmount and remove the old repo-local USB mount folder if it exists.
+
+    This keeps future git reset/clean operations from getting stuck on
+    data/usb-mounts/sdX entries that are really mounted thumb drives.
+    """
+    legacy_root = USB_LEGACY_MOUNT_ROOT
+    if not legacy_root.exists():
+        return
+    legacy_mounts: list[Path] = []
+    for mount in _mounted_paths():
+        mount_path = Path(str(mount.get("path") or ""))
+        if mount_path == legacy_root or _path_is_relative_to(mount_path, legacy_root):
+            legacy_mounts.append(mount_path)
+    legacy_mounts.sort(key=lambda x: len(str(x)), reverse=True)
+    for mount_path in legacy_mounts:
+        ok, detail = _run_command_quiet(["sudo", "umount", str(mount_path)], timeout=12)
+        if not ok:
+            print(f"Legacy USB unmount skipped for {mount_path}: {detail}", flush=True)
+    try:
+        shutil.rmtree(legacy_root, ignore_errors=True)
+    except Exception:
+        pass
+
+
 def _is_usb_mount_path(path: Path) -> bool:
     try:
         resolved = path.resolve()
@@ -1425,19 +1509,11 @@ def _mounted_usb_drives(require_writable: bool = False) -> list[dict]:
     }
     candidates: list[dict] = []
     seen: set[str] = set()
-    try:
-        lines = Path("/proc/mounts").read_text(encoding="utf-8", errors="ignore").splitlines()
-    except Exception:
-        lines = []
 
-    for line in lines:
-        parts = line.split()
-        if len(parts) < 3:
-            continue
-        device = _decode_proc_mount_field(parts[0])
-        mount_text = _decode_proc_mount_field(parts[1])
-        fs_type = _decode_proc_mount_field(parts[2]).lower()
-        mount_path = Path(mount_text)
+    for mount in _mounted_paths():
+        device = str(mount.get("device") or "")
+        fs_type = str(mount.get("fsType") or "").lower()
+        mount_path = Path(str(mount.get("path") or ""))
 
         if fs_type in ignored_fs:
             continue
@@ -1466,6 +1542,123 @@ def _mounted_usb_drives(require_writable: bool = False) -> list[dict]:
     return candidates
 
 
+def _flatten_lsblk_nodes(nodes: list[dict], parent_usb: bool = False) -> list[dict]:
+    flattened: list[dict] = []
+    for node in nodes or []:
+        if not isinstance(node, dict):
+            continue
+        node_is_usb = parent_usb or str(node.get("tran") or "").lower() == "usb" or bool(node.get("rm"))
+        item = dict(node)
+        item["_smartThermostatUsb"] = node_is_usb
+        flattened.append(item)
+        children = node.get("children") if isinstance(node.get("children"), list) else []
+        flattened.extend(_flatten_lsblk_nodes(children, node_is_usb))
+    return flattened
+
+
+def _removable_block_devices() -> list[dict]:
+    cmd = ["lsblk", "-J", "-o", "NAME,KNAME,PATH,TYPE,TRAN,MOUNTPOINTS,MOUNTPOINT,FSTYPE,LABEL,RM,RO,SIZE"]
+    try:
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=8, check=False)
+        if result.returncode != 0:
+            print(f"USB lsblk failed: {result.stderr.strip()}", flush=True)
+            return []
+        raw = json.loads(result.stdout or "{}")
+    except Exception as exc:
+        print(f"USB lsblk parse failed: {exc}", flush=True)
+        return []
+
+    nodes = _flatten_lsblk_nodes(raw.get("blockdevices") if isinstance(raw, dict) else [])
+    devices: list[dict] = []
+    seen: set[str] = set()
+    for node in nodes:
+        device_path = str(node.get("path") or "").strip()
+        if not device_path.startswith("/dev/"):
+            continue
+        if not bool(node.get("_smartThermostatUsb")):
+            continue
+        if str(node.get("ro") or "0") in {"1", "true", "True"}:
+            continue
+        node_type = str(node.get("type") or "").lower()
+        fs_type = str(node.get("fstype") or "").strip().lower()
+        # Prefer partitions. Allow a whole disk only if it directly contains a filesystem.
+        if node_type not in {"part", "disk"}:
+            continue
+        if node_type == "disk" and not fs_type:
+            continue
+        mountpoints = node.get("mountpoints") if isinstance(node.get("mountpoints"), list) else []
+        mountpoint = node.get("mountpoint")
+        if mountpoint:
+            mountpoints.append(mountpoint)
+        mounted = [str(x) for x in mountpoints if x]
+        if device_path in seen:
+            continue
+        seen.add(device_path)
+        devices.append({
+            "path": device_path,
+            "fsType": fs_type,
+            "label": str(node.get("label") or Path(device_path).name),
+            "mounted": mounted,
+        })
+    return devices
+
+
+def _mount_usb_device(device: dict) -> tuple[bool, str]:
+    device_path = str(device.get("path") or "")
+    if not device_path.startswith("/dev/"):
+        return False, "Invalid USB device path."
+    mount_root = USB_RUNTIME_MOUNT_ROOT
+    try:
+        mount_root.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:
+        return False, f"Could not create USB runtime mount folder {mount_root}: {exc}"
+    target = mount_root / _safe_usb_mount_name(device_path)
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:
+        return False, f"Could not create USB mount folder {target}: {exc}"
+
+    fs_type = str(device.get("fsType") or "").lower()
+    opts: list[str] = []
+    if fs_type in {"vfat", "exfat", "msdos", "ntfs", "ntfs3"}:
+        opts.append(f"uid={os.getuid()}")
+        opts.append(f"gid={os.getgid()}")
+        opts.append("umask=0002")
+    cmd = ["sudo", "mount"]
+    if opts:
+        cmd += ["-o", ",".join(opts)]
+    cmd += [device_path, str(target)]
+    ok, detail = _run_command_quiet(cmd, timeout=15)
+    if not ok:
+        try:
+            target.rmdir()
+        except Exception:
+            pass
+        return False, detail or f"Could not mount {device_path}."
+    return True, str(target)
+
+
+def _ensure_usb_drives(require_writable: bool = False) -> list[dict]:
+    _cleanup_legacy_repo_usb_mounts()
+    drives = _mounted_usb_drives(require_writable=require_writable)
+    if drives:
+        return drives
+
+    errors: list[str] = []
+    for device in _removable_block_devices():
+        if device.get("mounted"):
+            # It is mounted somewhere outside our allowed USB roots. Do not touch
+            # it; a later _mounted_usb_drives pass will pick it up if it is under
+            # /media, /run/media, /mnt, or SMART_THERMOSTAT_USB_RUNTIME_MOUNT_ROOT.
+            continue
+        ok, detail = _mount_usb_device(device)
+        if not ok:
+            errors.append(f"{device.get('label') or device.get('path')}: {detail}")
+    drives = _mounted_usb_drives(require_writable=require_writable)
+    if not drives and errors:
+        print("USB auto-mount did not produce a usable drive: " + "; ".join(errors[:3]), flush=True)
+    return drives
+
 def _write_json_atomic(path: Path, payload: dict) -> int:
     body = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
     tmp_path = path.with_name(f".{path.name}.tmp")
@@ -1486,11 +1679,11 @@ def _write_json_atomic(path: Path, payload: dict) -> int:
 
 
 def _config_export_usb_payload(server_port: int | str | None = None) -> dict:
-    drives = _mounted_usb_drives(require_writable=True)
+    drives = _ensure_usb_drives(require_writable=True)
     if not drives:
         return {
             "ok": False,
-            "error": "No writable USB drive was found. Insert a mounted USB drive and try Download Config again.",
+            "error": "No writable USB drive was found. Insert a USB drive directly into the Pi and try Download Config again.",
             "filename": USB_CONFIG_FILENAME,
             "drives": [],
         }
@@ -1522,7 +1715,7 @@ def _config_export_usb_payload(server_port: int | str | None = None) -> dict:
 
 def _find_usb_config_files() -> list[dict]:
     found: list[dict] = []
-    for drive in _mounted_usb_drives(require_writable=False):
+    for drive in _ensure_usb_drives(require_writable=False):
         path = Path(str(drive.get("path") or "")) / USB_CONFIG_FILENAME
         try:
             if path.exists() and path.is_file():
@@ -1543,9 +1736,9 @@ def _config_import_usb_payload() -> dict:
     if not matches:
         return {
             "ok": False,
-            "error": f"No {USB_CONFIG_FILENAME} file was found on any mounted USB drive.",
+            "error": f"No {USB_CONFIG_FILENAME} file was found on any USB drive.",
             "filename": USB_CONFIG_FILENAME,
-            "drives": _mounted_usb_drives(require_writable=False),
+            "drives": _ensure_usb_drives(require_writable=False),
         }
 
     selected = matches[0]
@@ -3522,18 +3715,63 @@ run_as_app_user() {{
   fi
 }}
 
+cleanup_legacy_usb_mounts() {{
+  local root="$PWD/data/usb-mounts"
+  [[ -d "$root" ]] || return 0
+  echo "Checking for old repo-local USB mounts under $root"
+  python3 - <<'PY_CLEANUP'
+from pathlib import Path
+import shutil, subprocess
+root = Path.cwd() / 'data' / 'usb-mounts'
+mounts = []
+try:
+    for line in Path('/proc/mounts').read_text(errors='ignore').splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        mount = Path(parts[1].replace('\\040', ' '))
+        try:
+            mount.resolve().relative_to(root.resolve())
+            mounts.append(mount)
+        except Exception:
+            continue
+except Exception as exc:
+    print(f'Could not inspect mounts: {{exc}}')
+for mount in sorted(mounts, key=lambda p: len(str(p)), reverse=True):
+    print(f'Unmounting legacy USB mount: {{mount}}')
+    subprocess.run(['umount', str(mount)], check=False)
+shutil.rmtree(root, ignore_errors=True)
+PY_CLEANUP
+}}
+
+backup_data_files() {{
+  mkdir -p "$BACKUP_ROOT/$ts"
+  for file in panel-config.json thermostat-state.json hvac-history.json; do
+    if [[ -f "data/$file" ]]; then
+      cp -av "data/$file" "$BACKUP_ROOT/$ts/$file"
+    fi
+  done
+}}
+
+restore_data_files() {{
+  mkdir -p data
+  if compgen -G "$BACKUP_ROOT/$ts/*" >/dev/null; then
+    cp -av "$BACKUP_ROOT/$ts/." data/.
+  fi
+}}
+
 ts=$(date +%F-%H%M%S)
-mkdir -p "$BACKUP_ROOT/$ts"
-cp -av data/. "$BACKUP_ROOT/$ts/."
+cleanup_legacy_usb_mounts
+backup_data_files
 
 # Match the terminal update path: git operations run as the project owner, not
 # root. This avoids Git safe-directory failures and root-owned checkout files.
 run_as_app_user git fetch origin Development
 run_as_app_user git reset --hard origin/Development
+cleanup_legacy_usb_mounts
 run_as_app_user git clean -fd
 
-mkdir -p data
-cp -av "$BACKUP_ROOT/$ts/." data/.
+restore_data_files
 chmod +x scripts/*.sh
 
 # This transient unit already runs as root. install-native.sh now resolves the
