@@ -3369,20 +3369,20 @@ class RoomManagerSettingsDialog(QDialog):
     saved = pyqtSignal()
 
     PROFILES = {
-        "Blinds": ("blinds", "Shade Rooms", "blinds", "Blind"),
-        "Lights": ("lights", "Light Rooms", "lights", "Light"),
-        "Room": ("roomControl", "Room Control Rooms", "controls", "Control"),
+        "Blinds": ("blinds", "Shade Rooms", "blinds", "Blind", 6),
+        "Lights": ("lights", "Light Rooms", "lights", "Light", 12),
+        "Room": ("roomControl", "Room Control Rooms", "controls", "Control", 12),
     }
 
     def __init__(self, state: AppState, page_name: str, parent=None):
         super().__init__(parent)
         self.s = state
         self.page_name = page_name
-        self.domain, title, self.item_key, self.item_label = self.PROFILES.get(page_name, self.PROFILES["Room"])
+        self.domain, title, self.item_key, self.item_label, self.max_entries = self.PROFILES.get(page_name, self.PROFILES["Room"])
         self.selected_key = str((self.s.config.get(self.domain) or {}).get("room") or "")
         self.setWindowTitle(title)
         self.setModal(True)
-        self.resize(900, 560)
+        self.resize(980, 640)
         self.setStyleSheet("""
             QDialog { background:#09111f; color:#f7fbff; }
             QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
@@ -3390,19 +3390,55 @@ class RoomManagerSettingsDialog(QDialog):
 
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 22, 24, 22)
-        root.setSpacing(14)
+        root.setSpacing(12)
 
         self.header = QLabel(title)
         self.header.setAlignment(Qt.AlignCenter)
         self.header.setFont(font(27, QFont.Black))
         root.addWidget(self.header)
 
-        self.hint = QLabel("Add or delete page rooms. Entries inside each room stay on that page and are assigned by pressing/holding an entry.")
+        self.hint = QLabel(
+            "Add/delete rooms, then select a room and set how many entries it should show. "
+            "New empty entries appear on that page so they can be assigned to Home Assistant devices."
+        )
         self.hint.setWordWrap(True)
         self.hint.setAlignment(Qt.AlignCenter)
         self.hint.setFont(font(11, QFont.Black))
         self.hint.setStyleSheet("color:#c9d5ea;")
         root.addWidget(self.hint)
+
+        self.entry_panel = GlassPanel(radius=22, strong=True)
+        self.entry_panel.setMinimumHeight(108)
+        entry_lay = QHBoxLayout(self.entry_panel)
+        entry_lay.setContentsMargins(18, 14, 18, 14)
+        entry_lay.setSpacing(14)
+
+        self.selected_room_label = QLabel("Selected Room")
+        self.selected_room_label.setFont(font(16, QFont.Black))
+        self.selected_room_label.setStyleSheet("color:#ffffff; background:transparent; border:0;")
+        self.selected_room_label.setMinimumWidth(280)
+        entry_lay.addWidget(self.selected_room_label, 1)
+
+        self.entry_minus = RoundButton("−", min_h=58)
+        self.entry_minus.setFixedSize(64, 58)
+        self.entry_count_label = QLabel("0")
+        self.entry_count_label.setAlignment(Qt.AlignCenter)
+        self.entry_count_label.setMinimumWidth(120)
+        self.entry_count_label.setFont(font(34, QFont.Black))
+        self.entry_count_label.setStyleSheet("color:#46e8ff; background:transparent; border:0;")
+        self.entry_plus = RoundButton("+", active=True, min_h=58)
+        self.entry_plus.setFixedSize(64, 58)
+        entry_lay.addWidget(self.entry_minus)
+        entry_lay.addWidget(self.entry_count_label)
+        entry_lay.addWidget(self.entry_plus)
+
+        self.entry_caption = QLabel(f"{self.item_label.upper()} ENTRIES\nMAX {self.max_entries}")
+        self.entry_caption.setAlignment(Qt.AlignCenter)
+        self.entry_caption.setMinimumWidth(160)
+        self.entry_caption.setFont(font(10, QFont.Black, 18))
+        self.entry_caption.setStyleSheet("color:#c9d5ea; background:transparent; border:0; letter-spacing:2px;")
+        entry_lay.addWidget(self.entry_caption)
+        root.addWidget(self.entry_panel)
 
         self.room_panel = GlassPanel(radius=24, strong=True)
         root.addWidget(self.room_panel, 1)
@@ -3420,6 +3456,8 @@ class RoomManagerSettingsDialog(QDialog):
         close_btn.setMinimumWidth(150)
         self.add_btn.clicked.connect(self.add_room)
         self.delete_btn.clicked.connect(self.delete_selected_room)
+        self.entry_minus.clicked.connect(lambda: self.adjust_entry_count(-1))
+        self.entry_plus.clicked.connect(lambda: self.adjust_entry_count(1))
         close_btn.clicked.connect(self.accept)
         bottom.addWidget(self.add_btn)
         bottom.addWidget(self.delete_btn)
@@ -3436,12 +3474,44 @@ class RoomManagerSettingsDialog(QDialog):
             section["room"] = "living"
         for key, room in rooms.items():
             room.setdefault("label", str(key).replace("-", " ").title())
-            room.setdefault(self.item_key, [])
+            items = room.setdefault(self.item_key, [])
+            if not isinstance(items, list):
+                room[self.item_key] = []
         if section.get("room") not in rooms:
             section["room"] = next(iter(rooms))
         if self.selected_key not in rooms:
             self.selected_key = section.get("room") or next(iter(rooms))
         return section, rooms
+
+    def entry_count(self, room: dict | None = None) -> int:
+        if room is None:
+            _, rooms = self.ensure_model()
+            room = rooms.get(self.selected_key) or {}
+        return len(room.get(self.item_key) or [])
+
+    def make_entry(self, room_key: str, idx: int) -> dict:
+        n = int(idx) + 1
+        safe_key = str(room_key or "room").replace(" ", "-").lower()
+        if self.page_name == "Lights":
+            return {"id": f"{safe_key}-light-{n}", "name": f"Light {n}", "brightness": 0, "lastBrightness": 100, "on": False}
+        if self.page_name == "Blinds":
+            return {"id": f"{safe_key}-blind-{n}", "name": f"Blind {n}", "position": 100}
+        return {"id": f"{safe_key}-control-{n}", "name": f"Control {n}", "domain": "switch", "on": False}
+
+    def save_and_refresh(self):
+        self.s.save_config()
+        self.saved.emit()
+        self.rebuild()
+
+    def update_entry_controls(self):
+        _, rooms = self.ensure_model()
+        room = rooms.get(self.selected_key) or {}
+        count = self.entry_count(room)
+        label = room.get("label") or self.selected_key or "Room"
+        self.selected_room_label.setText(f"{label}\nEntries shown on this page")
+        self.entry_count_label.setText(str(count))
+        self.entry_minus.setEnabled(count > 0)
+        self.entry_plus.setEnabled(count < self.max_entries)
 
     def rebuild(self):
         while self.room_lay.count():
@@ -3452,11 +3522,12 @@ class RoomManagerSettingsDialog(QDialog):
         for idx, (key, room) in enumerate(rooms.items()):
             count = len(room.get(self.item_key) or [])
             label = room.get("label") or key
-            btn = RoundButton(f"{label}\n{count} {self.item_label}{'' if count == 1 else 's'}", active=key == self.selected_key, min_h=82)
-            btn.setMinimumWidth(170)
+            btn = RoundButton(f"{label}\n{count}/{self.max_entries} {self.item_label}{'' if count == 1 else 's'}", active=key == self.selected_key, min_h=86)
+            btn.setMinimumWidth(190)
             btn.clicked.connect(lambda checked=False, k=key: self.select_room(k))
             self.room_lay.addWidget(btn, idx // 4, idx % 4)
         self.delete_btn.setEnabled(len(rooms) > 1)
+        self.update_entry_controls()
 
     def select_room(self, key: str):
         self.selected_key = key
@@ -3467,6 +3538,37 @@ class RoomManagerSettingsDialog(QDialog):
         except Exception:
             pass
         self.rebuild()
+
+    def set_entry_count(self, target: int):
+        section, rooms = self.ensure_model()
+        key = self.selected_key or section.get("room")
+        room = rooms.get(key)
+        if not room:
+            return
+        items = room.setdefault(self.item_key, [])
+        target = int(clamp(target, 0, self.max_entries))
+        current = len(items)
+        if target == current:
+            return
+
+        if target < current:
+            removed = items[target:]
+            assigned_removed = [x for x in removed if isinstance(x, dict) and x.get("haEntityId")]
+            if assigned_removed:
+                msg = f"Reducing to {target} removes {len(assigned_removed)} assigned {self.item_label.lower()} entr{'y' if len(assigned_removed) == 1 else 'ies'} from this room. Continue?"
+                if QMessageBox.question(self, "Remove Assigned Entries", msg) != QMessageBox.Yes:
+                    return
+            del items[target:]
+        else:
+            for idx in range(current, target):
+                items.append(self.make_entry(key, idx))
+        try:
+            self.save_and_refresh()
+        except Exception as exc:
+            QMessageBox.warning(self, "Save failed", str(exc))
+
+    def adjust_entry_count(self, delta: int):
+        self.set_entry_count(self.entry_count() + int(delta))
 
     def add_room(self):
         section, rooms = self.ensure_model()
