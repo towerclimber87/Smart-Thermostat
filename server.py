@@ -3066,9 +3066,10 @@ def _reboot_payload() -> dict:
 def _fetch_update_payload() -> dict:
     """Start the full self-update/deploy command from the panel Info dialog.
 
-    The command is intentionally launched in the background because it restarts
-    this backend service and the native UI service. Waiting synchronously would
-    kill the HTTP response halfway through the update.
+    Important: do NOT run the update as a child of the backend service. When the
+    command restarts smart-thermostat-backend.service, systemd kills every child
+    in that service cgroup. That is what can leave the panel at a black console
+    with a blinking cursor. We launch a separate transient systemd unit instead.
     """
     if not (ROOT / ".git").exists():
         return {"ok": False, "error": "This thermostat folder is not connected to Git."}
@@ -3076,50 +3077,76 @@ def _fetch_update_payload() -> dict:
     logs = DATA_DIR / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     log_path = logs / "fetch-update.log"
-    project_dir = str(ROOT)
+    script_path = logs / "self-update.sh"
 
-    command = f"""
-cd {project_dir!r} && \
-ts=$(date +%F-%H%M%S) && \
-mkdir -p ~/thermostat-pi-data-backups/$ts && \
-cp -av data/. ~/thermostat-pi-data-backups/$ts/. && \
-git fetch origin Development && \
-git reset --hard origin/Development && \
-git clean -fd && \
-mkdir -p data && \
-cp -av ~/thermostat-pi-data-backups/$ts/. data/. && \
-chmod +x scripts/*.sh && \
-sudo ./scripts/install-native.sh && \
-sudo systemctl daemon-reload && \
-sudo systemctl restart smart-thermostat-backend.service smart-thermostat-native.service && \
-sleep 8 && \
-systemctl status smart-thermostat-backend.service smart-thermostat-native.service --no-pager -l
-""".strip()
+    script = f"""#!/usr/bin/env bash
+set -Eeuo pipefail
 
-    launcher = (
-        "nohup bash -lc "
-        + shlex.quote(command)
-        + " >> "
-        + shlex.quote(str(log_path))
-        + " 2>&1 &"
-    )
+exec >>{shlex.quote(str(log_path))} 2>&1
+
+echo "===== Smart Thermostat self-update started: $(date) ====="
+cd {shlex.quote(str(ROOT))}
+
+ts=$(date +%F-%H%M%S)
+mkdir -p "$HOME/thermostat-pi-data-backups/$ts"
+cp -av data/. "$HOME/thermostat-pi-data-backups/$ts/."
+
+git fetch origin Development
+git reset --hard origin/Development
+git clean -fd
+
+mkdir -p data
+cp -av "$HOME/thermostat-pi-data-backups/$ts/." data/.
+chmod +x scripts/*.sh
+
+# This transient unit runs as root, so do not call sudo inside it.
+./scripts/install-native.sh
+
+systemctl daemon-reload
+systemctl restart smart-thermostat-backend.service
+sleep 2
+systemctl restart smart-thermostat-native.service
+
+sleep 8
+systemctl status smart-thermostat-backend.service smart-thermostat-native.service --no-pager -l || true
+echo "===== Smart Thermostat self-update finished: $(date) ====="
+"""
     try:
-        subprocess.Popen(
-            ["bash", "-lc", launcher],
-            cwd=str(ROOT),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        script_path.write_text(script, encoding="utf-8")
+        script_path.chmod(0o755)
     except Exception as exc:
-        return {"ok": False, "error": f"Could not start update command: {exc}"}
+        return {"ok": False, "error": f"Could not write update script: {exc}"}
+
+    unit_name = f"smart-thermostat-self-update-{int(time.time())}"
+    cmd = [
+        "sudo",
+        "systemd-run",
+        "--unit", unit_name,
+        "--collect",
+        "--property", "Type=oneshot",
+        "--property", f"WorkingDirectory={str(ROOT)}",
+        "/bin/bash",
+        str(script_path),
+    ]
+
+    try:
+        started = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=12)
+    except Exception as exc:
+        return {"ok": False, "error": f"Could not start update unit: {exc}"}
+
+    if started.returncode != 0:
+        detail = (started.stderr or started.stdout or "").strip()
+        return {
+            "ok": False,
+            "error": detail or "systemd-run could not start the update unit. Run sudo ./scripts/install-native.sh once to update sudoers.",
+        }
 
     return {
         "ok": True,
         "started": True,
+        "unit": unit_name,
         "log": str(log_path),
-        "message": "Fetch update started. The panel will pull Development, preserve data, reinstall native services, and restart.",
+        "message": "Fetch update started safely. The panel will restart after the transient update service finishes.",
     }
 
 

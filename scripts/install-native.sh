@@ -48,6 +48,18 @@ systemctl disable --now getty@tty1.service 2>/dev/null || true
 # Make sure the touch UI user can access display, input, and GPU devices on Raspberry Pi OS.
 usermod -aG tty,video,input,render "$APP_USER" 2>/dev/null || true
 
+# Let the native panel start the self-update transient systemd unit without a
+# password prompt. The actual update runs as a separate root-owned systemd unit,
+# outside the backend service cgroup, so restarting the backend will not kill it.
+SUDOERS_FILE="/etc/sudoers.d/smart-thermostat-panel"
+SYSTEMD_RUN_BIN="$(command -v systemd-run || echo /usr/bin/systemd-run)"
+SYSTEMCTL_BIN="$(command -v systemctl || echo /usr/bin/systemctl)"
+cat >"$SUDOERS_FILE" <<EOF
+$APP_USER ALL=(root) NOPASSWD: $SYSTEMD_RUN_BIN, $SYSTEMCTL_BIN
+EOF
+chmod 0440 "$SUDOERS_FILE"
+
+
 sed -e "s|@APP_DIR@|$APP_DIR|g" -e "s|@APP_USER@|$APP_USER|g" -e "s|@APP_HOME@|$APP_HOME|g" \
   "$APP_DIR/systemd/smart-thermostat-backend.service.template" > /etc/systemd/system/smart-thermostat-backend.service
 sed -e "s|@APP_DIR@|$APP_DIR|g" -e "s|@APP_USER@|$APP_USER|g" -e "s|@APP_HOME@|$APP_HOME|g" \
