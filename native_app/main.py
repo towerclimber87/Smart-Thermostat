@@ -2127,7 +2127,10 @@ class BlindCard(GlassPanel):
     def __init__(self, blind: dict, parent=None):
         super().__init__(parent, radius=24)
         self.blind = blind
-        self.setMinimumSize(244, 468)
+        # Give each blind entry roughly another half-inch of vertical room on
+        # the 10.1" panel. The extra space is consumed by the blind preview,
+        # not by the Open/Close buttons.
+        self.setMinimumSize(244, 520)
         self.name = QLabel(self)
         self.pos = QLabel(self)
         self.open_btn = RoundButton("Open", active=False, min_h=38, parent=self)
@@ -2203,29 +2206,43 @@ class BlindsScreen(Page):
         self.panel = GlassPanel(radius=30)
         root.addWidget(self.panel, 1)
         self.lay = QVBoxLayout(self.panel)
-        self.lay.setContentsMargins(24, 18, 24, 22)
-        top = QHBoxLayout()
-        top.setContentsMargins(0, 0, 0, 0)
-        top.setSpacing(14)
+        # Tighten the panel padding so the blind cards can visibly grow.
+        self.lay.setContentsMargins(24, 10, 24, 14)
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(14)
         self.title = SectionTitle("Shade Control", "Living Room")
         self.title.setMinimumHeight(52)
-        top.addWidget(self.title)
-        top.addStretch(1)
+        header.addWidget(self.title)
+        header.addStretch(1)
+
+        right_header = QVBoxLayout()
+        right_header.setContentsMargins(0, 0, 0, 0)
+        right_header.setSpacing(4)
         self.room_tabs = QHBoxLayout()
-        top.addLayout(self.room_tabs)
-        self.lay.addLayout(top)
-        buttons = QHBoxLayout()
-        # Pull the room-wide controls up; this removes the dead space between
-        # the title/tabs and the blind cards on the 10.1" panel.
-        buttons.setContentsMargins(0, -34, 0, -10)
-        buttons.addStretch(1)
+        self.room_tabs.setContentsMargins(0, 0, 0, 0)
+        self.room_tabs.setSpacing(8)
+        right_header.addLayout(self.room_tabs)
+
+        # Put the room-wide controls into the header area instead of a separate
+        # middle row. This moves Open Room / Close Room up by about a half inch
+        # and gives that reclaimed space back to the individual blind entries.
+        room_actions = QHBoxLayout()
+        room_actions.setContentsMargins(0, 0, 0, 0)
+        room_actions.setSpacing(8)
+        room_actions.addStretch(1)
         self.open_room = RoundButton("Open Room", active=True, min_h=44)
         self.close_room = RoundButton("Close Room", kind="purple", min_h=44)
         self.open_room.setMinimumWidth(148); self.close_room.setMinimumWidth(148)
-        buttons.addWidget(self.open_room); buttons.addWidget(self.close_room); buttons.addStretch(1)
-        self.lay.addLayout(buttons)
+        room_actions.addWidget(self.open_room)
+        room_actions.addWidget(self.close_room)
+        room_actions.addStretch(1)
+        right_header.addLayout(room_actions)
+        header.addLayout(right_header)
+        self.lay.addLayout(header)
+
         self.grid = QGridLayout()
-        self.grid.setContentsMargins(0, -22, 0, 0)
+        self.grid.setContentsMargins(0, 2, 0, 0)
         self.grid.setHorizontalSpacing(14)
         self.lay.addLayout(self.grid, 1)
         self.open_room.clicked.connect(lambda: self.room_action("open"))
