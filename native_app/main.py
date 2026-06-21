@@ -5054,9 +5054,21 @@ class MainWindow(Background):
             self._settings_reopen_block_until = time.monotonic() + 2.0
 
     def show_info(self):
-        if time.monotonic() < getattr(self, "_ignore_info_until", 0):
+        now = time.monotonic()
+        if now < getattr(self, "_ignore_info_until", 0):
             return
+        if getattr(self, "_info_dialog_open", False):
+            return
+        if now < getattr(self, "_info_reopen_block_until", 0):
+            return
+        self._info_dialog_open = True
         try:
+            settings_code = self.settings_code()
+            if settings_code:
+                entered = CodeKeypadDialog.get_code(self, "Info Locked", "Enter Settings Code", settings_code)
+                if entered is None:
+                    self._info_reopen_block_until = time.monotonic() + 1.5
+                    return
             info = self.s.api.get("/api/system/info")
             dlg = QDialog(self)
             dlg.setModal(True)
@@ -5136,6 +5148,9 @@ class MainWindow(Background):
             dlg.exec_()
         except Exception as exc:
             self.toast.show_message(f"Info failed: {exc}")
+        finally:
+            self._info_dialog_open = False
+            self._info_reopen_block_until = time.monotonic() + 1.5
 
     def do_fetch_update(self):
         try:
@@ -5153,27 +5168,19 @@ class MainWindow(Background):
             self.toast.show_message(f"Restart failed: {exc}")
 
     def export_config(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Save Config", str(Path.home() / "smart-thermostat-config.json"), "JSON (*.json)")
-        if not path: return
         try:
-            rec = self.s.api.get("/api/config")
-            import json
-            Path(path).write_text(json.dumps(rec, indent=2), encoding="utf-8")
-            self.toast.show_message("Config saved")
+            data = self.s.api.post("/api/system/config-export-usb", {})
+            self.toast.show_message(data.get("message") or "Config downloaded to USB", 7000)
         except Exception as exc:
-            self.toast.show_message(f"Export failed: {exc}")
+            self.toast.show_message(f"USB download failed: {exc}", 8000)
 
     def import_config(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Upload Config", str(Path.home()), "JSON (*.json)")
-        if not path: return
         try:
-            import json
-            data = json.loads(Path(path).read_text(encoding="utf-8"))
-            self.s.api.post("/api/system/config-import", data)
+            data = self.s.api.post("/api/system/config-import-usb", {})
             self.reload_all()
-            self.toast.show_message("Config uploaded")
+            self.toast.show_message(data.get("message") or "Config uploaded from USB", 7000)
         except Exception as exc:
-            self.toast.show_message(f"Import failed: {exc}")
+            self.toast.show_message(f"USB upload failed: {exc}", 8000)
 
     def force_panel_geometry(self):
         """Force the native kiosk window to cover the whole X screen.

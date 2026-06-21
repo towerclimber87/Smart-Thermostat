@@ -39,6 +39,10 @@ HA_REQUEST_TIMEOUT_SECONDS = float(os.environ.get("SMART_THERMOSTAT_HA_REQUEST_T
 ACCESS_LOGS_ENABLED = os.environ.get("SMART_THERMOSTAT_ACCESS_LOGS", "0").strip().lower() in {"1", "true", "yes", "on"}
 HISTORY_PERSISTENCE_MODE = os.environ.get("SMART_THERMOSTAT_HISTORY_PERSISTENCE", "daily").strip().lower() or "daily"
 HISTORY_SAVE_ON_SHUTDOWN = os.environ.get("SMART_THERMOSTAT_HISTORY_SAVE_ON_SHUTDOWN", "0").strip().lower() in {"1", "true", "yes", "on"}
+USB_CONFIG_FILENAME = os.environ.get("SMART_THERMOSTAT_USB_CONFIG_FILENAME", "smart-thermostat-config-backup.json").strip() or "smart-thermostat-config-backup.json"
+USB_MOUNT_ROOTS = tuple(
+    x for x in os.environ.get("SMART_THERMOSTAT_USB_MOUNT_ROOTS", "/media:/run/media:/mnt").split(":") if x.strip()
+)
 MANUAL_CHANGEOVER_LOCKOUT_MINUTES = 10
 _HA_STATES_CACHE_LOCK = threading.Lock()
 _HA_STATES_CACHE: dict[tuple[str, str], tuple[float, list[dict]]] = {}
@@ -1366,6 +1370,195 @@ def _send_json_download(handler: BaseHTTPRequestHandler, filename: str, payload:
     handler.end_headers()
     handler.close_connection = True
     handler.wfile.write(body)
+
+
+def _decode_proc_mount_field(value: str) -> str:
+    # /proc/mounts escapes spaces and a few control characters as octal values.
+    # Keep this local and dependency-free so USB backup works on a minimal Pi OS.
+    return (
+        str(value or "")
+        .replace("\\040", " ")
+        .replace("\\011", "\t")
+        .replace("\\012", "\n")
+        .replace("\\134", "\\")
+    )
+
+
+def _is_usb_mount_path(path: Path) -> bool:
+    try:
+        resolved = path.resolve()
+    except Exception:
+        resolved = path
+    for root in USB_MOUNT_ROOTS:
+        try:
+            root_path = Path(root).resolve()
+        except Exception:
+            root_path = Path(root)
+        if resolved == root_path:
+            # Never write directly to /mnt or /media itself. We only want a
+            # mounted USB volume below one of those roots.
+            continue
+        try:
+            resolved.relative_to(root_path)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def _mounted_usb_drives(require_writable: bool = False) -> list[dict]:
+    ignored_fs = {
+        "autofs", "binfmt_misc", "bpf", "cgroup", "cgroup2", "configfs", "debugfs",
+        "devpts", "devtmpfs", "efivarfs", "fusectl", "hugetlbfs", "mqueue", "overlay",
+        "proc", "pstore", "ramfs", "securityfs", "sysfs", "tmpfs", "tracefs",
+    }
+    candidates: list[dict] = []
+    seen: set[str] = set()
+    try:
+        lines = Path("/proc/mounts").read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        lines = []
+
+    for line in lines:
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        device = _decode_proc_mount_field(parts[0])
+        mount_text = _decode_proc_mount_field(parts[1])
+        fs_type = _decode_proc_mount_field(parts[2]).lower()
+        mount_path = Path(mount_text)
+
+        if fs_type in ignored_fs:
+            continue
+        if not device.startswith("/dev/"):
+            continue
+        if not _is_usb_mount_path(mount_path):
+            continue
+        if not mount_path.exists() or not mount_path.is_dir():
+            continue
+        try:
+            resolved = str(mount_path.resolve())
+        except Exception:
+            resolved = str(mount_path)
+        if resolved in seen:
+            continue
+        if require_writable and not os.access(str(mount_path), os.W_OK):
+            continue
+        seen.add(resolved)
+        candidates.append({
+            "path": str(mount_path),
+            "device": device,
+            "fsType": fs_type,
+            "label": mount_path.name or str(mount_path),
+        })
+    candidates.sort(key=lambda item: (str(item.get("label") or "").lower(), str(item.get("path") or "")))
+    return candidates
+
+
+def _write_json_atomic(path: Path, payload: dict) -> int:
+    body = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
+    tmp_path = path.with_name(f".{path.name}.tmp")
+    with tmp_path.open("wb") as handle:
+        handle.write(body)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp_path, path)
+    try:
+        directory_fd = os.open(str(path.parent), os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except Exception:
+        pass
+    return len(body)
+
+
+def _config_export_usb_payload(server_port: int | str | None = None) -> dict:
+    drives = _mounted_usb_drives(require_writable=True)
+    if not drives:
+        return {
+            "ok": False,
+            "error": "No writable USB drive was found. Insert a mounted USB drive and try Download Config again.",
+            "filename": USB_CONFIG_FILENAME,
+            "drives": [],
+        }
+
+    payload = _config_export_payload(server_port)
+    errors: list[str] = []
+    for drive in drives:
+        target = Path(str(drive.get("path") or "")) / USB_CONFIG_FILENAME
+        try:
+            size = _write_json_atomic(target, payload)
+            return {
+                "ok": True,
+                "message": f"Config downloaded to USB as {USB_CONFIG_FILENAME}.",
+                "filename": USB_CONFIG_FILENAME,
+                "path": str(target),
+                "drive": drive,
+                "bytes": size,
+            }
+        except Exception as exc:
+            errors.append(f"{drive.get('label') or drive.get('path')}: {exc}")
+
+    return {
+        "ok": False,
+        "error": "A USB drive was found, but the config could not be written. " + "; ".join(errors[:3]),
+        "filename": USB_CONFIG_FILENAME,
+        "drives": drives,
+    }
+
+
+def _find_usb_config_files() -> list[dict]:
+    found: list[dict] = []
+    for drive in _mounted_usb_drives(require_writable=False):
+        path = Path(str(drive.get("path") or "")) / USB_CONFIG_FILENAME
+        try:
+            if path.exists() and path.is_file():
+                found.append({
+                    "path": str(path),
+                    "drive": drive,
+                    "mtime": path.stat().st_mtime,
+                    "bytes": path.stat().st_size,
+                })
+        except Exception:
+            continue
+    found.sort(key=lambda item: float(item.get("mtime") or 0), reverse=True)
+    return found
+
+
+def _config_import_usb_payload() -> dict:
+    matches = _find_usb_config_files()
+    if not matches:
+        return {
+            "ok": False,
+            "error": f"No {USB_CONFIG_FILENAME} file was found on any mounted USB drive.",
+            "filename": USB_CONFIG_FILENAME,
+            "drives": _mounted_usb_drives(require_writable=False),
+        }
+
+    selected = matches[0]
+    path = Path(str(selected.get("path") or ""))
+    try:
+        backup = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": f"The USB config file could not be read: {exc}",
+            "filename": USB_CONFIG_FILENAME,
+            "path": str(path),
+        }
+
+    result = _config_import_payload(backup)
+    if not result.get("ok"):
+        result.setdefault("filename", USB_CONFIG_FILENAME)
+        result.setdefault("path", str(path))
+        return result
+    result["message"] = f"Config uploaded from USB file {USB_CONFIG_FILENAME}."
+    result["filename"] = USB_CONFIG_FILENAME
+    result["path"] = str(path)
+    result["drive"] = selected.get("drive")
+    return result
 
 
 def _extract_import_record(payload: object) -> tuple[dict | None, dict | None]:
@@ -4412,7 +4605,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-import", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action"}:
             self.send_error(404, "Not found")
             return
 
@@ -4435,8 +4628,17 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                 result = _reboot_payload()
                 return _json(self, 200 if result.get("ok") else 500, result)
 
+            if path == "/api/system/config-export-usb":
+                server_port = getattr(self.server, "server_address", (None, None))[1]
+                result = _config_export_usb_payload(server_port)
+                return _json(self, 200 if result.get("ok") else 400, result)
+
             if path == "/api/system/config-import":
                 result = _config_import_payload(payload)
+                return _json(self, 200 if result.get("ok") else 400, result)
+
+            if path == "/api/system/config-import-usb":
+                result = _config_import_usb_payload()
                 return _json(self, 200 if result.get("ok") else 400, result)
 
             if path == "/api/hardware/relay":
