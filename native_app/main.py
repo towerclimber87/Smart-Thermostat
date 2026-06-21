@@ -908,9 +908,19 @@ class ThermostatScreen(Page):
         self.alert_banner.bypassClicked.connect(self.bypass_changeover_lockout)
         self.fx_timer = QTimer(self)
         self.fx_timer.timeout.connect(self.animate_environment)
-        self.fx_timer.start(700)
+        self.fx_timer.start(900)
         self.notice.hide()
         QTimer.singleShot(0, self.position_alert_banner)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if hasattr(self, "fx_timer") and not self.fx_timer.isActive():
+            self.fx_timer.start(900)
+
+    def hideEvent(self, event):
+        if hasattr(self, "fx_timer") and self.fx_timer.isActive():
+            self.fx_timer.stop()
+        super().hideEvent(event)
 
     def value(self, key: str, default=None):
         src = self.thermostat if isinstance(self.thermostat, dict) else {}
@@ -3633,7 +3643,10 @@ class MainWindow(Background):
 
         self.poll_timer = QTimer(self)
         self.poll_timer.timeout.connect(self.poll)
-        self.poll_timer.start(1800)
+        self.poll_timer.start(12000)
+        self._last_poll_by_page: dict[str, float] = {}
+        self._poll_busy = False
+        self._last_page_change_at = time.monotonic()
         self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self.refresh_status)
         self.status_timer.start(4000)
@@ -3661,10 +3674,13 @@ class MainWindow(Background):
         if name not in self.pages:
             return
         self.current_name = name
+        self._last_page_change_at = time.monotonic()
         self.stack.setCurrentWidget(self.pages[name])
         self.header.set_page(name)
         self.pages[name].sync(self.s.config, self.s.thermostat)
-        self.pages[name].poll()
+        # Never run a Home Assistant poll inside the navigation click handler.
+        # The UI must stay touch-responsive first; the background timer will
+        # refresh the selected page after the transition settles.
 
     def refresh_status(self):
         try:
@@ -3695,9 +3711,25 @@ class MainWindow(Background):
 
     def poll(self):
         try:
+            if self._poll_busy:
+                return
+            if time.monotonic() - getattr(self, "_last_page_change_at", 0) < 1.2:
+                return
+            if QApplication.activeModalWidget() is not None:
+                return
+            now = time.monotonic()
+            last = self._last_poll_by_page.get(self.current_name, 0)
+            # Room/Light/Blind/Audio polls go through Home Assistant. Keep them
+            # infrequent so a slow HA response cannot make touch feel dead.
+            if now - last < 10.0:
+                return
+            self._poll_busy = True
+            self._last_poll_by_page[self.current_name] = now
             self.pages[self.current_name].poll()
         except Exception:
             pass
+        finally:
+            self._poll_busy = False
 
     def domains_for(self, group: str) -> list[str]:
         if group == "room":
@@ -3739,7 +3771,7 @@ class MainWindow(Background):
                 obj["domain"] = ent.get("domain")
             try:
                 self.s.save_config()
-                self.sync_all()
+                self.sync_runtime_only()
                 self.toast.show_message(f"Assigned {obj.get('haName') or obj.get('name')}")
             except Exception as exc:
                 self.toast.show_message(f"Save failed: {exc}")
