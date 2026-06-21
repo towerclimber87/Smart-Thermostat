@@ -93,6 +93,16 @@ def slug_room_key(label: str, rooms: dict) -> str:
     return key
 
 
+def fit_dialog_to_available_screen(dialog: QDialog, margin: int = 0):
+    screen = dialog.screen() or QApplication.primaryScreen()
+    if not screen:
+        return
+    geo = screen.availableGeometry()
+    margin = max(0, int(margin))
+    dialog.resize(max(320, geo.width() - (margin * 2)), max(260, geo.height() - (margin * 2)))
+    dialog.move(geo.x() + margin, geo.y() + margin)
+
+
 class HoldRoundButton(RoundButton):
     held = pyqtSignal()
 
@@ -3400,13 +3410,23 @@ class PeopleSelectionDialog(QDialog):
         self.buttons: dict[str, RoundButton] = {}
         self.setModal(True)
         self.setWindowTitle("Auto Away / Home")
-        self.setFixedSize(720, 620)
+        self.setWindowFlag(Qt.FramelessWindowHint, True)
+        self.setMinimumSize(720, 520)
+        self.resize(1280, 800)
         self.setStyleSheet("""
             QDialog { background:#09111f; color:#f7fbff; }
             QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
         """)
         self.load_people()
         self.build()
+        QTimer.singleShot(0, self.fit_to_screen)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.fit_to_screen()
+
+    def fit_to_screen(self):
+        fit_dialog_to_available_screen(self, margin=0)
 
     def load_people(self):
         by_id: dict[str, dict] = {}
@@ -3430,14 +3450,14 @@ class PeopleSelectionDialog(QDialog):
 
     def build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(20, 18, 20, 18)
-        root.setSpacing(12)
+        root.setContentsMargins(12, 10, 12, 10)
+        root.setSpacing(8)
         header = QHBoxLayout()
         title = QLabel("AUTO AWAY / HOME")
-        title.setFont(font(24, QFont.Black))
+        title.setFont(font(22, QFont.Black))
         title.setStyleSheet("color:#55f0ff; letter-spacing:3px;")
-        select_all = RoundButton("Select All", active=True, min_h=44)
-        clear = RoundButton("Clear", active=False, kind="danger", min_h=44)
+        select_all = RoundButton("Select All", active=True, min_h=40)
+        clear = RoundButton("Clear", active=False, kind="danger", min_h=40)
         header.addWidget(title)
         header.addStretch(1)
         header.addWidget(select_all)
@@ -3447,7 +3467,7 @@ class PeopleSelectionDialog(QDialog):
         note = QLabel("Select the Home Assistant person entries that keep the room in Home mode. If none of them are home, the thermostat enters Away. When any selected person comes home, it returns to Home automatically.")
         note.setWordWrap(True)
         note.setFont(font(10, QFont.Black))
-        note.setStyleSheet("color:#cdd8ee; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.10); border-radius:14px; padding:10px;")
+        note.setStyleSheet("color:#cdd8ee; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.10); border-radius:12px; padding:8px;")
         root.addWidget(note)
 
         scroll = QScrollArea()
@@ -3461,8 +3481,8 @@ class PeopleSelectionDialog(QDialog):
         root.addWidget(scroll, 1)
 
         bottom = QHBoxLayout()
-        cancel = RoundButton("Cancel", active=False, min_h=50)
-        save = RoundButton("Save Selected", active=True, min_h=50)
+        cancel = RoundButton("Cancel", active=False, min_h=42)
+        save = RoundButton("Save Selected", active=True, min_h=42)
         bottom.addStretch(1)
         bottom.addWidget(cancel)
         bottom.addWidget(save)
@@ -3766,19 +3786,22 @@ class RoomManagerSettingsDialog(QDialog):
         self.selected_key = str((self.s.config.get(self.domain) or {}).get("room") or "")
         self.setWindowTitle(title)
         self.setModal(True)
-        self.resize(980, 640)
+        self.setWindowFlag(Qt.FramelessWindowHint, True)
+        self.setMinimumSize(760, 500)
+        self.resize(1280, 800)
         self.setStyleSheet("""
             QDialog { background:#09111f; color:#f7fbff; }
             QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
         """)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 22, 24, 22)
-        root.setSpacing(12)
+        root.setContentsMargins(12, 10, 12, 10)
+        root.setSpacing(8)
 
         self.header = QLabel(title)
         self.header.setAlignment(Qt.AlignCenter)
-        self.header.setFont(font(27, QFont.Black))
+        self.header.setFont(font(24, QFont.Black))
+        self.header.setMaximumHeight(44)
         root.addWidget(self.header)
 
         self.hint = QLabel(
@@ -3792,10 +3815,10 @@ class RoomManagerSettingsDialog(QDialog):
         root.addWidget(self.hint)
 
         self.entry_panel = GlassPanel(radius=22, strong=True)
-        self.entry_panel.setMinimumHeight(108)
+        self.entry_panel.setMinimumHeight(90)
         entry_lay = QHBoxLayout(self.entry_panel)
-        entry_lay.setContentsMargins(18, 14, 18, 14)
-        entry_lay.setSpacing(14)
+        entry_lay.setContentsMargins(12, 10, 12, 10)
+        entry_lay.setSpacing(10)
 
         self.selected_room_label = QLabel("Selected Room")
         self.selected_room_label.setFont(font(16, QFont.Black))
@@ -3827,9 +3850,9 @@ class RoomManagerSettingsDialog(QDialog):
         self.room_panel = GlassPanel(radius=24, strong=True)
         root.addWidget(self.room_panel, 1)
         self.room_lay = QGridLayout(self.room_panel)
-        self.room_lay.setContentsMargins(18, 18, 18, 18)
-        self.room_lay.setHorizontalSpacing(12)
-        self.room_lay.setVerticalSpacing(12)
+        self.room_lay.setContentsMargins(10, 10, 10, 10)
+        self.room_lay.setHorizontalSpacing(8)
+        self.room_lay.setVerticalSpacing(8)
 
         bottom = QHBoxLayout()
         self.add_btn = RoundButton("Add Room", active=True, min_h=50)
@@ -3849,6 +3872,14 @@ class RoomManagerSettingsDialog(QDialog):
         bottom.addWidget(close_btn)
         root.addLayout(bottom)
         self.rebuild()
+        QTimer.singleShot(0, self.fit_to_screen)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.fit_to_screen()
+
+    def fit_to_screen(self):
+        fit_dialog_to_available_screen(self, margin=0)
 
     def ensure_model(self) -> tuple[dict, dict]:
         section = self.s.config.setdefault(self.domain, {})
@@ -3998,13 +4029,16 @@ class SimplePageSettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(f"{page_name} Settings")
         self.setModal(True)
-        self.resize(680, 320)
+        self.setWindowFlag(Qt.FramelessWindowHint, True)
+        self.setMinimumSize(640, 420)
+        self.resize(1280, 800)
         self.setStyleSheet("""
             QDialog { background:#09111f; color:#f7fbff; }
             QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
         """)
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 22, 24, 22)
+        root.setContentsMargins(12, 10, 12, 10)
+        root.setSpacing(8)
         title = QLabel(f"{page_name} Settings")
         title.setAlignment(Qt.AlignCenter)
         title.setFont(font(27, QFont.Black))
@@ -4022,6 +4056,14 @@ class SimplePageSettingsDialog(QDialog):
         row.addStretch(1)
         row.addWidget(close)
         root.addLayout(row)
+        QTimer.singleShot(0, self.fit_to_screen)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.fit_to_screen()
+
+    def fit_to_screen(self):
+        fit_dialog_to_available_screen(self, margin=0)
 
 
 
@@ -4033,11 +4075,9 @@ class SettingsDialog(QDialog):
         self.s = state
         self.setWindowTitle("Comfort Setup")
         self.setModal(True)
-        # The 10.1" DSI panel has a physical bezel and a rotated touch surface.
-        # Keep the settings panel away from the top edge so the header buttons
-        # remain reachable, then fit the dialog inside the real 1280x800 screen.
-        self.setMinimumSize(900, 500)
-        self.resize(1220, 650)
+        self.setWindowFlag(Qt.FramelessWindowHint, True)
+        self.setMinimumSize(760, 500)
+        self.resize(1280, 800)
         self.setStyleSheet("""
             QDialog {
                 background:#07101f;
@@ -4081,30 +4121,23 @@ class SettingsDialog(QDialog):
         """)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 0, 10, 8)
-        root.setSpacing(6)
-
-        # Touch/bezel safe area. Without this, the top row can sit under the
-        # panel edge and clicks on Done/Hardware/History become unreliable.
-        self.top_safe_space = QWidget()
-        self.top_safe_space.setFixedHeight(28)
-        self.top_safe_space.setStyleSheet("background:transparent;")
-        root.addWidget(self.top_safe_space)
+        root.setContentsMargins(6, 4, 6, 6)
+        root.setSpacing(4)
 
         header = QHBoxLayout()
-        header.setSpacing(8)
+        header.setSpacing(6)
         title = QLabel("<span style='color:#46e8ff; letter-spacing:3px; font-size:9px; font-weight:900'>PANEL SETTINGS</span><br><span style='font-size:23px; font-weight:1000; color:#ffffff'>Comfort Setup</span>")
         title.setTextFormat(Qt.RichText)
-        title.setMinimumHeight(42)
-        title.setMaximumHeight(48)
+        title.setMinimumHeight(38)
+        title.setMaximumHeight(42)
         header.addWidget(title)
         header.addStretch(1)
-        self.hardware = RoundButton("Hardware Information", active=True, min_h=40)
-        self.history = RoundButton("History", active=True, min_h=40)
-        self.done = RoundButton("Done", active=True, min_h=40)
-        self.hardware.setMinimumWidth(190)
-        self.history.setMinimumWidth(120)
-        self.done.setMinimumWidth(118)
+        self.hardware = RoundButton("Hardware Information", active=True, min_h=36)
+        self.history = RoundButton("History", active=True, min_h=36)
+        self.done = RoundButton("Done", active=True, min_h=36)
+        self.hardware.setMinimumWidth(176)
+        self.history.setMinimumWidth(108)
+        self.done.setMinimumWidth(104)
         header.addWidget(self.hardware)
         header.addWidget(self.history)
         header.addWidget(self.done)
@@ -4118,8 +4151,8 @@ class SettingsDialog(QDialog):
         body.setStyleSheet("background:transparent;")
         scroll.viewport().setStyleSheet("background:transparent;")
         self.grid = QGridLayout(body)
-        self.grid.setSpacing(6)
-        self.grid.setContentsMargins(0, 0, 2, 0)
+        self.grid.setSpacing(5)
+        self.grid.setContentsMargins(0, 0, 0, 0)
         for col in range(4):
             self.grid.setColumnStretch(col, 1)
         scroll.setWidget(body)
@@ -4128,10 +4161,10 @@ class SettingsDialog(QDialog):
         # Single clean bottom action bar. Hardware / History / Done stay in the
         # header only so the settings screen does not show duplicate controls.
         bottom = QHBoxLayout()
-        bottom.setSpacing(10)
+        bottom.setSpacing(6)
         bottom.addStretch(1)
-        self.bottom_save = RoundButton("Save Settings", active=True, min_h=46)
-        self.bottom_save.setMinimumWidth(190)
+        self.bottom_save = RoundButton("Save Settings", active=True, min_h=38)
+        self.bottom_save.setMinimumWidth(170)
         bottom.addWidget(self.bottom_save)
         root.addLayout(bottom)
 
@@ -4148,16 +4181,7 @@ class SettingsDialog(QDialog):
         self.fit_to_screen()
 
     def fit_to_screen(self):
-        screen = self.screen() or QApplication.primaryScreen()
-        if not screen:
-            return
-        geo = screen.availableGeometry()
-        top_safe = 46
-        bottom_safe = 22
-        w = min(1220, max(900, geo.width() - 36))
-        h = min(650, max(500, geo.height() - top_safe - bottom_safe))
-        self.resize(w, h)
-        self.move(geo.x() + (geo.width() - w) // 2, geo.y() + top_safe)
+        fit_dialog_to_available_screen(self, margin=0)
 
     def settings_panel(self, radius: int = 14) -> QFrame:
         p = QFrame()
@@ -4172,42 +4196,58 @@ class SettingsDialog(QDialog):
         """)
         return p
 
-    def build_value(self, key: str, label: str, value, row: int, col: int, low=None, high=None, suffix="°"):
-        panel = self.settings_panel(13)
-        panel.setMinimumHeight(46)
-        panel.setMaximumHeight(52)
+    def value_control(self, key: str, label: str, value, low=None, high=None, suffix="°") -> QFrame:
+        panel = self.settings_panel(10)
+        panel.setMinimumHeight(40)
+        panel.setMaximumHeight(46)
         lay = QHBoxLayout(panel)
-        lay.setContentsMargins(8, 5, 8, 5)
-        lay.setSpacing(6)
+        lay.setContentsMargins(7, 4, 7, 4)
+        lay.setSpacing(5)
         lab = QLabel(label)
-        lab.setFont(font(9, QFont.Black))
+        lab.setFont(font(8, QFont.Black))
         lab.setStyleSheet("color:#e7efff; background:transparent; border:0;")
         lab.setWordWrap(False)
-        minus = RoundButton("−", min_h=30)
-        minus.setFixedSize(34, 30)
+        minus = RoundButton("−", min_h=28)
+        minus.setFixedSize(32, 28)
         val = QLabel(str(value) + suffix)
         val.setAlignment(Qt.AlignCenter)
-        val.setMinimumWidth(46)
-        val.setFont(font(11, QFont.Black))
+        val.setMinimumWidth(44)
+        val.setFont(font(10, QFont.Black))
         val.setStyleSheet("color:#ffffff; background:transparent; border:0;")
-        plus = RoundButton("+", min_h=30)
-        plus.setFixedSize(34, 30)
+        plus = RoundButton("+", min_h=28)
+        plus.setFixedSize(32, 28)
         lay.addWidget(lab, 1)
         lay.addWidget(minus)
         lay.addWidget(val)
         lay.addWidget(plus)
-        self.grid.addWidget(panel, row, col)
         self.controls[key] = val
         minus.clicked.connect(lambda: self.adjust_value(key, -1, low, high, suffix))
         plus.clicked.connect(lambda: self.adjust_value(key, 1, low, high, suffix))
+        return panel
+
+    def build_value(self, key: str, label: str, value, row: int, col: int, low=None, high=None, suffix="°"):
+        self.grid.addWidget(self.value_control(key, label, value, low, high, suffix), row, col)
+
+    def section_grid(self, section: QFrame, columns: int = 2) -> QGridLayout:
+        g = QGridLayout()
+        g.setContentsMargins(0, 0, 0, 0)
+        g.setHorizontalSpacing(5)
+        g.setVerticalSpacing(5)
+        for col in range(max(1, int(columns))):
+            g.setColumnStretch(col, 1)
+        section.layout().addLayout(g)
+        return g
+
+    def add_section_value(self, layout: QGridLayout, key: str, label: str, value, row: int, col: int, low=None, high=None, suffix="°", colspan: int = 1):
+        layout.addWidget(self.value_control(key, label, value, low, high, suffix), row, col, 1, colspan)
 
     def add_section(self, title: str, row: int, col: int, rowspan: int = 1, colspan: int = 1) -> QFrame:
-        p = self.settings_panel(14)
+        p = self.settings_panel(12)
         v = QVBoxLayout(p)
-        v.setContentsMargins(10, 7, 10, 8)
-        v.setSpacing(5)
+        v.setContentsMargins(8, 5, 8, 6)
+        v.setSpacing(4)
         lab = QLabel(title)
-        lab.setFont(font(11, QFont.Black))
+        lab.setFont(font(10, QFont.Black))
         lab.setStyleSheet("color:#ffffff; background:transparent; border:0;")
         v.addWidget(lab)
         self.grid.addWidget(p, row, col, rowspan, colspan)
@@ -4405,21 +4445,52 @@ class SettingsDialog(QDialog):
 
     def build(self):
         t = self.s.thermostat or {}
-        self.build_value("safetyLow", "Low Safety", t.get("safetyLow", 55), 0, 0, 40, 75)
-        self.build_value("safetyHigh", "High Safety", t.get("safetyHigh", 85), 0, 1, 75, 100)
-        self.build_value("awayHeat", "Heat Away", t.get("awayHeat", 55), 0, 2, 40, 75)
-        self.build_value("awayCool", "Cool Away", t.get("awayCool", 85), 0, 3, 75, 100)
-        self.build_value("coolMin", "Cool Low", nested_get(t, "limits", "cool", "min", default=65), 1, 0, 50, 90)
-        self.build_value("coolMax", "Cool High", nested_get(t, "limits", "cool", "max", default=80), 1, 1, 50, 90)
-        self.build_value("heatMin", "Heat Low", nested_get(t, "limits", "heat", "min", default=60), 1, 2, 40, 80)
-        self.build_value("heatMax", "Heat High", nested_get(t, "limits", "heat", "max", default=78), 1, 3, 40, 85)
-        self.build_value("autoCoolOutdoorTarget", "Cool Mode Switch", t.get("autoCoolOutdoorTarget", 70), 2, 0, 40, 100)
-        self.build_value("autoHeatOutdoorTarget", "Heat Mode Switch", t.get("autoHeatOutdoorTarget", 65), 2, 1, 40, 100)
-        self.build_value("autoChangeoverLockoutMinutes", "Auto Delay", int(float(t.get("autoChangeoverLockoutMinutes", 120))/60), 2, 2, 0, 8, " hr")
-        self.build_value("manualChangeoverLockoutMinutes", "Manual Delay", t.get("manualChangeoverLockoutMinutes", 10), 2, 3, 0, 60, " min")
-        self.build_value("coolFanRemainOnMinutes", "Cool Fan", t.get("coolFanRemainOnMinutes", 2), 6, 0, 0, 15, " min")
 
-        temp_source = self.add_section("Current Temperature Source", 3, 0, 1, 2)
+        auto_home = self.add_section("Auto Away / Home", 0, 0, 1, 2)
+        auto_grid = self.section_grid(auto_home, 2)
+        self.add_section_value(auto_grid, "awayHeat", "Heat Away", t.get("awayHeat", 55), 0, 0, 40, 75)
+        self.add_section_value(auto_grid, "awayCool", "Cool Away", t.get("awayCool", 85), 0, 1, 75, 100)
+        people_head = QHBoxLayout()
+        people_head.setSpacing(6)
+        self.people_summary = QLabel(self.people_summary_text())
+        self.people_summary.setWordWrap(True)
+        self.people_summary.setFont(font(8, QFont.Black))
+        self.people_summary.setStyleSheet("color:#c4d0e5; background:rgba(5,10,20,0.42); border:1px dashed rgba(160,180,210,0.26); border-radius:9px; padding:5px;")
+        add_people = RoundButton("+ Person", active=True, min_h=32)
+        add_people.setMinimumWidth(112)
+        add_people.clicked.connect(self.choose_auto_away_people)
+        people_head.addWidget(self.people_summary, 1)
+        people_head.addWidget(add_people)
+        auto_home.layout().addLayout(people_head)
+
+        ranges = self.add_section("Range", 0, 2, 1, 2)
+        range_grid = self.section_grid(ranges, 2)
+        self.add_section_value(range_grid, "coolMin", "Cool Low", nested_get(t, "limits", "cool", "min", default=65), 0, 0, 50, 90)
+        self.add_section_value(range_grid, "coolMax", "Cool High", nested_get(t, "limits", "cool", "max", default=80), 0, 1, 50, 90)
+        self.add_section_value(range_grid, "heatMin", "Heat Low", nested_get(t, "limits", "heat", "min", default=60), 1, 0, 40, 80)
+        self.add_section_value(range_grid, "heatMax", "Heat High", nested_get(t, "limits", "heat", "max", default=78), 1, 1, 40, 85)
+
+        safety = self.add_section("Safety / Mode Switches", 1, 0, 1, 2)
+        safety_grid = self.section_grid(safety, 2)
+        self.add_section_value(safety_grid, "safetyLow", "Low Safety", t.get("safetyLow", 55), 0, 0, 40, 75)
+        self.add_section_value(safety_grid, "safetyHigh", "High Safety", t.get("safetyHigh", 85), 0, 1, 75, 100)
+        self.add_section_value(safety_grid, "autoCoolOutdoorTarget", "Cool Mode Switch", t.get("autoCoolOutdoorTarget", 70), 1, 0, 40, 100)
+        self.add_section_value(safety_grid, "autoHeatOutdoorTarget", "Heat Mode Switch", t.get("autoHeatOutdoorTarget", 65), 1, 1, 40, 100)
+
+        changeover = self.add_section("Changeover / Fan", 1, 2, 1, 2)
+        change_grid = self.section_grid(changeover, 2)
+        self.add_section_value(change_grid, "autoChangeoverLockoutMinutes", "Auto Delay", int(float(t.get("autoChangeoverLockoutMinutes", 120))/60), 0, 0, 0, 8, " hr")
+        self.add_section_value(change_grid, "manualChangeoverLockoutMinutes", "Manual Delay", t.get("manualChangeoverLockoutMinutes", 10), 0, 1, 0, 60, " min")
+        self.add_section_value(change_grid, "coolFanRemainOnMinutes", "Cool Fan", t.get("coolFanRemainOnMinutes", 2), 1, 0, 0, 15, " min", colspan=2)
+        fan_row = QHBoxLayout()
+        fan_row.setSpacing(6)
+        changeover.layout().addLayout(fan_row)
+        for f in ["off", "on", "auto"]:
+            b = RoundButton(f.capitalize(), active=(t.get("fan") or "auto") == f, min_h=32)
+            b.clicked.connect(lambda checked=False, x=f: self.set_thermostat({"fan": x}))
+            fan_row.addWidget(b)
+
+        temp_source = self.add_section("Current Temperature Source", 2, 0, 1, 2)
         selected_temp = nested_get(self.s.config, "integrations", "homeAssistant", "currentTempEntity", default=None)
         if isinstance(selected_temp, dict):
             source_name = selected_temp.get("name") or selected_temp.get("friendly_name") or selected_temp.get("entityId") or "Home Assistant Sensor"
@@ -4428,23 +4499,15 @@ class SettingsDialog(QDialog):
             source_name = t.get("currentTempSourceName") or "Virtual Temp"
             source_line = "Using virtual temp until a sensor is selected"
         self.temp_source_label = QLabel(f"{source_name}\n{source_line}")
-        self.temp_source_label.setFont(font(10, QFont.Black))
+        self.temp_source_label.setFont(font(9, QFont.Black))
         self.temp_source_label.setStyleSheet("color:#dfe9ff; background:transparent; border:0;")
         temp_source.layout().addWidget(self.temp_source_label)
-        choose = RoundButton("Choose Sensor", active=True, min_h=34)
-        choose.setMinimumWidth(150)
+        choose = RoundButton("Choose Sensor", active=True, min_h=32)
+        choose.setMinimumWidth(142)
         choose.clicked.connect(self.choose_temp_sensor)
         temp_source.layout().addWidget(choose, 0, Qt.AlignRight)
 
-        fan = self.add_section("Fan", 3, 2, 1, 2)
-        row = QHBoxLayout()
-        row.setSpacing(8)
-        fan.layout().addLayout(row)
-        for f in ["off", "on", "auto"]:
-            b = RoundButton(f.capitalize(), active=(t.get("fan") or "auto") == f, min_h=34)
-            b.clicked.connect(lambda checked=False, x=f: self.set_thermostat({"fan": x}))
-            row.addWidget(b)
-        outdoor_source = self.add_section("Outside Temperature Source", 4, 2, 1, 2)
+        outdoor_source = self.add_section("Outside Temperature Source", 2, 2, 1, 2)
         selected_outdoor = nested_get(self.s.config, "integrations", "homeAssistant", "outdoorTempEntity", default=None) or nested_get(self.s.config, "integrations", "homeAssistant", "weatherEntity", default=None)
         if isinstance(selected_outdoor, dict):
             outdoor_name = selected_outdoor.get("name") or selected_outdoor.get("friendly_name") or selected_outdoor.get("entityId") or "Outside Sensor"
@@ -4453,51 +4516,53 @@ class SettingsDialog(QDialog):
             outdoor_name = "Not selected"
             outdoor_line = "Choose a Home Assistant outside temp entry"
         self.outdoor_source_label = QLabel(f"{outdoor_name}\n{outdoor_line}")
-        self.outdoor_source_label.setFont(font(10, QFont.Black))
+        self.outdoor_source_label.setFont(font(9, QFont.Black))
         self.outdoor_source_label.setStyleSheet("color:#dfe9ff; background:transparent; border:0;")
         outdoor_source.layout().addWidget(self.outdoor_source_label)
-        choose_outdoor = RoundButton("Choose Outside", active=True, min_h=34)
-        choose_outdoor.setMinimumWidth(160)
+        choose_outdoor = RoundButton("Choose Outside", active=True, min_h=32)
+        choose_outdoor.setMinimumWidth(150)
         choose_outdoor.clicked.connect(self.choose_outdoor_temp_sensor)
         outdoor_source.layout().addWidget(choose_outdoor, 0, Qt.AlignRight)
 
-        people = self.add_section("Auto Away / Home", 4, 0, 1, 2)
-        people_head = QHBoxLayout()
-        self.people_summary = QLabel(self.people_summary_text())
-        self.people_summary.setWordWrap(True)
-        self.people_summary.setFont(font(9, QFont.Black))
-        self.people_summary.setStyleSheet("color:#c4d0e5; background:rgba(5,10,20,0.42); border:1px dashed rgba(160,180,210,0.26); border-radius:10px; padding:7px;")
-        add_people = RoundButton("+ Person", active=True, min_h=34)
-        add_people.clicked.connect(self.choose_auto_away_people)
-        people_head.addWidget(self.people_summary, 1)
-        people_head.addWidget(add_people)
-        people.layout().addLayout(people_head)
-
-        door_source = self.add_section("Inside Doors Entry", 5, 2, 1, 1)
+        door_source = self.add_section("Inside Doors / Comfort Pause", 3, 0, 1, 2)
         self.inside_door_label = QLabel(self.inside_door_summary_text())
         self.inside_door_label.setWordWrap(True)
-        self.inside_door_label.setFont(font(9, QFont.Black))
-        self.inside_door_label.setStyleSheet("color:#c4d0e5; background:rgba(5,10,20,0.42); border:1px dashed rgba(160,180,210,0.26); border-radius:10px; padding:7px;")
-        choose_door = RoundButton("Choose Entry", active=True, min_h=34)
-        choose_door.clicked.connect(self.choose_inside_door_entry)
+        self.inside_door_label.setFont(font(8, QFont.Black))
+        self.inside_door_label.setStyleSheet("color:#c4d0e5; background:rgba(5,10,20,0.42); border:1px dashed rgba(160,180,210,0.26); border-radius:9px; padding:5px;")
         door_source.layout().addWidget(self.inside_door_label)
-        door_source.layout().addWidget(choose_door, 0, Qt.AlignRight)
         pause = t.get("pauseFunction") if isinstance(t.get("pauseFunction"), dict) else {}
-        self.build_value("doorPauseDurationMinutes", "Door Delay", int(float(pause.get("durationMinutes") or 5)), 5, 3, 1, 60, " min")
+        door_grid = self.section_grid(door_source, 2)
+        self.add_section_value(door_grid, "doorPauseDurationMinutes", "Door Delay", int(float(pause.get("durationMinutes") or 5)), 0, 0, 1, 60, " min")
+        choose_door = RoundButton("Choose Entry", active=True, min_h=32)
+        choose_door.clicked.connect(self.choose_inside_door_entry)
+        door_grid.addWidget(choose_door, 0, 1)
 
-        code_sec = self.add_section("Security Code", 5, 0, 1, 1)
+        codes = self.add_section("Security Codes", 3, 2, 1, 2)
+        code_grid = QGridLayout()
+        code_grid.setContentsMargins(0, 0, 0, 0)
+        code_grid.setHorizontalSpacing(6)
+        code_grid.setVerticalSpacing(4)
+        codes.layout().addLayout(code_grid)
+        alarm_lab = QLabel("Alarm Disarm")
+        alarm_lab.setFont(font(8, QFont.Black))
+        alarm_lab.setStyleSheet("color:#c4d0e5; background:transparent; border:0;")
+        settings_lab = QLabel("Settings Access")
+        settings_lab.setFont(font(8, QFont.Black))
+        settings_lab.setStyleSheet("color:#c4d0e5; background:transparent; border:0;")
         current_security = str((self.s.config.get("alarm") or {}).get("disarmCode") or "")
         self.security_code_field = self.code_field(current_security, self.edit_security_code)
         self.security_code_field.setPlaceholderText("Alarm disarm code")
-        code_sec.layout().addWidget(self.security_code_field)
-
-        settings_code_sec = self.add_section("Settings Code", 5, 1, 1, 1)
         current_settings = str((self.s.config.get("security") or {}).get("settingsCode") or "")
         self.settings_code_field = self.code_field(current_settings, self.edit_settings_code)
         self.settings_code_field.setPlaceholderText("Settings access code")
-        settings_code_sec.layout().addWidget(self.settings_code_field)
+        code_grid.addWidget(alarm_lab, 0, 0)
+        code_grid.addWidget(settings_lab, 0, 1)
+        code_grid.addWidget(self.security_code_field, 1, 0)
+        code_grid.addWidget(self.settings_code_field, 1, 1)
+        code_grid.setColumnStretch(0, 1)
+        code_grid.setColumnStretch(1, 1)
 
-        self.grid.setRowStretch(7, 1)
+        self.grid.setRowStretch(4, 1)
 
     def val_number(self, key):
         text = self.controls[key].text().split()[0].replace("°", "")

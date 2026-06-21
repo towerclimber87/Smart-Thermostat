@@ -6,6 +6,7 @@ from typing import Callable, Iterable
 from PyQt5.QtCore import QEvent, QPointF, QRect, QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QBrush, QColor, QConicalGradient, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QRadialGradient
 from PyQt5.QtWidgets import (
+    QApplication,
     QAbstractButton,
     QDialog,
     QFrame,
@@ -38,6 +39,16 @@ def compact_name(name: str, max_len: int = 26) -> str:
     if len(name) <= max_len:
         return name
     return name[: max_len - 1].rstrip() + "…"
+
+
+def fit_dialog_to_available_screen(dialog: QDialog, margin: int = 0):
+    screen = dialog.screen() or QApplication.primaryScreen()
+    if not screen:
+        return
+    geo = screen.availableGeometry()
+    margin = max(0, int(margin))
+    dialog.resize(max(320, geo.width() - (margin * 2)), max(260, geo.height() - (margin * 2)))
+    dialog.move(geo.x() + margin, geo.y() + margin)
 
 
 class Background(QWidget):
@@ -965,19 +976,22 @@ class EntityPickerDialog(QDialog):
         self.setWindowTitle(title)
         self.entities = sorted(entities or [], key=lambda e: str(e.get("name") or e.get("entityId") or "").lower())
         self.setModal(True)
-        self.resize(760, 640)
+        self.setWindowFlag(Qt.FramelessWindowHint, True)
+        self.setMinimumSize(720, 520)
+        self.resize(1280, 800)
         self.setStyleSheet("""
             QDialog { background: #0b1020; color: #f6f8ff; }
             QLabel { color: #f6f8ff; font-family: Arial; font-weight: 900; }
-            QLineEdit { background: rgba(55,66,86,0.85); color:#f6f8ff; border:1px solid rgba(150,170,205,0.25); border-radius:14px; padding:12px; font-weight:800; }
-            QListWidget { background: rgba(28,36,54,0.92); color:#eef3ff; border:1px solid rgba(150,170,205,0.24); border-radius:18px; padding:8px; }
-            QListWidget::item { padding:12px; border-bottom:1px solid rgba(255,255,255,0.06); }
+            QLineEdit { background: rgba(55,66,86,0.85); color:#f6f8ff; border:1px solid rgba(150,170,205,0.25); border-radius:14px; padding:10px; font-weight:800; }
+            QListWidget { background: rgba(28,36,54,0.92); color:#eef3ff; border:1px solid rgba(150,170,205,0.24); border-radius:18px; padding:6px; }
+            QListWidget::item { padding:10px; border-bottom:1px solid rgba(255,255,255,0.06); }
             QListWidget::item:selected { background:#3edfff; color:#06121d; border-radius:10px; }
         """)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(22,22,22,22)
+        lay.setContentsMargins(12,10,12,10)
+        lay.setSpacing(8)
         label = QLabel(title)
-        label.setFont(font(24, QFont.Black))
+        label.setFont(font(22, QFont.Black))
         lay.addWidget(label)
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search Home Assistant entities…")
@@ -995,6 +1009,14 @@ class EntityPickerDialog(QDialog):
         self.list.itemDoubleClicked.connect(lambda item: self._choose_item(item))
         self.search.textChanged.connect(self.refresh)
         self.refresh()
+        QTimer.singleShot(0, self.fit_to_screen)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.fit_to_screen()
+
+    def fit_to_screen(self):
+        fit_dialog_to_available_screen(self, margin=0)
 
     def open_search_keyboard(self):
         value = MiniTextKeyboardDialog.get_text(self, "Search", self.search.text())
