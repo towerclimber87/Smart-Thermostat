@@ -597,7 +597,10 @@ class LightCard(HoldCard):
 
     def resizeEvent(self, event):
         top = 128 if self.height() >= 320 else 118
-        bottom = 66
+        # Leave just enough room for the percent/brightness labels; the light
+        # page now stretches the card rows, so this gives the slider more throw
+        # and pulls it closer to the bottom of the card.
+        bottom = 60
         self.slider.setGeometry(int(self.width() / 2 - 21), top, 42, max(78, self.height() - top - bottom))
 
     def setLight(self, light: dict):

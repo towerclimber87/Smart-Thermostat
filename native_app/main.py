@@ -2024,11 +2024,14 @@ class LightsScreen(Page):
         self.cards: list[LightCard] = []
         self.room_buttons = {}
         root = QVBoxLayout(self)
-        root.setContentsMargins(30, 0, 30, 22)
+        # Tighten the light page shell so the controls can use the full glass panel
+        # height instead of leaving a large unused strip at the bottom.
+        root.setContentsMargins(30, 0, 30, 12)
         self.panel = GlassPanel(radius=30)
         root.addWidget(self.panel, 1)
         self.lay = QVBoxLayout(self.panel)
-        self.lay.setContentsMargins(24, 18, 24, 22)
+        self.lay.setContentsMargins(24, 12, 24, 10)
+        self.lay.setSpacing(4)
         top = QHBoxLayout()
         self.title = SectionTitle("Light Control", "Living Room")
         top.addWidget(self.title)
@@ -2037,6 +2040,8 @@ class LightsScreen(Page):
         top.addLayout(self.room_tabs)
         self.lay.addLayout(top)
         center_buttons = QHBoxLayout()
+        center_buttons.setContentsMargins(0, 0, 0, 0)
+        center_buttons.setSpacing(8)
         center_buttons.addStretch(1)
         self.on_btn = HoldRoundButton("Room On", active=True, min_h=44)
         self.off_btn = HoldRoundButton("Room Off", kind="purple", min_h=44)
@@ -2045,8 +2050,9 @@ class LightsScreen(Page):
         center_buttons.addStretch(1)
         self.lay.addLayout(center_buttons)
         self.grid = QGridLayout()
+        self.grid.setContentsMargins(0, 2, 0, 0)
         self.grid.setHorizontalSpacing(14)
-        self.grid.setVerticalSpacing(12)
+        self.grid.setVerticalSpacing(8)
         self.lay.addLayout(self.grid, 1)
         self.on_btn.clicked.connect(lambda: self.room_action(True))
         self.off_btn.clicked.connect(lambda: self.room_action(False))
@@ -2094,7 +2100,17 @@ class LightsScreen(Page):
             self.grid.addWidget(card, idx // 6, idx % 6)
         for col in range(6):
             self.grid.setColumnStretch(col, 1)
-        self.grid.setRowStretch((len(self.cards) + 5) // 6, 1)
+
+        # The old layout stretched a blank row below the light cards, which kept
+        # the cards short and left a large empty area at the bottom of the page.
+        # Stretch the actual card rows instead so the sliders grow downward and
+        # use the available space. Reset a few rows first because QGridLayout
+        # keeps stretch values when rooms are rebuilt with different counts.
+        rows = max(1, (len(self.cards) + 5) // 6)
+        for row in range(4):
+            self.grid.setRowStretch(row, 0)
+        for row in range(rows):
+            self.grid.setRowStretch(row, 1)
 
     def sync(self, config, thermostat):
         first = self.config is not config
