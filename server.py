@@ -15,6 +15,7 @@ import os
 import signal
 import socket
 import shutil
+import shlex
 import subprocess
 import threading
 import time
@@ -3063,49 +3064,62 @@ def _reboot_payload() -> dict:
 
 
 def _fetch_update_payload() -> dict:
+    """Start the full self-update/deploy command from the panel Info dialog.
+
+    The command is intentionally launched in the background because it restarts
+    this backend service and the native UI service. Waiting synchronously would
+    kill the HTTP response halfway through the update.
+    """
     if not (ROOT / ".git").exists():
         return {"ok": False, "error": "This thermostat folder is not connected to Git."}
 
-    settings_snapshot = _snapshot_settings_files()
-    branch = _update_branch_name()
-    before = _run_git_command(["git", "rev-parse", "--short=12", "HEAD"])
-    if before.returncode != 0:
-        return {"ok": False, "error": before.stderr.strip() or before.stdout.strip() or "Could not read current Git version."}
-    before_hash = before.stdout.strip()
+    logs = DATA_DIR / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    log_path = logs / "fetch-update.log"
+    project_dir = str(ROOT)
 
-    fetch = _run_git_command(["git", "fetch", "origin", branch])
-    if fetch.returncode != 0:
-        return {"ok": False, "error": fetch.stderr.strip() or fetch.stdout.strip() or "Git fetch failed."}
+    command = f"""
+cd {project_dir!r} && \
+ts=$(date +%F-%H%M%S) && \
+mkdir -p ~/thermostat-pi-data-backups/$ts && \
+cp -av data/. ~/thermostat-pi-data-backups/$ts/. && \
+git fetch origin Development && \
+git reset --hard origin/Development && \
+git clean -fd && \
+mkdir -p data && \
+cp -av ~/thermostat-pi-data-backups/$ts/. data/. && \
+chmod +x scripts/*.sh && \
+sudo ./scripts/install-native.sh && \
+sudo systemctl daemon-reload && \
+sudo systemctl restart smart-thermostat-backend.service smart-thermostat-native.service && \
+sleep 8 && \
+systemctl status smart-thermostat-backend.service smart-thermostat-native.service --no-pager -l
+""".strip()
 
-    remote = _run_git_command(["git", "rev-parse", "--short=12", f"origin/{branch}"])
-    if remote.returncode != 0:
-        return {"ok": False, "error": remote.stderr.strip() or remote.stdout.strip() or "Could not read remote Git version."}
-    remote_hash = remote.stdout.strip()
+    launcher = (
+        "nohup bash -lc "
+        + shlex.quote(command)
+        + " >> "
+        + shlex.quote(str(log_path))
+        + " 2>&1 &"
+    )
+    try:
+        subprocess.Popen(
+            ["bash", "-lc", launcher],
+            cwd=str(ROOT),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception as exc:
+        return {"ok": False, "error": f"Could not start update command: {exc}"}
 
-    if before_hash == remote_hash:
-        return {
-            "ok": True,
-            "updated": False,
-            "branch": branch,
-            "version": _read_version_value(),
-            "commit": before_hash,
-            "message": f"Already up to date on {branch} at {before_hash}.",
-        }
-
-    reset = _run_git_command(["git", "reset", "--hard", f"origin/{branch}"])
-    if reset.returncode != 0:
-        return {"ok": False, "error": reset.stderr.strip() or reset.stdout.strip() or "Git reset failed."}
-
-    _restore_settings_files(settings_snapshot)
-    _schedule_service_restart()
     return {
         "ok": True,
-        "updated": True,
-        "branch": branch,
-        "version": _read_version_value(),
-        "from": before_hash,
-        "commit": remote_hash,
-        "message": f"Updated to {branch} at {remote_hash}. Restarting panel service…",
+        "started": True,
+        "log": str(log_path),
+        "message": "Fetch update started. The panel will pull Development, preserve data, reinstall native services, and restart.",
     }
 
 

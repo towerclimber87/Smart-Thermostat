@@ -3879,7 +3879,7 @@ class MainWindow(Background):
             dlg = QDialog(self)
             dlg.setModal(True)
             dlg.setWindowTitle("Thermostat Info")
-            dlg.setFixedSize(620, 430)
+            dlg.setFixedSize(660, 500)
             dlg.setStyleSheet("""
                 QDialog {
                     background:qlineargradient(x1:0,y1:0,x2:1,y2:1,
@@ -3926,17 +3926,25 @@ class MainWindow(Background):
                 grid.addWidget(v, row, 1)
             root.addWidget(grid_panel, 1)
 
-            buttons = QHBoxLayout()
-            buttons.setSpacing(10)
-            fetch = RoundButton("Fetch Update", active=True, min_h=44)
-            reboot = RoundButton("Restart", kind="purple", min_h=44)
-            export = RoundButton("Download Config", active=False, min_h=44)
-            upload = RoundButton("Upload Config", active=False, min_h=44)
-            close = RoundButton("Close", active=False, min_h=44)
+            button_grid = QGridLayout()
+            button_grid.setHorizontalSpacing(10)
+            button_grid.setVerticalSpacing(10)
+            fetch = RoundButton("Fetch Update", active=True, min_h=46)
+            reboot = RoundButton("Restart", kind="purple", min_h=46)
+            export = RoundButton("Download Config", active=False, min_h=46)
+            upload = RoundButton("Upload Config", active=False, min_h=46)
+            close = RoundButton("Close", active=False, min_h=46)
+
+            # Two rows so labels are never cut off on the 10.1" panel.
             for b in [fetch, reboot, export, upload, close]:
-                b.setMinimumWidth(108)
-                buttons.addWidget(b)
-            root.addLayout(buttons)
+                b.setMinimumWidth(176)
+            button_grid.addWidget(fetch, 0, 0)
+            button_grid.addWidget(reboot, 0, 1)
+            button_grid.addWidget(close, 0, 2)
+            button_grid.addWidget(export, 1, 0)
+            button_grid.addWidget(upload, 1, 1)
+            button_grid.setColumnStretch(2, 1)
+            root.addLayout(button_grid)
 
             fetch.clicked.connect(lambda: (dlg.accept(), self.do_fetch_update()))
             reboot.clicked.connect(lambda: (dlg.accept(), self.do_restart()))
@@ -3950,9 +3958,9 @@ class MainWindow(Background):
     def do_fetch_update(self):
         try:
             data = self.s.api.post("/api/system/fetch-update", {})
-            self.toast.show_message(data.get("message") or "Fetch update complete")
+            self.toast.show_message(data.get("message") or "Fetch update started. Panel will restart.", 6500)
         except Exception as exc:
-            self.toast.show_message(f"Fetch update failed: {exc}")
+            self.toast.show_message(f"Fetch update failed: {exc}", 6500)
 
     def do_restart(self):
         if QMessageBox.question(self, "Restart", "Restart the thermostat service?") != QMessageBox.Yes:
