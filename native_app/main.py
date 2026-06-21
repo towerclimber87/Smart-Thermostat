@@ -3647,6 +3647,7 @@ class MainWindow(Background):
         self._last_poll_by_page: dict[str, float] = {}
         self._poll_busy = False
         self._last_page_change_at = time.monotonic()
+        self._ignore_info_until = 0.0
         self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self.refresh_status)
         self.status_timer.start(4000)
@@ -3658,7 +3659,8 @@ class MainWindow(Background):
             if not self.api.wait_until_ready(5):
                 self.toast.show_message("Backend is not responding on 127.0.0.1:8080")
             self.s.load()
-            self.sync_all()
+            self.sync_runtime_only()
+            self.sync_visible_page(self.current_name)
             self.toast.show_message("Native panel ready")
         except Exception as exc:
             self.toast.show_message(f"Startup problem: {exc}", 6000)
@@ -3674,13 +3676,26 @@ class MainWindow(Background):
         if name not in self.pages:
             return
         self.current_name = name
-        self._last_page_change_at = time.monotonic()
+        now = time.monotonic()
+        self._last_page_change_at = now
+        # Touchscreens can emit a ghost release after a nav tap. Do not let
+        # that release open the info button while the page is changing.
+        self._ignore_info_until = now + 1.25
         self.stack.setCurrentWidget(self.pages[name])
         self.header.set_page(name)
-        self.pages[name].sync(self.s.config, self.s.thermostat)
-        # Never run a Home Assistant poll inside the navigation click handler.
-        # The UI must stay touch-responsive first; the background timer will
-        # refresh the selected page after the transition settles.
+        # Load the page immediately. Rebuild/sync shortly after the tap settles,
+        # and do not wait for fresh Home Assistant data.
+        QTimer.singleShot(60, lambda n=name: self.sync_visible_page(n))
+
+    def sync_visible_page(self, name: str | None = None):
+        try:
+            if name is not None and name != self.current_name:
+                return
+            page = self.pages.get(self.current_name)
+            if page is not None:
+                page.sync(self.s.config, self.s.thermostat)
+        except Exception:
+            pass
 
     def refresh_status(self):
         try:
@@ -3692,14 +3707,12 @@ class MainWindow(Background):
     def sync_runtime_only(self):
         t = self.s.thermostat or {}
         self.header.update_values(t.get("currentTemp"), t.get("targetTemp"))
-        page = self.pages.get(self.current_name)
-        if page is not None:
-            page.sync(self.s.config, self.s.thermostat)
+        self.sync_visible_page()
 
     def reload_all(self):
         try:
             self.s.load()
-            self.sync_all()
+            self.sync_runtime_only()
         except Exception as exc:
             self.toast.show_message(f"Reload failed: {exc}")
 
@@ -3711,16 +3724,14 @@ class MainWindow(Background):
 
     def poll(self):
         try:
-            if self._poll_busy:
+            if getattr(self, "_poll_busy", False):
                 return
             if time.monotonic() - getattr(self, "_last_page_change_at", 0) < 1.2:
                 return
             if QApplication.activeModalWidget() is not None:
                 return
             now = time.monotonic()
-            last = self._last_poll_by_page.get(self.current_name, 0)
-            # Room/Light/Blind/Audio polls go through Home Assistant. Keep them
-            # infrequent so a slow HA response cannot make touch feel dead.
+            last = getattr(self, "_last_poll_by_page", {}).get(self.current_name, 0)
             if now - last < 10.0:
                 return
             self._poll_busy = True
@@ -3805,6 +3816,8 @@ class MainWindow(Background):
             self._settings_reopen_block_until = time.monotonic() + 2.0
 
     def show_info(self):
+        if time.monotonic() < getattr(self, "_ignore_info_until", 0):
+            return
         try:
             info = self.s.api.get("/api/system/info")
             dlg = QDialog(self)
