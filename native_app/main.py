@@ -1865,7 +1865,8 @@ class RoomScreen(Page):
         self.panel = GlassPanel(radius=30)
         root.addWidget(self.panel, 1)
         self.lay = QVBoxLayout(self.panel)
-        self.lay.setContentsMargins(24, 18, 24, 22)
+        self.lay.setContentsMargins(24, 14, 24, 16)
+        self.lay.setSpacing(6)
         top = QHBoxLayout()
         self.title = SectionTitle("Room Control", "Living Room")
         top.addWidget(self.title)
@@ -2118,12 +2119,13 @@ class LightsScreen(Page):
 class BlindCard(GlassPanel):
     openClicked = pyqtSignal(dict)
     closeClicked = pyqtSignal(dict)
+    tiltRequested = pyqtSignal(dict, int)
     assignRequested = pyqtSignal(dict)
 
     def __init__(self, blind: dict, parent=None):
         super().__init__(parent, radius=24)
         self.blind = blind
-        self.setMinimumSize(244, 406)
+        self.setMinimumSize(244, 442)
         self.name = QLabel(self)
         self.pos = QLabel(self)
         self.open_btn = RoundButton("Open", active=False, min_h=38, parent=self)
@@ -2133,13 +2135,14 @@ class BlindCard(GlassPanel):
         self.close_btn.setStyleSheet(button_style(False) + "QPushButton{background:#f2eee4;color:#2b2116;border-radius:18px;}" )
         self.open_btn.clicked.connect(lambda: self.openClicked.emit(self.blind))
         self.close_btn.clicked.connect(lambda: self.closeClicked.emit(self.blind))
+        self.preview.tiltRequested.connect(lambda value: self.tiltRequested.emit(self.blind, int(value)))
         self.updateData(blind)
 
     def resizeEvent(self, event):
         self.name.setGeometry(14, 14, self.width()-96, 28)
         self.pos.setGeometry(self.width()-80, 14, 66, 28)
         self.open_btn.setGeometry(14, 48, self.width()-28, 38)
-        self.preview.setGeometry(14, 96, self.width()-28, self.height()-148)
+        self.preview.setGeometry(14, 92, self.width()-28, self.height()-142)
         self.close_btn.setGeometry(14, self.height()-48, self.width()-28, 38)
 
     def updateData(self, blind: dict):
@@ -2147,11 +2150,18 @@ class BlindCard(GlassPanel):
         self.name.setText(blind.get("haName") or blind.get("name") or "Blind")
         self.name.setFont(font(11, QFont.Black))
         self.name.setStyleSheet("color:#f6f8ff;")
-        self.pos.setText(f"{int(blind.get('position') or 0)}%")
+        position = int(blind.get("position") or 0)
+        tilt = blind.get("tiltPosition")
+        try:
+            tilt = int(tilt)
+        except Exception:
+            tilt = int(blind.get("currentTiltPosition") or position)
+        self.pos.setText(f"{position}%/{tilt}%")
         self.pos.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.pos.setFont(font(10, QFont.Black))
         self.pos.setStyleSheet("color:#ffe8a6;")
-        self.preview.setPosition(int(blind.get("position") or 0))
+        self.preview.setPosition(position)
+        self.preview.setTiltPosition(tilt)
 
     def mousePressEvent(self, event):
         self._press_time = time.time()
@@ -2182,6 +2192,7 @@ class BlindsScreen(Page):
         top.addLayout(self.room_tabs)
         self.lay.addLayout(top)
         buttons = QHBoxLayout()
+        buttons.setContentsMargins(0, -6, 0, 2)
         buttons.addStretch(1)
         self.open_room = RoundButton("Open Room", active=True, min_h=44)
         self.close_room = RoundButton("Close Room", kind="purple", min_h=44)
@@ -2227,6 +2238,7 @@ class BlindsScreen(Page):
             card = BlindCard(blind)
             card.openClicked.connect(lambda b: self.blind_action(b, "open"))
             card.closeClicked.connect(lambda b: self.blind_action(b, "close"))
+            card.tiltRequested.connect(lambda b, value: self.blind_action(b, "tilt", position=value))
             card.assignRequested.connect(lambda b: self.requestAssign.emit("cover", b, "blind"))
             self.cards.append(card)
             self.grid.addWidget(card, 0, idx)
@@ -2249,21 +2261,36 @@ class BlindsScreen(Page):
                 self.blind_action(blind, action, quiet=True)
         self.requestToast.emit(f"Room blinds {action} sent")
 
-    def blind_action(self, blind: dict, action: str, quiet: bool = False):
+    def blind_action(self, blind: dict, action: str, quiet: bool = False, position: int | None = None):
         if not blind.get("haEntityId"):
             self.requestAssign.emit("cover", blind, "blind")
             return
         try:
-            result = self.s.api.post("/api/ha/cover/action", self.s.ha_payload({"entityId": blind.get("haEntityId"), "action": action}))
+            payload = {"entityId": blind.get("haEntityId"), "action": action}
+            if position is not None:
+                payload["position"] = max(0, min(100, int(position)))
+
+            # Optimistic update so touch/drag tilt feels instant.
+            if action == "open":
+                blind["position"] = 100
+            elif action == "close":
+                blind["position"] = 0
+            elif action in {"tilt", "set_tilt_position"} and position is not None:
+                blind["tiltPosition"] = max(0, min(100, int(position)))
+            self.sync(self.s.config, self.s.thermostat)
+
+            result = self.s.api.post("/api/ha/cover/action", self.s.ha_payload(payload))
             state = result.get("state") or {}
-            if action == "open": blind["position"] = 100
-            if action == "close": blind["position"] = 0
             if state.get("currentPosition") is not None:
                 blind["position"] = int(state.get("currentPosition") or 0)
+            if state.get("currentTiltPosition") is not None:
+                blind["tiltPosition"] = int(state.get("currentTiltPosition") or 0)
             blind["haName"] = state.get("name") or blind.get("haName")
             self.s.save_config()
             self.sync(self.s.config, self.s.thermostat)
-            if not quiet: self.requestToast.emit(f"{blind.get('haName') or blind.get('name')} {action}")
+            if not quiet:
+                label = f"tilt {int(position)}%" if action in {"tilt", "set_tilt_position"} and position is not None else action
+                self.requestToast.emit(f"{blind.get('haName') or blind.get('name')} {label}")
         except Exception as exc:
             self.requestToast.emit(f"Blind failed: {exc}")
 
@@ -2278,6 +2305,8 @@ class BlindsScreen(Page):
                 st = by_id.get(blind.get("haEntityId"))
                 if st:
                     blind["position"] = int(st.get("currentPosition") if st.get("currentPosition") is not None else blind.get("position") or 0)
+                    if st.get("currentTiltPosition") is not None:
+                        blind["tiltPosition"] = int(st.get("currentTiltPosition") or 0)
                     blind["haName"] = st.get("name") or blind.get("haName")
             self.sync(self.s.config, self.s.thermostat)
         except Exception:

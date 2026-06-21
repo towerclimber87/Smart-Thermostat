@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from typing import Callable, Iterable
 
-from PyQt5.QtCore import QPointF, QRect, QRectF, QSize, Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QEvent, QPointF, QRect, QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QBrush, QColor, QConicalGradient, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QRadialGradient
 from PyQt5.QtWidgets import (
     QAbstractButton,
@@ -633,41 +633,111 @@ class LightCard(HoldCard):
 
 
 class BlindPreview(QWidget):
+    tiltRequested = pyqtSignal(int)
+
     def __init__(self, position: int = 100, parent=None):
         super().__init__(parent)
         self.position = position
-        self.setMinimumHeight(180)
+        self.tilt_position = 100
+        self.setMinimumHeight(210)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setAttribute(Qt.WA_AcceptTouchEvents, True)
 
     def setPosition(self, pos):
-        try: self.position = int(pos)
-        except Exception: self.position = 0
+        try:
+            self.position = max(0, min(100, int(pos)))
+        except Exception:
+            self.position = 0
         self.update()
+
+    def setTiltPosition(self, pos):
+        try:
+            self.tilt_position = max(0, min(100, int(pos)))
+        except Exception:
+            self.tilt_position = 100
+        self.update()
+
+    def tilt_from_pos(self, pos) -> int:
+        r = QRectF(self.rect()).adjusted(18, 26, -18, -18)
+        pct = 100.0 - ((float(pos.y()) - r.top()) / max(1.0, r.height()) * 100.0)
+        return int(max(0, min(100, round(pct))))
+
+    def emit_tilt_from_pos(self, pos):
+        value = self.tilt_from_pos(pos)
+        self.setTiltPosition(value)
+        self.tiltRequested.emit(value)
+
+    def mousePressEvent(self, event):
+        self.emit_tilt_from_pos(event.pos())
+        event.accept()
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.LeftButton:
+            self.emit_tilt_from_pos(event.pos())
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def event(self, event):
+        if event.type() in (QEvent.TouchBegin, QEvent.TouchUpdate, QEvent.TouchEnd):
+            pts = event.touchPoints()
+            if pts:
+                self.emit_tilt_from_pos(pts[0].pos().toPoint())
+                event.accept()
+                return True
+        return super().event(event)
 
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        r = QRectF(self.rect()).adjusted(4,4,-4,-4)
+        r = QRectF(self.rect()).adjusted(4, 4, -4, -4)
         p.setBrush(QColor(5, 9, 15, 210))
-        p.setPen(QPen(QColor(255,255,255,32),1))
+        p.setPen(QPen(QColor(255, 255, 255, 32), 1))
         p.drawRoundedRect(r, 8, 8)
+
         bg = QLinearGradient(r.topLeft(), r.bottomRight())
-        bg.setColorAt(0, QColor(68,92,102,180))
-        bg.setColorAt(0.52, QColor(245,230,160,110))
-        bg.setColorAt(1, QColor(32,50,66,190))
+        bg.setColorAt(0, QColor(68, 92, 102, 180))
+        bg.setColorAt(0.52, QColor(245, 230, 160, 112))
+        bg.setColorAt(1, QColor(32, 50, 66, 190))
         inner = r.adjusted(14, 18, -14, -14)
         p.fillRect(inner, bg)
-        p.setPen(QPen(QColor(255,255,255,180), 2))
-        top = inner.top() + 8
-        p.drawRoundedRect(QRectF(inner.left()+16, top, inner.width()-32, 8), 4, 4)
+
+        # Header cassette / stack. Open = slats are pulled up at the top.
+        p.setBrush(QColor(238, 235, 220, 210))
+        p.setPen(QPen(QColor(255, 255, 255, 190), 1.6))
+        cassette = QRectF(inner.left() + 14, inner.top() + 6, inner.width() - 28, 10)
+        p.drawRoundedRect(cassette, 5, 5)
+
         count = 18
-        visible = max(2, int(count * max(0, min(100, self.position)) / 100))
-        gap = (inner.height()-42) / count
-        for i in range(visible):
-            y = inner.top()+30+i*gap
-            p.setPen(QPen(QColor(255,255,255,185), 1.4))
-            p.drawLine(QPointF(inner.left()+20, y), QPointF(inner.right()-20, y-1))
-            p.setPen(QPen(QColor(0,0,0,40), 1))
-            p.drawLine(QPointF(inner.left()+22, y+2), QPointF(inner.right()-22, y+1))
+        clamped_position = max(0, min(100, int(self.position)))
+        # HA cover position is normally 100=open, 0=closed.
+        # Visually invert the slat body: open means the blind is up, closed means it is down.
+        covered_count = int(round(count * (100 - clamped_position) / 100))
+        stack_count = max(2, int(round(count * clamped_position / 100)))
+        gap = (inner.height() - 46) / count
+        tilt_offset = (max(0, min(100, int(self.tilt_position))) - 50) / 50.0 * 5.5
+
+        # Compact slats stacked at the top when open.
+        for i in range(min(stack_count, 6)):
+            y = inner.top() + 24 + i * 2.5
+            alpha = max(70, 170 - i * 14)
+            p.setPen(QPen(QColor(255, 255, 255, alpha), 1.3))
+            p.drawLine(QPointF(inner.left() + 22, y), QPointF(inner.right() - 22, y))
+
+        # Lower visible slats when closed/partially closed.
+        for i in range(covered_count):
+            y = inner.top() + 34 + i * gap
+            p.setPen(QPen(QColor(255, 255, 255, 185), 1.5))
+            p.drawLine(QPointF(inner.left() + 20, y), QPointF(inner.right() - 20, y - tilt_offset))
+            p.setPen(QPen(QColor(0, 0, 0, 45), 1))
+            p.drawLine(QPointF(inner.left() + 22, y + 2), QPointF(inner.right() - 22, y + 2 - tilt_offset))
+
+        guide_y = inner.top() + (100 - max(0, min(100, int(self.tilt_position)))) / 100.0 * inner.height()
+        p.setPen(QPen(QColor(73, 224, 255, 120), 1, Qt.DashLine))
+        p.drawLine(QPointF(inner.left() + 10, guide_y), QPointF(inner.right() - 10, guide_y))
+        p.setFont(font(7, QFont.Black, 15))
+        p.setPen(QColor(222, 244, 255, 185))
+        p.drawText(QRectF(inner.left(), inner.bottom() - 18, inner.width(), 16), Qt.AlignCenter, f"TAP / DRAG TO TILT  {int(self.tilt_position)}%")
 
 
 class MiniTextKeyboardDialog(QDialog):
