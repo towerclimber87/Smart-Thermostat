@@ -78,8 +78,12 @@ usermod -aG tty,video,input,render "$APP_USER" 2>/dev/null || true
 SUDOERS_FILE="/etc/sudoers.d/smart-thermostat-panel"
 SYSTEMD_RUN_BIN="$(command -v systemd-run || echo /usr/bin/systemd-run)"
 SYSTEMCTL_BIN="$(command -v systemctl || echo /usr/bin/systemctl)"
+MOUNT_BIN="$(command -v mount || echo /usr/bin/mount)"
+UMOUNT_BIN="$(command -v umount || echo /usr/bin/umount)"
+mkdir -p "$APP_DIR/data/usb-mounts"
+chown -R "$APP_USER:$APP_USER" "$APP_DIR/data/usb-mounts"
 cat >"$SUDOERS_FILE" <<EOF
-$APP_USER ALL=(root) NOPASSWD: $SYSTEMD_RUN_BIN, $SYSTEMCTL_BIN
+$APP_USER ALL=(root) NOPASSWD: $SYSTEMD_RUN_BIN, $SYSTEMCTL_BIN, $MOUNT_BIN, $UMOUNT_BIN
 EOF
 chmod 0440 "$SUDOERS_FILE"
 

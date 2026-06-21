@@ -1406,7 +1406,141 @@ def _is_usb_mount_path(path: Path) -> bool:
     return False
 
 
-def _mounted_usb_drives(require_writable: bool = False) -> list[dict]:
+def _run_usb_command(command: list[str], timeout: float = 8.0) -> subprocess.CompletedProcess[str] | None:
+    try:
+        return subprocess.run(
+            command,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            check=False,
+        )
+    except Exception as exc:
+        print(f"USB command failed to start: {' '.join(command)}: {exc}", flush=True)
+        return None
+
+
+def _normal_mountpoints(value: object) -> list[str]:
+    if isinstance(value, str) and value:
+        return [value]
+    if isinstance(value, list):
+        return [str(item) for item in value if item]
+    return []
+
+
+def _lsblk_tree() -> list[dict]:
+    lsblk = shutil.which("lsblk") or "/usr/bin/lsblk"
+    result = _run_usb_command([
+        lsblk,
+        "-J",
+        "-p",
+        "-o",
+        "NAME,PATH,KNAME,TYPE,TRAN,RM,FSTYPE,LABEL,MOUNTPOINT,MOUNTPOINTS,MODEL,SIZE",
+    ], timeout=5)
+    if not result or result.returncode != 0:
+        return []
+    try:
+        data = json.loads(result.stdout or "{}")
+    except Exception:
+        return []
+    blockdevices = data.get("blockdevices")
+    return blockdevices if isinstance(blockdevices, list) else []
+
+
+def _flatten_usb_lsblk_nodes(nodes: list[dict], inherited_usb: bool = False) -> list[dict]:
+    flattened: list[dict] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        tran = str(node.get("tran") or "").lower()
+        rm_value = str(node.get("rm") or "").strip().lower()
+        this_usb = inherited_usb or tran == "usb" or rm_value in {"1", "true", "yes"}
+        children = node.get("children") if isinstance(node.get("children"), list) else []
+        if this_usb:
+            copied = dict(node)
+            copied.pop("children", None)
+            flattened.append(copied)
+        flattened.extend(_flatten_usb_lsblk_nodes(children, this_usb))
+    return flattened
+
+
+def _usb_block_devices() -> list[dict]:
+    """Return USB/removable block devices from lsblk.
+
+    This catches the common Pi case where a USB thumb drive is plugged in but
+    not mounted under /media yet. We only treat devices reported by lsblk as
+    USB/removable candidates, then mount/write only a filesystem-bearing node.
+    """
+    devices: list[dict] = []
+    seen: set[str] = set()
+    for node in _flatten_usb_lsblk_nodes(_lsblk_tree()):
+        device = str(node.get("path") or node.get("name") or "").strip()
+        node_type = str(node.get("type") or "").lower()
+        fs_type = str(node.get("fstype") or "").strip().lower()
+        if not device.startswith("/dev/"):
+            continue
+        # Prefer partitions, but allow a whole USB disk if it directly contains
+        # a filesystem. Skip raw disks without a filesystem.
+        if node_type not in {"part", "disk"}:
+            continue
+        if not fs_type:
+            continue
+        if device in seen:
+            continue
+        seen.add(device)
+        mountpoints = _normal_mountpoints(node.get("mountpoints")) or _normal_mountpoints(node.get("mountpoint"))
+        devices.append({
+            "device": device,
+            "fsType": fs_type,
+            "label": str(node.get("label") or Path(device).name),
+            "model": str(node.get("model") or "").strip(),
+            "size": str(node.get("size") or "").strip(),
+            "mountpoints": mountpoints,
+        })
+    devices.sort(key=lambda item: (str(item.get("label") or "").lower(), str(item.get("device") or "")))
+    return devices
+
+
+def _probe_write_access(mount_path: Path) -> tuple[bool, str]:
+    try:
+        if not mount_path.exists() or not mount_path.is_dir():
+            return False, "mount path does not exist"
+        test_path = mount_path / ".smart-thermostat-write-test"
+        with test_path.open("w", encoding="utf-8") as handle:
+            handle.write("ok")
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            test_path.unlink()
+        except Exception:
+            pass
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
+def _drive_record(path: Path, device: str = "", fs_type: str = "", label: str = "", **extra: object) -> dict:
+    writable, write_error = _probe_write_access(path)
+    try:
+        resolved = str(path.resolve())
+    except Exception:
+        resolved = str(path)
+    record = {
+        "path": str(path),
+        "resolvedPath": resolved,
+        "device": device,
+        "fsType": fs_type,
+        "label": label or path.name or str(path),
+        "writable": writable,
+    }
+    if write_error:
+        record["writeError"] = write_error
+    record.update({k: v for k, v in extra.items() if v not in (None, "", [])})
+    return record
+
+
+def _mounted_usb_drives(require_writable: bool = False, allow_automount: bool = True) -> list[dict]:
     ignored_fs = {
         "autofs", "binfmt_misc", "bpf", "cgroup", "cgroup2", "configfs", "debugfs",
         "devpts", "devtmpfs", "efivarfs", "fusectl", "hugetlbfs", "mqueue", "overlay",
@@ -1414,11 +1548,22 @@ def _mounted_usb_drives(require_writable: bool = False) -> list[dict]:
     }
     candidates: list[dict] = []
     seen: set[str] = set()
+
+    def add_candidate(record: dict) -> None:
+        path_text = str(record.get("resolvedPath") or record.get("path") or "")
+        if not path_text or path_text in seen:
+            return
+        if require_writable and not bool(record.get("writable")):
+            return
+        seen.add(path_text)
+        candidates.append(record)
+
+    # First use /proc/mounts for normal automounted USB paths such as
+    # /media/david/DRIVE, /run/media/david/DRIVE, or /mnt/DRIVE.
     try:
         lines = Path("/proc/mounts").read_text(encoding="utf-8", errors="ignore").splitlines()
     except Exception:
         lines = []
-
     for line in lines:
         parts = line.split()
         if len(parts) < 3:
@@ -1427,32 +1572,111 @@ def _mounted_usb_drives(require_writable: bool = False) -> list[dict]:
         mount_text = _decode_proc_mount_field(parts[1])
         fs_type = _decode_proc_mount_field(parts[2]).lower()
         mount_path = Path(mount_text)
-
-        if fs_type in ignored_fs:
-            continue
-        if not device.startswith("/dev/"):
+        if fs_type in ignored_fs or not device.startswith("/dev/"):
             continue
         if not _is_usb_mount_path(mount_path):
             continue
-        if not mount_path.exists() or not mount_path.is_dir():
-            continue
-        try:
-            resolved = str(mount_path.resolve())
-        except Exception:
-            resolved = str(mount_path)
-        if resolved in seen:
-            continue
-        if require_writable and not os.access(str(mount_path), os.W_OK):
-            continue
-        seen.add(resolved)
-        candidates.append({
-            "path": str(mount_path),
-            "device": device,
-            "fsType": fs_type,
-            "label": mount_path.name or str(mount_path),
-        })
+        add_candidate(_drive_record(mount_path, device=device, fs_type=fs_type, label=mount_path.name))
+
+    # Then use lsblk so mounted USB devices are found even if the desktop mounted
+    # them somewhere outside the default roots.
+    for dev in _usb_block_devices():
+        for mount_text in dev.get("mountpoints") or []:
+            mount_path = Path(str(mount_text))
+            if mount_path.exists() and mount_path.is_dir():
+                add_candidate(_drive_record(
+                    mount_path,
+                    device=str(dev.get("device") or ""),
+                    fs_type=str(dev.get("fsType") or ""),
+                    label=str(dev.get("label") or mount_path.name),
+                    model=str(dev.get("model") or ""),
+                    size=str(dev.get("size") or ""),
+                ))
+
+    if allow_automount:
+        mounted_before = len(candidates)
+        auto_errors = _automount_usb_devices()
+        if auto_errors:
+            print("USB automount attempts: " + "; ".join(auto_errors[:5]), flush=True)
+        if len(candidates) == mounted_before:
+            # Re-scan once after any successful udisksctl/sudo mount attempt.
+            candidates.extend(_mounted_usb_drives(require_writable=require_writable, allow_automount=False))
+            deduped: list[dict] = []
+            seen_after: set[str] = set()
+            for item in candidates:
+                key = str(item.get("resolvedPath") or item.get("path") or "")
+                if key and key not in seen_after:
+                    seen_after.add(key)
+                    deduped.append(item)
+            candidates = deduped
+
     candidates.sort(key=lambda item: (str(item.get("label") or "").lower(), str(item.get("path") or "")))
     return candidates
+
+
+def _safe_mount_folder_name(device: str) -> str:
+    raw = Path(device).name or "usb"
+    safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in raw).strip("-")
+    return safe or "usb"
+
+
+def _automount_usb_devices() -> list[str]:
+    """Try to mount plugged-in USB drives that are not currently mounted.
+
+    This keeps the panel workflow appliance-friendly: plug in a thumb drive,
+    press Download/Upload Config, and the backend will try to mount it. If the
+    existing install has not yet granted passwordless mount permission, the
+    returned errors tell the user to re-run the installer once.
+    """
+    errors: list[str] = []
+    for dev in _usb_block_devices():
+        device = str(dev.get("device") or "")
+        if not device or dev.get("mountpoints"):
+            continue
+
+        udisksctl = shutil.which("udisksctl")
+        if udisksctl:
+            result = _run_usb_command([udisksctl, "mount", "-b", device], timeout=12)
+            if result and result.returncode == 0:
+                continue
+            if result:
+                msg = (result.stderr or result.stdout or "").strip()
+                if msg:
+                    errors.append(f"udisksctl {device}: {msg}")
+
+        try:
+            mount_root = Path(os.environ.get("SMART_THERMOSTAT_USB_AUTOMOUNT_ROOT", str(DATA_DIR / "usb-mounts")))
+            mount_root.mkdir(parents=True, exist_ok=True)
+            target = mount_root / _safe_mount_folder_name(device)
+            target.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            errors.append(f"{device}: could not create mount folder: {exc}")
+            continue
+
+        mount_bin = shutil.which("mount") or "/usr/bin/mount"
+        sudo_prefix = [] if os.geteuid() == 0 else ["sudo", "-n"]
+        option_sets = [
+            "rw,nosuid,nodev",
+            f"rw,nosuid,nodev,uid={os.getuid()},gid={os.getgid()},umask=0022",
+        ]
+        mounted = False
+        last_msg = ""
+        for options in option_sets:
+            result = _run_usb_command(sudo_prefix + [mount_bin, "-o", options, device, str(target)], timeout=12)
+            if result and result.returncode == 0:
+                mounted = True
+                break
+            if result:
+                last_msg = (result.stderr or result.stdout or f"exit {result.returncode}").strip()
+        if not mounted:
+            if sudo_prefix:
+                errors.append(
+                    f"{device}: could not auto-mount ({last_msg or 'sudo mount was not allowed'}). "
+                    "Run sudo ./scripts/install-native.sh once so the panel user can mount USB backups."
+                )
+            else:
+                errors.append(f"{device}: could not auto-mount ({last_msg or 'mount failed'})")
+    return errors
 
 
 def _write_json_atomic(path: Path, payload: dict) -> int:
@@ -1471,17 +1695,34 @@ def _write_json_atomic(path: Path, payload: dict) -> int:
             os.close(directory_fd)
     except Exception:
         pass
+    try:
+        os.sync()
+    except Exception:
+        pass
     return len(body)
 
 
+def _usb_debug_payload(drives: list[dict] | None = None) -> dict:
+    return {
+        "filename": USB_CONFIG_FILENAME,
+        "mountRoots": list(USB_MOUNT_ROOTS),
+        "drives": drives if drives is not None else _mounted_usb_drives(require_writable=False),
+        "blockDevices": _usb_block_devices(),
+    }
+
+
 def _config_export_usb_payload(server_port: int | str | None = None) -> dict:
-    drives = _mounted_usb_drives(require_writable=True)
+    drives = _mounted_usb_drives(require_writable=False)
     if not drives:
+        debug = _usb_debug_payload([])
         return {
             "ok": False,
-            "error": "No writable USB drive was found. Insert a mounted USB drive and try Download Config again.",
-            "filename": USB_CONFIG_FILENAME,
-            "drives": [],
+            "error": (
+                "No mounted USB drive was found on this Raspberry Pi. "
+                "Leave the USB plugged in, run sudo ./scripts/install-native.sh once after this update, "
+                "then try Download Config again."
+            ),
+            **debug,
         }
 
     payload = _config_export_payload(server_port)
@@ -1504,8 +1745,7 @@ def _config_export_usb_payload(server_port: int | str | None = None) -> dict:
     return {
         "ok": False,
         "error": "A USB drive was found, but the config could not be written. " + "; ".join(errors[:3]),
-        "filename": USB_CONFIG_FILENAME,
-        "drives": drives,
+        **_usb_debug_payload(drives),
     }
 
 
@@ -1532,9 +1772,8 @@ def _config_import_usb_payload() -> dict:
     if not matches:
         return {
             "ok": False,
-            "error": f"No {USB_CONFIG_FILENAME} file was found on any mounted USB drive.",
-            "filename": USB_CONFIG_FILENAME,
-            "drives": _mounted_usb_drives(require_writable=False),
+            "error": f"No {USB_CONFIG_FILENAME} file was found on any USB drive attached to this Raspberry Pi.",
+            **_usb_debug_payload(),
         }
 
     selected = matches[0]
@@ -1559,7 +1798,6 @@ def _config_import_usb_payload() -> dict:
     result["path"] = str(path)
     result["drive"] = selected.get("drive")
     return result
-
 
 def _extract_import_record(payload: object) -> tuple[dict | None, dict | None]:
     if not isinstance(payload, dict):

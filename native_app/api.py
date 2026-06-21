@@ -46,12 +46,16 @@ class ApiClient:
             with request.urlopen(req, timeout=self.timeout) as resp:
                 raw = resp.read().decode("utf-8")
         except error.HTTPError as exc:
+            raw = ""
             try:
                 raw = exc.read().decode("utf-8")
                 data = json.loads(raw or "{}")
-                raise ApiError(data.get("error") or raw or str(exc)) from exc
-            except Exception:
-                raise ApiError(str(exc)) from exc
+                detail = data.get("error") or data.get("message")
+                if detail:
+                    raise ApiError(str(detail)) from exc
+                raise ApiError(raw or str(exc)) from exc
+            except json.JSONDecodeError:
+                raise ApiError(raw or str(exc)) from exc
         except error.URLError as exc:
             raise ApiError(str(exc)) from exc
         try:
