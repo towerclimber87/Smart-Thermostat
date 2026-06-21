@@ -1865,8 +1865,8 @@ class RoomScreen(Page):
         self.panel = GlassPanel(radius=30)
         root.addWidget(self.panel, 1)
         self.lay = QVBoxLayout(self.panel)
-        self.lay.setContentsMargins(24, 10, 24, 12)
-        self.lay.setSpacing(3)
+        self.lay.setContentsMargins(24, 2, 24, 10)
+        self.lay.setSpacing(0)
         top = QHBoxLayout()
         self.title = SectionTitle("Room Control", "Living Room")
         top.addWidget(self.title)
@@ -2169,6 +2169,18 @@ class BlindCard(GlassPanel):
         except Exception:
             return
         self.blind["position"] = value
+        self.blind["pendingPosition"] = value
+        self.pos.setText(f"{value}%")
+
+    def hold_pending_position(self, value: int, seconds: float = 18.0):
+        try:
+            value = max(0, min(100, int(value)))
+        except Exception:
+            return
+        self.blind["position"] = value
+        self.blind["pendingPosition"] = value
+        self.blind["pendingPositionUntil"] = time.time() + seconds
+        self.preview.setPosition(value)
         self.pos.setText(f"{value}%")
 
     def mousePressEvent(self, event):
@@ -2196,14 +2208,16 @@ class BlindsScreen(Page):
         top.setContentsMargins(0, 0, 0, 0)
         top.setSpacing(14)
         self.title = SectionTitle("Shade Control", "Living Room")
-        self.title.setMinimumHeight(74)
+        self.title.setMinimumHeight(52)
         top.addWidget(self.title)
         top.addStretch(1)
         self.room_tabs = QHBoxLayout()
         top.addLayout(self.room_tabs)
         self.lay.addLayout(top)
         buttons = QHBoxLayout()
-        buttons.setContentsMargins(0, -16, 0, -2)
+        # Pull the room-wide controls up; this removes the dead space between
+        # the title/tabs and the blind cards on the 10.1" panel.
+        buttons.setContentsMargins(0, -34, 0, -10)
         buttons.addStretch(1)
         self.open_room = RoundButton("Open Room", active=True, min_h=44)
         self.close_room = RoundButton("Close Room", kind="purple", min_h=44)
@@ -2211,7 +2225,7 @@ class BlindsScreen(Page):
         buttons.addWidget(self.open_room); buttons.addWidget(self.close_room); buttons.addStretch(1)
         self.lay.addLayout(buttons)
         self.grid = QGridLayout()
-        self.grid.setContentsMargins(0, -2, 0, 0)
+        self.grid.setContentsMargins(0, -22, 0, 0)
         self.grid.setHorizontalSpacing(14)
         self.lay.addLayout(self.grid, 1)
         self.open_room.clicked.connect(lambda: self.room_action("open"))
@@ -2247,7 +2261,7 @@ class BlindsScreen(Page):
             if item.widget(): item.widget().deleteLater()
         active = nested_get(self.config, "blinds", "room", default="living")
         room = nested_get(self.config, "blinds", "rooms", active, default={}) or {}
-        self.title.setText(f"<span style='color:#46e8ff; letter-spacing:4px; font-size:11px; font-weight:900'>SHADE CONTROL</span><br><span style='font-size:38px; font-weight:1000; color:#ffffff'>{room.get('label') or active}</span>")
+        self.title.setText(f"<span style='color:#46e8ff; letter-spacing:3px; font-size:10px; font-weight:900'>SHADE CONTROL</span><br><span style='font-size:34px; font-weight:1000; color:#ffffff'>{room.get('label') or active}</span>")
         for idx, blind in enumerate(room.get("blinds") or []):
             card = BlindCard(blind)
             card.openClicked.connect(lambda b: self.blind_action(b, "open"))
@@ -2281,28 +2295,41 @@ class BlindsScreen(Page):
             return
         try:
             payload = {"entityId": blind.get("haEntityId"), "action": action}
+            desired_position = None
             if position is not None:
-                payload["position"] = max(0, min(100, int(position)))
+                desired_position = max(0, min(100, int(position)))
+                payload["position"] = desired_position
 
-            # Optimistic update so drag feels instant. The API call is only sent
-            # on release/tap, not for every pixel of movement.
+            # Optimistic update so drag feels instant. Keep this pending long
+            # enough for the blind motor to physically reach the target. During
+            # that period, status polling will not snap the icon back to the
+            # old in-motion position.
             if action == "open":
-                blind["position"] = 100
+                desired_position = 100
             elif action == "close":
-                blind["position"] = 0
-            elif action == "position" and position is not None:
-                blind["position"] = max(0, min(100, int(position)))
+                desired_position = 0
+
+            if desired_position is not None:
+                blind["position"] = desired_position
+                blind["pendingPosition"] = desired_position
+                blind["pendingPositionUntil"] = time.time() + 18.0
             self.sync(self.s.config, self.s.thermostat)
 
             result = self.s.api.post("/api/ha/cover/action", self.s.ha_payload(payload))
             state = result.get("state") or {}
             if state.get("currentPosition") is not None:
-                blind["position"] = int(state.get("currentPosition") or 0)
+                reported = int(state.get("currentPosition") or 0)
+                pending = blind.get("pendingPosition")
+                pending_until = float(blind.get("pendingPositionUntil") or 0)
+                if pending is None or time.time() >= pending_until or abs(reported - int(pending)) <= 3:
+                    blind["position"] = reported
+                    blind.pop("pendingPosition", None)
+                    blind.pop("pendingPositionUntil", None)
             blind["haName"] = state.get("name") or blind.get("haName")
             self.s.save_config()
             self.sync(self.s.config, self.s.thermostat)
             if not quiet:
-                label = f"{int(position)}%" if action == "position" and position is not None else action
+                label = f"{int(desired_position)}%" if action == "position" and desired_position is not None else action
                 self.requestToast.emit(f"{blind.get('haName') or blind.get('name')} {label}")
         except Exception as exc:
             self.requestToast.emit(f"Blind failed: {exc}")
@@ -2314,10 +2341,21 @@ class BlindsScreen(Page):
         try:
             result = self.s.api.post("/api/ha/cover/states", self.s.ha_payload({"entityIds": [b["haEntityId"] for b in blinds]}))
             by_id = {x.get("entityId"): x for x in result.get("covers") or []}
+            now = time.time()
             for blind in blinds:
                 st = by_id.get(blind.get("haEntityId"))
                 if st:
-                    blind["position"] = int(st.get("currentPosition") if st.get("currentPosition") is not None else blind.get("position") or 0)
+                    if st.get("currentPosition") is not None:
+                        reported = int(st.get("currentPosition") if st.get("currentPosition") is not None else blind.get("position") or 0)
+                        pending = blind.get("pendingPosition")
+                        pending_until = float(blind.get("pendingPositionUntil") or 0)
+                        if pending is not None and now < pending_until and abs(reported - int(pending)) > 3:
+                            # Keep the user-requested preview while the blind is travelling.
+                            blind["position"] = int(pending)
+                        else:
+                            blind["position"] = reported
+                            blind.pop("pendingPosition", None)
+                            blind.pop("pendingPositionUntil", None)
                     blind["haName"] = st.get("name") or blind.get("haName")
             self.sync(self.s.config, self.s.thermostat)
         except Exception:
