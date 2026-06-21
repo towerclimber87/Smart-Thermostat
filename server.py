@@ -160,6 +160,7 @@ DEFAULT_THERMOSTAT = {
         "previousTargetTemp": None,
         "previousLastComfortTarget": None,
         "activeEntityIds": [],
+        "snoozeUntil": 0,
     },
     "autoSwitchNotice": {"active": False, "source": "", "fromMode": "", "toMode": "", "switchTemp": 0, "outdoorTemp": 0, "coolTarget": 0, "heatTarget": 0, "createdAt": 0},
     "autoSwitchHold": {"active": False, "source": "", "mode": "", "suggestedMode": "", "reason": "", "dismissed": False, "createdAt": 0},
@@ -492,6 +493,7 @@ def _normalize_pause_function(value: object) -> dict:
         "previousTargetTemp": previous_target,
         "previousLastComfortTarget": previous_last,
         "activeEntityIds": _normalize_presence_entity_list(source.get("activeEntityIds", [])),
+        "snoozeUntil": _number(source.get("snoozeUntil", source.get("snoozedUntil", 0)), 0, 0, None),
     }
 
 
@@ -764,6 +766,7 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
     if not base["pauseFunction"].get("entries"):
         base["pauseFunction"]["active"] = False
         base["pauseFunction"]["activeEntityIds"] = []
+        base["pauseFunction"]["snoozeUntil"] = 0
     if not base["pauseFunction"].get("active"):
         base["pauseFunction"]["pausedAt"] = 0
         base["pauseFunction"]["previousTargetTemp"] = None
@@ -854,14 +857,22 @@ def _thermostat_persist_payload(thermostat: dict) -> dict:
     safe = _merge_thermostat_state(thermostat)
     persistent = {key: _deepcopy_json(safe.get(key)) for key in THERMOSTAT_PERSIST_KEYS}
     pause = safe.get("pauseFunction") if isinstance(safe.get("pauseFunction"), dict) else {}
+    # Door/entry pause is a runtime state. If a save occurs while comfort is
+    # paused, keep the long-term saved target at the original comfort target
+    # instead of permanently saving the temporary away setpoint.
+    if bool(pause.get("active")) and pause.get("previousTargetTemp") is not None:
+        persistent["targetTemp"] = pause.get("previousTargetTemp")
+    if bool(pause.get("active")) and pause.get("previousLastComfortTarget") is not None:
+        persistent["lastComfortTarget"] = pause.get("previousLastComfortTarget")
     persistent["pauseFunction"] = {
-        "durationMinutes": _number(pause.get("durationMinutes"), 5, 1, 240),
+        "durationMinutes": _number(pause.get("durationMinutes"), 5, 1, 60),
         "entries": _deepcopy_json(pause.get("entries") if isinstance(pause.get("entries"), list) else []),
         "active": False,
         "pausedAt": 0,
         "previousTargetTemp": None,
         "previousLastComfortTarget": None,
         "activeEntityIds": [],
+        "snoozeUntil": 0,
     }
     return persistent
 
@@ -1406,141 +1417,7 @@ def _is_usb_mount_path(path: Path) -> bool:
     return False
 
 
-def _run_usb_command(command: list[str], timeout: float = 8.0) -> subprocess.CompletedProcess[str] | None:
-    try:
-        return subprocess.run(
-            command,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=timeout,
-            check=False,
-        )
-    except Exception as exc:
-        print(f"USB command failed to start: {' '.join(command)}: {exc}", flush=True)
-        return None
-
-
-def _normal_mountpoints(value: object) -> list[str]:
-    if isinstance(value, str) and value:
-        return [value]
-    if isinstance(value, list):
-        return [str(item) for item in value if item]
-    return []
-
-
-def _lsblk_tree() -> list[dict]:
-    lsblk = shutil.which("lsblk") or "/usr/bin/lsblk"
-    result = _run_usb_command([
-        lsblk,
-        "-J",
-        "-p",
-        "-o",
-        "NAME,PATH,KNAME,TYPE,TRAN,RM,FSTYPE,LABEL,MOUNTPOINT,MOUNTPOINTS,MODEL,SIZE",
-    ], timeout=5)
-    if not result or result.returncode != 0:
-        return []
-    try:
-        data = json.loads(result.stdout or "{}")
-    except Exception:
-        return []
-    blockdevices = data.get("blockdevices")
-    return blockdevices if isinstance(blockdevices, list) else []
-
-
-def _flatten_usb_lsblk_nodes(nodes: list[dict], inherited_usb: bool = False) -> list[dict]:
-    flattened: list[dict] = []
-    for node in nodes:
-        if not isinstance(node, dict):
-            continue
-        tran = str(node.get("tran") or "").lower()
-        rm_value = str(node.get("rm") or "").strip().lower()
-        this_usb = inherited_usb or tran == "usb" or rm_value in {"1", "true", "yes"}
-        children = node.get("children") if isinstance(node.get("children"), list) else []
-        if this_usb:
-            copied = dict(node)
-            copied.pop("children", None)
-            flattened.append(copied)
-        flattened.extend(_flatten_usb_lsblk_nodes(children, this_usb))
-    return flattened
-
-
-def _usb_block_devices() -> list[dict]:
-    """Return USB/removable block devices from lsblk.
-
-    This catches the common Pi case where a USB thumb drive is plugged in but
-    not mounted under /media yet. We only treat devices reported by lsblk as
-    USB/removable candidates, then mount/write only a filesystem-bearing node.
-    """
-    devices: list[dict] = []
-    seen: set[str] = set()
-    for node in _flatten_usb_lsblk_nodes(_lsblk_tree()):
-        device = str(node.get("path") or node.get("name") or "").strip()
-        node_type = str(node.get("type") or "").lower()
-        fs_type = str(node.get("fstype") or "").strip().lower()
-        if not device.startswith("/dev/"):
-            continue
-        # Prefer partitions, but allow a whole USB disk if it directly contains
-        # a filesystem. Skip raw disks without a filesystem.
-        if node_type not in {"part", "disk"}:
-            continue
-        if not fs_type:
-            continue
-        if device in seen:
-            continue
-        seen.add(device)
-        mountpoints = _normal_mountpoints(node.get("mountpoints")) or _normal_mountpoints(node.get("mountpoint"))
-        devices.append({
-            "device": device,
-            "fsType": fs_type,
-            "label": str(node.get("label") or Path(device).name),
-            "model": str(node.get("model") or "").strip(),
-            "size": str(node.get("size") or "").strip(),
-            "mountpoints": mountpoints,
-        })
-    devices.sort(key=lambda item: (str(item.get("label") or "").lower(), str(item.get("device") or "")))
-    return devices
-
-
-def _probe_write_access(mount_path: Path) -> tuple[bool, str]:
-    try:
-        if not mount_path.exists() or not mount_path.is_dir():
-            return False, "mount path does not exist"
-        test_path = mount_path / ".smart-thermostat-write-test"
-        with test_path.open("w", encoding="utf-8") as handle:
-            handle.write("ok")
-            handle.flush()
-            os.fsync(handle.fileno())
-        try:
-            test_path.unlink()
-        except Exception:
-            pass
-        return True, ""
-    except Exception as exc:
-        return False, str(exc)
-
-
-def _drive_record(path: Path, device: str = "", fs_type: str = "", label: str = "", **extra: object) -> dict:
-    writable, write_error = _probe_write_access(path)
-    try:
-        resolved = str(path.resolve())
-    except Exception:
-        resolved = str(path)
-    record = {
-        "path": str(path),
-        "resolvedPath": resolved,
-        "device": device,
-        "fsType": fs_type,
-        "label": label or path.name or str(path),
-        "writable": writable,
-    }
-    if write_error:
-        record["writeError"] = write_error
-    record.update({k: v for k, v in extra.items() if v not in (None, "", [])})
-    return record
-
-
-def _mounted_usb_drives(require_writable: bool = False, allow_automount: bool = True) -> list[dict]:
+def _mounted_usb_drives(require_writable: bool = False) -> list[dict]:
     ignored_fs = {
         "autofs", "binfmt_misc", "bpf", "cgroup", "cgroup2", "configfs", "debugfs",
         "devpts", "devtmpfs", "efivarfs", "fusectl", "hugetlbfs", "mqueue", "overlay",
@@ -1548,22 +1425,11 @@ def _mounted_usb_drives(require_writable: bool = False, allow_automount: bool = 
     }
     candidates: list[dict] = []
     seen: set[str] = set()
-
-    def add_candidate(record: dict) -> None:
-        path_text = str(record.get("resolvedPath") or record.get("path") or "")
-        if not path_text or path_text in seen:
-            return
-        if require_writable and not bool(record.get("writable")):
-            return
-        seen.add(path_text)
-        candidates.append(record)
-
-    # First use /proc/mounts for normal automounted USB paths such as
-    # /media/david/DRIVE, /run/media/david/DRIVE, or /mnt/DRIVE.
     try:
         lines = Path("/proc/mounts").read_text(encoding="utf-8", errors="ignore").splitlines()
     except Exception:
         lines = []
+
     for line in lines:
         parts = line.split()
         if len(parts) < 3:
@@ -1572,111 +1438,32 @@ def _mounted_usb_drives(require_writable: bool = False, allow_automount: bool = 
         mount_text = _decode_proc_mount_field(parts[1])
         fs_type = _decode_proc_mount_field(parts[2]).lower()
         mount_path = Path(mount_text)
-        if fs_type in ignored_fs or not device.startswith("/dev/"):
+
+        if fs_type in ignored_fs:
+            continue
+        if not device.startswith("/dev/"):
             continue
         if not _is_usb_mount_path(mount_path):
             continue
-        add_candidate(_drive_record(mount_path, device=device, fs_type=fs_type, label=mount_path.name))
-
-    # Then use lsblk so mounted USB devices are found even if the desktop mounted
-    # them somewhere outside the default roots.
-    for dev in _usb_block_devices():
-        for mount_text in dev.get("mountpoints") or []:
-            mount_path = Path(str(mount_text))
-            if mount_path.exists() and mount_path.is_dir():
-                add_candidate(_drive_record(
-                    mount_path,
-                    device=str(dev.get("device") or ""),
-                    fs_type=str(dev.get("fsType") or ""),
-                    label=str(dev.get("label") or mount_path.name),
-                    model=str(dev.get("model") or ""),
-                    size=str(dev.get("size") or ""),
-                ))
-
-    if allow_automount:
-        mounted_before = len(candidates)
-        auto_errors = _automount_usb_devices()
-        if auto_errors:
-            print("USB automount attempts: " + "; ".join(auto_errors[:5]), flush=True)
-        if len(candidates) == mounted_before:
-            # Re-scan once after any successful udisksctl/sudo mount attempt.
-            candidates.extend(_mounted_usb_drives(require_writable=require_writable, allow_automount=False))
-            deduped: list[dict] = []
-            seen_after: set[str] = set()
-            for item in candidates:
-                key = str(item.get("resolvedPath") or item.get("path") or "")
-                if key and key not in seen_after:
-                    seen_after.add(key)
-                    deduped.append(item)
-            candidates = deduped
-
+        if not mount_path.exists() or not mount_path.is_dir():
+            continue
+        try:
+            resolved = str(mount_path.resolve())
+        except Exception:
+            resolved = str(mount_path)
+        if resolved in seen:
+            continue
+        if require_writable and not os.access(str(mount_path), os.W_OK):
+            continue
+        seen.add(resolved)
+        candidates.append({
+            "path": str(mount_path),
+            "device": device,
+            "fsType": fs_type,
+            "label": mount_path.name or str(mount_path),
+        })
     candidates.sort(key=lambda item: (str(item.get("label") or "").lower(), str(item.get("path") or "")))
     return candidates
-
-
-def _safe_mount_folder_name(device: str) -> str:
-    raw = Path(device).name or "usb"
-    safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in raw).strip("-")
-    return safe or "usb"
-
-
-def _automount_usb_devices() -> list[str]:
-    """Try to mount plugged-in USB drives that are not currently mounted.
-
-    This keeps the panel workflow appliance-friendly: plug in a thumb drive,
-    press Download/Upload Config, and the backend will try to mount it. If the
-    existing install has not yet granted passwordless mount permission, the
-    returned errors tell the user to re-run the installer once.
-    """
-    errors: list[str] = []
-    for dev in _usb_block_devices():
-        device = str(dev.get("device") or "")
-        if not device or dev.get("mountpoints"):
-            continue
-
-        udisksctl = shutil.which("udisksctl")
-        if udisksctl:
-            result = _run_usb_command([udisksctl, "mount", "-b", device], timeout=12)
-            if result and result.returncode == 0:
-                continue
-            if result:
-                msg = (result.stderr or result.stdout or "").strip()
-                if msg:
-                    errors.append(f"udisksctl {device}: {msg}")
-
-        try:
-            mount_root = Path(os.environ.get("SMART_THERMOSTAT_USB_AUTOMOUNT_ROOT", str(DATA_DIR / "usb-mounts")))
-            mount_root.mkdir(parents=True, exist_ok=True)
-            target = mount_root / _safe_mount_folder_name(device)
-            target.mkdir(parents=True, exist_ok=True)
-        except Exception as exc:
-            errors.append(f"{device}: could not create mount folder: {exc}")
-            continue
-
-        mount_bin = shutil.which("mount") or "/usr/bin/mount"
-        sudo_prefix = [] if os.geteuid() == 0 else ["sudo", "-n"]
-        option_sets = [
-            "rw,nosuid,nodev",
-            f"rw,nosuid,nodev,uid={os.getuid()},gid={os.getgid()},umask=0022",
-        ]
-        mounted = False
-        last_msg = ""
-        for options in option_sets:
-            result = _run_usb_command(sudo_prefix + [mount_bin, "-o", options, device, str(target)], timeout=12)
-            if result and result.returncode == 0:
-                mounted = True
-                break
-            if result:
-                last_msg = (result.stderr or result.stdout or f"exit {result.returncode}").strip()
-        if not mounted:
-            if sudo_prefix:
-                errors.append(
-                    f"{device}: could not auto-mount ({last_msg or 'sudo mount was not allowed'}). "
-                    "Run sudo ./scripts/install-native.sh once so the panel user can mount USB backups."
-                )
-            else:
-                errors.append(f"{device}: could not auto-mount ({last_msg or 'mount failed'})")
-    return errors
 
 
 def _write_json_atomic(path: Path, payload: dict) -> int:
@@ -1695,34 +1482,17 @@ def _write_json_atomic(path: Path, payload: dict) -> int:
             os.close(directory_fd)
     except Exception:
         pass
-    try:
-        os.sync()
-    except Exception:
-        pass
     return len(body)
 
 
-def _usb_debug_payload(drives: list[dict] | None = None) -> dict:
-    return {
-        "filename": USB_CONFIG_FILENAME,
-        "mountRoots": list(USB_MOUNT_ROOTS),
-        "drives": drives if drives is not None else _mounted_usb_drives(require_writable=False),
-        "blockDevices": _usb_block_devices(),
-    }
-
-
 def _config_export_usb_payload(server_port: int | str | None = None) -> dict:
-    drives = _mounted_usb_drives(require_writable=False)
+    drives = _mounted_usb_drives(require_writable=True)
     if not drives:
-        debug = _usb_debug_payload([])
         return {
             "ok": False,
-            "error": (
-                "No mounted USB drive was found on this Raspberry Pi. "
-                "Leave the USB plugged in, run sudo ./scripts/install-native.sh once after this update, "
-                "then try Download Config again."
-            ),
-            **debug,
+            "error": "No writable USB drive was found. Insert a mounted USB drive and try Download Config again.",
+            "filename": USB_CONFIG_FILENAME,
+            "drives": [],
         }
 
     payload = _config_export_payload(server_port)
@@ -1745,7 +1515,8 @@ def _config_export_usb_payload(server_port: int | str | None = None) -> dict:
     return {
         "ok": False,
         "error": "A USB drive was found, but the config could not be written. " + "; ".join(errors[:3]),
-        **_usb_debug_payload(drives),
+        "filename": USB_CONFIG_FILENAME,
+        "drives": drives,
     }
 
 
@@ -1772,8 +1543,9 @@ def _config_import_usb_payload() -> dict:
     if not matches:
         return {
             "ok": False,
-            "error": f"No {USB_CONFIG_FILENAME} file was found on any USB drive attached to this Raspberry Pi.",
-            **_usb_debug_payload(),
+            "error": f"No {USB_CONFIG_FILENAME} file was found on any mounted USB drive.",
+            "filename": USB_CONFIG_FILENAME,
+            "drives": _mounted_usb_drives(require_writable=False),
         }
 
     selected = matches[0]
@@ -1798,6 +1570,7 @@ def _config_import_usb_payload() -> dict:
     result["path"] = str(path)
     result["drive"] = selected.get("drive")
     return result
+
 
 def _extract_import_record(payload: object) -> tuple[dict | None, dict | None]:
     if not isinstance(payload, dict):
@@ -2145,6 +1918,197 @@ def _apply_presence_away_logic(thermostat: dict) -> dict:
     return _merge_thermostat_state(updated)
 
 
+def _pause_entry_open_state(entry: dict) -> bool:
+    """Return True when a configured inside-door entry should pause comfort."""
+    if not isinstance(entry, dict):
+        return False
+    state = str(entry.get("state") or "").strip().lower()
+    domain = str(entry.get("domain") or _pause_function_domain_from_entity_id(entry.get("entityId"))).strip().lower()
+    if state in {"", "unknown", "unavailable", "none", "null"}:
+        return False
+    if entry.get("isClosed") is True:
+        return False
+    if entry.get("isClosed") is False:
+        return True
+    if domain == "cover":
+        if state in {"open", "opening"}:
+            return True
+        if state in {"closed", "closing"}:
+            return False
+        pos = entry.get("currentPosition")
+        try:
+            if pos is not None:
+                return float(pos) > 0
+        except (TypeError, ValueError):
+            return False
+    if state in {"on", "open", "opened", "opening", "true", "1", "detected", "triggered"}:
+        return True
+    return False
+
+
+def _refresh_pause_function_entry_states(entries: list[dict]) -> list[dict]:
+    if not entries:
+        return []
+    ha_url, token = _ha_credentials_from_panel_config()
+    if not ha_url or not token:
+        return entries
+    refreshed: list[dict] = []
+    for entry in entries:
+        current = dict(entry)
+        entity_id = str(current.get("entityId") or "").strip()
+        if not entity_id:
+            refreshed.append(current)
+            continue
+        try:
+            item = _ha_state_cached(ha_url, token, entity_id, ttl=1.0)
+            if isinstance(item, dict) and item.get("entity_id"):
+                fresh = _normalize_generic_entity(item)
+                # Preserve a user-facing label if one was saved, but refresh the
+                # live state, device class and cover position from HA.
+                saved_name = current.get("name") or fresh.get("name")
+                current.update(fresh)
+                current["name"] = str(saved_name or entity_id)
+        except Exception as exc:
+            print(f"Inside-door pause state update failed for {entity_id}: {exc}", flush=True)
+        refreshed.append(_normalize_pause_function_entry(current) or current)
+    return refreshed
+
+
+def _door_pause_away_target(thermostat: dict) -> int:
+    mode = str(thermostat.get("mode") or "cool").strip().lower()
+    active = str(thermostat.get("autoActiveMode") or "").strip().lower()
+    effective = active if mode == "auto" and active in {"heat", "cool"} else mode
+    if effective == "heat":
+        return _intish(thermostat.get("awayHeat"), 55, 45, 72)
+    return _intish(thermostat.get("awayCool"), 85, 72, 95)
+
+
+def _restore_from_door_pause(thermostat: dict, pause: dict) -> dict:
+    restored = dict(thermostat)
+    if pause.get("previousTargetTemp") is not None:
+        restored["targetTemp"] = _number(pause.get("previousTargetTemp"), restored.get("targetTemp", 70), 45, 95)
+    elif restored.get("lastComfortTarget") is not None:
+        restored["targetTemp"] = _number(restored.get("lastComfortTarget"), restored.get("targetTemp", 70), 45, 95)
+    if pause.get("previousLastComfortTarget") is not None:
+        restored["lastComfortTarget"] = _number(pause.get("previousLastComfortTarget"), restored.get("targetTemp", 70), 45, 95)
+    return restored
+
+
+def _apply_door_pause_logic(thermostat: dict) -> dict:
+    """Apply the configured inside-door countdown and temporary away setpoint.
+
+    The selected entry and delay are persisted, but the active countdown,
+    previous target and snooze state are runtime-only so normal sensor polling
+    does not create extra SD-card writes.
+    """
+    t = _merge_thermostat_state(thermostat)
+    pause = _normalize_pause_function(t.get("pauseFunction"))
+    entries = _refresh_pause_function_entry_states(pause.get("entries") or [])
+    pause["entries"] = entries
+    if not entries:
+        pause.update({
+            "active": False,
+            "pausedAt": 0,
+            "previousTargetTemp": None,
+            "previousLastComfortTarget": None,
+            "activeEntityIds": [],
+            "snoozeUntil": 0,
+        })
+        t["pauseFunction"] = pause
+        return _merge_thermostat_state(t)
+
+    now_ms = int(time.time() * 1000)
+    duration_ms = _normalize_pause_function_duration(pause.get("durationMinutes"), 5) * 60000
+    open_entries: list[dict] = []
+    for entry in entries:
+        if _pause_entry_open_state(entry):
+            if not _number(entry.get("openedAt"), 0, 0):
+                entry["openedAt"] = now_ms
+            open_entries.append(entry)
+        else:
+            entry["openedAt"] = 0
+
+    if not open_entries:
+        if pause.get("active"):
+            t = _restore_from_door_pause(t, pause)
+        pause.update({
+            "active": False,
+            "pausedAt": 0,
+            "previousTargetTemp": None,
+            "previousLastComfortTarget": None,
+            "activeEntityIds": [],
+            "snoozeUntil": 0,
+        })
+        t["pauseFunction"] = pause
+        return _merge_thermostat_state(t)
+
+    open_ids = [str(entry.get("entityId") or "") for entry in open_entries if str(entry.get("entityId") or "")]
+    first_opened_at = min(int(_number(entry.get("openedAt"), now_ms, 0)) for entry in open_entries)
+    snooze_until = int(_number(pause.get("snoozeUntil"), 0, 0))
+
+    if snooze_until and now_ms < snooze_until:
+        if pause.get("active"):
+            t = _restore_from_door_pause(t, pause)
+        pause.update({
+            "active": False,
+            "pausedAt": 0,
+            "previousTargetTemp": None,
+            "previousLastComfortTarget": None,
+            "activeEntityIds": [],
+        })
+    elif not bool(t.get("away")):
+        if pause.get("active"):
+            t["targetTemp"] = _door_pause_away_target(t)
+            pause["activeEntityIds"] = open_ids
+        elif now_ms - first_opened_at >= duration_ms:
+            pause["active"] = True
+            pause["pausedAt"] = now_ms
+            pause["previousTargetTemp"] = _number(t.get("targetTemp"), 70, 45, 95)
+            pause["previousLastComfortTarget"] = _number(t.get("lastComfortTarget"), t.get("targetTemp", 70), 45, 95)
+            pause["activeEntityIds"] = open_ids
+            pause["snoozeUntil"] = 0
+            t["targetTemp"] = _door_pause_away_target(t)
+    else:
+        # Already away: show the door state/countdown, but do not create a
+        # second pause state over away mode.
+        if pause.get("active"):
+            t = _restore_from_door_pause(t, pause)
+        pause.update({
+            "active": False,
+            "pausedAt": 0,
+            "previousTargetTemp": None,
+            "previousLastComfortTarget": None,
+            "activeEntityIds": [],
+        })
+
+    if snooze_until and now_ms >= snooze_until:
+        pause["snoozeUntil"] = 0
+    t["pauseFunction"] = pause
+    return _merge_thermostat_state(t)
+
+
+def _apply_door_pause_snooze_request(existing: dict, minutes: object = 5) -> dict:
+    t = _merge_thermostat_state(existing)
+    pause = _normalize_pause_function(t.get("pauseFunction"))
+    snooze_minutes = _normalize_pause_function_duration(minutes, 5)
+    now_ms = int(time.time() * 1000)
+    if pause.get("active"):
+        t = _restore_from_door_pause(t, pause)
+    for entry in pause.get("entries") or []:
+        if _pause_entry_open_state(entry):
+            entry["openedAt"] = now_ms
+    pause.update({
+        "active": False,
+        "pausedAt": 0,
+        "previousTargetTemp": None,
+        "previousLastComfortTarget": None,
+        "activeEntityIds": [],
+        "snoozeUntil": now_ms + snooze_minutes * 60000,
+    })
+    t["pauseFunction"] = pause
+    return _merge_thermostat_state(t)
+
+
 def _apply_runtime_thermostat_logic(record: dict, *, notify: bool = True) -> dict:
     thermostat = record.get("thermostat") or {}
     thermostat = _clear_expired_virtual_temp_override(thermostat)
@@ -2152,6 +2116,7 @@ def _apply_runtime_thermostat_logic(record: dict, *, notify: bool = True) -> dic
     thermostat = _apply_selected_ha_outdoor_temperature_sensor_if_needed(thermostat)
     thermostat = _apply_local_temperature_sensor_if_needed({"thermostat": thermostat})
     updated = _apply_presence_away_logic(thermostat)
+    updated = _apply_door_pause_logic(updated)
     updated = _apply_comfort_auto_switch_logic(updated, notify=notify)
     scheduled = _apply_thermostat_schedules(updated)
     if scheduled != updated:
@@ -2357,6 +2322,14 @@ def _handle_thermostat_update(payload: dict) -> dict:
     incoming = payload.get("thermostat", payload) if isinstance(payload, dict) else {}
     if not isinstance(incoming, dict):
         incoming = {}
+
+    pause_incoming = incoming.get("pauseFunction") if isinstance(incoming.get("pauseFunction"), dict) else {}
+    if pause_incoming and str(pause_incoming.get("action") or "").strip().lower() == "snooze":
+        existing = _apply_door_pause_snooze_request(existing, pause_incoming.get("snoozeMinutes", 5))
+        incoming = {k: v for k, v in incoming.items() if k != "pauseFunction"}
+    elif pause_incoming and pause_incoming.get("snoozeMinutes") is not None:
+        existing = _apply_door_pause_snooze_request(existing, pause_incoming.get("snoozeMinutes", 5))
+        incoming = {k: v for k, v in incoming.items() if k != "pauseFunction"}
 
     bypass_mode = str(incoming.get("bypassChangeoverLockout") or "").strip().lower()
     if bypass_mode not in {"heat", "cool"} and incoming.get("bypassChangeoverLockout"):

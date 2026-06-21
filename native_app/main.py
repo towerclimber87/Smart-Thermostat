@@ -421,10 +421,13 @@ class ThermostatActionBanner(GlassPanel):
         self.bypass.clicked.connect(self.bypassClicked.emit)
         self.hide()
 
-    def set_alert(self, kind: str, title: str, body: str, *, dismiss=False, revert=False, bypass=False):
+    def set_alert(self, kind: str, title: str, body: str, *, dismiss=False, revert=False, bypass=False, dismiss_text="Dismiss", revert_text="Revert", bypass_text="Bypass"):
         self.kind = kind or "info"
         self.title.setText(title)
         self.body.setText(body)
+        self.dismiss.setText(dismiss_text or "Dismiss")
+        self.revert.setText(revert_text or "Revert")
+        self.bypass.setText(bypass_text or "Bypass")
         self.dismiss.setVisible(bool(dismiss))
         self.revert.setVisible(bool(revert))
         self.bypass.setVisible(bool(bypass))
@@ -432,6 +435,7 @@ class ThermostatActionBanner(GlassPanel):
             "heat": "rgba(255,72,83,0.58)",
             "cool": "rgba(65,225,255,0.48)",
             "lockout": "rgba(188,132,255,0.50)",
+            "door-pause": "rgba(255,178,73,0.54)",
             "auto": "rgba(72,214,255,0.42)",
             "safety": "rgba(255,72,83,0.56)" if "Heat" in title else "rgba(65,225,255,0.50)",
         }.get(self.kind, "rgba(72,214,255,0.38)")
@@ -919,6 +923,21 @@ class ThermostatScreen(Page):
             border-radius:14px;
             padding:7px 14px;
         """)
+        self.door_countdown = QLabel("")
+        self.door_countdown.setAlignment(Qt.AlignCenter)
+        self.door_countdown.setFont(font(10, QFont.Black, 18))
+        self.door_countdown.setMinimumWidth(250)
+        self.door_countdown.setStyleSheet("""
+            color:#fff4dc;
+            background:qlineargradient(x1:0,y1:0,x2:1,y2:1,
+                stop:0 rgba(166,86,24,0.80),
+                stop:1 rgba(52,35,24,0.82));
+            border:1px solid rgba(255,194,104,0.52);
+            border-radius:14px;
+            padding:7px 14px;
+            letter-spacing:1px;
+        """)
+        self.door_countdown.hide()
         self.notice = QLabel("")
         self.notice.setAlignment(Qt.AlignCenter)
         self.notice.setFont(font(12, QFont.Black))
@@ -991,6 +1010,7 @@ class ThermostatScreen(Page):
         left_title.addWidget(title)
         title_row.addLayout(left_title)
         title_row.addStretch(1)
+        title_row.addWidget(self.door_countdown, 0, Qt.AlignRight | Qt.AlignTop)
         root.addLayout(title_row)
 
         mid = QGridLayout()
@@ -1112,6 +1132,7 @@ class ThermostatScreen(Page):
 
     def animate_environment(self):
         self.fx_phase = (self.fx_phase + 1) % 10000
+        self.update_door_pause_ui()
         self.update()
         if self.alert_banner.isVisible():
             self.alert_banner.raise_()
@@ -1329,6 +1350,25 @@ class ThermostatScreen(Page):
             self.position_alert_banner()
             return
 
+        pause = t.get("pauseFunction") if isinstance(t.get("pauseFunction"), dict) else {}
+        if pause.get("active"):
+            self.bypass_pill.hide()
+            self.notice.hide()
+            entries = pause.get("entries") if isinstance(pause.get("entries"), list) else []
+            names = [str(e.get("name") or e.get("entityId") or "Door") for e in entries if isinstance(e, dict) and self.pause_entry_is_open(e)]
+            door_name = names[0] if names else "Selected door"
+            self.alert_banner.set_alert(
+                "door-pause",
+                "Comfort Paused",
+                f"{door_name} is open. Using the away setpoint until it closes.",
+                dismiss=False,
+                revert=False,
+                bypass=True,
+                bypass_text="Snooze 5 min",
+            )
+            self.position_alert_banner()
+            return
+
         now_ms = time.time() * 1000
         pending = str(t.get("manualPendingMode") or outputs.get("pendingMode") or "").lower()
         until = self.safe_float(t.get("manualLockoutUntil") or outputs.get("manualLockoutUntil"), 0.0)
@@ -1469,6 +1509,9 @@ class ThermostatScreen(Page):
             self.requestToast.emit(f"Revert failed: {exc}")
 
     def bypass_changeover_lockout(self):
+        if getattr(self.alert_banner, "kind", "") == "door-pause":
+            self.snooze_door_pause()
+            return
         t = self.thermostat_view()
         outputs = t.get("outputs") if isinstance(t.get("outputs"), dict) else {}
         pending = str(t.get("manualPendingMode") or outputs.get("pendingMode") or t.get("autoPendingMode") or "").lower()
@@ -1491,6 +1534,81 @@ class ThermostatScreen(Page):
             self.sync(self.s.config, self.s.thermostat)
         except Exception as exc:
             self.requestToast.emit(f"Bypass failed: {exc}")
+
+    def pause_entry_is_open(self, entry: dict) -> bool:
+        if not isinstance(entry, dict):
+            return False
+        state = str(entry.get("state") or "").strip().lower()
+        domain = str(entry.get("domain") or "").strip().lower()
+        if entry.get("isClosed") is True:
+            return False
+        if entry.get("isClosed") is False:
+            return True
+        if domain == "cover":
+            if state in {"open", "opening"}:
+                return True
+            if state in {"closed", "closing"}:
+                return False
+            try:
+                pos = entry.get("currentPosition")
+                if pos is not None:
+                    return float(pos) > 0
+            except Exception:
+                return False
+        return state in {"on", "open", "opened", "opening", "true", "1", "detected", "triggered"}
+
+    def selected_pause_entry(self) -> dict | None:
+        pause = self.thermostat_view().get("pauseFunction")
+        if not isinstance(pause, dict):
+            return None
+        entries = pause.get("entries") if isinstance(pause.get("entries"), list) else []
+        return entries[0] if entries and isinstance(entries[0], dict) else None
+
+    def update_door_pause_ui(self):
+        t = self.thermostat_view()
+        pause = t.get("pauseFunction") if isinstance(t.get("pauseFunction"), dict) else {}
+        entry = self.selected_pause_entry()
+        if not entry:
+            self.door_card.title = "Inside Doors"
+            self.door_card.setGood(False)
+            self.door_card.setValue("NOT SET")
+            self.door_countdown.hide()
+            return
+        open_state = self.pause_entry_is_open(entry)
+        self.door_card.title = "Inside Doors"
+        self.door_card.setGood(not open_state)
+        self.door_card.setValue("OPEN" if open_state else "CLOSED")
+        if not open_state:
+            self.door_countdown.hide()
+            return
+
+        now_ms = int(time.time() * 1000)
+        name = str(entry.get("name") or entry.get("entityId") or "Door").strip() or "Door"
+        short_name = compact_name(name, 28).upper()
+        duration_ms = int(max(1, min(60, float(pause.get("durationMinutes") or 5))) * 60000)
+        snooze_until = int(float(pause.get("snoozeUntil") or 0))
+        if snooze_until > now_ms:
+            remaining = self.format_remaining((snooze_until - now_ms) / 1000)
+            self.door_countdown.setText(f"{short_name} OPEN\nSNOOZED {remaining}")
+            self.door_countdown.show()
+            return
+        if pause.get("active"):
+            self.door_countdown.setText(f"{short_name} OPEN\nAWAY TEMP")
+            self.door_countdown.show()
+            return
+        opened_at = int(float(entry.get("openedAt") or now_ms))
+        remaining = self.format_remaining(max(0, (opened_at + duration_ms - now_ms) / 1000))
+        self.door_countdown.setText(f"{short_name} OPEN\nPAUSE IN {remaining}")
+        self.door_countdown.show()
+
+    def snooze_door_pause(self):
+        try:
+            self.s.update_thermostat({"pauseFunction": {"action": "snooze", "snoozeMinutes": 5}})
+            self.sync(self.s.config, self.s.thermostat)
+            self.requestToast.emit("Door pause snoozed for 5 minutes")
+        except Exception as exc:
+            self.requestToast.emit(f"Snooze failed: {exc}")
+
 
     def refresh_schedule_shortcuts(self):
         if not hasattr(self, "schedule_shortcuts_lay"):
@@ -1770,6 +1888,7 @@ class ThermostatScreen(Page):
             self.away_overlay.raise_()
         else:
             self.away_overlay.hide()
+        self.update_door_pause_ui()
         self.update_alert_banner()
         self.update()
         ha = nested_get(config, "integrations", "homeAssistant", default={}) or {}
@@ -1799,6 +1918,10 @@ class InfoTile(HoldCard):
 
     def setValue(self, value: str):
         self.value = value
+        self.update()
+
+    def setGood(self, good: bool):
+        self.good = bool(good)
         self.update()
 
     def setAlarmState(self, state: str):
@@ -4161,6 +4284,125 @@ class SettingsDialog(QDialog):
         dlg.exec_()
 
 
+    def current_inside_door_entry(self) -> dict | None:
+        pause = self.s.thermostat.get("pauseFunction") if isinstance(self.s.thermostat, dict) else {}
+        if isinstance(pause, dict) and isinstance(pause.get("entries"), list) and pause.get("entries"):
+            first = pause.get("entries")[0]
+            if isinstance(first, dict):
+                return first
+        ha = self.s.ha()
+        door = ha.get("doorEntity") if isinstance(ha, dict) else None
+        return door if isinstance(door, dict) else None
+
+    def inside_door_summary_text(self) -> str:
+        entry = self.current_inside_door_entry()
+        if not entry:
+            return "No entry selected. Choose the HA door/contact/cover used by the Inside Doors tile."
+        name = str(entry.get("name") or entry.get("friendly_name") or entry.get("entityId") or "Selected Entry")
+        entity_id = str(entry.get("entityId") or entry.get("entity_id") or "")
+        return f"{name}\nUsing {entity_id}"
+
+    def current_door_pause_duration(self) -> int:
+        pause = self.s.thermostat.get("pauseFunction") if isinstance(self.s.thermostat, dict) else {}
+        if isinstance(pause, dict):
+            try:
+                return int(max(1, min(60, round(float(pause.get("durationMinutes") or 5)))))
+            except Exception:
+                pass
+        return 5
+
+    def choose_inside_door_entry(self):
+        ha = self.s.ha()
+        stored = []
+        if isinstance(ha, dict):
+            for key in ("doorAvailableEntities", "pauseFunctionAvailableEntities"):
+                if isinstance(ha.get(key), list):
+                    stored.extend(ha.get(key) or [])
+            current = ha.get("doorEntity")
+            if isinstance(current, dict):
+                stored.insert(0, current)
+        current_entry = self.current_inside_door_entry()
+        if isinstance(current_entry, dict):
+            stored.insert(0, current_entry)
+
+        entities = []
+        try:
+            data = self.s.api.post("/api/ha/entities", self.s.ha_payload({"domains": ["binary_sensor", "cover"]}))
+            entities = data.get("entities") or []
+        except Exception:
+            entities = []
+
+        by_id = {}
+        for item in list(entities) + list(stored):
+            if not isinstance(item, dict):
+                continue
+            eid = str(item.get("entityId") or item.get("entity_id") or "").strip()
+            if not eid:
+                continue
+            domain = str(item.get("domain") or (eid.split(".", 1)[0] if "." in eid else "")).strip()
+            if domain not in {"binary_sensor", "cover"}:
+                continue
+            by_id[eid] = {
+                "entityId": eid,
+                "name": str(item.get("name") or item.get("friendly_name") or eid),
+                "domain": domain,
+                "state": item.get("state"),
+                "deviceClass": item.get("deviceClass") or item.get("device_class") or "",
+                "currentPosition": item.get("currentPosition") or item.get("current_position"),
+                "isClosed": item.get("isClosed") if isinstance(item.get("isClosed"), bool) else item.get("is_closed"),
+            }
+        entities = list(by_id.values())
+        if not entities:
+            QMessageBox.warning(self, "Inside Doors", "No Home Assistant binary_sensor or cover entries found.")
+            return
+
+        dlg = EntityPickerDialog("Choose Inside Doors Entry", entities, self)
+        def apply(e):
+            try:
+                eid = str(e.get("entityId") or e.get("entity_id") or "").strip()
+                if not eid:
+                    return
+                domain = str(e.get("domain") or (eid.split(".", 1)[0] if "." in eid else "binary_sensor"))
+                selected = {
+                    "entityId": eid,
+                    "name": str(e.get("name") or e.get("friendly_name") or eid),
+                    "domain": domain,
+                    "state": str(e.get("state") or "unknown"),
+                    "deviceClass": str(e.get("deviceClass") or e.get("device_class") or ""),
+                    "currentPosition": e.get("currentPosition") or e.get("current_position"),
+                    "isClosed": e.get("isClosed") if isinstance(e.get("isClosed"), bool) else e.get("is_closed"),
+                }
+                ha = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
+                ha["doorEntity"] = selected
+                available = [selected]
+                for item in entities:
+                    if isinstance(item, dict) and str(item.get("entityId") or "") != eid:
+                        available.append(item)
+                ha["doorAvailableEntities"] = available
+                ha["pauseFunctionAvailableEntities"] = available
+                self.s.save_config()
+                duration = self.val_number("doorPauseDurationMinutes") if "doorPauseDurationMinutes" in self.controls else self.current_door_pause_duration()
+                self.s.update_thermostat({
+                    "pauseFunction": {
+                        "durationMinutes": duration,
+                        "entries": [selected],
+                        "active": False,
+                        "pausedAt": 0,
+                        "previousTargetTemp": None,
+                        "previousLastComfortTarget": None,
+                        "activeEntityIds": [],
+                        "snoozeUntil": 0,
+                    }
+                })
+                if hasattr(self, "inside_door_label"):
+                    self.inside_door_label.setText(self.inside_door_summary_text())
+                self.saved.emit()
+            except Exception as exc:
+                QMessageBox.warning(self, "Inside Doors", str(exc))
+        dlg.selected.connect(apply)
+        dlg.exec_()
+
+
     def build(self):
         t = self.s.thermostat or {}
         self.build_value("safetyLow", "Low Safety", t.get("safetyLow", 55), 0, 0, 40, 75)
@@ -4175,7 +4417,7 @@ class SettingsDialog(QDialog):
         self.build_value("autoHeatOutdoorTarget", "Heat Mode Switch", t.get("autoHeatOutdoorTarget", 65), 2, 1, 40, 100)
         self.build_value("autoChangeoverLockoutMinutes", "Auto Delay", int(float(t.get("autoChangeoverLockoutMinutes", 120))/60), 2, 2, 0, 8, " hr")
         self.build_value("manualChangeoverLockoutMinutes", "Manual Delay", t.get("manualChangeoverLockoutMinutes", 10), 2, 3, 0, 60, " min")
-        self.build_value("coolFanRemainOnMinutes", "Cool Fan", t.get("coolFanRemainOnMinutes", 2), 5, 2, 0, 15, " min")
+        self.build_value("coolFanRemainOnMinutes", "Cool Fan", t.get("coolFanRemainOnMinutes", 2), 6, 0, 0, 15, " min")
 
         temp_source = self.add_section("Current Temperature Source", 3, 0, 1, 2)
         selected_temp = nested_get(self.s.config, "integrations", "homeAssistant", "currentTempEntity", default=None)
@@ -4231,6 +4473,18 @@ class SettingsDialog(QDialog):
         people_head.addWidget(add_people)
         people.layout().addLayout(people_head)
 
+        door_source = self.add_section("Inside Doors Entry", 5, 2, 1, 1)
+        self.inside_door_label = QLabel(self.inside_door_summary_text())
+        self.inside_door_label.setWordWrap(True)
+        self.inside_door_label.setFont(font(9, QFont.Black))
+        self.inside_door_label.setStyleSheet("color:#c4d0e5; background:rgba(5,10,20,0.42); border:1px dashed rgba(160,180,210,0.26); border-radius:10px; padding:7px;")
+        choose_door = RoundButton("Choose Entry", active=True, min_h=34)
+        choose_door.clicked.connect(self.choose_inside_door_entry)
+        door_source.layout().addWidget(self.inside_door_label)
+        door_source.layout().addWidget(choose_door, 0, Qt.AlignRight)
+        pause = t.get("pauseFunction") if isinstance(t.get("pauseFunction"), dict) else {}
+        self.build_value("doorPauseDurationMinutes", "Door Delay", int(float(pause.get("durationMinutes") or 5)), 5, 3, 1, 60, " min")
+
         code_sec = self.add_section("Security Code", 5, 0, 1, 1)
         current_security = str((self.s.config.get("alarm") or {}).get("disarmCode") or "")
         self.security_code_field = self.code_field(current_security, self.edit_security_code)
@@ -4243,7 +4497,7 @@ class SettingsDialog(QDialog):
         self.settings_code_field.setPlaceholderText("Settings access code")
         settings_code_sec.layout().addWidget(self.settings_code_field)
 
-        self.grid.setRowStretch(6, 1)
+        self.grid.setRowStretch(7, 1)
 
     def val_number(self, key):
         text = self.controls[key].text().split()[0].replace("°", "")
@@ -4265,6 +4519,8 @@ class SettingsDialog(QDialog):
         limits.setdefault("heat", {})["max"] = self.val_number("heatMax")
         limits.setdefault("auto", {})["min"] = min(limits["cool"]["min"], limits["heat"]["min"])
         limits.setdefault("auto", {})["max"] = max(limits["cool"]["max"], limits["heat"]["max"])
+        pause = self.s.thermostat.get("pauseFunction") if isinstance(self.s.thermostat.get("pauseFunction"), dict) else {}
+        pause_entries = pause.get("entries") if isinstance(pause.get("entries"), list) else []
         changes = {
             "safetyLow": self.val_number("safetyLow"),
             "safetyHigh": self.val_number("safetyHigh"),
@@ -4275,6 +4531,16 @@ class SettingsDialog(QDialog):
             "autoChangeoverLockoutMinutes": self.val_number("autoChangeoverLockoutMinutes") * 60,
             "manualChangeoverLockoutMinutes": self.val_number("manualChangeoverLockoutMinutes"),
             "coolFanRemainOnMinutes": self.val_number("coolFanRemainOnMinutes"),
+            "pauseFunction": {
+                "durationMinutes": self.val_number("doorPauseDurationMinutes") if "doorPauseDurationMinutes" in self.controls else int(float(pause.get("durationMinutes") or 5)),
+                "entries": copy.deepcopy(pause_entries),
+                "active": False,
+                "pausedAt": 0,
+                "previousTargetTemp": None,
+                "previousLastComfortTarget": None,
+                "activeEntityIds": [],
+                "snoozeUntil": 0,
+            },
             "limits": limits,
         }
         self.set_thermostat(changes, quiet=True)
