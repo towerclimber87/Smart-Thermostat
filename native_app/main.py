@@ -20,6 +20,7 @@ from PyQt5.QtCore import QEvent, QPoint, QPointF, QRectF, QSize, Qt, QTimer, pyq
 from PyQt5.QtGui import QColor, QCursor, QFont, QIcon, QImage, QPainter, QPen, QBrush, QLinearGradient, QPainterPath, QRadialGradient
 from PyQt5.QtWidgets import (
     QApplication,
+    QAbstractButton,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -166,14 +167,97 @@ class Page(QWidget):
         pass
 
 
+class ScreenLockButton(QAbstractButton):
+    """Top-left page lock pill. Locked mode keeps the panel on Thermostat."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.locked = False
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedSize(154, 48)
+        self.setFont(font(9, QFont.Black, 18))
+
+    def setLocked(self, locked: bool):
+        self.locked = bool(locked)
+        self.setToolTip("Locked to Thermostat" if self.locked else "Tap to lock to Thermostat")
+        self.update()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self.rect().contains(event.pos()):
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
+        r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+
+        g = QLinearGradient(r.topLeft(), r.bottomRight())
+        if self.locked:
+            g.setColorAt(0.0, QColor(92, 22, 39, 238))
+            g.setColorAt(0.58, QColor(51, 16, 29, 230))
+            g.setColorAt(1.0, QColor(18, 10, 18, 238))
+            border = QColor(255, 82, 118, 175)
+            icon_bg = QColor(255, 74, 111, 62)
+            icon_fg = QColor(255, 210, 221, 230)
+            txt = QColor(255, 230, 236)
+            label = "LOCKED"
+        else:
+            g.setColorAt(0.0, QColor(19, 82, 74, 232))
+            g.setColorAt(0.55, QColor(14, 57, 64, 226))
+            g.setColorAt(1.0, QColor(13, 28, 43, 236))
+            border = QColor(88, 255, 206, 150)
+            icon_bg = QColor(84, 255, 196, 50)
+            icon_fg = QColor(195, 255, 240, 228)
+            txt = QColor(216, 255, 247)
+            label = "UNLOCKED"
+
+        p.setBrush(QBrush(g))
+        p.setPen(QPen(border, 1.45))
+        p.drawRoundedRect(r, 22, 22)
+
+        glow = QRadialGradient(QPointF(27, r.center().y()), 36)
+        glow.setColorAt(0.0, QColor(icon_fg.red(), icon_fg.green(), icon_fg.blue(), 70))
+        glow.setColorAt(0.72, QColor(icon_fg.red(), icon_fg.green(), icon_fg.blue(), 15))
+        glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.fillRect(QRectF(0, 0, 62, self.height()), glow)
+
+        icon = QRectF(11, 9, 30, 30)
+        p.setBrush(icon_bg)
+        p.setPen(QPen(QColor(icon_fg.red(), icon_fg.green(), icon_fg.blue(), 105), 1.1))
+        p.drawEllipse(icon)
+
+        cx = icon.center().x()
+        cy = icon.center().y()
+        p.setPen(QPen(icon_fg, 2.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.setBrush(Qt.NoBrush)
+        if self.locked:
+            p.drawArc(QRectF(cx - 7, cy - 11, 14, 15), 0, 180 * 16)
+        else:
+            p.drawArc(QRectF(cx - 10, cy - 11, 14, 15), 18 * 16, 155 * 16)
+        body = QRectF(cx - 9, cy - 2, 18, 13)
+        p.setBrush(QColor(icon_fg.red(), icon_fg.green(), icon_fg.blue(), 35))
+        p.drawRoundedRect(body, 4, 4)
+        p.setBrush(icon_fg)
+        p.setPen(Qt.NoPen)
+        p.drawEllipse(QRectF(cx - 1.8, cy + 3, 3.6, 3.6))
+
+        p.setFont(self.font())
+        p.setPen(txt)
+        p.drawText(QRectF(48, 0, r.width() - 54, r.height()), Qt.AlignVCenter | Qt.AlignLeft, label)
+
+
 class Header(QWidget):
     navChanged = pyqtSignal(str)
     infoClicked = pyqtSignal()
     settingsClicked = pyqtSignal()
+    lockClicked = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedHeight(102)
+        self.lock_button = ScreenLockButton()
         self.current_pill = TopPill("--", "Current")
         self.set_pill = TopPill("--", "Set", active=True)
         self.nav = NavBar(["Blinds", "Audio", "Thermostat", "Lights", "Room"])
@@ -189,6 +273,7 @@ class Header(QWidget):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(42, 24, 42, 20)
         lay.setSpacing(14)
+        lay.addWidget(self.lock_button)
         lay.addWidget(self.current_pill)
         lay.addWidget(self.set_pill)
         lay.addStretch(1)
@@ -201,10 +286,20 @@ class Header(QWidget):
         self.nav.changed.connect(self.navChanged.emit)
         self.info.clicked.connect(self.infoClicked.emit)
         self.gear.clicked.connect(self.settingsClicked.emit)
+        self.lock_button.clicked.connect(self.lockClicked.emit)
         self.clock = QTimer(self)
         self.clock.timeout.connect(self.update_time)
         self.clock.start(1000)
         self.update_time()
+
+
+
+    def set_locked(self, locked: bool):
+        self.lock_button.setLocked(locked)
+        # Keep Thermostat selectable, but grey out the other tabs while the
+        # page lock is engaged. MainWindow still enforces this in set_page().
+        for name, btn in self.nav.buttons.items():
+            btn.setEnabled((not locked) or name == "Thermostat")
 
     def update_time(self):
         try:
@@ -815,7 +910,13 @@ class ThermostatScreen(Page):
         self.status_badge.setStyleSheet("color:#f6f8ff; background:transparent; border:0; padding:0;")
         self.outdoor = QLabel("OUTDOOR --°   WIND --")
         self.outdoor.setFont(font(9, QFont.Black, 20))
-        self.outdoor.setStyleSheet("color:#d3dbee; background:transparent; border:0; padding:0;")
+        self.outdoor.setStyleSheet("""
+            color:#dce7fb;
+            background:rgba(65,73,92,0.55);
+            border:1px solid rgba(155,174,208,0.24);
+            border-radius:14px;
+            padding:7px 14px;
+        """)
         self.notice = QLabel("")
         self.notice.setAlignment(Qt.AlignCenter)
         self.notice.setFont(font(12, QFont.Black))
@@ -1070,6 +1171,28 @@ class ThermostatScreen(Page):
         low = self.safe_float(t.get("safetyLow"), 55.0)
         high = self.safe_float(t.get("safetyHigh"), 85.0)
         heat_mode = self.active_visual_mode() == "heat"
+
+        # Base climate-page ambience. This keeps the thermostat screen vivid
+        # even while the equipment is idle, closer to the clean glassy look of
+        # the reference layout without adding polling or animation load.
+        base_cool = QRadialGradient(QPointF(r.width() * 0.47, r.height() * 0.46), r.width() * 0.50)
+        base_cool.setColorAt(0.0, QColor(58, 145, 255, 32))
+        base_cool.setColorAt(0.55, QColor(44, 100, 220, 16))
+        base_cool.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.fillRect(r, base_cool)
+
+        base_purple = QRadialGradient(QPointF(r.width() * 0.63, r.height() * 0.35), r.width() * 0.44)
+        base_purple.setColorAt(0.0, QColor(154, 104, 255, 26))
+        base_purple.setColorAt(0.62, QColor(84, 62, 190, 12))
+        base_purple.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.fillRect(r, base_purple)
+
+        base_teal = QRadialGradient(QPointF(r.width() * 0.12, r.height() * 0.70), r.width() * 0.36)
+        base_teal.setColorAt(0.0, QColor(50, 255, 195, 22))
+        base_teal.setColorAt(0.62, QColor(28, 138, 128, 10))
+        base_teal.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.fillRect(r, base_teal)
+
         # Temperature ambience. Cold rooms get a blue wash and snow accents;
         # hot rooms get a darker red/orange wash and a sun pulse.
         cold_ratio = clamp((68.0 - current) / 14.0, 0.0, 1.0)
@@ -1637,41 +1760,108 @@ class InfoTile(HoldCard):
         self.update()
 
     def draw_icon(self, p: QPainter, cx: float, cy: float, size: float):
+        title = self.title.lower()
         icon_rect = QRectF(cx - size / 2, cy - size / 2, size, size)
-        ring = QRadialGradient(QPointF(cx, cy), size * 0.74)
-        ring.setColorAt(0.0, QColor(98, 255, 205, 54))
-        ring.setColorAt(0.72, QColor(98, 255, 205, 18))
+        open_state = str(self.value or "").strip().lower() in {"open", "opened", "opening", "on", "triggered"}
+        alarmish = "alarm" in title
+        armed_alarm = alarmish and (
+            self.alarm_state.startswith("armed") or self.alarm_state in {"arming", "pending", "triggered"}
+        )
+
+        if armed_alarm:
+            glow_color = QColor(255, 74, 111, 88)
+            ring_color = QColor(255, 102, 130, 135)
+            icon_color = QColor(255, 226, 235, 235)
+            fill_color = QColor(255, 74, 111, 82)
+        elif "door" in title and open_state:
+            glow_color = QColor(255, 184, 86, 76)
+            ring_color = QColor(255, 202, 120, 135)
+            icon_color = QColor(255, 242, 214, 235)
+            fill_color = QColor(255, 188, 94, 58)
+        else:
+            glow_color = QColor(84, 255, 196, 70)
+            ring_color = QColor(113, 255, 219, 120)
+            icon_color = QColor(210, 255, 244, 232)
+            fill_color = QColor(84, 255, 196, 46)
+
+        ring = QRadialGradient(QPointF(cx, cy), size * 0.86)
+        ring.setColorAt(0.0, glow_color)
+        ring.setColorAt(0.64, QColor(glow_color.red(), glow_color.green(), glow_color.blue(), max(12, glow_color.alpha() // 4)))
         ring.setColorAt(1.0, QColor(0, 0, 0, 0))
         p.setBrush(ring)
         p.setPen(Qt.NoPen)
-        p.drawEllipse(icon_rect.adjusted(-8, -8, 8, 8))
+        p.drawEllipse(icon_rect.adjusted(-13, -13, 13, 13))
 
-        p.setBrush(QColor(27, 95, 84, 112))
-        p.setPen(QPen(QColor(147, 255, 224, 64), 1.4))
+        bg = QLinearGradient(icon_rect.topLeft(), icon_rect.bottomRight())
+        bg.setColorAt(0.0, QColor(fill_color.red(), fill_color.green(), fill_color.blue(), 115))
+        bg.setColorAt(1.0, QColor(8, 24, 36, 142))
+        p.setBrush(QBrush(bg))
+        p.setPen(QPen(ring_color, 1.7))
         p.drawEllipse(icon_rect)
 
-        p.setPen(QPen(QColor(198, 255, 240, 185), 3, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.setPen(QPen(icon_color, 3.2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
         p.setBrush(Qt.NoBrush)
-        title = self.title.lower()
+
         if "door" in title:
-            door = QRectF(cx - size * 0.16, cy - size * 0.27, size * 0.32, size * 0.54)
-            p.drawRect(door)
-            p.drawLine(QPointF(cx - size * 0.31, cy - size * 0.36), QPointF(cx - size * 0.16, cy - size * 0.27))
-            p.drawLine(QPointF(cx + size * 0.16, cy - size * 0.27), QPointF(cx + size * 0.31, cy - size * 0.36))
-            p.drawLine(QPointF(cx - size * 0.31, cy + size * 0.36), QPointF(cx - size * 0.16, cy + size * 0.27))
-            p.drawLine(QPointF(cx + size * 0.16, cy + size * 0.27), QPointF(cx + size * 0.31, cy + size * 0.36))
-            p.setBrush(QColor(198, 255, 240, 190))
-            p.drawEllipse(QRectF(cx + size * 0.06, cy - 2, 4, 4))
+            frame = QRectF(cx - size * 0.23, cy - size * 0.32, size * 0.46, size * 0.64)
+            p.setPen(QPen(QColor(icon_color.red(), icon_color.green(), icon_color.blue(), 150), 2.2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            p.drawRoundedRect(frame, 3, 3)
+            if open_state:
+                door = QPainterPath()
+                door.moveTo(frame.left() + size * 0.08, frame.top() + size * 0.06)
+                door.lineTo(frame.right() + size * 0.18, frame.top() + size * 0.13)
+                door.lineTo(frame.right() + size * 0.18, frame.bottom() - size * 0.10)
+                door.lineTo(frame.left() + size * 0.08, frame.bottom() - size * 0.04)
+                door.closeSubpath()
+                dg = QLinearGradient(door.boundingRect().topLeft(), door.boundingRect().bottomRight())
+                dg.setColorAt(0.0, QColor(icon_color.red(), icon_color.green(), icon_color.blue(), 70))
+                dg.setColorAt(1.0, QColor(8, 28, 38, 122))
+                p.setBrush(QBrush(dg))
+                p.setPen(QPen(icon_color, 2.8, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+                p.drawPath(door)
+                p.setBrush(icon_color)
+                p.setPen(Qt.NoPen)
+                p.drawEllipse(QRectF(frame.right() + size * 0.08, cy - 1.8, 3.8, 3.8))
+            else:
+                door = QRectF(frame.left() + size * 0.07, frame.top() + size * 0.07, frame.width() - size * 0.14, frame.height() - size * 0.14)
+                dg = QLinearGradient(door.topLeft(), door.bottomRight())
+                dg.setColorAt(0.0, QColor(icon_color.red(), icon_color.green(), icon_color.blue(), 58))
+                dg.setColorAt(1.0, QColor(8, 28, 38, 112))
+                p.setBrush(QBrush(dg))
+                p.setPen(QPen(icon_color, 2.8, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+                p.drawRoundedRect(door, 2.5, 2.5)
+                p.setBrush(icon_color)
+                p.setPen(Qt.NoPen)
+                p.drawEllipse(QRectF(door.right() - size * 0.13, cy - 2.0, 4.2, 4.2))
             p.setBrush(Qt.NoBrush)
-        elif "alarm" in title:
+            p.setPen(QPen(QColor(icon_color.red(), icon_color.green(), icon_color.blue(), 115), 2.0, Qt.SolidLine, Qt.RoundCap))
+            p.drawLine(QPointF(frame.left() - size * 0.07, frame.bottom() + 1), QPointF(frame.right() + size * 0.09, frame.bottom() + 1))
+        elif alarmish:
             shield = QPainterPath()
             shield.moveTo(cx, cy - size * 0.34)
-            shield.lineTo(cx + size * 0.27, cy - size * 0.22)
-            shield.lineTo(cx + size * 0.24, cy + size * 0.16)
-            shield.quadTo(cx, cy + size * 0.38, cx - size * 0.24, cy + size * 0.16)
-            shield.lineTo(cx - size * 0.27, cy - size * 0.22)
+            shield.lineTo(cx + size * 0.29, cy - size * 0.21)
+            shield.lineTo(cx + size * 0.25, cy + size * 0.11)
+            shield.quadTo(cx + size * 0.17, cy + size * 0.31, cx, cy + size * 0.40)
+            shield.quadTo(cx - size * 0.17, cy + size * 0.31, cx - size * 0.25, cy + size * 0.11)
+            shield.lineTo(cx - size * 0.29, cy - size * 0.21)
             shield.closeSubpath()
+            sg = QLinearGradient(shield.boundingRect().topLeft(), shield.boundingRect().bottomRight())
+            sg.setColorAt(0.0, QColor(icon_color.red(), icon_color.green(), icon_color.blue(), 72))
+            sg.setColorAt(1.0, QColor(7, 29, 38, 142))
+            p.setBrush(QBrush(sg))
+            p.setPen(QPen(icon_color, 3.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
             p.drawPath(shield)
+            p.setBrush(Qt.NoBrush)
+            if armed_alarm:
+                p.setPen(QPen(icon_color, 3.3, Qt.SolidLine, Qt.RoundCap))
+                p.drawLine(QPointF(cx, cy - size * 0.15), QPointF(cx, cy + size * 0.10))
+                p.setBrush(icon_color)
+                p.setPen(Qt.NoPen)
+                p.drawEllipse(QRectF(cx - 2.6, cy + size * 0.18, 5.2, 5.2))
+            else:
+                p.setPen(QPen(icon_color, 3.4, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+                p.drawLine(QPointF(cx - size * 0.13, cy + size * 0.03), QPointF(cx - size * 0.03, cy + size * 0.14))
+                p.drawLine(QPointF(cx - size * 0.03, cy + size * 0.14), QPointF(cx + size * 0.17, cy - size * 0.12))
         else:
             p.setFont(font(34, QFont.Black))
             p.drawText(icon_rect, Qt.AlignCenter, self.symbol)
@@ -1682,30 +1872,39 @@ class InfoTile(HoldCard):
         r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
 
         armed_alarm = "alarm" in self.title.lower() and (
-            self.alarm_state.startswith("armed") or self.alarm_state in {"arming", "pending"}
+            self.alarm_state.startswith("armed") or self.alarm_state in {"arming", "pending", "triggered"}
         )
+        open_door = "door" in self.title.lower() and str(self.value or "").lower() in {"open", "opened", "opening", "on"}
         pulse = 34 if (armed_alarm and self.flash_on) else 0
         glow = QRadialGradient(QPointF(r.center().x(), r.top() + 70), max(r.width(), r.height()) * 0.8)
         if armed_alarm:
-            glow.setColorAt(0.0, QColor(255, 45, 92, 90 + pulse))
-            glow.setColorAt(0.62, QColor(115, 17, 39, 58 + pulse))
+            glow.setColorAt(0.0, QColor(255, 45, 92, 98 + pulse))
+            glow.setColorAt(0.62, QColor(115, 17, 39, 64 + pulse))
+        elif open_door:
+            glow.setColorAt(0.0, QColor(255, 178, 73, 78))
+            glow.setColorAt(0.62, QColor(122, 70, 22, 44))
         else:
-            glow.setColorAt(0.0, QColor(42, 255, 187, 54 if self.good else 24))
-            glow.setColorAt(0.62, QColor(27, 88, 77, 32))
+            glow.setColorAt(0.0, QColor(42, 255, 187, 68 if self.good else 32))
+            glow.setColorAt(0.62, QColor(27, 102, 86, 40))
         glow.setColorAt(1.0, QColor(0, 0, 0, 0))
         p.fillRect(r, glow)
 
         g = QLinearGradient(r.topLeft(), r.bottomRight())
         if armed_alarm:
-            g.setColorAt(0.0, QColor(108, 19, 43, 225))
-            g.setColorAt(0.48, QColor(62, 16, 35, 220))
-            g.setColorAt(1.0, QColor(22, 12, 28, 232))
-            border_color = QColor(255, 67, 111, 168 + min(pulse, 40))
+            g.setColorAt(0.0, QColor(122, 23, 49, 232))
+            g.setColorAt(0.48, QColor(66, 16, 37, 224))
+            g.setColorAt(1.0, QColor(23, 12, 29, 236))
+            border_color = QColor(255, 67, 111, 178 + min(pulse, 40))
+        elif open_door:
+            g.setColorAt(0.0, QColor(126, 73, 23, 222))
+            g.setColorAt(0.48, QColor(58, 41, 27, 218))
+            g.setColorAt(1.0, QColor(18, 22, 35, 232))
+            border_color = QColor(255, 190, 91, 148)
         else:
-            g.setColorAt(0.0, QColor(22, 88, 78, 205 if self.good else 150))
-            g.setColorAt(0.48, QColor(15, 45, 53, 210))
-            g.setColorAt(1.0, QColor(12, 23, 39, 226))
-            border_color = QColor(61, 221, 184, 118 if self.good else 70)
+            g.setColorAt(0.0, QColor(24, 102, 89, 216 if self.good else 166))
+            g.setColorAt(0.48, QColor(16, 53, 60, 214))
+            g.setColorAt(1.0, QColor(12, 23, 39, 232))
+            border_color = QColor(80, 245, 202, 136 if self.good else 78)
         p.setBrush(QBrush(g))
         p.setPen(QPen(border_color, 1.6))
         p.drawRoundedRect(r, 28, 28)
@@ -1720,7 +1919,13 @@ class InfoTile(HoldCard):
         fm = p.fontMetrics()
         badge_w = max(86, min(r.width() - 34, fm.horizontalAdvance(badge_text) + 28))
         badge = QRectF(r.center().x() - badge_w / 2, 128, badge_w, 24)
-        p.setBrush(QColor(185, 35, 67, 220) if ("alarm" in self.title.lower() and (self.alarm_state.startswith("armed") or self.alarm_state in {"arming", "pending"})) else QColor(40, 141, 113, 205 if self.good else 135))
+        if armed_alarm:
+            badge_color = QColor(202, 42, 76, 226)
+        elif open_door:
+            badge_color = QColor(210, 126, 40, 220)
+        else:
+            badge_color = QColor(38, 160, 126, 214 if self.good else 145)
+        p.setBrush(badge_color)
         p.setPen(Qt.NoPen)
         p.drawRoundedRect(badge, 12, 12)
         p.setFont(font(9, QFont.Black, 18))
@@ -4517,6 +4722,7 @@ class MainWindow(Background):
         self.setWindowTitle("Smart Thermostat Native")
         self.setMinimumSize(1000, 620)
         self.toast = StatusToast(self)
+        self.navigation_locked = False
         self.header = Header()
         self.stack = QStackedWidget()
         self.pages: dict[str, Page] = {
@@ -4540,8 +4746,10 @@ class MainWindow(Background):
         self.header.navChanged.connect(self.set_page)
         self.header.infoClicked.connect(self.show_info)
         self.header.settingsClicked.connect(self.show_settings)
+        self.header.lockClicked.connect(self.toggle_navigation_lock)
         self.current_name = "Thermostat"
         self.header.set_page(self.current_name)
+        self.header.set_locked(self.navigation_locked)
         self.stack.setCurrentWidget(self.pages[self.current_name])
 
         self.poll_timer = QTimer(self)
@@ -4579,8 +4787,15 @@ class MainWindow(Background):
         if self.toast.isVisible():
             self.toast.move((self.width() - self.toast.width()) // 2, self.height() - self.toast.height() - 28)
 
-    def set_page(self, name: str):
+    def set_page(self, name: str, force: bool = False):
         if name not in self.pages:
+            return
+        if getattr(self, "navigation_locked", False) and name != "Thermostat" and not force:
+            self.current_name = "Thermostat"
+            self.stack.setCurrentWidget(self.pages["Thermostat"])
+            self.header.set_page("Thermostat")
+            self.toast.show_message("Locked to Thermostat")
+            QTimer.singleShot(60, lambda: self.sync_visible_page("Thermostat"))
             return
         self.current_name = name
         now = time.monotonic()
@@ -4594,6 +4809,40 @@ class MainWindow(Background):
         # sit on saved config for several seconds after navigation.
         QTimer.singleShot(60, lambda n=name: self.sync_visible_page(n))
         QTimer.singleShot(140, lambda n=name: self.poll_visible_page_now(n))
+
+
+
+    def settings_code(self) -> str:
+        security = self.s.config.get("security") or {}
+        alarm = self.s.config.get("alarm") or {}
+        code = str(security.get("settingsCode") or alarm.get("settingsCode") or alarm.get("disarmCode") or "").strip()
+        # The appliance has historically used 3762 as the panel/settings code.
+        # Keep it as a safe fallback for page unlocks when older configs do not
+        # yet have security.settingsCode saved.
+        return code or "3762"
+
+    def set_navigation_locked(self, locked: bool, *, show_toast: bool = False):
+        self.navigation_locked = bool(locked)
+        self.header.set_locked(self.navigation_locked)
+        if self.navigation_locked:
+            if self.current_name != "Thermostat":
+                self.set_page("Thermostat", force=True)
+            else:
+                self.header.set_page("Thermostat")
+            if show_toast:
+                self.toast.show_message("Locked to Thermostat")
+        elif show_toast:
+            self.toast.show_message("Page lock released")
+
+    def toggle_navigation_lock(self):
+        if not getattr(self, "navigation_locked", False):
+            self.set_navigation_locked(True, show_toast=True)
+            return
+        code = self.settings_code()
+        entered = CodeKeypadDialog.get_code(self, "Screen Locked", "Enter Settings Code", code)
+        if entered is None:
+            return
+        self.set_navigation_locked(False, show_toast=True)
 
     def poll_visible_page_now(self, name: str | None = None):
         try:
@@ -4726,9 +4975,7 @@ class MainWindow(Background):
             return
         self._settings_dialog_open = True
         try:
-            security = self.s.config.get("security") or {}
-            alarm = self.s.config.get("alarm") or {}
-            settings_code = str(security.get("settingsCode") or alarm.get("settingsCode") or alarm.get("disarmCode") or "").strip()
+            settings_code = self.settings_code()
             if settings_code:
                 entered = CodeKeypadDialog.get_code(self, "Settings Locked", "Enter Settings Code", settings_code)
                 if entered is None:
