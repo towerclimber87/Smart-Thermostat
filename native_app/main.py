@@ -2114,6 +2114,51 @@ class LightsScreen(Page):
             self._send_light(light, "on" if turn_on else "off", light.get("lastBrightness") or 100 if turn_on else 0)
         self.requestToast.emit("Room lights updated")
 
+    def _open_live_color_dialog(self, lights: list[dict], current: str, title: str):
+        """Open a touch-friendly RGB picker and push color changes live.
+
+        The dialog itself does not have Apply/Cancel anymore. It emits each
+        color as soon as the user taps or drags. A short debounce keeps the Pi
+        responsive while still making the bulb update feel immediate.
+        """
+        targets = [x for x in lights if x.get("haEntityId")]
+        if not targets:
+            return
+        dlg = LightColorDialog(current, title, self)
+        pending = {"color": None}
+        live_timer = QTimer(dlg)
+        live_timer.setSingleShot(True)
+
+        def brightness_for(light: dict) -> int:
+            value = int(light.get("brightness") or light.get("lastBrightness") or 100)
+            return value if value > 0 else int(light.get("lastBrightness") or 100)
+
+        def flush_color():
+            color = pending.get("color")
+            if not color:
+                return
+            for item in targets:
+                self._send_light(item, "color", brightness_for(item), color=color)
+
+        def live_color(color: str):
+            color = LightColorDialog.clean_color(color)
+            pending["color"] = color
+            for item in targets:
+                item["color"] = color
+                item["colorSupported"] = True
+                item["on"] = True
+                if int(item.get("brightness") or 0) <= 0:
+                    item["brightness"] = brightness_for(item)
+            self.sync(self.s.config, self.s.thermostat)
+            live_timer.start(90)
+
+        live_timer.timeout.connect(flush_color)
+        dlg.colorPreviewed.connect(live_color)
+        dlg.exec_()
+        if live_timer.isActive():
+            live_timer.stop()
+            flush_color()
+
     def open_room_color_picker(self):
         active = nested_get(self.config, "lights", "room", default="living")
         lights = [x for x in nested_get(self.config, "lights", "rooms", active, "lights", default=[]) or [] if x.get("haEntityId")]
@@ -2122,15 +2167,7 @@ class LightsScreen(Page):
             self.requestToast.emit("No RGB lights in this room")
             return
         current = rgb_lights[0].get("color") or rgb_lights[0].get("colorHex") or "#ffd76f"
-        color = LightColorDialog.get_color(self, current, "Room RGB Color")
-        if not color:
-            return
-        for light in rgb_lights:
-            brightness = int(light.get("brightness") or light.get("lastBrightness") or 100)
-            if brightness <= 0:
-                brightness = int(light.get("lastBrightness") or 100)
-            self._send_light(light, "color", brightness, color=color)
-        self.requestToast.emit("Room RGB color updated")
+        self._open_live_color_dialog(rgb_lights, current, "Room RGB Color")
 
     def open_light_color_picker(self, light: dict):
         if not light.get("haEntityId"):
@@ -2141,14 +2178,7 @@ class LightsScreen(Page):
             return
         name = light.get("haName") or light.get("name") or "RGB Light"
         current = light.get("color") or light.get("colorHex") or "#ffd76f"
-        color = LightColorDialog.get_color(self, current, f"{compact_name(name, 24)} RGB Color")
-        if not color:
-            return
-        brightness = int(light.get("brightness") or light.get("lastBrightness") or 100)
-        if brightness <= 0:
-            brightness = int(light.get("lastBrightness") or 100)
-        self._send_light(light, "color", brightness, color=color)
-        self.requestToast.emit(f"{compact_name(name, 22)} color updated")
+        self._open_live_color_dialog([light], current, f"{compact_name(name, 24)} RGB Color")
 
     def toggle_light(self, light: dict):
         if not light.get("haEntityId"):
@@ -3057,6 +3087,8 @@ class ColorWheelWidget(QWidget):
 
 
 class LightColorDialog(QDialog):
+    colorPreviewed = pyqtSignal(str)
+
     COLORS = [
         ("Warm", "#ffd76f"),
         ("White", "#ffffff"),
@@ -3075,7 +3107,7 @@ class LightColorDialog(QDialog):
         self.selected_color = self.clean_color(current)
         self.setWindowTitle(title)
         self.setModal(True)
-        self.resize(900, 500)
+        self.resize(900, 520)
         self.setStyleSheet("""
             QDialog { background:#09111f; color:#f7fbff; }
             QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
@@ -3103,10 +3135,9 @@ class LightColorDialog(QDialog):
 
         right = QVBoxLayout()
         right.setSpacing(12)
-        self.preview = QLabel(self.selected_color.upper())
+        self.preview = QLabel("")
         self.preview.setAlignment(Qt.AlignCenter)
-        self.preview.setFont(font(17, QFont.Black))
-        self.preview.setFixedHeight(62)
+        self.preview.setFixedHeight(74)
         right.addWidget(self.preview)
         self.refresh_preview()
 
@@ -3121,10 +3152,10 @@ class LightColorDialog(QDialog):
         grid.setVerticalSpacing(10)
         self.preset_buttons = []
         for idx, (name, color) in enumerate(self.COLORS):
-            btn = QPushButton(name)
-            btn.setMinimumSize(92, 52)
+            btn = QPushButton("")
+            btn.setAccessibleName(name)
+            btn.setMinimumSize(104, 56)
             btn.setCursor(Qt.PointingHandCursor)
-            btn.setFont(font(11, QFont.Black))
             btn.clicked.connect(lambda checked=False, c=color: self.pick(c, sync_wheel=True))
             self.preset_buttons.append((btn, color))
             grid.addWidget(btn, idx // 2, idx % 2)
@@ -3133,15 +3164,12 @@ class LightColorDialog(QDialog):
         root.addLayout(body, 1)
 
         bottom = QHBoxLayout()
-        cancel = RoundButton("Cancel", min_h=48)
-        apply = RoundButton("Apply Color", active=True, min_h=48)
-        cancel.setMinimumWidth(150)
-        apply.setMinimumWidth(190)
-        cancel.clicked.connect(self.reject)
-        apply.clicked.connect(self.accept)
+        close = RoundButton("Close", active=True, min_h=48)
+        close.setMinimumWidth(170)
+        close.clicked.connect(self.accept)
         bottom.addStretch(1)
-        bottom.addWidget(cancel)
-        bottom.addWidget(apply)
+        bottom.addWidget(close)
+        bottom.addStretch(1)
         root.addLayout(bottom)
 
         self.refresh_presets()
@@ -3156,10 +3184,8 @@ class LightColorDialog(QDialog):
         return raw.lower() if c.isValid() else fallback
 
     def color_button_style(self, color: str, selected: bool = False) -> str:
-        c = QColor(color)
-        text = "#06121d" if (c.red() * 0.299 + c.green() * 0.587 + c.blue() * 0.114) > 150 else "#ffffff"
         border = "4px solid #ffffff" if selected else "1px solid rgba(255,255,255,0.28)"
-        return f"background:{color}; color:{text}; border:{border}; border-radius:18px; font-weight:900;"
+        return f"background:{color}; color:transparent; border:{border}; border-radius:18px;"
 
     def pick(self, color: str, sync_wheel: bool = False):
         self.selected_color = self.clean_color(color)
@@ -3167,6 +3193,7 @@ class LightColorDialog(QDialog):
             self.wheel.set_color(self.selected_color, notify=False)
         self.refresh_preview()
         self.refresh_presets()
+        self.colorPreviewed.emit(self.selected_color)
 
     def refresh_presets(self):
         for btn, color in getattr(self, "preset_buttons", []):
@@ -3174,10 +3201,8 @@ class LightColorDialog(QDialog):
 
     def refresh_preview(self):
         color = self.clean_color(self.selected_color)
-        c = QColor(color)
-        text = "#06121d" if (c.red() * 0.299 + c.green() * 0.587 + c.blue() * 0.114) > 150 else "#ffffff"
-        self.preview.setText(color.upper())
-        self.preview.setStyleSheet(f"background:{color}; color:{text}; border:2px solid rgba(255,255,255,0.28); border-radius:22px; padding:10px;")
+        self.preview.setText("")
+        self.preview.setStyleSheet(f"background:{color}; border:2px solid rgba(255,255,255,0.28); border-radius:22px; padding:10px;")
 
     @staticmethod
     def get_color(parent, current: str = "#ffd76f", title: str = "RGB Color") -> str | None:

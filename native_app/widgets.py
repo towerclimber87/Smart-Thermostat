@@ -583,12 +583,17 @@ class LightCard(HoldCard):
         self._power_held = False
         self._power_timer = QTimer(self)
         self._power_timer.setSingleShot(True)
-        self._power_timer.setInterval(650)
+        # Make the RGB long-press feel responsive on the touch panel while
+        # still leaving normal quick taps available for simple on/off toggles.
+        self._power_timer.setInterval(260)
         self._power_timer.timeout.connect(self._fire_power_hold)
 
     def _power_rect(self) -> QRectF:
         w = float(self.width())
-        return QRectF(w / 2.0 - 31.0, 66.0, 62.0, 50.0)
+        return QRectF(w / 2.0 - 36.0, 62.0, 72.0, 56.0)
+
+    def _power_hit_rect(self) -> QRectF:
+        return self._power_rect().adjusted(-30.0, -24.0, 30.0, 24.0)
 
     def resizeEvent(self, event):
         top = 128 if self.height() >= 320 else 118
@@ -608,10 +613,11 @@ class LightCard(HoldCard):
 
     def _fire_power_hold(self):
         self._power_held = True
+        self._power_pressed = False
         self.colorRequested.emit(self.light)
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton and self._power_rect().contains(QPointF(event.pos())):
+        if event.button() == Qt.LeftButton and self._power_hit_rect().contains(QPointF(event.pos())):
             self._power_pressed = True
             self._power_held = False
             self._power_timer.start()
@@ -623,7 +629,7 @@ class LightCard(HoldCard):
         if self._power_pressed:
             if self._power_timer.isActive():
                 self._power_timer.stop()
-            pressed_inside = self._power_rect().contains(QPointF(event.pos()))
+            pressed_inside = self._power_hit_rect().contains(QPointF(event.pos()))
             was_held = self._power_held
             self._power_pressed = False
             self._power_held = False
