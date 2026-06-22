@@ -212,6 +212,7 @@ DEFAULT_HOME_ASSISTANT_CONFIG = {
         "gain": None,
         "bass": None,
         "treble": None,
+        "music_surround": None,
         "subwoofer": None,
         "surround": None,
         "projector": None,
@@ -5044,6 +5045,8 @@ def _fetch_ha_weather_state(ha_url: str, token: str, entity_id: str = "weather.h
 
 def _audio_control_entity_id(controls: dict, kind: str) -> str:
     value = (controls or {}).get(kind)
+    if kind == "music_surround" and not value:
+        value = (controls or {}).get("musicSurround")
     if isinstance(value, dict):
         return str(value.get("entityId") or value.get("entity_id") or "").strip()
     return str(value or "").strip()
@@ -5440,6 +5443,7 @@ def _score_audio_control(item: dict, kind: str, player_entity_id: str, player_na
         "bass": ["bass"],
         "treble": ["treble"],
         "gain": ["gain", "subwoofergain", "subgain"],
+        "music_surround": ["musicsurround", "surroundmusic", "music", "surroundlevel", "surroundvolume", "musicvolume"],
     }
     if not any(term in compact for term in kind_terms.get(kind, [kind])):
         return -1
@@ -5474,9 +5478,9 @@ def _fetch_ha_audio_controls(ha_url: str, token: str, media_player_id: str, medi
 
     states = _ha_json_request(ha_url, token, "GET", "/api/states")
     if not isinstance(states, list):
-        return {"gain": None, "bass": None, "treble": None}
+        return {"gain": None, "bass": None, "treble": None, "music_surround": None}
 
-    controls: dict[str, dict | None] = {"gain": None, "bass": None, "treble": None}
+    controls: dict[str, dict | None] = {"gain": None, "bass": None, "treble": None, "music_surround": None}
     for kind in list(controls.keys()):
         best = None
         best_score = -1
@@ -5494,7 +5498,7 @@ def _fetch_ha_audio_controls(ha_url: str, token: str, media_player_id: str, medi
 
 
 def _fetch_ha_audio_control_states(ha_url: str, token: str, controls: dict) -> dict:
-    kinds = ("gain", "bass", "treble")
+    kinds = ("gain", "bass", "treble", "music_surround")
     entity_by_kind = {kind: _audio_control_entity_id(controls, kind) for kind in kinds}
     wanted = [entity_id for entity_id in entity_by_kind.values() if entity_id.startswith("number.")]
     items = _fetch_ha_state_items_for_entities(ha_url, token, wanted, {"number"}, all_states_threshold=2)

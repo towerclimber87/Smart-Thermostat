@@ -128,15 +128,26 @@ def nested_get(data: dict, *keys, default=None):
 
 
 
-AUDIO_CONTROL_ORDER: list[tuple[str, str]] = [
+AUDIO_NUMBER_CONTROL_ORDER: list[tuple[str, str]] = [
     ("gain", "Gain"),
     ("bass", "Bass"),
     ("treble", "Treble"),
+    ("music_surround", "Music Surround"),
+]
+AUDIO_SWITCH_CONTROL_ORDER: list[tuple[str, str]] = [
     ("projector", "Projector"),
     ("subwoofer", "Sub"),
     ("surround", "Surround Sound"),
 ]
+AUDIO_CONTROL_ORDER: list[tuple[str, str]] = AUDIO_NUMBER_CONTROL_ORDER + AUDIO_SWITCH_CONTROL_ORDER
+AUDIO_CONTROL_LABELS = {key: label for key, label in AUDIO_CONTROL_ORDER}
 AUDIO_CONTROL_DEFAULTS = {key: True for key, _label in AUDIO_CONTROL_ORDER}
+AUDIO_PRESET_ORDER: list[tuple[str, str, str, str]] = [
+    ("movie", "Movie", "movie", "warm"),
+    ("show", "Show", "show", "purple"),
+    ("volume40", "40%", "volume", "normal"),
+    ("max", "Max", "max", "danger"),
+]
 AUDIO_IDLE_SECONDS = 120.0
 AUDIO_FAST_NAV_POLL_SECONDS = 2.0
 
@@ -161,6 +172,55 @@ def audio_control_enabled(config: dict | None, key: str) -> bool:
 
 def audio_auto_navigate_enabled(config: dict | None) -> bool:
     return bool(audio_ui_config(config).get("autoNavigate", False))
+
+
+def default_audio_presets() -> dict:
+    return {
+        "show": {
+            "label": "Show Mode",
+            "volume": None,
+            "numbers": {"gain": 0, "bass": 8, "treble": 8},
+            "switches": {"subwoofer": "off", "surround": "on"},
+        },
+        "volume40": {
+            "label": "40% Volume",
+            "volume": 40,
+            "numbers": {"gain": "max", "bass": "max", "treble": 8},
+            "switches": {"subwoofer": "on", "surround": "on"},
+        },
+        "max": {
+            "label": "Max",
+            "volume": 100,
+            "numbers": {"gain": "max", "bass": "max", "treble": 8},
+            "switches": {"subwoofer": "on", "surround": "on"},
+        },
+        "movie": {
+            "label": "Movie Mode",
+            "volume": None,
+            "numbers": {},
+            "switches": {},
+        },
+    }
+
+
+def audio_preset_definition(config: dict | None, preset: str) -> dict:
+    preset = str(preset or "").strip()
+    defaults = default_audio_presets()
+    if preset not in defaults:
+        return {}
+    result = copy.deepcopy(defaults[preset])
+    cfg = config if isinstance(config, dict) else {}
+    custom = nested_get(cfg, "audio", "presets", preset, default=None)
+    if isinstance(custom, dict):
+        if "label" in custom and str(custom.get("label") or "").strip():
+            result["label"] = str(custom.get("label") or result.get("label"))
+        if "volume" in custom:
+            result["volume"] = custom.get("volume")
+        if isinstance(custom.get("numbers"), dict):
+            result["numbers"] = copy.deepcopy(custom.get("numbers") or {})
+        if isinstance(custom.get("switches"), dict):
+            result["switches"] = copy.deepcopy(custom.get("switches") or {})
+    return result
 
 
 def thermostat_detail_payload(payload: dict | None) -> dict:
@@ -3850,12 +3910,7 @@ class AudioScreen(Page):
         top = QHBoxLayout()
         top.setSpacing(10)
         self.preset_buttons = {}
-        for preset, text, icon_key, kind in [
-            ("movie", "Movie", "movie", "warm"),
-            ("show", "Show", "show", "purple"),
-            ("volume40", "40%", "volume", "normal"),
-            ("max", "Max", "max", "danger"),
-        ]:
+        for preset, text, icon_key, kind in AUDIO_PRESET_ORDER:
             b = ModernAudioButton(icon_key, text, kind=kind, min_h=78, holdable=False)
             b.setMinimumWidth(126)
             b.setToolTip(f"Apply {text} audio preset")
@@ -4002,24 +4057,23 @@ class AudioScreen(Page):
         eq.setSpacing(10)
         self.eq_sliders = {}
         self.eq_cards = {}
-        for name in ["Gain", "Bass", "Treble"]:
-            key = name.lower()
+        for key, name in AUDIO_NUMBER_CONTROL_ORDER:
             card = HoldCard(hold_ms=700)
             card.setMinimumHeight(232)
             card.setMaximumHeight(246)
             card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             card.setToolTip(f"Hold to assign {name}")
             v = QVBoxLayout(card)
-            v.setContentsMargins(14, 10, 14, 12)
+            v.setContentsMargins(12, 10, 12, 12)
             v.setSpacing(6)
-            label = HoldLabel(f"{name}\n--")
+            label = HoldLabel(self._audio_number_label_text(key, "--"))
             label.setAlignment(Qt.AlignCenter)
-            label.setFont(font(10, QFont.Black))
+            label.setFont(font(9 if key == "music_surround" else 10, QFont.Black))
             label.setStyleSheet("color:#dbe3f4;")
             sl = QSlider(Qt.Vertical)
             sl.setRange(0, 100)
             sl.setValue(50)
-            sl.setMinimumHeight(162)
+            sl.setMinimumHeight(156)
             sl.setStyleSheet("""
                 QSlider::groove:vertical { width:12px; border-radius:6px; background:rgba(160,170,190,0.23); }
                 QSlider::add-page:vertical { width:12px; border-radius:6px; background:#49e6ff; }
@@ -4069,7 +4123,10 @@ class AudioScreen(Page):
         return nested_get(self.config, "integrations", "homeAssistant", "audioControlEntities", default={}) or {}
 
     def audio_control_record(self, name: str) -> dict:
-        value = self.audio_controls().get(name)
+        controls = self.audio_controls()
+        value = controls.get(name)
+        if name == "music_surround" and not value:
+            value = controls.get("musicSurround")
         if isinstance(value, dict):
             return value
         if value:
@@ -4079,7 +4136,7 @@ class AudioScreen(Page):
         return {}
 
     def assign_audio_control(self, name: str):
-        group = "audio-number" if name in {"gain", "bass", "treble"} else "audio-toggle"
+        group = "audio-number" if name in {key for key, _label in AUDIO_NUMBER_CONTROL_ORDER} else "audio-toggle"
         self.requestAssign.emit(group, {"audioControlKind": name}, name)
 
     def number_value_to_slider(self, record: dict, value) -> int:
@@ -4122,6 +4179,12 @@ class AudioScreen(Page):
         except Exception:
             return str(value)[:12]
 
+    def _audio_number_label_text(self, name: str, value_text: str) -> str:
+        title = AUDIO_CONTROL_LABELS.get(name, str(name or "").replace("_", " ").title())
+        if name == "music_surround":
+            title = "Music\nSurround"
+        return f"{title}\n{value_text}"
+
     def apply_audio_visibility(self):
         for key, card in getattr(self, "eq_cards", {}).items():
             card.setVisible(audio_control_enabled(self.config, key))
@@ -4131,7 +4194,7 @@ class AudioScreen(Page):
     def apply_audio_control_state(self):
         self.apply_audio_visibility()
         controls = self.audio_controls()
-        for name, title in {"gain": "Gain", "bass": "Bass", "treble": "Treble"}.items():
+        for name, title in AUDIO_NUMBER_CONTROL_ORDER:
             sl_label = self.eq_sliders.get(name)
             if not sl_label:
                 continue
@@ -4143,9 +4206,9 @@ class AudioScreen(Page):
                     slider.blockSignals(True)
                     slider.setValue(self.number_value_to_slider(record, value))
                     slider.blockSignals(False)
-                label.setText(f"{title}\n{self._number_label_value(value)}")
+                label.setText(self._audio_number_label_text(name, self._number_label_value(value)))
             else:
-                label.setText(f"{title}\nHold")
+                label.setText(self._audio_number_label_text(name, "Hold"))
         for name, button in getattr(self, "switch_buttons", {}).items():
             record = controls.get(name) if isinstance(controls.get(name), dict) else self.audio_control_record(name)
             state = str(record.get("state") or "").lower() if isinstance(record, dict) else ""
@@ -4194,37 +4257,7 @@ class AudioScreen(Page):
         return self.audio_control_record(name).get("entityId") or ""
 
     def _audio_preset_definition(self, preset: str) -> dict:
-        """Return the local scene targets for audio presets.
-
-        Movie Mode is intentionally left unassigned until the exact desired
-        targets are confirmed, so the panel will not unexpectedly change the
-        projector or EQ values.
-        """
-        preset = str(preset or "").strip().lower()
-        presets = {
-            "show": {
-                "label": "Show Mode",
-                "numbers": {"gain": 0, "bass": 8, "treble": 8},
-                "switches": {"subwoofer": "off", "surround": "on"},
-            },
-            "volume40": {
-                "label": "40% Volume",
-                "volume": 40,
-                "numbers": {"gain": "max", "bass": "max", "treble": 8},
-                "switches": {"subwoofer": "on", "surround": "on"},
-            },
-            "max": {
-                "label": "Max",
-                "volume": 100,
-                "numbers": {"gain": "max", "bass": "max", "treble": 8},
-                "switches": {"subwoofer": "on", "surround": "on"},
-            },
-            "movie": {
-                "label": "Movie Mode",
-                "needsConfirmation": True,
-            },
-        }
-        return presets.get(preset, {})
+        return audio_preset_definition(self.config, preset)
 
     def _round_audio_number_value(self, name: str, target):
         record = self.audio_control_record(name)
@@ -4278,10 +4311,6 @@ class AudioScreen(Page):
         if not definition:
             self.requestToast.emit("Unknown audio preset")
             return
-        if definition.get("needsConfirmation"):
-            self.requestToast.emit("Movie Mode needs target values first")
-            return
-
         media_player_id = self.player_id()
         missing: list[str] = []
         number_actions: list[tuple[str, str, int | float]] = []
@@ -4307,12 +4336,12 @@ class AudioScreen(Page):
                 continue
             entity_id = self.control_entity(name)
             if not entity_id:
-                missing.append(name)
+                missing.append(AUDIO_CONTROL_LABELS.get(name, name))
                 continue
             try:
                 value = self._round_audio_number_value(name, target)
             except Exception:
-                missing.append(name)
+                missing.append(AUDIO_CONTROL_LABELS.get(name, name))
                 continue
             self._remember_number_state(name, value)
             number_actions.append((name, entity_id, value))
@@ -4399,7 +4428,7 @@ class AudioScreen(Page):
         sl_label = self.eq_sliders.get(name)
         if sl_label:
             _, label = sl_label
-            label.setText(f"{name.capitalize()}\n{self._number_label_value(actual_value)}")
+            label.setText(self._audio_number_label_text(name, self._number_label_value(actual_value)))
         payload = self.s.ha_payload({"entityId": eid, "value": actual_value})
         def done(result):
             control = (result or {}).get("control") if isinstance(result, dict) else None
@@ -4611,7 +4640,7 @@ class AudioScreen(Page):
     def poll(self):
         self.poll_player_only()
         controls = self.audio_controls()
-        if any(self.audio_control_record(k).get("entityId") for k in ("gain", "bass", "treble")):
+        if any(self.audio_control_record(k).get("entityId") for k, _label in AUDIO_NUMBER_CONTROL_ORDER):
             def number_done(result):
                 fresh = (result or {}).get("controls") if isinstance(result, dict) else None
                 if isinstance(fresh, dict):
@@ -4624,7 +4653,7 @@ class AudioScreen(Page):
                             target[key] = merged
                     self.apply_audio_control_state()
             self.run_async("audio-number-poll", lambda: self.s.api.post("/api/ha/audio/control_states", self.s.ha_payload({"controls": controls})), number_done, None)
-        if any(self.audio_control_record(k).get("entityId") for k in ("subwoofer", "surround", "projector")):
+        if any(self.audio_control_record(k).get("entityId") for k, _label in AUDIO_SWITCH_CONTROL_ORDER):
             def switch_done(result):
                 fresh = (result or {}).get("controls") if isinstance(result, dict) else None
                 if isinstance(fresh, dict):
@@ -5444,6 +5473,15 @@ class AudioSettingsDialog(QDialog):
         super().__init__(parent)
         self.s = state
         self.checks: dict[str, QCheckBox] = {}
+        self.selected_preset = "movie"
+        self.scene_number_sliders: dict[str, QSlider] = {}
+        self.scene_switch_checks: dict[str, QCheckBox] = {}
+        self.scene_volume_slider: QSlider | None = None
+        self.scene_dirty = False
+        self.preset_edits = {
+            preset: copy.deepcopy(audio_preset_definition(self.s.config, preset))
+            for preset, _label, _icon, _kind in AUDIO_PRESET_ORDER
+        }
         self.setWindowTitle("Audio Settings")
         self.setModal(True)
         self.setWindowFlag(Qt.FramelessWindowHint, True)
@@ -5456,13 +5494,13 @@ class AudioSettingsDialog(QDialog):
                 color:#f7fbff;
                 font-family:Arial;
                 font-weight:900;
-                font-size:17px;
-                spacing:14px;
-                padding:8px 4px;
+                font-size:16px;
+                spacing:12px;
+                padding:6px 4px;
             }
             QCheckBox::indicator {
-                width:30px;
-                height:30px;
+                width:28px;
+                height:28px;
                 border-radius:8px;
                 border:2px solid rgba(107,226,255,0.42);
                 background:rgba(7,13,25,0.86);
@@ -5474,10 +5512,14 @@ class AudioSettingsDialog(QDialog):
             QCheckBox::indicator:unchecked {
                 background:rgba(7,13,25,0.86);
             }
+            QSlider::groove:horizontal { height:12px; border-radius:6px; background:rgba(160,170,190,0.23); }
+            QSlider::sub-page:horizontal { height:12px; border-radius:6px; background:#49e6ff; }
+            QSlider::add-page:horizontal { height:12px; border-radius:6px; background:rgba(110,92,180,0.42); }
+            QSlider::handle:horizontal { width:34px; height:34px; margin:-11px 0; border-radius:17px; background:#f8f5ff; border:1px solid rgba(255,255,255,0.42); }
         """)
         root = QVBoxLayout(self)
-        root.setContentsMargins(26, 18, 26, 22)
-        root.setSpacing(16)
+        root.setContentsMargins(24, 16, 24, 20)
+        root.setSpacing(14)
 
         header = QHBoxLayout()
         title_col = QVBoxLayout()
@@ -5485,7 +5527,7 @@ class AudioSettingsDialog(QDialog):
         title = QLabel("Audio Settings")
         title.setFont(font(30, QFont.Black))
         title.setStyleSheet("color:#ffffff;")
-        sub = QLabel("Choose which audio controls appear on the main Audio page.")
+        sub = QLabel("Choose controls per room and save what each audio scene button should set.")
         sub.setFont(font(12, QFont.Black))
         sub.setStyleSheet("color:rgba(219,227,244,0.72);")
         title_col.addWidget(title)
@@ -5502,40 +5544,44 @@ class AudioSettingsDialog(QDialog):
         root.addLayout(header)
 
         body = QHBoxLayout()
-        body.setSpacing(18)
+        body.setSpacing(16)
 
         controls_panel = GlassPanel(radius=24, strong=True)
         controls_lay = QVBoxLayout(controls_panel)
-        controls_lay.setContentsMargins(22, 18, 22, 20)
-        controls_lay.setSpacing(8)
+        controls_lay.setContentsMargins(20, 16, 20, 18)
+        controls_lay.setSpacing(7)
         controls_title = QLabel("Visible Controls")
         controls_title.setFont(font(19, QFont.Black))
         controls_lay.addWidget(controls_title)
-        hint = QLabel("Turn off anything this room does not have assigned. Disabled items are hidden from the main Audio screen and skipped by scene buttons.")
+        hint = QLabel("Turn off controls this room does not have. Disabled items are hidden from Audio and skipped by scene buttons.")
         hint.setWordWrap(True)
-        hint.setFont(font(11, QFont.Black))
+        hint.setFont(font(10, QFont.Black))
         hint.setStyleSheet("color:rgba(219,227,244,0.72);")
         controls_lay.addWidget(hint)
-        controls_lay.addSpacing(8)
 
         current = audio_ui_config(self.s.config)
         enabled = current.get("enabledControls", {})
-        for key, label in AUDIO_CONTROL_ORDER:
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(8)
+        for idx, (key, label) in enumerate(AUDIO_CONTROL_ORDER):
             row = GlassPanel(radius=18)
             row_lay = QHBoxLayout(row)
-            row_lay.setContentsMargins(14, 7, 14, 7)
+            row_lay.setContentsMargins(12, 5, 12, 5)
             cb = QCheckBox(label)
             cb.setChecked(bool(enabled.get(key, True)))
+            cb.toggled.connect(self._scene_visibility_changed)
             self.checks[key] = cb
             row_lay.addWidget(cb, 1)
-            controls_lay.addWidget(row)
+            grid.addWidget(row, idx // 2, idx % 2)
+        controls_lay.addLayout(grid)
         controls_lay.addStretch(1)
         body.addWidget(controls_panel, 3)
 
         nav_panel = GlassPanel(radius=24, strong=True)
         nav_lay = QVBoxLayout(nav_panel)
-        nav_lay.setContentsMargins(22, 18, 22, 20)
-        nav_lay.setSpacing(14)
+        nav_lay.setContentsMargins(20, 16, 20, 18)
+        nav_lay.setSpacing(12)
         nav_title = QLabel("Auto-Navigate")
         nav_title.setFont(font(19, QFont.Black))
         nav_lay.addWidget(nav_title)
@@ -5543,17 +5589,52 @@ class AudioSettingsDialog(QDialog):
         self.auto_nav.setChecked(bool(current.get("autoNavigate", False)))
         nav_lay.addWidget(self.auto_nav)
         desc = QLabel(
-            "When music is playing and the source is not TV, the panel returns to Audio after 2 minutes without touch. "
-            "When music is not playing, it returns to Thermostat after 2 minutes without touch. You can still navigate away any time."
+            "Real music jumps to Audio quickly. If you leave Audio while music keeps playing, the panel returns after 2 minutes without touch. When music stops, it returns to Thermostat after 2 minutes. TV audio is ignored."
         )
         desc.setWordWrap(True)
-        desc.setFont(font(12, QFont.Black))
+        desc.setFont(font(11, QFont.Black))
         desc.setStyleSheet("color:rgba(219,227,244,0.74); line-height:1.25;")
         nav_lay.addWidget(desc)
         nav_lay.addStretch(1)
         body.addWidget(nav_panel, 2)
         root.addLayout(body, 1)
 
+        scene_panel = GlassPanel(radius=24, strong=True)
+        scene_lay = QVBoxLayout(scene_panel)
+        scene_lay.setContentsMargins(20, 14, 20, 14)
+        scene_lay.setSpacing(10)
+        scene_top = QHBoxLayout()
+        scene_title = QLabel("Scene Save Points")
+        scene_title.setFont(font(19, QFont.Black))
+        self.scene_name = QLabel("")
+        self.scene_name.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.scene_name.setFont(font(12, QFont.Black))
+        self.scene_name.setStyleSheet("color:#49e6ff;")
+        scene_top.addWidget(scene_title)
+        scene_top.addStretch(1)
+        scene_top.addWidget(self.scene_name)
+        scene_lay.addLayout(scene_top)
+
+        self.scene_editor = QWidget()
+        self.scene_editor_lay = QHBoxLayout(self.scene_editor)
+        self.scene_editor_lay.setContentsMargins(0, 0, 0, 0)
+        self.scene_editor_lay.setSpacing(10)
+        scene_lay.addWidget(self.scene_editor, 1)
+
+        scene_buttons = QHBoxLayout()
+        scene_buttons.setSpacing(10)
+        self.scene_buttons: dict[str, ModernAudioButton] = {}
+        for preset, text, icon_key, kind in AUDIO_PRESET_ORDER:
+            btn = ModernAudioButton(icon_key, text, kind=kind, min_h=62, holdable=False)
+            btn.setMinimumWidth(116)
+            btn.clicked.connect(lambda checked=False, p=preset: self.select_scene(p))
+            self.scene_buttons[preset] = btn
+            scene_buttons.addWidget(btn)
+        scene_buttons.addStretch(1)
+        scene_lay.addLayout(scene_buttons)
+        root.addWidget(scene_panel, 2)
+
+        self.build_scene_editor()
         QTimer.singleShot(0, self.fit_to_screen)
 
     def showEvent(self, event):
@@ -5563,17 +5644,218 @@ class AudioSettingsDialog(QDialog):
     def fit_to_screen(self):
         fit_dialog_to_available_screen(self, margin=0)
 
+    def _clear_layout(self, layout: QHBoxLayout | QVBoxLayout | QGridLayout):
+        while layout.count():
+            item = layout.takeAt(0)
+            child_layout = item.layout()
+            widget = item.widget()
+            if child_layout is not None:
+                self._clear_layout(child_layout)
+            if widget is not None:
+                widget.deleteLater()
+
+    def _control_record(self, name: str) -> dict:
+        controls = nested_get(self.s.config, "integrations", "homeAssistant", "audioControlEntities", default={}) or {}
+        value = controls.get(name) if isinstance(controls, dict) else None
+        if name == "music_surround" and not value and isinstance(controls, dict):
+            value = controls.get("musicSurround")
+        if isinstance(value, dict):
+            return value
+        if value:
+            entity_id = str(value)
+            domain = entity_id.split(".", 1)[0] if "." in entity_id else ""
+            return {"entityId": entity_id, "name": entity_id, "domain": domain}
+        return {}
+
+    def _number_range(self, name: str) -> tuple[float, float, float]:
+        record = self._control_record(name)
+        try:
+            low = float(record.get("min", 0))
+            high = float(record.get("max", 100))
+            step = float(record.get("step", 1) or 1)
+        except Exception:
+            low, high, step = 0.0, 100.0, 1.0
+        if high <= low:
+            high = low + 100.0
+        return low, high, step
+
+    def _number_text(self, value) -> str:
+        if value is None or value == "":
+            return "--"
+        try:
+            number = float(value)
+            if abs(number - round(number)) < 0.001:
+                return str(int(round(number)))
+            return f"{number:.1f}"
+        except Exception:
+            return str(value)[:12]
+
+    def _target_to_actual(self, name: str, target):
+        low, high, step = self._number_range(name)
+        if isinstance(target, str):
+            key = target.strip().lower()
+            if key == "max":
+                raw = high
+            elif key == "min":
+                raw = low
+            else:
+                try:
+                    raw = float(key)
+                except Exception:
+                    raw = float(self._control_record(name).get("value", self._control_record(name).get("state", low)))
+        elif target is None:
+            record = self._control_record(name)
+            try:
+                raw = float(record.get("value", record.get("state", (low + high) / 2)))
+            except Exception:
+                raw = (low + high) / 2
+        else:
+            raw = float(target)
+        raw = float(clamp(raw, low, high))
+        if step > 0:
+            raw = round((raw - low) / step) * step + low
+            raw = float(clamp(raw, low, high))
+        if abs(raw - round(raw)) < 0.001:
+            return int(round(raw))
+        return round(raw, 2)
+
+    def _actual_to_slider(self, name: str, value) -> int:
+        low, high, _step = self._number_range(name)
+        try:
+            raw = float(self._target_to_actual(name, value))
+        except Exception:
+            raw = (low + high) / 2
+        return int(clamp(round(((raw - low) / (high - low)) * 100), 0, 100))
+
+    def _slider_to_actual(self, name: str, slider_value: int):
+        low, high, step = self._number_range(name)
+        raw = low + (float(slider_value) / 100.0) * (high - low)
+        if step > 0:
+            raw = round((raw - low) / step) * step + low
+            raw = float(clamp(raw, low, high))
+        if abs(raw - round(raw)) < 0.001:
+            return int(round(raw))
+        return round(raw, 2)
+
+    def _scene_visibility_changed(self, _checked=False):
+        self.store_scene_editor_values()
+        self.build_scene_editor()
+
+    def select_scene(self, preset: str):
+        if preset == self.selected_preset:
+            return
+        self.store_scene_editor_values()
+        self.selected_preset = preset
+        self.build_scene_editor()
+
+    def build_scene_editor(self):
+        self._clear_layout(self.scene_editor_lay)
+        self.scene_number_sliders = {}
+        self.scene_switch_checks = {}
+        self.scene_volume_slider = None
+        definition = self.preset_edits.get(self.selected_preset) or audio_preset_definition(self.s.config, self.selected_preset)
+        label = str(definition.get("label") or dict((p, l) for p, l, _i, _k in AUDIO_PRESET_ORDER).get(self.selected_preset, "Scene"))
+        self.scene_name.setText(f"Editing {label}")
+        for key, btn in self.scene_buttons.items():
+            btn.setActive(key == self.selected_preset)
+
+        volume_card = GlassPanel(radius=18)
+        volume_lay = QVBoxLayout(volume_card)
+        volume_lay.setContentsMargins(12, 8, 12, 10)
+        volume_lay.setSpacing(6)
+        volume_value = definition.get("volume")
+        try:
+            volume_pct = int(clamp(round(float(volume_value)), 0, 100)) if volume_value is not None else 40
+        except Exception:
+            volume_pct = 40
+        volume_title = QLabel("Volume")
+        volume_title.setAlignment(Qt.AlignCenter)
+        volume_title.setFont(font(10, QFont.Black))
+        self.scene_volume_label = QLabel(f"{volume_pct}%")
+        self.scene_volume_label.setAlignment(Qt.AlignCenter)
+        self.scene_volume_label.setFont(font(11, QFont.Black))
+        self.scene_volume_label.setStyleSheet("color:#49e6ff;")
+        vslider = QSlider(Qt.Horizontal)
+        vslider.setRange(0, 100)
+        vslider.setValue(volume_pct)
+        vslider.setMinimumWidth(145)
+        vslider.valueChanged.connect(lambda value: (self.scene_volume_label.setText(f"{int(value)}%"), setattr(self, "scene_dirty", True)))
+        volume_lay.addWidget(volume_title)
+        volume_lay.addWidget(self.scene_volume_label)
+        volume_lay.addWidget(vslider)
+        self.scene_volume_slider = vslider
+        self.scene_editor_lay.addWidget(volume_card, 2)
+
+        numbers = definition.get("numbers") if isinstance(definition.get("numbers"), dict) else {}
+        for key, title in AUDIO_NUMBER_CONTROL_ORDER:
+            if not self.checks.get(key, QCheckBox()).isChecked():
+                continue
+            actual = self._target_to_actual(key, numbers.get(key))
+            card = GlassPanel(radius=18)
+            lay = QVBoxLayout(card)
+            lay.setContentsMargins(12, 8, 12, 10)
+            lay.setSpacing(5)
+            title_label = QLabel(title)
+            title_label.setAlignment(Qt.AlignCenter)
+            title_label.setFont(font(9 if key == "music_surround" else 10, QFont.Black))
+            value_label = QLabel(self._number_text(actual))
+            value_label.setAlignment(Qt.AlignCenter)
+            value_label.setFont(font(11, QFont.Black))
+            value_label.setStyleSheet("color:#49e6ff;")
+            slider = QSlider(Qt.Horizontal)
+            slider.setRange(0, 100)
+            slider.setValue(self._actual_to_slider(key, actual))
+            slider.setMinimumWidth(118)
+            slider.valueChanged.connect(lambda value, k=key, lbl=value_label: (lbl.setText(self._number_text(self._slider_to_actual(k, value))), setattr(self, "scene_dirty", True)))
+            lay.addWidget(title_label)
+            lay.addWidget(value_label)
+            lay.addWidget(slider)
+            self.scene_number_sliders[key] = slider
+            self.scene_editor_lay.addWidget(card, 2)
+
+        switches = definition.get("switches") if isinstance(definition.get("switches"), dict) else {}
+        switch_card = GlassPanel(radius=18)
+        switch_lay = QVBoxLayout(switch_card)
+        switch_lay.setContentsMargins(12, 8, 12, 10)
+        switch_lay.setSpacing(4)
+        switch_title = QLabel("Scene Toggles")
+        switch_title.setFont(font(10, QFont.Black))
+        switch_lay.addWidget(switch_title)
+        for key, title in AUDIO_SWITCH_CONTROL_ORDER:
+            if not self.checks.get(key, QCheckBox()).isChecked():
+                continue
+            cb = QCheckBox(title)
+            cb.setFont(font(10, QFont.Black))
+            cb.setChecked(str(switches.get(key, "off")).lower() == "on")
+            cb.toggled.connect(lambda _checked=False: setattr(self, "scene_dirty", True))
+            self.scene_switch_checks[key] = cb
+            switch_lay.addWidget(cb)
+        switch_lay.addStretch(1)
+        self.scene_editor_lay.addWidget(switch_card, 2)
+        self.scene_dirty = False
+
+    def store_scene_editor_values(self):
+        if self.scene_volume_slider is None or not getattr(self, "scene_dirty", False):
+            return
+        previous = copy.deepcopy(self.preset_edits.get(self.selected_preset) or audio_preset_definition(self.s.config, self.selected_preset))
+        previous["volume"] = int(self.scene_volume_slider.value())
+        previous["numbers"] = {key: self._slider_to_actual(key, slider.value()) for key, slider in self.scene_number_sliders.items()}
+        previous["switches"] = {key: ("on" if cb.isChecked() else "off") for key, cb in self.scene_switch_checks.items()}
+        self.preset_edits[self.selected_preset] = previous
+        self.scene_dirty = False
+
     def save(self):
         try:
+            self.store_scene_editor_values()
             audio = self.s.config.setdefault("audio", {})
             audio["enabledControls"] = {key: bool(cb.isChecked()) for key, cb in self.checks.items()}
             audio["autoNavigate"] = bool(self.auto_nav.isChecked())
+            audio["presets"] = copy.deepcopy(self.preset_edits)
             self.s.save_config()
             self.saved.emit()
             self.accept()
         except Exception as exc:
             QMessageBox.warning(self, "Save failed", str(exc))
-
 
 
 class SettingsDialog(QDialog):
