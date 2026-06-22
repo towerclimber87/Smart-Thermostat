@@ -1720,7 +1720,7 @@ def _config_portal_url(server_port: int | str | None = None) -> str:
         port = int(info.get("port") or server_port or 8080)
     except (TypeError, ValueError):
         port = 8080
-    return f"http://{ip}:{port}/config-transfer"
+    return f"http://{ip}:{port}"
 
 
 def _config_web_portal_activate() -> dict:
@@ -1760,7 +1760,7 @@ def _config_web_portal_stop_payload() -> dict:
         "ok": True,
         "active": False,
         "wasActive": was_active,
-        "message": "Config transfer portal stopped.",
+        "message": "Config backup portal stopped.",
     }
 
 
@@ -1770,7 +1770,7 @@ def _config_transfer_closed_html() -> str:
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Config Transfer Closed</title>
+  <title>Config Backup Closed</title>
   <style>
     :root { color-scheme: dark; font-family: Arial, Helvetica, sans-serif; }
     body { margin:0; min-height:100vh; display:grid; place-items:center; color:#f7fbff; background:linear-gradient(135deg,#071222,#101d35,#050913); }
@@ -1783,8 +1783,8 @@ def _config_transfer_closed_html() -> str:
 <body>
   <main class="card">
     <div class="eyebrow">Smart Thermostat</div>
-    <h1>Config transfer is closed</h1>
-    <p>Open Download Config or Upload Config again on the thermostat panel to temporarily enable this page.</p>
+    <h1>Config backup is closed</h1>
+    <p>Open Backup Config on the thermostat panel to temporarily enable this page.</p>
   </main>
 </body>
 </html>"""
@@ -1796,14 +1796,14 @@ def _config_web_portal_payload(server_port: int | str | None = None) -> dict:
     portal = _config_web_portal_activate()
     return {
         "ok": True,
-        "message": "Config transfer portal is ready.",
+        "message": "Config backup portal is ready.",
         "url": url,
         "ipAddress": info.get("ipAddress"),
         "port": info.get("port"),
         "address": info.get("address"),
         "thermostatName": info.get("thermostatName") or info.get("name"),
-        "note": "Open this address from a computer on the same network to download or upload the thermostat config. Keep the panel popup open while transferring; closing it stops the portal.",
-        "resourceMode": "temporary-existing-backend-route",
+        "note": "Open this address from a computer on the same network to download or upload the thermostat config. Keep the panel popup open while transferring; closing it stops the backup portal.",
+        "resourceMode": "temporary-root-backup-route",
         "active": portal.get("active"),
         "timeoutSeconds": portal.get("timeoutSeconds"),
     }
@@ -1825,7 +1825,7 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{name} Config Transfer</title>
+  <title>{name} Config Backup</title>
   <style>
     :root {{ color-scheme: dark; font-family: Arial, Helvetica, sans-serif; }}
     * {{ box-sizing: border-box; }}
@@ -1855,7 +1855,7 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
   <main class="wrap">
     <section class="hero">
       <div>
-        <div class="eyebrow">Smart Thermostat</div>
+        <div class="eyebrow">Smart Thermostat Backup</div>
         <h1>{name}</h1>
         <div class="muted">Download a backup into this browser or upload a saved backup to restore this panel. No USB drive is required.</div>
       </div>
@@ -1870,7 +1870,7 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
       <div class="card"><div class="label">Config Version</div><div class="value">{cfg_version}</div></div>
       <div class="card"><div class="label">Config Updated</div><div class="value">{updated}</div></div>
       <div class="card"><div class="label">Backup Name</div><div class="value">Device + date</div></div>
-      <div class="card"><div class="label">Server</div><div class="value">Ready</div></div>
+      <div class="card"><div class="label">Backup Portal</div><div class="value">Open</div></div>
     </section>
 
     <section class="actions">
@@ -5880,14 +5880,21 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
         if path == "/api/system/info":
             server_port = getattr(self.server, "server_address", (None, None))[1]
             return _json(self, 200, _system_info_payload(server_port))
+        if path == "/":
+            if not _config_web_portal_active(touch=True):
+                self.send_error(404, "Not found")
+                return
+            server_port = getattr(self.server, "server_address", (None, None))[1]
+            return _send_html(self, _config_transfer_html(server_port))
         if path in {"/config-transfer", "/config", "/config-backup"}:
             if not _config_web_portal_active(touch=True):
-                return _send_html(self, _config_transfer_closed_html())
+                self.send_error(404, "Not found")
+                return
             server_port = getattr(self.server, "server_address", (None, None))[1]
             return _send_html(self, _config_transfer_html(server_port))
         if path == "/api/system/config-export":
             if not _config_web_portal_active(touch=True):
-                self.send_error(403, "Config transfer portal is closed")
+                self.send_error(403, "Config backup portal is closed")
                 return
             server_port = getattr(self.server, "server_address", (None, None))[1]
             return _send_json_download(self, _config_backup_filename(), _config_export_payload(server_port))
@@ -5961,7 +5968,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
             if path == "/api/system/config-import":
                 if not _config_web_portal_active(touch=True):
-                    return _json(self, 403, {"ok": False, "error": "Config transfer portal is closed. Open Download Config or Upload Config again on the thermostat panel."})
+                    return _json(self, 403, {"ok": False, "error": "Config backup portal is closed. Open Backup Config again on the thermostat panel."})
                 result = _config_import_payload(payload)
                 return _json(self, 200 if result.get("ok") else 400, result)
 

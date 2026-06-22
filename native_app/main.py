@@ -7802,25 +7802,20 @@ class MainWindow(Background):
             button_grid.setVerticalSpacing(10)
             fetch = RoundButton("Fetch Update", active=True, min_h=46)
             reboot = RoundButton("Restart", kind="purple", min_h=46)
-            export = RoundButton("Download Config", active=False, min_h=46)
-            upload = RoundButton("Upload Config", active=False, min_h=46)
+            backup = RoundButton("Backup Config", active=False, min_h=46)
             close = RoundButton("Close", active=False, min_h=46)
 
-            # Two rows so labels are never cut off on the 10.1" panel.
-            for b in [fetch, reboot, export, upload, close]:
-                b.setMinimumWidth(176)
+            for b in [fetch, reboot, backup, close]:
+                b.setMinimumWidth(156)
             button_grid.addWidget(fetch, 0, 0)
             button_grid.addWidget(reboot, 0, 1)
-            button_grid.addWidget(close, 0, 2)
-            button_grid.addWidget(export, 1, 0)
-            button_grid.addWidget(upload, 1, 1)
-            button_grid.setColumnStretch(2, 1)
+            button_grid.addWidget(backup, 0, 2)
+            button_grid.addWidget(close, 0, 3)
             root.addLayout(button_grid)
 
             fetch.clicked.connect(lambda: (dlg.accept(), self.do_fetch_update()))
             reboot.clicked.connect(lambda: (dlg.accept(), self.do_restart()))
-            export.clicked.connect(lambda: (dlg.accept(), self.export_config()))
-            upload.clicked.connect(lambda: (dlg.accept(), self.import_config()))
+            backup.clicked.connect(lambda: (dlg.accept(), self.backup_config()))
             close.clicked.connect(dlg.accept)
             dlg.exec_()
         except Exception as exc:
@@ -7844,29 +7839,25 @@ class MainWindow(Background):
         except Exception as exc:
             self.toast.show_message(f"Restart failed: {exc}")
 
-    def show_config_portal(self, mode: str = ""):
+    def show_config_portal(self, mode: str = "backup"):
         try:
             data = self.s.api.post("/api/system/config-web-portal", {})
             url = str(data.get("url") or "").strip()
             if not url:
-                raise RuntimeError(data.get("error") or "The config portal address was not returned.")
+                raise RuntimeError(data.get("error") or "The backup portal address was not returned.")
             self.show_config_portal_dialog(data, mode=mode)
         except Exception as exc:
-            self.toast.show_message(f"Config web portal failed: {exc}", 8000)
+            self.toast.show_message(f"Backup portal failed: {exc}", 8000)
 
     def show_config_portal_dialog(self, data: dict, mode: str = ""):
         url = str(data.get("url") or "").strip()
         address = str(data.get("address") or "").strip()
         name = str(data.get("thermostatName") or "Smart Thermostat").strip() or "Smart Thermostat"
-        action_text = "download or upload"
-        if mode == "download":
-            action_text = "download a config backup"
-        elif mode == "upload":
-            action_text = "upload a config backup"
+        action_text = "download or upload a config backup"
 
         dlg = QDialog(self)
         dlg.setModal(True)
-        dlg.setWindowTitle("Config Web Portal")
+        dlg.setWindowTitle("Backup Config")
         dlg.setFixedSize(720, 410)
         dlg.setStyleSheet("""
             QDialog {
@@ -7887,13 +7878,13 @@ class MainWindow(Background):
         root.setContentsMargins(26, 24, 26, 22)
         root.setSpacing(14)
 
-        title = QLabel("<span style='color:#46e8ff; letter-spacing:4px; font-size:11px; font-weight:900'>CONFIG SERVER READY</span><br><span style='font-size:30px; font-weight:1000; color:#ffffff'>Web Config Transfer</span>")
+        title = QLabel("<span style='color:#46e8ff; letter-spacing:4px; font-size:11px; font-weight:900'>BACKUP PORTAL READY</span><br><span style='font-size:30px; font-weight:1000; color:#ffffff'>Backup Config</span>")
         title.setTextFormat(Qt.RichText)
         root.addWidget(title)
 
         help_text = QLabel(
             f"Open this address from a computer on the same network to {action_text}. "
-            "Keep this popup open while transferring; closing it shuts off the config transfer portal."
+            "Keep this popup open while transferring; closing it shuts off the backup portal."
         )
         help_text.setWordWrap(True)
         help_text.setFont(font(12, QFont.Bold))
@@ -7917,7 +7908,7 @@ class MainWindow(Background):
         url_label.setStyleSheet("color:#ffffff; padding:10px 0;")
         panel_layout.addWidget(url_label)
 
-        note = QLabel("The transfer page is only enabled while this popup is open. Closing this popup stops the transfer portal so it is not left available on the network.")
+        note = QLabel("The backup page is only enabled while this popup is open. Closing this popup stops the backup portal so it is not left available on the network.")
         note.setWordWrap(True)
         note.setFont(font(10, QFont.Bold))
         note.setStyleSheet("color:#9fb0c8;")
@@ -7927,7 +7918,7 @@ class MainWindow(Background):
         buttons = QHBoxLayout()
         buttons.setSpacing(10)
         copy_btn = RoundButton("Copy Address", active=True, min_h=48)
-        close_btn = RoundButton("Close & Stop Portal", active=False, min_h=48)
+        close_btn = RoundButton("Close & Stop Backup", active=False, min_h=48)
         buttons.addStretch(1)
         buttons.addWidget(copy_btn)
         buttons.addWidget(close_btn)
@@ -7936,7 +7927,7 @@ class MainWindow(Background):
         def copy_url():
             try:
                 QApplication.clipboard().setText(url)
-                self.toast.show_message("Config portal address copied", 3000)
+                self.toast.show_message("Backup portal address copied", 3000)
             except Exception:
                 pass
 
@@ -7953,11 +7944,14 @@ class MainWindow(Background):
         except Exception:
             pass
 
+    def backup_config(self):
+        self.show_config_portal("backup")
+
     def export_config(self):
-        self.show_config_portal("download")
+        self.backup_config()
 
     def import_config(self):
-        self.show_config_portal("upload")
+        self.backup_config()
 
     def force_panel_geometry(self):
         """Force the native kiosk window to cover the whole X screen.
