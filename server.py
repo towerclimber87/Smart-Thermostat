@@ -30,6 +30,8 @@ PUBLIC = ROOT / "public"
 DATA_DIR = ROOT / "data"
 VERSION_FILE = ROOT / "VERSION"
 THERMOSTAT_STATE_FILE = DATA_DIR / "thermostat-state.json"
+THERMOSTAT_SCHEDULES_FILE = DATA_DIR / "thermostat-schedules.json"
+THERMOSTAT_SCHEDULES_BACKUP_FILE = DATA_DIR / "thermostat-schedules.backup.json"
 PANEL_CONFIG_FILE = DATA_DIR / "panel-config.json"
 HVAC_HISTORY_FILE = DATA_DIR / "hvac-history.json"
 APP_STARTED_AT = time.time()
@@ -287,7 +289,7 @@ def _migrate_panel_config(config: object) -> dict | None:
 def _snapshot_settings_files() -> dict[str, str | None]:
     """Capture settings files before a git reset/update can replace them."""
     snapshots: dict[str, str | None] = {}
-    for key, path in (("thermostat", THERMOSTAT_STATE_FILE), ("panel", PANEL_CONFIG_FILE)):
+    for key, path in (("thermostat", THERMOSTAT_STATE_FILE), ("schedules", THERMOSTAT_SCHEDULES_FILE), ("schedulesBackup", THERMOSTAT_SCHEDULES_BACKUP_FILE), ("panel", PANEL_CONFIG_FILE)):
         try:
             snapshots[key] = path.read_text(encoding="utf-8") if path.exists() else None
         except OSError:
@@ -298,7 +300,7 @@ def _snapshot_settings_files() -> dict[str, str | None]:
 def _restore_settings_files(snapshots: dict[str, str | None]) -> None:
     """Restore settings captured before the updater reset the code folder."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    for key, path in (("thermostat", THERMOSTAT_STATE_FILE), ("panel", PANEL_CONFIG_FILE)):
+    for key, path in (("thermostat", THERMOSTAT_STATE_FILE), ("schedules", THERMOSTAT_SCHEDULES_FILE), ("schedulesBackup", THERMOSTAT_SCHEDULES_BACKUP_FILE), ("panel", PANEL_CONFIG_FILE)):
         content = snapshots.get(key)
         if content is None:
             continue
@@ -1033,6 +1035,133 @@ def _atomic_write_json(path: Path, record: dict) -> None:
     temp_path.replace(path)
 
 
+def _schedule_entries_from_object(value: object) -> list[dict] | None:
+    """Extract an explicit schedule list from known old/new storage shapes.
+
+    Returns None when no schedule field is present. Returns [] when a schedule
+    field is explicitly present but empty, which lets an intentional clear stay
+    cleared instead of being restored from older backups.
+    """
+    candidates: list[object] = []
+
+    def add_candidates(obj: object) -> None:
+        if not isinstance(obj, dict):
+            return
+        candidates.append(obj.get("schedules"))
+        for key in ("schedule", "scheduleConfig", "thermostatSchedule", "thermostatSchedules"):
+            candidates.append(obj.get(key))
+
+    add_candidates(value)
+    if isinstance(value, dict):
+        thermostat = value.get("thermostat")
+        add_candidates(thermostat)
+        config = value.get("config")
+        add_candidates(config)
+        if isinstance(config, dict):
+            add_candidates(config.get("thermostat"))
+
+    for candidate in candidates:
+        if isinstance(candidate, list):
+            return _normalize_schedule_entries(candidate)
+        if isinstance(candidate, dict):
+            inner = candidate.get("schedules") or candidate.get("items") or candidate.get("entries")
+            if isinstance(inner, list):
+                return _normalize_schedule_entries(inner)
+    return None
+
+
+def _read_schedule_entries_from_file(path: Path) -> list[dict] | None:
+    if not path.exists():
+        return None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return _schedule_entries_from_object(raw)
+
+
+def _schedule_backup_roots() -> list[Path]:
+    roots: list[Path] = []
+    for candidate in (Path.home(), Path("/home/david"), Path("/home/pi")):
+        try:
+            if candidate.exists():
+                root = candidate / "thermostat-pi-data-backups"
+                if root not in roots:
+                    roots.append(root)
+        except Exception:
+            continue
+    return roots
+
+
+def _schedules_from_recent_update_backups() -> list[dict]:
+    backup_dirs: list[Path] = []
+    for root in _schedule_backup_roots():
+        try:
+            backup_dirs.extend([p for p in root.iterdir() if p.is_dir()])
+        except Exception:
+            continue
+    backup_dirs.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
+    for folder in backup_dirs[:30]:
+        for filename in (
+            "thermostat-schedules.json",
+            "thermostat-schedules.backup.json",
+            "thermostat-state.json",
+            "panel-config.json",
+        ):
+            schedules = _read_schedule_entries_from_file(folder / filename)
+            if schedules:
+                return schedules
+    return []
+
+
+def _fallback_saved_schedules() -> list[dict]:
+    # A dedicated schedule file is authoritative when present. If it explicitly
+    # contains an empty list, the user intentionally deleted all schedules.
+    for path in (THERMOSTAT_SCHEDULES_FILE, THERMOSTAT_SCHEDULES_BACKUP_FILE):
+        schedules = _read_schedule_entries_from_file(path)
+        if schedules is not None:
+            return schedules
+
+    legacy_schedules = _legacy_panel_config_schedules()
+    if legacy_schedules:
+        return legacy_schedules
+
+    return _schedules_from_recent_update_backups()
+
+
+def _write_schedule_backup(schedules: object) -> None:
+    safe = _normalize_schedule_entries(schedules)
+    record = {"version": 1, "updatedAt": int(time.time()), "schedules": safe}
+    _atomic_write_json(THERMOSTAT_SCHEDULES_FILE, record)
+    # Keep the last known non-empty copy too. If a full code copy accidentally
+    # replaces thermostat-state.json with the repo default, this gives the next
+    # boot a small independent recovery point.
+    if safe:
+        _atomic_write_json(THERMOSTAT_SCHEDULES_BACKUP_FILE, record)
+
+
+def _mirror_schedules_to_panel_config(schedules: object) -> None:
+    """Mirror schedules into panel config for migration/update safety.
+
+    Schedule edits are low-frequency user actions, so this does not add steady
+    SD-card wear. It gives older and newer builds a second persistent location
+    to recover from if thermostat-state.json is replaced during an update.
+    """
+    safe = _normalize_schedule_entries(schedules)
+    try:
+        existing = _read_panel_config_record().get("config")
+        config = _deepcopy_json(existing) if isinstance(existing, dict) else {}
+        thermostat = config.setdefault("thermostat", {})
+        if not isinstance(thermostat, dict):
+            thermostat = {}
+            config["thermostat"] = thermostat
+        thermostat["schedules"] = safe
+        # Also keep the old top-level shape populated for legacy fallbacks.
+        config["schedules"] = safe
+        _write_panel_config_record(config)
+    except Exception:
+        pass
+
 
 def _legacy_panel_config_schedules() -> list[dict]:
     """Return schedules saved in old panel config locations, if any."""
@@ -1067,6 +1196,9 @@ def _legacy_panel_config_schedules() -> list[dict]:
 def _read_thermostat_record_from_disk() -> dict:
     if not THERMOSTAT_STATE_FILE.exists():
         thermostat = _merge_thermostat_state()
+        fallback_schedules = _fallback_saved_schedules()
+        if fallback_schedules:
+            thermostat["schedules"] = fallback_schedules
         return {"version": 1, "updatedAt": int(time.time()), "thermostat": thermostat}
     try:
         raw = json.loads(THERMOSTAT_STATE_FILE.read_text(encoding="utf-8"))
@@ -1074,9 +1206,13 @@ def _read_thermostat_record_from_disk() -> dict:
         raw = {}
     thermostat = _merge_thermostat_state(raw.get("thermostat", raw if isinstance(raw, dict) else {}))
     if not thermostat.get("schedules"):
-        legacy_schedules = _legacy_panel_config_schedules()
-        if legacy_schedules:
-            thermostat["schedules"] = legacy_schedules
+        fallback_schedules = _fallback_saved_schedules()
+        if fallback_schedules:
+            thermostat["schedules"] = fallback_schedules
+            try:
+                _write_schedule_backup(fallback_schedules)
+            except Exception:
+                pass
     return {
         "version": int(raw.get("version", 1)) if isinstance(raw, dict) else 1,
         "updatedAt": int(raw.get("updatedAt", 0) or 0) if isinstance(raw, dict) else 0,
@@ -2822,6 +2958,7 @@ def _handle_thermostat_update(payload: dict) -> dict:
     incoming = payload.get("thermostat", payload) if isinstance(payload, dict) else {}
     if not isinstance(incoming, dict):
         incoming = {}
+    incoming_has_schedules = "schedules" in incoming
 
     pause_incoming = incoming.get("pauseFunction") if isinstance(incoming.get("pauseFunction"), dict) else {}
     if pause_incoming and str(pause_incoming.get("action") or "").strip().lower() == "snooze":
@@ -2891,6 +3028,10 @@ def _handle_thermostat_update(payload: dict) -> dict:
 
     merged = _apply_comfort_auto_switch_logic(merged, notify=True)
     _write_thermostat_record(merged)
+    if incoming_has_schedules:
+        saved_schedules = _normalize_schedule_entries(incoming.get("schedules"))
+        _write_schedule_backup(saved_schedules)
+        _mirror_schedules_to_panel_config(saved_schedules)
 
     # Keep the control endpoint fast. The native UI has already made the local
     # setpoint change visible, and it only needs confirmation that the setting
@@ -4217,7 +4358,7 @@ PY_CLEANUP
 
 backup_data_files() {{
   mkdir -p "$BACKUP_ROOT/$ts"
-  for file in panel-config.json thermostat-state.json hvac-history.json; do
+  for file in panel-config.json thermostat-state.json thermostat-schedules.json thermostat-schedules.backup.json hvac-history.json; do
     if [[ -f "data/$file" ]]; then
       cp -av "data/$file" "$BACKUP_ROOT/$ts/$file"
     fi

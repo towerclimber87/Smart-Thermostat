@@ -70,7 +70,7 @@ ts="$(date +%F-%H%M%S)"
 backup_dir="$BACKUP_ROOT/$ts"
 mkdir -p "$backup_dir"
 cleanup_legacy_usb_mounts
-for file in panel-config.json thermostat-state.json hvac-history.json; do
+for file in panel-config.json thermostat-state.json thermostat-schedules.json thermostat-schedules.backup.json hvac-history.json; do
   if [[ -f "data/$file" ]]; then
     cp -av "data/$file" "$backup_dir/$file"
   fi
