@@ -5551,7 +5551,10 @@ def _call_media_service(ha_url: str, token: str, entity_id: str, action: str, va
     if action == "volume":
         if value is None:
             raise ValueError("Missing volume value")
-        payload["volume_level"] = max(0, min(100, float(value))) / 100
+        raw_volume = float(value)
+        # Accept either the native panel's percent values (0-100) or older
+        # fractional values (0.0-1.0) so volume actions stay backward compatible.
+        payload["volume_level"] = max(0.0, min(1.0, raw_volume if raw_volume <= 1 else raw_volume / 100.0))
 
     if action == "source":
         source = str(value or "").strip()

@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 from datetime import datetime
+from urllib import request as urlrequest
 from pathlib import Path
 from typing import Any, Callable
 
@@ -17,7 +18,7 @@ ROOT_DIR = APP_DIR.parent
 sys.path.insert(0, str(APP_DIR))
 
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QCursor, QFont, QIcon, QImage, QPainter, QPen, QBrush, QLinearGradient, QPainterPath, QRadialGradient
+from PyQt5.QtGui import QColor, QCursor, QFont, QIcon, QImage, QPainter, QPen, QBrush, QLinearGradient, QPainterPath, QRadialGradient, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
     QAbstractButton,
@@ -199,6 +200,65 @@ class HoldLabel(QLabel):
             event.accept()
             return
         super().mouseReleaseEvent(event)
+
+
+class CoverArtLabel(QLabel):
+    """Rounded album-art card with a clean fallback when no artwork is available."""
+
+    def __init__(self, size: int = 250, parent=None):
+        super().__init__(parent)
+        self._card_size = int(size)
+        self.setFixedSize(self._card_size, self._card_size)
+        self.setAlignment(Qt.AlignCenter)
+        self.setFont(font(max(28, self._card_size // 4), QFont.Black))
+        self.show_fallback("NP")
+
+    def show_fallback(self, text: str = "NP"):
+        self.clear()
+        self.setText(text or "NP")
+        self.setStyleSheet(f"""
+            QLabel {{
+                background:qlineargradient(x1:0,y1:0,x2:1,y2:1,
+                    stop:0 rgba(73,229,255,0.96),
+                    stop:1 rgba(109,77,208,0.96));
+                color:rgba(8,26,45,0.92);
+                border:1px solid rgba(255,255,255,0.24);
+                border-radius:{max(24, self._card_size // 8)}px;
+            }}
+        """)
+
+    def set_cover_bytes(self, payload: bytes) -> bool:
+        image = QImage()
+        if not payload or not image.loadFromData(payload):
+            return False
+        self.set_cover_pixmap(QPixmap.fromImage(image))
+        return True
+
+    def set_cover_pixmap(self, pixmap: QPixmap):
+        if pixmap.isNull():
+            self.show_fallback("NP")
+            return
+        size = self.size()
+        scaled = pixmap.scaled(size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+        x = max(0, (scaled.width() - size.width()) // 2)
+        y = max(0, (scaled.height() - size.height()) // 2)
+        cropped = scaled.copy(x, y, size.width(), size.height())
+        rounded = QPixmap(size)
+        rounded.fill(Qt.transparent)
+        painter = QPainter(rounded)
+        painter.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
+        radius = max(24, self._card_size // 8)
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(0, 0, size.width(), size.height()), radius, radius)
+        painter.setClipPath(path)
+        painter.drawPixmap(0, 0, cropped)
+        painter.setClipping(False)
+        painter.setPen(QPen(QColor(255, 255, 255, 64), 2))
+        painter.drawRoundedRect(QRectF(1, 1, size.width() - 2, size.height() - 2), radius, radius)
+        painter.end()
+        self.setText("")
+        self.setStyleSheet("background:transparent; border:0;")
+        self.setPixmap(rounded)
 
 
 class HoldRoundButton(RoundButton):
@@ -3487,8 +3547,11 @@ class AudioScreen(Page):
     def __init__(self, app_state: AppState, parent=None):
         super().__init__(app_state, parent)
         self.player_state: dict = {}
+        self._cover_url = ""
+        self._cover_loading_url = ""
+        self._cover_cache: dict[str, bytes] = {}
         root = QHBoxLayout(self)
-        root.setContentsMargins(36, 8, 36, 24)
+        root.setContentsMargins(28, 6, 28, 18)
         root.setSpacing(18)
         self.left = GlassPanel(radius=28, strong=True)
         self.right = GlassPanel(radius=28, strong=True)
@@ -3499,127 +3562,202 @@ class AudioScreen(Page):
 
     def build_left(self):
         lay = QVBoxLayout(self.left)
-        lay.setContentsMargins(26, 20, 26, 24)
+        lay.setContentsMargins(24, 18, 24, 20)
+        lay.setSpacing(14)
+
         top = QHBoxLayout()
-        for text, icon, kind in [("Movie Mode", "⚙", "normal"), ("Show Mode", "♙", "normal"), ("40% Volume", "♬", "normal"), ("Max", "♬", "danger")]:
-            b = RoundButton(f"{icon}\n{text}", kind=kind, min_h=76)
-            b.setMinimumWidth(118)
+        top.setSpacing(10)
+        for text, icon, kind in [
+            ("Movie", "🎬", "normal"),
+            ("Show", "▵", "normal"),
+            ("40%", "40", "normal"),
+            ("Max", "MAX", "danger"),
+        ]:
+            b = RoundButton(f"{icon}\n{text}", kind=kind, min_h=74)
+            b.setMinimumWidth(122)
+            b.setFont(font(11, QFont.Black))
             top.addWidget(b)
-            if "40" in text:
-                b.clicked.connect(lambda: self.media_action("volume", 0.40))
+            if text == "40%":
+                b.clicked.connect(lambda: self.media_action("volume", 40))
             elif text == "Max":
-                b.clicked.connect(lambda: self.media_action("volume", 1.0))
+                b.clicked.connect(lambda: self.media_action("volume", 100))
             else:
-                b.clicked.connect(lambda checked=False, t=text: self.requestToast.emit(f"{t} sent"))
+                b.clicked.connect(lambda checked=False, t=text: self.requestToast.emit(f"{t} preset sent"))
         top.addStretch(1)
         lay.addLayout(top)
-        lay.addStretch(1)
+
         now = QLabel("NOW PLAYING")
         now.setAlignment(Qt.AlignCenter)
-        now.setFont(font(9, QFont.Black, 26))
-        now.setStyleSheet("color:#46e8ff;")
+        now.setFont(font(9, QFont.Black, 28))
+        now.setStyleSheet("color:#46e8ff; letter-spacing:5px;")
         lay.addWidget(now)
-        mid = QHBoxLayout()
-        self.art = QLabel("NP")
-        self.art.setAlignment(Qt.AlignCenter)
-        self.art.setFont(font(52, QFont.Black))
-        self.art.setStyleSheet("background:qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #49e5ff, stop:1 #6d4dd0); color:rgba(15,35,57,0.92); border-radius:34px;")
-        self.art.setFixedSize(198, 198)
-        self.track = QLabel("Nothing\nPlaying")
-        self.track.setFont(font(38, QFont.Black))
-        self.track.setStyleSheet("color:#f6f8ff;")
-        self.source_label = QLabel("Livingroom Sonos")
-        self.source_label.setFont(font(15, QFont.Black))
-        self.source_label.setStyleSheet("color:#d9e0ee;")
+
+        self.now_card = GlassPanel(radius=30)
+        now_lay = QHBoxLayout(self.now_card)
+        now_lay.setContentsMargins(26, 22, 26, 22)
+        now_lay.setSpacing(26)
+        self.art = CoverArtLabel(250)
+        now_lay.addWidget(self.art, 0, Qt.AlignVCenter)
+
         text_col = QVBoxLayout()
+        text_col.setSpacing(8)
+        self.track = QLabel("Nothing\nPlaying")
+        self.track.setWordWrap(True)
+        self.track.setFont(font(38, QFont.Black))
+        self.track.setStyleSheet("color:#f6f8ff; line-height:0.96;")
+        self.artist_label = QLabel("Livingroom Sonos")
+        self.artist_label.setWordWrap(True)
+        self.artist_label.setFont(font(18, QFont.Black))
+        self.artist_label.setStyleSheet("color:#d9e0ee;")
+        self.album_label = QLabel("")
+        self.album_label.setWordWrap(True)
+        self.album_label.setFont(font(12, QFont.Black))
+        self.album_label.setStyleSheet("color:rgba(219,227,244,0.68);")
+        self.source_label = QLabel("Livingroom Sonos")
+        self.source_label.setFont(font(11, QFont.Black))
+        self.source_label.setStyleSheet("color:rgba(70,232,255,0.92); letter-spacing:2px;")
+        text_col.addStretch(1)
         text_col.addWidget(self.track)
+        text_col.addWidget(self.artist_label)
+        text_col.addWidget(self.album_label)
+        text_col.addSpacing(4)
         text_col.addWidget(self.source_label)
         text_col.addStretch(1)
-        mid.addWidget(self.art)
-        mid.addSpacing(24)
-        mid.addLayout(text_col, 1)
-        lay.addLayout(mid)
-        lay.addStretch(1)
+        now_lay.addLayout(text_col, 1)
+        lay.addWidget(self.now_card, 1)
+
         self.progress = QFrame()
         self.progress.setFixedHeight(10)
-        self.progress.setStyleSheet("background:rgba(160,170,190,0.20); border-radius:5px;")
+        self.progress.setStyleSheet("background:rgba(160,170,190,0.22); border-radius:5px;")
         lay.addWidget(self.progress)
-        lay.addStretch(1)
 
     def build_right(self):
         lay = QVBoxLayout(self.right)
-        lay.setContentsMargins(22, 20, 22, 22)
+        lay.setContentsMargins(22, 18, 22, 20)
+        lay.setSpacing(14)
+
         header = QHBoxLayout()
+        header.setSpacing(10)
+        title_col = QVBoxLayout()
+        title_col.setSpacing(4)
         self.room_title = QLabel("Livingroom Sonos")
         self.room_title.setFont(font(24, QFont.Black))
         self.room_title.setStyleSheet("color:#f6f8ff;")
         self.state_pill = QLabel("Idle")
+        self.state_pill.setAlignment(Qt.AlignCenter)
         self.state_pill.setFont(font(9, QFont.Black))
-        self.state_pill.setStyleSheet("background:rgba(70,80,96,0.65); color:#dbe3f4; border:1px solid rgba(255,255,255,0.16); border-radius:14px; padding:7px 11px;")
+        self.state_pill.setStyleSheet("background:rgba(70,80,96,0.65); color:#dbe3f4; border:1px solid rgba(255,255,255,0.16); border-radius:13px; padding:6px 11px;")
+        title_row = QHBoxLayout()
+        title_row.setSpacing(10)
+        title_row.addWidget(self.room_title)
+        title_row.addWidget(self.state_pill)
+        title_row.addStretch(1)
+        title_col.addLayout(title_row)
+        header.addLayout(title_col, 1)
+
+        source_col = QVBoxLayout()
+        source_col.setSpacing(4)
+        source_text = QLabel("Source")
+        source_text.setFont(font(8, QFont.Black, 18))
+        source_text.setStyleSheet("color:rgba(219,227,244,0.78); letter-spacing:2px;")
         self.source = QComboBox()
-        self.source.setMinimumWidth(150)
-        self.source.setStyleSheet("QComboBox{background:rgba(22,36,52,0.85); color:#f6f8ff; border:1px solid rgba(71,224,255,0.18); border-radius:16px; padding:10px; font-weight:900;} QAbstractItemView{background:#182235;color:#fff;}")
-        header.addWidget(self.room_title)
-        header.addWidget(self.state_pill)
-        header.addStretch(1)
-        header.addWidget(self.source)
+        self.source.setMinimumWidth(145)
+        self.source.setMinimumHeight(48)
+        self.source.setStyleSheet("QComboBox{background:rgba(22,36,52,0.88); color:#f6f8ff; border:1px solid rgba(71,224,255,0.20); border-radius:16px; padding:8px 10px; font-weight:900;} QAbstractItemView{background:#182235;color:#fff; selection-background-color:#45e5ff; selection-color:#071420;}")
+        self.source.activated[str].connect(lambda text: self.media_action("source", text))
+        source_col.addWidget(source_text)
+        source_col.addWidget(self.source)
+        header.addLayout(source_col)
         lay.addLayout(header)
+
         controls = QHBoxLayout()
-        controls.setSpacing(12)
-        self.sub = HoldRoundButton("Sub", active=False, min_h=56)
-        self.prev = IconCircle("◀◀", "previous", 58)
-        self.play = IconCircle("▶", "play_pause", 74, active=True)
-        self.next = IconCircle("▶▶", "next", 58)
-        self.sur = HoldRoundButton("Surround", active=False, min_h=56)
+        controls.setSpacing(14)
+        self.sub = HoldRoundButton("☊\nSub", active=False, min_h=66)
+        self.sub.setMinimumWidth(98)
+        transport = GlassPanel(radius=44)
+        transport_lay = QHBoxLayout(transport)
+        transport_lay.setContentsMargins(10, 8, 10, 8)
+        transport_lay.setSpacing(12)
+        self.prev = IconCircle("◀◀", "previous", 62)
+        self.play = IconCircle("▶", "play_pause", 82, active=True)
+        self.next = IconCircle("▶▶", "next", 62)
+        transport_lay.addWidget(self.prev)
+        transport_lay.addWidget(self.play)
+        transport_lay.addWidget(self.next)
+        self.sur = HoldRoundButton("⌬\nSurround", active=False, min_h=66)
+        self.sur.setMinimumWidth(118)
         self.switch_buttons = {"subwoofer": self.sub, "surround": self.sur}
-        for w in [self.sub, self.prev, self.play, self.next, self.sur]:
-            controls.addWidget(w)
+        controls.addWidget(self.sub)
+        controls.addWidget(transport, 1)
+        controls.addWidget(self.sur)
         lay.addLayout(controls)
+
         vol_panel = GlassPanel(radius=22)
         vol_lay = QVBoxLayout(vol_panel)
-        vol_lay.setContentsMargins(16,14,16,14)
-        self.vol_label = QLabel("Volume                                                              --%")
-        self.vol_label.setFont(font(12, QFont.Black))
-        self.vol_label.setStyleSheet("color:#dbe3f4;")
+        vol_lay.setContentsMargins(16, 12, 16, 12)
+        vol_lay.setSpacing(10)
+        vol_row = QHBoxLayout()
+        vol_name = QLabel("Volume")
+        vol_name.setFont(font(12, QFont.Black))
+        vol_name.setStyleSheet("color:#dbe3f4;")
+        self.vol_value = QLabel("--%")
+        self.vol_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.vol_value.setFont(font(12, QFont.Black))
+        self.vol_value.setStyleSheet("color:#dbe3f4;")
+        vol_row.addWidget(vol_name)
+        vol_row.addStretch(1)
+        vol_row.addWidget(self.vol_value)
         self.volume = QSlider(Qt.Horizontal)
         self.volume.setRange(0, 100)
+        self.volume.setMinimumHeight(42)
         self.volume.setStyleSheet(SLIDER_H)
-        vol_lay.addWidget(self.vol_label)
-        vol_lay.addWidget(self.volume)
-        self.projector = HoldRoundButton("Proj", min_h=54)
-        self.projector.setMaximumWidth(96)
+        self.projector = HoldRoundButton("▭\nProjector", min_h=58)
+        self.projector.setMinimumWidth(118)
         self.switch_buttons["projector"] = self.projector
+        vol_lay.addLayout(vol_row)
+        vol_lay.addWidget(self.volume)
         vol_lay.addWidget(self.projector, 0, Qt.AlignCenter)
         lay.addWidget(vol_panel)
+
         eq = QHBoxLayout()
+        eq.setSpacing(10)
         self.eq_sliders = {}
         for name in ["Gain", "Bass", "Treble"]:
             key = name.lower()
             card = HoldCard(hold_ms=700)
-            card.setMinimumHeight(165)
+            card.setMinimumHeight(260)
+            card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             card.setToolTip(f"Hold to assign {name}")
             v = QVBoxLayout(card)
+            v.setContentsMargins(14, 12, 14, 14)
+            v.setSpacing(8)
             label = HoldLabel(f"{name}\n--")
             label.setAlignment(Qt.AlignCenter)
             label.setFont(font(10, QFont.Black))
             label.setStyleSheet("color:#dbe3f4;")
             sl = QSlider(Qt.Vertical)
-            sl.setRange(0, 100); sl.setValue(50); sl.setStyleSheet("""
-                QSlider::groove:vertical { width:10px; border-radius:5px; background:rgba(160,170,190,0.22); }
-                QSlider::add-page:vertical { width:10px; border-radius:5px; background:#49e6ff; }
-                QSlider::handle:vertical { height:32px; width:32px; margin:0 -11px; border-radius:16px; background:#f8f5ff; }
+            sl.setRange(0, 100)
+            sl.setValue(50)
+            sl.setMinimumHeight(210)
+            sl.setStyleSheet("""
+                QSlider::groove:vertical { width:12px; border-radius:6px; background:rgba(160,170,190,0.23); }
+                QSlider::add-page:vertical { width:12px; border-radius:6px; background:#49e6ff; }
+                QSlider::sub-page:vertical { width:12px; border-radius:6px; background:rgba(110,92,180,0.42); }
+                QSlider::handle:vertical { height:36px; width:36px; margin:0 -12px; border-radius:18px; background:#f8f5ff; border:1px solid rgba(255,255,255,0.42); }
             """)
-            v.addWidget(label); v.addWidget(sl, 1, Qt.AlignCenter)
+            v.addWidget(label)
+            v.addWidget(sl, 1, Qt.AlignHCenter)
             self.eq_sliders[key] = (sl, label)
             sl.sliderReleased.connect(lambda n=key, s=sl: self.set_number_control(n, s.value()))
             card.held.connect(lambda n=key: self.assign_audio_control(n))
             label.held.connect(lambda n=key: self.assign_audio_control(n))
             eq.addWidget(card)
-        lay.addLayout(eq)
+        lay.addLayout(eq, 1)
+
         self.prev.clicked.connect(lambda: self.media_action("previous"))
         self.play.clicked.connect(lambda: self.media_action("play_pause"))
         self.next.clicked.connect(lambda: self.media_action("next"))
-        self.volume.sliderReleased.connect(lambda: self.media_action("volume", self.volume.value()/100.0))
+        self.volume.sliderReleased.connect(lambda: self.media_action("volume", self.volume.value()))
         self.sub.clicked.connect(lambda: self.toggle_audio_switch("subwoofer"))
         self.sur.clicked.connect(lambda: self.toggle_audio_switch("surround"))
         self.projector.clicked.connect(lambda: self.toggle_audio_switch("projector"))
@@ -3640,7 +3778,9 @@ class AudioScreen(Page):
             if p.get("entityId") == mp:
                 title = p.get("name") or title
         self.room_title.setText(title)
-        self.source_label.setText(title)
+        self.source_label.setText(title.upper())
+        if not self.player_state:
+            self.artist_label.setText(title)
         self.apply_audio_control_state()
 
     def audio_controls(self) -> dict:
@@ -3724,34 +3864,40 @@ class AudioScreen(Page):
             on = state in {"on", "open", "true", "1"}
             button.setActive(on)
             if name == "subwoofer":
-                label = "Sub"
+                label = "☊\nSub"
             elif name == "surround":
-                label = "Surround"
+                label = "⌬\nSurround"
             else:
-                label = "Proj"
+                label = "▭\nProjector"
             suffix = "ON" if on else ("OFF" if assigned and state not in {"", "unknown", "unavailable"} else "Hold")
-            button.setText(f"{label}\n{suffix}")
+            button.setText(f"{label} {suffix}" if "\n" not in label else f"{label}\n{suffix}")
 
     def media_action(self, action: str, value=None):
         eid = self.player_id()
         if not eid:
             self.requestToast.emit("No media player selected")
             return
+        send_value = value
         if action == "volume" and value is not None:
             try:
-                pct = int(float(value) * 100)
+                raw = float(value)
+                pct = int(clamp(round(raw * 100 if raw <= 1 else raw), 0, 100))
+                send_value = pct
                 self.volume.blockSignals(True)
                 self.volume.setValue(pct)
                 self.volume.blockSignals(False)
-                self.vol_label.setText(f"Volume                                                              {pct}%")
+                self.vol_value.setText(f"{pct}%")
             except Exception:
                 pass
-        payload = self.s.ha_payload({"entityId": eid, "action": action, "value": value})
+        if action == "source" and not str(value or "").strip():
+            return
+        payload = self.s.ha_payload({"entityId": eid, "action": action, "value": send_value})
 
         def done(result):
             if isinstance(result, dict):
                 self.player_state = result.get("state") or self.player_state
                 self.apply_player_state()
+                QTimer.singleShot(700, self.poll)
 
         self.run_async(
             "audio-media",
@@ -3807,6 +3953,7 @@ class AudioScreen(Page):
                 updated.update(control)
                 controls[name] = updated
                 self.apply_audio_control_state()
+                QTimer.singleShot(600, self.poll)
 
         self.run_async(
             "audio-switch",
@@ -3815,19 +3962,125 @@ class AudioScreen(Page):
             lambda err, n=name: self.requestToast.emit(f"{n} failed: {err}"),
         )
 
+    def _compact_track_title(self, text: str) -> str:
+        clean = str(text or "").strip()
+        if not clean:
+            return "Nothing\nPlaying"
+        clean = clean.replace(" - ", "\n")
+        if len(clean) > 54:
+            clean = clean[:53].rstrip() + "…"
+        return clean
+
+    def _set_source_choices(self, st: dict):
+        current = str(st.get("source") or "")
+        choices = st.get("sourceList") or st.get("source_list") or []
+        if isinstance(choices, str):
+            choices = [choices] if choices.strip() else []
+        if current and current not in choices:
+            choices = [current] + list(choices)
+        self.source.blockSignals(True)
+        self.source.clear()
+        if choices:
+            self.source.addItems([str(x) for x in choices])
+            if current:
+                idx = self.source.findText(current)
+                if idx >= 0:
+                    self.source.setCurrentIndex(idx)
+        else:
+            self.source.addItem(current or "TV")
+        self.source.blockSignals(False)
+
+    def _fetch_cover_bytes(self, url: str) -> bytes:
+        if url in self._cover_cache:
+            return self._cover_cache[url]
+        req = urlrequest.Request(
+            url,
+            headers={
+                "User-Agent": "SmartThermostatPanel/0.1",
+                "Accept": "image/*,*/*;q=0.8",
+                "Connection": "close",
+            },
+        )
+        with urlrequest.urlopen(req, timeout=5) as resp:
+            payload = resp.read(6 * 1024 * 1024)
+        self._cover_cache[url] = payload
+        # Keep the cache tiny. HA artwork URLs usually change with the track.
+        if len(self._cover_cache) > 8:
+            for key in list(self._cover_cache.keys())[:-8]:
+                self._cover_cache.pop(key, None)
+        return payload
+
+    def update_cover_art(self, st: dict):
+        url = str(st.get("pictureUrl") or st.get("picture_url") or st.get("entityPicture") or st.get("entity_picture") or "").strip()
+        title = str(st.get("mediaTitle") or st.get("media_title") or "").strip()
+        initials = "NP"
+        if title:
+            words = [w for w in title.replace("-", " ").split() if w]
+            if words:
+                initials = "".join(w[0].upper() for w in words[:2])[:2]
+        if not url:
+            self._cover_url = ""
+            self._cover_loading_url = ""
+            self.art.show_fallback(initials)
+            return
+        if url == self._cover_url:
+            return
+        self._cover_url = url
+        if url in self._cover_cache:
+            if not self.art.set_cover_bytes(self._cover_cache[url]):
+                self.art.show_fallback(initials)
+            return
+        if url == self._cover_loading_url:
+            return
+        self._cover_loading_url = url
+
+        def done(payload):
+            if url != self._cover_url:
+                return
+            self._cover_loading_url = ""
+            if not self.art.set_cover_bytes(payload or b""):
+                self.art.show_fallback(initials)
+
+        def failed(_err):
+            if url == self._cover_url:
+                self._cover_loading_url = ""
+                self.art.show_fallback(initials)
+
+        self.run_async("audio-art", lambda: self._fetch_cover_bytes(url), done, failed)
+
     def apply_player_state(self):
         st = self.player_state or {}
-        state = str(st.get("state") or "idle").capitalize()
-        self.state_pill.setText(state)
-        media_title = st.get("mediaTitle") or st.get("media_title") or "Nothing\nPlaying"
-        if media_title == "Nothing Playing": media_title = "Nothing\nPlaying"
-        self.track.setText(str(media_title).replace(" - ", "\n"))
+        state_raw = str(st.get("state") or "idle").lower()
+        self.state_pill.setText(state_raw.capitalize())
+        is_playing = state_raw == "playing"
+        self.play.active = is_playing
+        self.play.text = "Ⅱ" if is_playing else "▶"
+        self.play.update()
+
+        media_title = st.get("mediaTitle") or st.get("media_title") or ""
+        title_text = self._compact_track_title(media_title or "Nothing Playing")
+        self.track.setText(title_text)
+        artist = str(st.get("mediaArtist") or st.get("media_artist") or "").strip()
+        album = str(st.get("mediaAlbum") or st.get("media_album") or "").strip()
+        source_name = str(st.get("name") or self.room_title.text() or "Livingroom Sonos")
+        self.artist_label.setText(artist or source_name)
+        self.album_label.setText(album)
+        self.album_label.setVisible(bool(album))
+        self.source_label.setText(source_name.upper())
+        self._set_source_choices(st)
+        self.update_cover_art(st)
+
         vol = st.get("volumeLevel")
-        if vol is None: vol = st.get("volume_level")
-        try: pct = int(float(vol) * 100)
-        except Exception: pct = self.volume.value() or 0
-        self.volume.blockSignals(True); self.volume.setValue(pct); self.volume.blockSignals(False)
-        self.vol_label.setText(f"Volume                                                              {pct}%")
+        if vol is None:
+            vol = st.get("volume_level")
+        try:
+            pct = int(clamp(round(float(vol) * 100), 0, 100))
+        except Exception:
+            pct = self.volume.value() or 0
+        self.volume.blockSignals(True)
+        self.volume.setValue(pct)
+        self.volume.blockSignals(False)
+        self.vol_value.setText(f"{pct}%")
 
     def poll(self):
         eid = self.player_id()
@@ -6109,7 +6362,7 @@ class MainWindow(Background):
 
         self.poll_timer = QTimer(self)
         self.poll_timer.timeout.connect(self.poll)
-        self.poll_timer.start(12000)
+        self.poll_timer.start(3000)
         self._last_poll_by_page: dict[str, float] = {}
         self._poll_busy = False
         self._last_page_change_at = time.monotonic()
@@ -6162,7 +6415,7 @@ class MainWindow(Background):
         self._ignore_info_until = now + 1.25
         self.stack.setCurrentWidget(self.pages[name])
         self.header.set_page(name)
-        # Show the page immediately, then kick a fresh Lights poll so it does not
+        # Show the page immediately, then kick a fresh active-page poll so it does not
         # sit on saved config for several seconds after navigation.
         QTimer.singleShot(60, lambda n=name: self.sync_visible_page(n))
         QTimer.singleShot(140, lambda n=name: self.poll_visible_page_now(n))
@@ -6209,7 +6462,7 @@ class MainWindow(Background):
                 return
             if QApplication.activeModalWidget() is not None:
                 return
-            if self.current_name != "Lights":
+            if self.current_name not in {"Lights", "Audio"}:
                 return
             page = self.pages.get(self.current_name)
             if page is None:
@@ -6287,7 +6540,8 @@ class MainWindow(Background):
                 return
             now = time.monotonic()
             last = getattr(self, "_last_poll_by_page", {}).get(self.current_name, 0)
-            if now - last < 10.0:
+            min_interval = 3.0 if self.current_name == "Audio" else 10.0
+            if now - last < min_interval:
                 return
             self._poll_busy = True
             self._last_poll_by_page[self.current_name] = now
