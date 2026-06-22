@@ -8501,6 +8501,10 @@ class MainWindow(Background):
         # yet have security.settingsCode saved.
         return code or "3762"
 
+    def alarm_disarm_code(self) -> str:
+        alarm = self.s.config.get("alarm") or {}
+        return str(alarm.get("disarmCode") or "").strip()
+
     def set_navigation_locked(self, locked: bool, *, show_toast: bool = False):
         self.navigation_locked = bool(locked)
         self.header.set_locked(self.navigation_locked)
@@ -8518,10 +8522,11 @@ class MainWindow(Background):
         if not getattr(self, "navigation_locked", False):
             self.set_navigation_locked(True, show_toast=True)
             return
-        code = self.settings_code()
-        entered = CodeKeypadDialog.get_code(self, "Screen Locked", "Enter Settings Code", code)
-        if entered is None:
-            return
+        code = self.alarm_disarm_code()
+        if code:
+            entered = CodeKeypadDialog.get_code(self, "Screen Locked", "Enter Alarm Disarm Code", code)
+            if entered is None:
+                return
         self.set_navigation_locked(False, show_toast=True)
 
     def poll_visible_page_now(self, name: str | None = None):
