@@ -3134,6 +3134,10 @@ class RoomScreen(Page):
         super().__init__(app_state, parent)
         self.cards: list[RoomControlCard] = []
         self.room_buttons: dict[str, RoundButton] = {}
+        # Home Assistant often reports the old value for a second or two after a
+        # switch/lock command. Hold the intended local state during that round
+        # trip so Room cards do not flicker back and forth.
+        self._room_pending: dict[str, dict[str, Any]] = {}
         root = QVBoxLayout(self)
         root.setContentsMargins(30, 0, 30, 22)
         root.setSpacing(8)
@@ -3213,18 +3217,85 @@ class RoomScreen(Page):
             for card, ctl in zip(self.cards, controls):
                 card.setControl(ctl)
 
+    def _room_eid(self, ctl: dict) -> str:
+        return str((ctl or {}).get("haEntityId") or "").strip()
+
+    def _room_domain(self, ctl: dict) -> str:
+        entity_id = self._room_eid(ctl)
+        return str((ctl or {}).get("domain") or (entity_id.split(".", 1)[0] if "." in entity_id else "")).lower()
+
+    def _room_state_text_for_on(self, ctl: dict, is_on: bool) -> str:
+        domain = self._room_domain(ctl)
+        if domain == "lock":
+            return "unlocked" if is_on else "locked"
+        if domain == "cover":
+            return "open" if is_on else "closed"
+        return "on" if is_on else "off"
+
+    def _room_pending_for(self, ctl: dict) -> dict[str, Any] | None:
+        eid = self._room_eid(ctl)
+        pending = self._room_pending.get(eid) if eid else None
+        if pending and time.monotonic() > float(pending.get("until") or 0):
+            self._clear_room_pending(ctl)
+            return None
+        return pending
+
+    def _set_room_pending(self, ctl: dict, target_on: bool, previous_state: Any, previous_on: bool):
+        eid = self._room_eid(ctl)
+        if not eid:
+            return
+        target_state = self._room_state_text_for_on(ctl, target_on)
+        pending = {
+            "on": bool(target_on),
+            "state": target_state,
+            "until": time.monotonic() + 8.0,
+            "previous_state": previous_state,
+            "previous_on": bool(previous_on),
+        }
+        self._room_pending[eid] = pending
+        ctl["_pendingUntil"] = pending["until"]
+        ctl["_pendingOn"] = bool(target_on)
+        ctl["_pendingState"] = target_state
+
+    def _clear_room_pending(self, ctl: dict):
+        eid = self._room_eid(ctl)
+        if eid:
+            self._room_pending.pop(eid, None)
+        for key in ("_pendingUntil", "_pendingOn", "_pendingState"):
+            ctl.pop(key, None)
+
+    def _room_pending_matches(self, pending: dict[str, Any], incoming_state: Any, domain: str) -> bool:
+        incoming_text = str(incoming_state or "").strip().lower()
+        target_state = str(pending.get("state") or "").strip().lower()
+        if target_state and incoming_text == target_state:
+            return True
+        return room_control_active(incoming_text, domain) == bool(pending.get("on"))
+
     def _apply_room_state_to_control(self, ctl: dict, state: dict):
         if not isinstance(state, dict):
             return
         domain = state.get("domain") or ctl.get("domain") or ""
-        ctl["state"] = state.get("state") or ctl.get("state") or "unknown"
-        ctl["on"] = room_control_active(ctl.get("state"), domain)
         ctl["haName"] = state.get("name") or ctl.get("haName")
         ctl["name"] = state.get("name") or ctl.get("name") or ctl.get("haName")
         ctl["domain"] = domain or ctl.get("domain")
         for meta_key in ("deviceClass", "icon", "supportedFeatures", "currentPosition"):
             if meta_key in state:
                 ctl[meta_key] = state.get(meta_key)
+
+        pending = self._room_pending_for(ctl)
+        incoming_state = state.get("state") or "unknown"
+        if pending:
+            if self._room_pending_matches(pending, incoming_state, domain):
+                self._clear_room_pending(ctl)
+            else:
+                # This is a stale HA refresh from before the command finished.
+                # Keep the local target visible and wait for HA to catch up.
+                ctl["state"] = pending.get("state") or ctl.get("state") or "unknown"
+                ctl["on"] = bool(pending.get("on"))
+                return
+
+        ctl["state"] = incoming_state
+        ctl["on"] = room_control_active(ctl.get("state"), domain)
 
     def _entry_code_for_action(self, ctl: dict, action: str) -> str | None:
         code = str((ctl or {}).get("accessCode") or "").strip()
@@ -3242,6 +3313,9 @@ class RoomScreen(Page):
         if not eid:
             self.requestAssign.emit("room", ctl, "room")
             return
+        if self._room_pending_for(ctl):
+            self.requestToast.emit("Still updating Home Assistant…")
+            return
         action = room_control_next_action(ctl)
         required_code = self._entry_code_for_action(ctl, action)
         entered_code = None
@@ -3254,11 +3328,14 @@ class RoomScreen(Page):
         previous_on = bool(ctl.get("on"))
         if action in {"toggle", "on", "off", "lock", "unlock", "open", "close"}:
             if action == "toggle":
-                ctl["on"] = not previous_on
+                target_on = not previous_on
             elif action in {"on", "unlock", "open"}:
-                ctl["on"] = True
-            elif action in {"off", "lock", "close"}:
-                ctl["on"] = False
+                target_on = True
+            else:
+                target_on = False
+            ctl["on"] = target_on
+            ctl["state"] = self._room_state_text_for_on(ctl, target_on)
+            self._set_room_pending(ctl, target_on, previous_state, previous_on)
             self.sync(self.s.config, self.s.thermostat)
         self.requestToast.emit(f"{ctl.get('haName') or ctl.get('name')} {action.replace('_', ' ')} sent")
         service_code = entered_code or (self.config.get("alarm") or {}).get("disarmCode", "")
@@ -3271,6 +3348,7 @@ class RoomScreen(Page):
                 self.sync(self.s.config, self.s.thermostat)
 
         def failed(err):
+            self._clear_room_pending(ctl)
             ctl["state"] = previous_state
             ctl["on"] = previous_on
             self.sync(self.s.config, self.s.thermostat)
