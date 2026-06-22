@@ -1185,7 +1185,7 @@ class TextKeyboardDialog(QDialog):
             for ch in letters:
                 b = RoundButton(ch, active=True, min_h=42)
                 b.setFixedSize(52, 42)
-                b.clicked.connect(lambda checked=False, c=ch: self.add_char(c))
+                b.pressed.connect(lambda c=ch: self.add_char(c))
                 row.addWidget(b)
             row.addStretch(1)
             root.addLayout(row)
@@ -1196,9 +1196,9 @@ class TextKeyboardDialog(QDialog):
         clear = RoundButton("Clear", active=False, min_h=46)
         cancel = RoundButton("Cancel", active=False, kind="danger", min_h=46)
         done = RoundButton("Done", active=True, min_h=46)
-        space.clicked.connect(lambda: self.add_char(" "))
-        back.clicked.connect(self.backspace)
-        clear.clicked.connect(self.clear_text)
+        space.pressed.connect(lambda: self.add_char(" "))
+        back.pressed.connect(self.backspace)
+        clear.pressed.connect(self.clear_text)
         cancel.clicked.connect(self.reject)
         done.clicked.connect(self.accept)
         bottom.addWidget(space)
@@ -1211,7 +1211,10 @@ class TextKeyboardDialog(QDialog):
         self.refresh()
 
     def refresh(self):
-        self.display.setText(self.result_text or " ")
+        next_text = self.result_text or " "
+        if self.display.text() != next_text:
+            self.display.setText(next_text)
+            self.display.repaint()
 
     def add_char(self, ch: str):
         if len(self.result_text) < 28:
@@ -1812,16 +1815,19 @@ class ThermostatScreen(Page):
         self.alert_banner.bypassClicked.connect(self.bypass_changeover_lockout)
         self.fx_timer = QTimer(self)
         self.fx_timer.timeout.connect(self.animate_environment)
-        # Fast enough for visible snow/heat movement, still light enough for the Pi
-        # because only this thermostat page repaints while it is shown.
-        self.fx_timer.start(240)
+        # Adaptive: idle thermostat screen should not repaint the whole page
+        # several times a second. We retune this based on whether heat/cold
+        # effects are actually visible.
+        self.fx_timer.start(1000)
         self.notice.hide()
         QTimer.singleShot(0, self.position_alert_banner)
 
     def showEvent(self, event):
         super().showEvent(event)
         if hasattr(self, "fx_timer") and not self.fx_timer.isActive():
-            self.fx_timer.start(240)
+            self.fx_timer.start(1000)
+        if hasattr(self, "retune_fx_timer"):
+            self.retune_fx_timer()
 
     def hideEvent(self, event):
         if hasattr(self, "fx_timer") and self.fx_timer.isActive():
@@ -1849,10 +1855,51 @@ class ThermostatScreen(Page):
             merged["outputs"] = src.get("outputs")
         return merged
 
+    def environment_effect_intensity(self, t: dict | None = None) -> float:
+        t = t or self.thermostat_view()
+        current = self.safe_float(t.get("currentTemp"), 70.0)
+        low = self.safe_float(t.get("safetyLow"), 55.0)
+        high = self.safe_float(t.get("safetyHigh"), 85.0)
+        cold_ratio = 0.0
+        if current <= 67.0:
+            cold_ratio = clamp((68.0 - current) / 2.4, 0.0, 1.0)
+            if current <= 66.0:
+                cold_ratio = max(cold_ratio, 0.84)
+        hot_ratio = 0.0
+        if current >= 72.0:
+            hot_ratio = clamp((current - 71.4) / 4.2, 0.0, 1.0)
+            if current >= 72.0:
+                hot_ratio = max(hot_ratio, 0.30)
+            if current >= 76.0:
+                hot_ratio = max(hot_ratio, 0.94)
+        if current < low:
+            cold_ratio = max(cold_ratio, 0.90)
+        if current > high:
+            hot_ratio = max(hot_ratio, 0.90)
+        if cold_ratio > 0 and hot_ratio > 0:
+            midpoint = (low + high) / 2 if high > low else 69.5
+            if current <= midpoint:
+                hot_ratio = 0.0
+            else:
+                cold_ratio = 0.0
+        heat_mode_visual = bool(self.active_visual_mode() == "heat" and cold_ratio <= 0 and hot_ratio <= 0)
+        return max(cold_ratio, hot_ratio, 0.38 if heat_mode_visual else 0.0)
+
+    def retune_fx_timer(self):
+        if not hasattr(self, "fx_timer"):
+            return
+        interval = 520 if self.environment_effect_intensity() > 0.01 else 1000
+        if self.fx_timer.interval() != interval:
+            self.fx_timer.setInterval(interval)
+
     def animate_environment(self):
-        self.fx_phase = (self.fx_phase + 1) % 10000
+        animated = self.environment_effect_intensity() > 0.01
+        if animated:
+            self.fx_phase = (self.fx_phase + 1) % 10000
         self.update_door_pause_ui()
-        self.update()
+        if animated:
+            self.update()
+        self.retune_fx_timer()
         if self.alert_banner.isVisible():
             self.alert_banner.raise_()
 
@@ -2708,13 +2755,21 @@ class ThermostatScreen(Page):
         if not eid:
             self.requestToast.emit("No alarm entity assigned")
             return
-        try:
-            fresh = self.s.refresh_alarm_state()
+        # Open the alarm panel immediately. A Home Assistant state refresh can
+        # take long enough to make the touch feel dead, so refresh it in the
+        # background and re-render the panel if the fresh state arrives while
+        # the dialog is still open.
+        dlg = AlarmControlDialog(self.s, entity, self)
+
+        def refresh_done(fresh):
             if fresh:
                 entity.update(fresh)
-        except Exception:
-            pass
-        dlg = AlarmControlDialog(self.s, entity, self)
+                dlg.entity.update(fresh)
+                if dlg.isVisible() and not getattr(dlg, "_alarm_action_running", False):
+                    dlg.render()
+
+        self.run_async("alarm-state-open", self.s.refresh_alarm_state, refresh_done, None)
+
         def applied(alarm, action):
             if alarm:
                 entity.update(alarm)
@@ -2796,6 +2851,7 @@ class ThermostatScreen(Page):
             self.away_overlay.hide()
         self.update_door_pause_ui()
         self.update_alert_banner()
+        self.retune_fx_timer()
         self.update()
         ha = nested_get(config, "integrations", "homeAssistant", default={}) or {}
         alarm = ha.get("alarmEntity") or {}
@@ -2823,22 +2879,32 @@ class InfoTile(HoldCard):
         self.setMaximumWidth(270)
 
     def setValue(self, value: str):
+        value = str(value)
+        if self.value == value:
+            return
         self.value = value
         self.update()
 
     def setGood(self, good: bool):
-        self.good = bool(good)
+        good = bool(good)
+        if self.good == good:
+            return
+        self.good = good
         self.update()
 
     def setAlarmState(self, state: str):
-        self.alarm_state = str(state or "").lower()
+        state = str(state or "").lower()
+        changed = self.alarm_state != state
+        self.alarm_state = state
         armed = self.alarm_state.startswith("armed") or self.alarm_state in {"arming", "pending"}
         if armed and not self.flash_timer.isActive():
             self.flash_timer.start(520)
         elif not armed and self.flash_timer.isActive():
             self.flash_timer.stop()
             self.flash_on = False
-        self.update()
+            changed = True
+        if changed:
+            self.update()
 
     def _flash_tick(self):
         self.flash_on = not self.flash_on
@@ -3026,6 +3092,9 @@ class ValueTile(GlassPanel):
         self.setMaximumWidth(230)
 
     def setValue(self, value: str):
+        value = str(value)
+        if self.value == value:
+            return
         self.value = value
         self.update()
 
@@ -5056,9 +5125,9 @@ class CodeKeypadDialog(QDialog):
                 b.setKind("danger")
                 b.clicked.connect(self.reject)
             elif label == "⌫":
-                b.clicked.connect(self.backspace_code)
+                b.pressed.connect(self.backspace_code)
             else:
-                b.clicked.connect(lambda checked=False, d=label: self.add_code_digit(d))
+                b.pressed.connect(lambda d=label: self.add_code_digit(d))
             keypad.addWidget(b, row, col)
         root.addLayout(keypad, 1)
         self.render_normal()
@@ -5083,7 +5152,10 @@ class CodeKeypadDialog(QDialog):
     def update_code_display(self):
         entered = "•" * len(self.code_buffer)
         remaining = "·" * max(0, 4 - len(self.code_buffer))
-        self.code_display.setText(entered + remaining)
+        next_text = entered + remaining
+        if self.code_display.text() != next_text:
+            self.code_display.setText(next_text)
+            self.code_display.repaint()
 
     def add_code_digit(self, digit: str):
         if len(self.code_buffer) >= 4:
@@ -7697,6 +7769,7 @@ class AlarmModeCard(QAbstractButton):
 
 class AlarmControlDialog(QDialog):
     actionDone = pyqtSignal(dict, str)
+    alarmActionCompleted = pyqtSignal(object)
 
     def __init__(self, state: AppState, alarm_entity: dict, parent=None):
         super().__init__(parent)
@@ -7707,6 +7780,8 @@ class AlarmControlDialog(QDialog):
         self.countdown_total = 60
         self.countdown_timer = QTimer(self)
         self.countdown_timer.timeout.connect(self.countdown_tick)
+        self._alarm_action_running = False
+        self.alarmActionCompleted.connect(self.handle_alarm_action_completed)
 
         self.setModal(True)
         self.setWindowTitle("Alarm Control")
@@ -7938,9 +8013,9 @@ class AlarmControlDialog(QDialog):
                 b.setKind("danger")
                 b.clicked.connect(self.reject)
             elif label == "⌫":
-                b.clicked.connect(self.backspace_code)
+                b.pressed.connect(self.backspace_code)
             else:
-                b.clicked.connect(lambda checked=False, d=label: self.add_code_digit(d))
+                b.pressed.connect(lambda d=label: self.add_code_digit(d))
             keypad.addWidget(b, row, col)
         content.addLayout(keypad, 1)
         self.body.addLayout(content, 1)
@@ -7949,7 +8024,10 @@ class AlarmControlDialog(QDialog):
     def update_code_display(self):
         entered = "•" * len(self.code_buffer)
         remaining = "·" * max(0, 4 - len(self.code_buffer))
-        self.code_display.setText(entered + remaining)
+        next_text = entered + remaining
+        if self.code_display.text() != next_text:
+            self.code_display.setText(next_text)
+            self.code_display.repaint()
 
     def add_code_digit(self, digit: str):
         if len(self.code_buffer) >= 4:
@@ -8068,27 +8146,45 @@ class AlarmControlDialog(QDialog):
             btn.setEnabled(not busy)
 
     def send_action(self, action: str, code: str = ""):
+        if self._alarm_action_running:
+            return
         if self.countdown_timer.isActive():
             self.countdown_timer.stop()
+        self._alarm_action_running = True
         self.set_busy(True)
-        QApplication.processEvents()
-        try:
-            result = self.s.api.post("/api/ha/alarm/action", self.s.ha_payload({
-                "entityId": self.entity.get("entityId") or "",
-                "action": action,
-                "code": code,
-            }))
-            alarm = result.get("alarm") or {}
-            if alarm:
-                self.entity.update(alarm)
-            self.actionDone.emit(alarm or self.entity, action)
-            self.accept()
-        except Exception as exc:
+        payload = self.s.ha_payload({
+            "entityId": self.entity.get("entityId") or "",
+            "action": action,
+            "code": code,
+        })
+
+        def worker():
+            try:
+                result = self.s.api.post("/api/ha/alarm/action", payload)
+                self.alarmActionCompleted.emit({"action": action, "result": result, "error": None})
+            except Exception as exc:
+                self.alarmActionCompleted.emit({"action": action, "result": None, "error": str(exc)})
+
+        threading.Thread(target=worker, name="alarm-action", daemon=True).start()
+
+    def handle_alarm_action_completed(self, info: object):
+        self._alarm_action_running = False
+        data = info if isinstance(info, dict) else {}
+        action = str(data.get("action") or "")
+        error = str(data.get("error") or "")
+        if error:
             self.set_busy(False)
             if action == "disarm" and hasattr(self, "code_display"):
                 self.code_buffer = ""
                 self.update_code_display()
-            QMessageBox.warning(self, "Alarm Action Failed", str(exc))
+            QMessageBox.warning(self, "Alarm Action Failed", error)
+            return
+        result = data.get("result") if isinstance(data.get("result"), dict) else {}
+        alarm = result.get("alarm") or {}
+        if alarm:
+            self.entity.update(alarm)
+        self.actionDone.emit(alarm or self.entity, action)
+        self.accept()
 
 
 class MainWindow(Background):
@@ -8443,7 +8539,7 @@ class MainWindow(Background):
 
     def domains_for(self, group: str) -> list[str]:
         if group == "room":
-            return ["switch", "input_boolean", "button", "fan", "cover", "light"]
+            return ["switch", "input_boolean", "button", "fan", "cover", "light", "lock"]
         if group == "light":
             return ["light"]
         if group == "cover":
@@ -8835,6 +8931,8 @@ def main():
         ("AA_SynthesizeMouseForUnhandledTouchEvents", True),
         ("AA_SynthesizeTouchForUnhandledMouseEvents", False),
         ("AA_UseHighDpiPixmaps", False),
+        ("AA_CompressHighFrequencyEvents", True),
+        ("AA_CompressTabletEvents", True),
     ):
         attr = getattr(Qt, attr_name, None)
         if attr is not None:
