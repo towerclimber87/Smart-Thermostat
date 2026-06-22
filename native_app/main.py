@@ -66,6 +66,48 @@ def clamp(n, low, high):
     return max(low, min(high, n))
 
 
+def parse_schedule_time_24h(value: Any, default_hour: int = 7, default_minute: int = 0) -> tuple[int, int]:
+    """Parse a schedule time into internal 24-hour HH:MM form.
+
+    The scheduler stores time as HH:MM for the backend, but the touchscreen UI
+    presents 12-hour time. Accept both forms so older/newer saved schedules and
+    hand-edited config remain safe.
+    """
+    hour = int(clamp(default_hour, 0, 23))
+    minute = int(clamp(default_minute, 0, 59))
+    text = str(value or "").strip().upper()
+    if not text:
+        return hour, minute
+
+    meridiem = None
+    if text.endswith("AM") or text.endswith("PM"):
+        meridiem = text[-2:]
+        text = text[:-2].strip()
+
+    try:
+        if ":" not in text:
+            return hour, minute
+        h_text, m_text = text.split(":", 1)
+        parsed_hour = int("".join(ch for ch in h_text if ch.isdigit()) or hour)
+        parsed_minute = int("".join(ch for ch in m_text if ch.isdigit())[:2] or minute)
+        if meridiem:
+            parsed_hour = parsed_hour % 12
+            if meridiem == "PM":
+                parsed_hour += 12
+        parsed_hour = int(clamp(parsed_hour, 0, 23))
+        parsed_minute = int(clamp(parsed_minute, 0, 59))
+        return parsed_hour, parsed_minute
+    except Exception:
+        return hour, minute
+
+
+def format_schedule_time_12h(value: Any) -> str:
+    hour, minute = parse_schedule_time_24h(value)
+    suffix = "PM" if hour >= 12 else "AM"
+    display_hour = hour % 12 or 12
+    return f"{display_hour}:{minute:02d} {suffix}"
+
+
 def as_bool_state(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -691,15 +733,7 @@ class ScheduleEditDialog(QDialog):
             QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
         """)
         self.name = str(self.schedule.get("name") or "Morning")
-        self.hour = 7
-        self.minute = 0
-        raw_time = str(self.schedule.get("time") or "07:00")
-        try:
-            h, m = raw_time.split(":", 1)
-            self.hour = max(0, min(23, int(h)))
-            self.minute = max(0, min(59, int(m)))
-        except Exception:
-            pass
+        self.hour, self.minute = parse_schedule_time_24h(self.schedule.get("time") or "07:00")
         self.cool = int(float(self.schedule.get("coolSetpoint") or 72))
         self.heat = int(float(self.schedule.get("heatSetpoint") or 68))
         self.enabled = bool(self.schedule.get("enabled", True))
@@ -746,11 +780,14 @@ class ScheduleEditDialog(QDialog):
         self.time_label.setStyleSheet("background:rgba(255,255,255,0.07); border:1px solid rgba(85,240,255,0.25); border-radius:16px; padding:8px;")
         top.addWidget(QLabel("Time"), 1, 0)
         top.addWidget(self.time_label, 1, 1)
+        self.ampm_btn = RoundButton("AM", active=True, min_h=42)
+        self.ampm_btn.clicked.connect(self.toggle_ampm)
+        top.addWidget(QLabel("AM / PM"), 2, 0)
+        top.addWidget(self.ampm_btn, 2, 1)
         for text_value, delta_h, delta_m, col in [("Hour −", -1, 0, 2), ("Hour +", 1, 0, 3), ("Min −", 0, -5, 2), ("Min +", 0, 5, 3)]:
             b = RoundButton(text_value, active=False, min_h=42)
             b.clicked.connect(lambda checked=False, dh=delta_h, dm=delta_m: self.adjust_time(dh, dm))
             top.addWidget(b, 1 if delta_m == 0 else 2, col)
-        top.addWidget(QLabel(""), 2, 0)
         root.addLayout(top)
 
         target_row = QHBoxLayout()
@@ -813,7 +850,10 @@ class ScheduleEditDialog(QDialog):
 
     def refresh(self):
         self.name_btn.setText(self.name)
-        self.time_label.setText(f"{self.hour:02d}:{self.minute:02d}")
+        self.time_label.setText(format_schedule_time_12h(f"{self.hour:02d}:{self.minute:02d}"))
+        if hasattr(self, "ampm_btn"):
+            self.ampm_btn.setText("PM" if self.hour >= 12 else "AM")
+            self.ampm_btn.setActive(self.hour >= 12)
         for label in self.findChildren(QLabel):
             if label.objectName() == "cool_value":
                 label.setText(f"{self.cool}°")
@@ -863,6 +903,10 @@ class ScheduleEditDialog(QDialog):
         total = self.hour * 60 + self.minute + dh * 60 + dm
         total %= 24 * 60
         self.hour, self.minute = divmod(total, 60)
+        self.refresh()
+
+    def toggle_ampm(self):
+        self.hour = (self.hour + 12) % 24
         self.refresh()
 
     def adjust_target(self, attr: str, delta: int, low: int, high: int):
@@ -982,7 +1026,8 @@ class ScheduleManagerDialog(QDialog):
         lay.setSpacing(10)
         people = sched.get("personEntityIds") or []
         people_text = "Runs every day" if not people else f"{len(people)} person{'s' if len(people) != 1 else ''} required"
-        text = QLabel(f"<b>{sched.get('name') or 'Schedule'}</b><br>{sched.get('time') or '--:--'} • Cool {sched.get('coolSetpoint')}° • Heat {sched.get('heatSetpoint')}°<br>{people_text}")
+        time_text = format_schedule_time_12h(sched.get('time') or '07:00')
+        text = QLabel(f"<b>{sched.get('name') or 'Schedule'}</b><br>{time_text} • Cool {sched.get('coolSetpoint')}° • Heat {sched.get('heatSetpoint')}°<br>{people_text}")
         text.setTextFormat(Qt.RichText)
         text.setFont(font(11, QFont.Black))
         text.setStyleSheet("background:transparent; border:0; color:#eef4ff;")
