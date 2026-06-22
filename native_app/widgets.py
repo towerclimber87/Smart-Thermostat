@@ -170,10 +170,14 @@ class IconCircle(QAbstractButton):
         p.drawText(rect, Qt.AlignCenter, self.text)
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton and self.rect().contains(event.pos()):
-            self.clicked.emit()
-            self.clickedValue.emit(self.value)
+        inside = event.button() == Qt.LeftButton and self.rect().contains(event.pos())
+        # Let QAbstractButton emit the normal clicked() signal exactly once.
+        # Emitting clicked() here and then calling the base implementation made
+        # touchscreen plus/minus buttons fire twice, which changed the main
+        # thermostat setpoint by 2° per tap instead of 1°.
         super().mouseReleaseEvent(event)
+        if inside:
+            self.clickedValue.emit(self.value)
 
 
 class TopPill(QWidget):

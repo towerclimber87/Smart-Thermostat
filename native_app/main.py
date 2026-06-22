@@ -1285,30 +1285,36 @@ class TextKeyboardDialog(QDialog):
         self.display.setFont(font(24, QFont.Black))
         self.display.setStyleSheet("background:rgba(255,255,255,0.07); border:1px solid rgba(85,240,255,0.35); border-radius:18px; padding:12px;")
         root.addWidget(self.display)
+        self.uppercase = False
+        self.letter_buttons: list[tuple[RoundButton, str]] = []
         rows = [list("QWERTYUIOP"), list("ASDFGHJKL"), list("ZXCVBNM")]
         for letters in rows:
             row = QHBoxLayout()
             row.setSpacing(6)
             row.addStretch(1)
             for ch in letters:
-                b = RoundButton(ch, active=True, min_h=42)
+                b = RoundButton(ch.lower(), active=True, min_h=42)
                 b.setFixedSize(52, 42)
-                b.pressed.connect(lambda c=ch: self.add_char(c))
+                b.pressed.connect(lambda c=ch: self.add_letter(c))
+                self.letter_buttons.append((b, ch))
                 row.addWidget(b)
             row.addStretch(1)
             root.addLayout(row)
         bottom = QHBoxLayout()
         bottom.setSpacing(8)
+        self.shift = RoundButton("Uppercase", active=False, min_h=46)
         space = RoundButton("Space", active=False, min_h=46)
         back = RoundButton("⌫", active=False, min_h=46)
         clear = RoundButton("Clear", active=False, min_h=46)
         cancel = RoundButton("Cancel", active=False, kind="danger", min_h=46)
         done = RoundButton("Done", active=True, min_h=46)
+        self.shift.pressed.connect(self.toggle_uppercase)
         space.pressed.connect(lambda: self.add_char(" "))
         back.pressed.connect(self.backspace)
         clear.pressed.connect(self.clear_text)
         cancel.clicked.connect(self.reject)
         done.clicked.connect(self.accept)
+        bottom.addWidget(self.shift)
         bottom.addWidget(space)
         bottom.addWidget(back)
         bottom.addWidget(clear)
@@ -1316,13 +1322,30 @@ class TextKeyboardDialog(QDialog):
         bottom.addWidget(cancel)
         bottom.addWidget(done)
         root.addLayout(bottom)
+        self.refresh_keyboard()
         self.refresh()
+
+    def refresh_keyboard(self):
+        for button, ch in self.letter_buttons:
+            button.setText(ch if self.uppercase else ch.lower())
+            if hasattr(button, "setActive"):
+                button.setActive(True)
+        self.shift.setText("lowercase" if self.uppercase else "Uppercase")
+        if hasattr(self.shift, "setActive"):
+            self.shift.setActive(self.uppercase)
+
+    def toggle_uppercase(self):
+        self.uppercase = not self.uppercase
+        self.refresh_keyboard()
 
     def refresh(self):
         next_text = self.result_text or " "
         if self.display.text() != next_text:
             self.display.setText(next_text)
             self.display.repaint()
+
+    def add_letter(self, ch: str):
+        self.add_char(ch if self.uppercase else ch.lower())
 
     def add_char(self, ch: str):
         if len(self.result_text) < 28:
@@ -1835,10 +1858,10 @@ class ThermostatScreen(Page):
         left_title = QVBoxLayout()
         left_title.setSpacing(8)
         left_title.addWidget(self.outdoor, 0, Qt.AlignLeft)
-        title = QLabel("Climate Control")
-        title.setFont(font(49, QFont.Black))
-        title.setStyleSheet("color:#ffffff;")
-        left_title.addWidget(title)
+        self.title_label = QLabel(self.thermostat_title_text())
+        self.title_label.setFont(font(49, QFont.Black))
+        self.title_label.setStyleSheet("color:#ffffff;")
+        left_title.addWidget(self.title_label)
         title_row.addLayout(left_title)
         title_row.addStretch(1)
         title_row.addWidget(self.door_countdown, 0, Qt.AlignRight | Qt.AlignTop)
@@ -2815,9 +2838,17 @@ class ThermostatScreen(Page):
             lambda err: self.requestToast.emit(f"Fan update failed: {err}"),
         )
 
+    def thermostat_title_text(self) -> str:
+        name = str((self.s.thermostat or {}).get("name") or "").strip()
+        return name or "Climate Control"
+
     def change_target(self, delta: int):
         t = self.thermostat_view()
-        self.set_target(float(t.get("targetTemp", t.get("target_temp", 70))) + delta)
+        # One physical tap should move the main setpoint by exactly 1°F.
+        # IconCircle now emits clicked() once, but keep this explicit so future
+        # repeat/gesture changes cannot accidentally double the step size.
+        step = 1 if delta >= 0 else -1
+        self.set_target(float(t.get("targetTemp", t.get("target_temp", 70))) + step)
 
     def set_target(self, value: float):
         try:
@@ -2938,6 +2969,11 @@ class ThermostatScreen(Page):
             active = str(t.get("autoActiveMode") or t.get("activeMode") or "cool").lower()
         else:
             active = mode
+        if hasattr(self, "title_label"):
+            next_title = self.thermostat_title_text()
+            if self.title_label.text() != next_title:
+                self.title_label.setText(next_title)
+                self.title_label.repaint()
         self.dial.setData(t.get("currentTemp"), t.get("targetTemp"), mode, active, t.get("limits"))
         setpoint_visible = mode != "off" or away
         self.minus.setVisible(setpoint_visible)
@@ -7497,6 +7533,12 @@ class SettingsDialog(QDialog):
         if hasattr(self, "thermostat_name_label"):
             self.thermostat_name_label.setText(self.thermostat_name_summary_text())
             self.thermostat_name_label.repaint()
+        top = self.window()
+        thermo_page = getattr(top, "thermostat", None)
+        title_label = getattr(thermo_page, "title_label", None)
+        if title_label is not None:
+            title_label.setText(name)
+            title_label.repaint()
         self.set_thermostat({"name": name}, quiet=False, debounce=False)
 
     def adjust_value(self, key, delta, low, high, suffix):
