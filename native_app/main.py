@@ -932,6 +932,8 @@ class AppState:
         # jump forward again.
         self._target_override_value: int | None = None
         self._target_override_until = 0.0
+        self._mode_override: dict | None = None
+        self._mode_override_until = 0.0
 
     def ha(self) -> dict:
         return nested_get(self.config, "integrations", "homeAssistant", default={}) or {}
@@ -1029,6 +1031,32 @@ class AppState:
         self._target_override_value = None
         self._target_override_until = 0.0
 
+    def set_mode_override(self, mode: str, *, away: bool = False, hold_seconds: float = 8.0):
+        """Hold a just-requested local mode against one stale status refresh."""
+        mode = str(mode or "").strip().lower()
+        if mode not in {"off", "heat", "cool", "auto", "away"}:
+            return
+        self._mode_override = {
+            "mode": "cool" if mode == "away" else mode,
+            "away": bool(away or mode == "away"),
+            "awaySource": "manual" if (away or mode == "away") else "",
+        }
+        self._mode_override_until = time.monotonic() + max(1.0, float(hold_seconds))
+
+    def clear_mode_override(self):
+        self._mode_override = None
+        self._mode_override_until = 0.0
+
+    def apply_mode_override(self, thermostat: dict) -> dict:
+        if not isinstance(thermostat, dict):
+            return thermostat
+        now = time.monotonic()
+        if not self._mode_override or now >= self._mode_override_until:
+            self.clear_mode_override()
+            return thermostat
+        thermostat.update(self._mode_override)
+        return thermostat
+
     def apply_target_override(self, thermostat: dict) -> dict:
         if not isinstance(thermostat, dict):
             return thermostat
@@ -1041,7 +1069,7 @@ class AppState:
         return thermostat
 
     def ingest_thermostat(self, payload: dict | None) -> dict:
-        self.thermostat = self.apply_target_override(thermostat_detail_payload(payload))
+        self.thermostat = self.apply_target_override(self.apply_mode_override(thermostat_detail_payload(payload)))
         return self.thermostat
 
     def load(self):
@@ -1857,6 +1885,10 @@ class ThermostatScreen(Page):
 
     def environment_effect_intensity(self, t: dict | None = None) -> float:
         t = t or self.thermostat_view()
+        outputs = t.get("outputs") if isinstance(t.get("outputs"), dict) else {}
+        safety = str(t.get("safetyMode") or outputs.get("safetyMode") or "").lower()
+        if str(t.get("mode") or "").lower() == "off" and safety not in {"heat", "cool"}:
+            return 0.0
         current = self.safe_float(t.get("currentTemp"), 70.0)
         low = self.safe_float(t.get("safetyLow"), 55.0)
         high = self.safe_float(t.get("safetyHigh"), 85.0)
@@ -1970,39 +2002,49 @@ class ThermostatScreen(Page):
         current = self.safe_float(t.get("currentTemp"), 70.0)
         low = self.safe_float(t.get("safetyLow"), 55.0)
         high = self.safe_float(t.get("safetyHigh"), 85.0)
+        outputs = t.get("outputs") if isinstance(t.get("outputs"), dict) else {}
+        safety = str(t.get("safetyMode") or outputs.get("safetyMode") or "").lower()
+        neutral_off = str(t.get("mode") or "").lower() == "off" and safety not in {"heat", "cool"}
         heat_mode = self.active_visual_mode() == "heat"
 
         # Base climate-page ambience. This keeps the thermostat screen vivid
         # even while the equipment is idle, closer to the clean glassy look of
         # the reference layout without adding polling or animation load.
-        base_cool = QRadialGradient(QPointF(r.width() * 0.47, r.height() * 0.46), r.width() * 0.50)
-        base_cool.setColorAt(0.0, QColor(58, 145, 255, 32))
-        base_cool.setColorAt(0.55, QColor(44, 100, 220, 16))
-        base_cool.setColorAt(1.0, QColor(0, 0, 0, 0))
-        p.fillRect(r, base_cool)
+        if neutral_off:
+            off_glow = QRadialGradient(QPointF(r.width() * 0.50, r.height() * 0.42), r.width() * 0.55)
+            off_glow.setColorAt(0.0, QColor(130, 146, 170, 18))
+            off_glow.setColorAt(0.62, QColor(72, 84, 104, 10))
+            off_glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+            p.fillRect(r, off_glow)
+        else:
+            base_cool = QRadialGradient(QPointF(r.width() * 0.47, r.height() * 0.46), r.width() * 0.50)
+            base_cool.setColorAt(0.0, QColor(58, 145, 255, 32))
+            base_cool.setColorAt(0.55, QColor(44, 100, 220, 16))
+            base_cool.setColorAt(1.0, QColor(0, 0, 0, 0))
+            p.fillRect(r, base_cool)
 
-        base_purple = QRadialGradient(QPointF(r.width() * 0.63, r.height() * 0.35), r.width() * 0.44)
-        base_purple.setColorAt(0.0, QColor(154, 104, 255, 26))
-        base_purple.setColorAt(0.62, QColor(84, 62, 190, 12))
-        base_purple.setColorAt(1.0, QColor(0, 0, 0, 0))
-        p.fillRect(r, base_purple)
+            base_purple = QRadialGradient(QPointF(r.width() * 0.63, r.height() * 0.35), r.width() * 0.44)
+            base_purple.setColorAt(0.0, QColor(154, 104, 255, 26))
+            base_purple.setColorAt(0.62, QColor(84, 62, 190, 12))
+            base_purple.setColorAt(1.0, QColor(0, 0, 0, 0))
+            p.fillRect(r, base_purple)
 
-        base_teal = QRadialGradient(QPointF(r.width() * 0.12, r.height() * 0.70), r.width() * 0.36)
-        base_teal.setColorAt(0.0, QColor(50, 255, 195, 22))
-        base_teal.setColorAt(0.62, QColor(28, 138, 128, 10))
-        base_teal.setColorAt(1.0, QColor(0, 0, 0, 0))
-        p.fillRect(r, base_teal)
+            base_teal = QRadialGradient(QPointF(r.width() * 0.12, r.height() * 0.70), r.width() * 0.36)
+            base_teal.setColorAt(0.0, QColor(50, 255, 195, 22))
+            base_teal.setColorAt(0.62, QColor(28, 138, 128, 10))
+            base_teal.setColorAt(1.0, QColor(0, 0, 0, 0))
+            p.fillRect(r, base_teal)
 
         # Temperature ambience. The old thresholds were too subtle and did not
         # show heat until the room was already very warm. Start warming the room
         # at 72°, start cooling it at 67°, and make 66°/76° feel obvious.
         cold_ratio = 0.0
-        if current <= 67.0:
+        if (not neutral_off) and current <= 67.0:
             cold_ratio = clamp((68.0 - current) / 2.4, 0.0, 1.0)
             if current <= 66.0:
                 cold_ratio = max(cold_ratio, 0.84)
         hot_ratio = 0.0
-        if current >= 72.0:
+        if (not neutral_off) and current >= 72.0:
             hot_ratio = clamp((current - 71.4) / 4.2, 0.0, 1.0)
             if current >= 72.0:
                 hot_ratio = max(hot_ratio, 0.30)
@@ -2618,11 +2660,13 @@ class ThermostatScreen(Page):
         if mode == "away":
             going_away = not bool(self.thermostat.get("away"))
             changes = {"away": going_away, "awaySource": "manual" if going_away else ""}
+            self.s.set_mode_override("away" if going_away else str(self.thermostat_view().get("mode") or "cool"), away=going_away)
             self.s.thermostat["away"] = going_away
             self.s.thermostat["awaySource"] = changes["awaySource"]
         else:
             # Physical/manual button taps should visibly win immediately.
             changes = {"mode": mode, "away": False, "awaySource": ""}
+            self.s.set_mode_override(mode, away=False)
             self.s.thermostat["mode"] = mode
             self.s.thermostat["away"] = False
             self.s.thermostat["awaySource"] = ""
@@ -2703,6 +2747,9 @@ class ThermostatScreen(Page):
             t = self.thermostat_view()
             limits = t.get("limits") or {}
             mode = str(t.get("mode") or "auto").lower()
+            if mode == "off" and not bool(t.get("away")):
+                self.requestToast.emit("Thermostat is Off")
+                return
             active = str(t.get("autoActiveMode") or t.get("activeMode") or "").lower()
             range_key = active if mode == "auto" and active in {"cool", "heat"} else mode
             lim = limits.get(range_key) or limits.get(mode) or limits.get("auto") or {"min": 55, "max": 90}
@@ -2815,6 +2862,11 @@ class ThermostatScreen(Page):
         else:
             active = mode
         self.dial.setData(t.get("currentTemp"), t.get("targetTemp"), mode, active, t.get("limits"))
+        setpoint_visible = mode != "off" or away
+        self.minus.setVisible(setpoint_visible)
+        self.plus.setVisible(setpoint_visible)
+        self.minus.setEnabled(setpoint_visible)
+        self.plus.setEnabled(setpoint_visible)
         for m, b in self.mode_buttons.items():
             selected = (m == mode and not away) or (m == "away" and away)
             b.setStyleSheet(self._floating_button_style(selected))

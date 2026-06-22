@@ -3186,6 +3186,23 @@ def _handle_thermostat_update(payload: dict) -> dict:
             reason="manual-return-home",
         )
 
+    requested_mode_raw = incoming.get("mode", incoming.get("hvac_mode", incoming.get("hvacMode")))
+    requested_mode = _normalize_mode(requested_mode_raw, "") if requested_mode_raw is not None else ""
+    if requested_mode in {"off", "heat", "cool", "auto"} and "away" not in incoming and "preset_mode" not in incoming and "presetMode" not in incoming:
+        # A Home Assistant HVAC-mode change should behave like tapping the mode
+        # button on the thermostat page: leave Away and make this a manual mode
+        # command. Without this, HA could send heat/cool while the saved Away
+        # preset stayed active, making the HA card look like the command only
+        # partly applied or reverted.
+        incoming = dict(incoming)
+        incoming["away"] = False
+        incoming["awaySource"] = ""
+        if bool(existing.get("away")) and existing_away_source in {"presence", "auto"} and "presenceHomeOverride" not in incoming:
+            incoming["presenceHomeOverride"] = _presence_home_override_payload(
+                _thermostat_person_entity_ids(existing),
+                reason="manual-ha-mode-change",
+            )
+
     if bypass_mode in {"heat", "cool"}:
         existing = dict(existing)
         if bypass_mode == "heat":
@@ -3202,8 +3219,6 @@ def _handle_thermostat_update(payload: dict) -> dict:
 
     merged = _merge_thermostat_state(existing, incoming)
 
-    requested_mode = incoming.get("mode", incoming.get("hvac_mode", incoming.get("hvacMode")))
-    requested_mode = _normalize_mode(requested_mode, "") if requested_mode is not None else ""
     if requested_mode in {"heat", "cool"}:
         # Manual / physical mode changes always win, whether they came from the
         # touchscreen buttons or Home Assistant. If the comfort auto-switch rule

@@ -261,6 +261,7 @@ class ThermostatDial(QWidget):
         self.target = 73.0
         self.mode = "auto"
         self.active_mode = "cool"
+        self.off_mode = False
         self.min_temp = 60.0
         self.max_temp = 80.0
         self.dragging = False
@@ -279,6 +280,8 @@ class ThermostatDial(QWidget):
             self.mode = str(mode)
         if active_mode:
             self.active_mode = str(active_mode)
+        self.off_mode = str(self.mode or "").strip().lower() == "off"
+        self.setCursor(Qt.ArrowCursor if self.off_mode else Qt.PointingHandCursor)
         if isinstance(limits, dict):
             mode_key = str(self.mode or "auto").lower()
             active_key = str(self.active_mode or "").lower()
@@ -335,10 +338,11 @@ class ThermostatDial(QWidget):
         c = tick_rect.center()
         radius_outer = tick_rect.width() / 2
         radius_inner = radius_outer - side * 0.08
-        heat_active = str(self.active_mode or self.mode).lower() == "heat"
+        heat_active = (not self.off_mode) and str(self.active_mode or self.mode).lower() == "heat"
         heat_color = QColor(255, 72, 83)
         cool_color = T.CYAN
-        active_color = heat_color if heat_active else cool_color
+        neutral_color = QColor(182, 196, 218)
+        active_color = neutral_color if self.off_mode else (heat_color if heat_active else cool_color)
 
         def pct_for_temp(temp: float) -> float:
             return max(0.0, min(1.0, (float(temp) - self.min_temp) / max(1.0, self.max_temp - self.min_temp)))
@@ -347,7 +351,7 @@ class ThermostatDial(QWidget):
         target_pct = pct_for_temp(self.target)
         band_low = min(current_pct, target_pct)
         band_high = max(current_pct, target_pct)
-        has_gap = abs(current_pct - target_pct) > 0.015
+        has_gap = (not self.off_mode) and abs(current_pct - target_pct) > 0.015
 
         # Home Assistant-style progress:
         # - the full dial track stays neutral gray
@@ -361,8 +365,8 @@ class ThermostatDial(QWidget):
             angle = math.radians(225 - pct * 270)
             is_major = i % 10 == 0
             is_mid = i % 5 == 0
-            in_dark_band = band_low <= pct <= band_high and has_gap
-            in_faint_band = pct <= faint_band_high + 1e-6 and not in_dark_band
+            in_dark_band = (not self.off_mode) and band_low <= pct <= band_high and has_gap
+            in_faint_band = (not self.off_mode) and pct <= faint_band_high + 1e-6 and not in_dark_band
             inner_offset = side * (0.105 if is_major else 0.087 if is_mid else 0.066)
             x1 = c.x() + math.cos(angle) * (radius_outer - inner_offset)
             y1 = c.y() - math.sin(angle) * (radius_outer - inner_offset)
@@ -396,7 +400,7 @@ class ThermostatDial(QWidget):
 
         # Faint mode-colored track from the low end only to the first marker.
         # This is intentionally not a full-scale color wash.
-        if faint_band_high > 0.001:
+        if (not self.off_mode) and faint_band_high > 0.001:
             faint_end_ang = angle_for_pct(faint_band_high)
             faint_span = int((faint_end_ang - 225) * 16)
             p.setPen(QPen(QColor(active_color.red(), active_color.green(), active_color.blue(), 66), side * 0.07, Qt.SolidLine, Qt.RoundCap))
@@ -413,7 +417,11 @@ class ThermostatDial(QWidget):
 
         inner = rect.adjusted(side * 0.29, side * 0.29, -side * 0.29, -side * 0.29)
         g = QRadialGradient(inner.center(), inner.width() / 2)
-        if heat_active:
+        if self.off_mode:
+            g.setColorAt(0, QColor(48, 58, 72))
+            g.setColorAt(0.58, QColor(30, 38, 50))
+            g.setColorAt(1, QColor(12, 16, 24))
+        elif heat_active:
             g.setColorAt(0, QColor(255, 95, 92))
             g.setColorAt(0.58, QColor(232, 55, 70))
             g.setColorAt(1, QColor(126, 26, 44))
@@ -447,12 +455,13 @@ class ThermostatDial(QWidget):
         p.setFont(unit_font)
         p.drawText(QRectF(number_left + number_w + unit_gap, inner.y() + inner.height() * 0.315, max(52, unit_w + 10), 36), Qt.AlignLeft | Qt.AlignVCenter, "°F")
 
-        set_rect = QRectF(inner.x(), inner.y() + inner.height() * 0.66, inner.width(), 34)
-        p.setFont(font(12, QFont.Black))
-        p.setPen(QColor(224, 241, 255))
-        p.drawText(set_rect, Qt.AlignCenter, f"Set Temp  {fmt_temp(self.target)}")
+        if not self.off_mode:
+            set_rect = QRectF(inner.x(), inner.y() + inner.height() * 0.66, inner.width(), 34)
+            p.setFont(font(12, QFont.Black))
+            p.setPen(QColor(224, 241, 255))
+            p.drawText(set_rect, Qt.AlignCenter, f"Set Temp  {fmt_temp(self.target)}")
 
-        for label, temp in [(str(int(self.min_temp)), self.min_temp), (str(int(self.max_temp)), self.max_temp)]:
+        for label, temp in ([] if self.off_mode else [(str(int(self.min_temp)), self.min_temp), (str(int(self.max_temp)), self.max_temp)]):
             ang = math.radians(self._angle_for_temp(temp))
             rr = arc_rect.width() / 2 + 10
             x = c.x() + math.cos(ang) * rr
@@ -470,28 +479,35 @@ class ThermostatDial(QWidget):
         # Current room temperature marker.
         current_ang_rad = math.radians(current_ang)
         current_knob = QPointF(c.x() + math.cos(current_ang_rad) * rr, c.y() - math.sin(current_ang_rad) * rr)
-        p.setBrush(QColor(active_color.red(), active_color.green(), active_color.blue(), 145))
+        p.setBrush(QColor(active_color.red(), active_color.green(), active_color.blue(), 120 if self.off_mode else 145))
         p.setPen(QPen(QColor(255, 255, 255, 120), 2))
         p.drawEllipse(current_knob, 8, 8)
 
         # Target setpoint marker.
-        ang = math.radians(target_ang)
-        knob = QPointF(c.x() + math.cos(ang) * rr, c.y() - math.sin(ang) * rr)
-        p.setBrush(T.TEXT)
-        p.setPen(QPen(QColor(active_color.red(), active_color.green(), active_color.blue(), 170), 3))
-        p.drawEllipse(knob, 12, 12)
+        if not self.off_mode:
+            ang = math.radians(target_ang)
+            knob = QPointF(c.x() + math.cos(ang) * rr, c.y() - math.sin(ang) * rr)
+            p.setBrush(T.TEXT)
+            p.setPen(QPen(QColor(active_color.red(), active_color.green(), active_color.blue(), 170), 3))
+            p.drawEllipse(knob, 12, 12)
 
     def mousePressEvent(self, event):
+        if self.off_mode:
+            return
         self.dragging = True
         self.target = self._temp_for_pos(event.pos())
         self.update()
 
     def mouseMoveEvent(self, event):
+        if self.off_mode:
+            return
         if self.dragging:
             self.target = self._temp_for_pos(event.pos())
             self.update()
 
     def mouseReleaseEvent(self, event):
+        if self.off_mode:
+            return
         if self.dragging:
             self.dragging = False
             self.target = self._temp_for_pos(event.pos())
