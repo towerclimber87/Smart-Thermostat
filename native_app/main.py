@@ -1250,6 +1250,17 @@ class ThermostatScreen(Page):
         if safety_hot:
             hot_ratio = max(hot_ratio, 0.90)
 
+        # The cold and hot environment effects must be mutually exclusive.
+        # A cold room can still be in heat mode while it is recovering, but
+        # that should not paint the warm/sun layer on top of snowflakes.
+        if cold_ratio > 0 and hot_ratio > 0:
+            midpoint = (low + high) / 2 if high > low else 69.5
+            if current <= midpoint:
+                hot_ratio = 0.0
+            else:
+                cold_ratio = 0.0
+        heat_mode_visual = bool(heat_mode and cold_ratio <= 0 and hot_ratio <= 0)
+
         if cold_ratio > 0:
             # Strong blue wash from the left side of the room.
             g = QRadialGradient(QPointF(r.width() * 0.25, r.height() * 0.43), r.width() * 0.86)
@@ -1280,49 +1291,66 @@ class ThermostatScreen(Page):
                     p.drawLine(QPointF(x - size * 0.7, y - size * 0.7), QPointF(x + size * 0.7, y + size * 0.7))
                     p.drawLine(QPointF(x - size * 0.7, y + size * 0.7), QPointF(x + size * 0.7, y - size * 0.7))
 
-        if hot_ratio > 0 or heat_mode:
-            ratio = max(hot_ratio, 0.42 if heat_mode else 0.0)
-            # Stronger orange/red wash that starts showing at 72°.
+        if hot_ratio > 0 or heat_mode_visual:
+            ratio = max(hot_ratio, 0.38 if heat_mode_visual else 0.0)
+            # Warm glassy wash that starts showing at 72°. The heat-mode-only
+            # fallback stays subtle and is disabled while cold effects are up.
             g = QRadialGradient(QPointF(r.width() * 0.76, r.height() * 0.42), r.width() * 0.88)
-            g.setColorAt(0.0, QColor(255, 94, 39, int(168 * ratio)))
-            g.setColorAt(0.40, QColor(213, 42, 39, int(128 * ratio)))
-            g.setColorAt(0.70, QColor(102, 18, 36, int(72 * ratio)))
+            g.setColorAt(0.0, QColor(255, 96, 42, int(156 * ratio)))
+            g.setColorAt(0.42, QColor(218, 46, 42, int(118 * ratio)))
+            g.setColorAt(0.74, QColor(104, 18, 36, int(66 * ratio)))
             g.setColorAt(1.0, QColor(0, 0, 0, 0))
             p.fillRect(r, g)
 
             amber = QLinearGradient(r.width(), 0, 0, r.height())
-            amber.setColorAt(0.0, QColor(255, 189, 68, int(72 * ratio)))
-            amber.setColorAt(0.44, QColor(255, 72, 42, int(40 * ratio)))
+            amber.setColorAt(0.0, QColor(255, 190, 82, int(64 * ratio)))
+            amber.setColorAt(0.45, QColor(255, 76, 52, int(38 * ratio)))
             amber.setColorAt(1.0, QColor(0, 0, 0, 0))
             p.fillRect(r, amber)
 
-            # Animated heat shimmer lines. They are intentionally subtle at 72°
-            # and much more visible as the room gets hotter.
-            wave_alpha = int(50 + 115 * ratio)
-            p.setPen(QPen(QColor(255, 206, 130, wave_alpha), 2, Qt.SolidLine, Qt.RoundCap))
-            for i in range(6):
-                y = 150 + i * 46 + 8 * math.sin((self.fx_phase + i * 9) * 0.24)
-                start_x = r.width() * 0.54 + i * 18
-                path = QPainterPath(QPointF(start_x, y))
-                for step in range(1, 6):
-                    x = start_x + step * 66
-                    yy = y + math.sin((self.fx_phase * 0.20) + step * 0.95 + i) * (8 + 8 * ratio)
-                    path.lineTo(QPointF(x, yy))
-                p.drawPath(path)
+            # Modern heat shimmer: layered soft thermal waves instead of the
+            # old cartoon sun/rays. Subtle at 72°, more visible as it gets hot.
+            for layer, width, alpha_mult, y_offset in ((0, 2, 1.0, 0), (1, 4, 0.34, 14)):
+                p.setPen(QPen(QColor(255, 214, 148, int((46 + 102 * ratio) * alpha_mult)), width, Qt.SolidLine, Qt.RoundCap))
+                for i in range(5):
+                    y = 145 + i * 52 + y_offset + 8 * math.sin((self.fx_phase + i * 10 + layer * 7) * 0.22)
+                    start_x = r.width() * 0.53 + i * 17
+                    path = QPainterPath(QPointF(start_x, y))
+                    for step in range(1, 7):
+                        x = start_x + step * 58
+                        yy = y + math.sin((self.fx_phase * 0.18) + step * 0.86 + i + layer) * (7 + 9 * ratio)
+                        path.lineTo(QPointF(x, yy))
+                    p.drawPath(path)
 
-            cx = r.width() - 165
-            cy = 120
-            pulse = 1.0 + 0.14 * math.sin(self.fx_phase * 0.30)
-            sun_r = (19 + 11 * ratio) * pulse
-            p.setBrush(QColor(255, 182, 58, int(145 + 75 * ratio)))
-            p.setPen(QPen(QColor(255, 232, 144, int(165 + 70 * ratio)), 2))
-            p.drawEllipse(QPointF(cx, cy), sun_r, sun_r)
-            for a in range(0, 360, 30):
-                rad = math.radians(a + self.fx_phase * 3)
-                inner = sun_r + 8
-                outer = sun_r + 20 + 14 * ratio
-                p.drawLine(QPointF(cx + math.cos(rad) * inner, cy + math.sin(rad) * inner),
-                           QPointF(cx + math.cos(rad) * outer, cy + math.sin(rad) * outer))
+            # A polished heat halo in the upper-right replaces the gimmicky sun.
+            # It reads as "hot" without literal rotating rays.
+            cx = r.width() - 158
+            cy = 118
+            pulse = 1.0 + 0.08 * math.sin(self.fx_phase * 0.24)
+            halo_r = (50 + 28 * ratio) * pulse
+            halo = QRadialGradient(QPointF(cx, cy), halo_r)
+            halo.setColorAt(0.0, QColor(255, 226, 138, int(138 + 72 * ratio)))
+            halo.setColorAt(0.34, QColor(255, 146, 66, int(92 + 52 * ratio)))
+            halo.setColorAt(0.68, QColor(255, 58, 58, int(38 + 34 * ratio)))
+            halo.setColorAt(1.0, QColor(0, 0, 0, 0))
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(halo))
+            p.drawEllipse(QPointF(cx, cy), halo_r, halo_r)
+
+            p.setBrush(Qt.NoBrush)
+            for ring in range(3):
+                ring_r = halo_r * (0.52 + ring * 0.23) + math.sin(self.fx_phase * 0.18 + ring) * 2.6
+                alpha = int((92 - ring * 22) * ratio)
+                p.setPen(QPen(QColor(255, 222, 156, alpha), 1.7, Qt.SolidLine, Qt.RoundCap))
+                p.drawEllipse(QPointF(cx, cy), ring_r, ring_r)
+
+            p.setPen(QPen(QColor(255, 240, 192, int(76 + 70 * ratio)), 2.2, Qt.SolidLine, Qt.RoundCap))
+            for i in range(3):
+                x = cx - 20 + i * 20
+                top = cy - 30 + 4 * math.sin(self.fx_phase * 0.20 + i)
+                path = QPainterPath(QPointF(x, top + 36))
+                path.cubicTo(QPointF(x - 13, top + 25), QPointF(x + 14, top + 14), QPointF(x, top))
+                p.drawPath(path)
         super().paintEvent(event)
 
     def format_remaining(self, seconds: float) -> str:
