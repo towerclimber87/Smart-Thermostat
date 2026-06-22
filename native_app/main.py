@@ -7576,6 +7576,125 @@ class SettingsDialog(QDialog):
             QMessageBox.warning(self, "History", str(exc))
 
 
+
+class AlarmCountdownRing(QWidget):
+    def __init__(self, total_seconds: int = 60, parent=None):
+        super().__init__(parent)
+        self.total_seconds = max(1, int(total_seconds))
+        self.remaining = self.total_seconds
+        self.setMinimumSize(250, 250)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+    def setRemaining(self, remaining: int):
+        self.remaining = max(0, int(remaining))
+        self.update()
+
+    def sizeHint(self):
+        return QSize(320, 320)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        side = min(self.width(), self.height()) - 18
+        rect = QRectF((self.width() - side) / 2, (self.height() - side) / 2, side, side)
+
+        glow = QRadialGradient(rect.center(), side * 0.56)
+        glow.setColorAt(0, QColor(255, 183, 91, 55))
+        glow.setColorAt(0.62, QColor(255, 91, 121, 26))
+        glow.setColorAt(1, QColor(255, 255, 255, 0))
+        p.setBrush(QBrush(glow))
+        p.setPen(Qt.NoPen)
+        p.drawEllipse(rect.adjusted(-8, -8, 8, 8))
+
+        p.setBrush(QColor(255, 255, 255, 12))
+        p.setPen(QPen(QColor(255, 255, 255, 28), 1.5))
+        p.drawEllipse(rect.adjusted(18, 18, -18, -18))
+
+        base_pen = QPen(QColor(255, 255, 255, 34), max(12, int(side * 0.045)))
+        base_pen.setCapStyle(Qt.RoundCap)
+        p.setPen(base_pen)
+        p.drawArc(rect.adjusted(16, 16, -16, -16), 90 * 16, -360 * 16)
+
+        ratio = max(0.0, min(1.0, self.remaining / self.total_seconds))
+        accent_pen = QPen(QColor(255, 183, 91), max(12, int(side * 0.045)))
+        accent_pen.setCapStyle(Qt.RoundCap)
+        p.setPen(accent_pen)
+        p.drawArc(rect.adjusted(16, 16, -16, -16), 90 * 16, int(-360 * 16 * ratio))
+
+        p.setPen(QColor(255, 255, 255))
+        p.setFont(font(max(44, int(side * 0.25)), QFont.Black))
+        p.drawText(rect.adjusted(0, -20, 0, 20), Qt.AlignCenter, str(self.remaining))
+        p.setFont(font(max(11, int(side * 0.045)), QFont.Black))
+        p.setPen(QColor(255, 210, 151))
+        p.drawText(rect.adjusted(0, int(side * 0.23), 0, 0), Qt.AlignCenter, "SECONDS")
+
+
+class AlarmModeCard(QAbstractButton):
+    def __init__(self, title: str, subtitle: str, icon: str, accent: str = "cyan", parent=None):
+        super().__init__(parent)
+        self.title = title
+        self.subtitle = subtitle
+        self.icon = icon
+        self.accent = accent
+        self.setCursor(Qt.PointingHandCursor)
+        self.setMinimumHeight(178)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+    def sizeHint(self):
+        return QSize(300, 205)
+
+    def accent_color(self):
+        if self.accent == "orange":
+            return QColor(255, 183, 91)
+        if self.accent == "red":
+            return QColor(255, 73, 121)
+        return QColor(85, 240, 255)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(1.5, 1.5, -1.5, -1.5)
+        accent = self.accent_color()
+
+        bg = QLinearGradient(rect.topLeft(), rect.bottomRight())
+        bg.setColorAt(0, QColor(255, 255, 255, 35))
+        bg.setColorAt(0.55, QColor(32, 44, 70, 210))
+        bg.setColorAt(1, QColor(7, 13, 24, 236))
+        p.setBrush(QBrush(bg))
+        p.setPen(QPen(QColor(accent.red(), accent.green(), accent.blue(), 108), 1.6))
+        p.drawRoundedRect(rect, 28, 28)
+
+        glow = QRadialGradient(QPointF(rect.left() + 70, rect.top() + 66), 125)
+        glow.setColorAt(0, QColor(accent.red(), accent.green(), accent.blue(), 58))
+        glow.setColorAt(1, QColor(accent.red(), accent.green(), accent.blue(), 0))
+        p.setBrush(QBrush(glow))
+        p.setPen(Qt.NoPen)
+        p.drawRoundedRect(rect, 28, 28)
+
+        icon_rect = QRectF(rect.left() + 24, rect.top() + 24, 76, 76)
+        p.setBrush(QColor(accent.red(), accent.green(), accent.blue(), 34))
+        p.setPen(QPen(QColor(accent.red(), accent.green(), accent.blue(), 136), 1.4))
+        p.drawEllipse(icon_rect)
+        p.setPen(QColor(255, 255, 255))
+        p.setFont(font(28, QFont.Black))
+        p.drawText(icon_rect, Qt.AlignCenter, self.icon)
+
+        text_x = icon_rect.right() + 20
+        title_rect = QRectF(text_x, rect.top() + 28, rect.width() - text_x + rect.left() - 22, 48)
+        p.setPen(QColor(255, 255, 255))
+        p.setFont(font(22, QFont.Black))
+        p.drawText(title_rect, Qt.AlignLeft | Qt.AlignVCenter, self.title)
+
+        sub_rect = QRectF(text_x, rect.top() + 82, rect.width() - text_x + rect.left() - 22, 74)
+        p.setPen(QColor(196, 211, 232))
+        p.setFont(font(11, QFont.Bold))
+        p.drawText(sub_rect, Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap, self.subtitle)
+
+        p.setPen(QColor(accent.red(), accent.green(), accent.blue(), 220))
+        p.setFont(font(18, QFont.Black))
+        p.drawText(QRectF(rect.right() - 58, rect.bottom() - 56, 34, 34), Qt.AlignCenter, "›")
+
+
 class AlarmControlDialog(QDialog):
     actionDone = pyqtSignal(dict, str)
 
@@ -7585,23 +7704,26 @@ class AlarmControlDialog(QDialog):
         self.entity = alarm_entity or {}
         self.code_buffer = ""
         self.remaining = 0
+        self.countdown_total = 60
         self.countdown_timer = QTimer(self)
         self.countdown_timer.timeout.connect(self.countdown_tick)
 
         self.setModal(True)
         self.setWindowTitle("Alarm Control")
-        self.setFixedSize(470, 430)
         self.setStyleSheet("""
             QDialog {
                 background:qlineargradient(x1:0,y1:0,x2:1,y2:1,
-                    stop:0 #070d18,
-                    stop:0.55 #101a32,
-                    stop:1 #210c17);
+                    stop:0 #050a13,
+                    stop:0.42 #0c1730,
+                    stop:0.72 #121b36,
+                    stop:1 #260b18);
                 color:#f7fbff;
             }
             QLabel {
                 color:#f7fbff;
                 font-family:Arial;
+                background:transparent;
+                border:0;
             }
             QPushButton {
                 font-family:Arial;
@@ -7610,8 +7732,8 @@ class AlarmControlDialog(QDialog):
         """)
 
         self.root = QVBoxLayout(self)
-        self.root.setContentsMargins(22, 18, 22, 18)
-        self.root.setSpacing(12)
+        self.root.setContentsMargins(34, 28, 34, 28)
+        self.root.setSpacing(18)
 
         self.title = QLabel("")
         self.title.setAlignment(Qt.AlignCenter)
@@ -7619,26 +7741,54 @@ class AlarmControlDialog(QDialog):
         self.root.addWidget(self.title)
 
         self.body = QVBoxLayout()
-        self.body.setSpacing(12)
+        self.body.setSpacing(16)
         self.root.addLayout(self.body, 1)
 
+        self.fit_to_parent()
         self.render()
 
-    def clear_body(self):
-        while self.body.count():
-            item = self.body.takeAt(0)
+    def fit_to_parent(self):
+        parent = self.parentWidget()
+        if parent:
+            base_w = max(620, parent.width())
+            base_h = max(540, parent.height())
+        else:
+            screen = QApplication.primaryScreen()
+            geo = screen.availableGeometry() if screen else QRectF(0, 0, 1000, 700)
+            base_w = int(geo.width())
+            base_h = int(geo.height())
+        width = int(base_w * 0.88)
+        height = int(base_h * 0.86)
+        if base_w > 720:
+            width = min(width, base_w - 36)
+        if base_h > 580:
+            height = min(height, base_h - 36)
+        width = max(620, min(width, 1180))
+        height = max(520, min(height, 1040))
+        self.resize(width, height)
+        self.setMinimumSize(min(width, 620), min(height, 520))
+
+    def _clear_layout(self, layout):
+        while layout.count():
+            item = layout.takeAt(0)
             widget = item.widget()
             child_layout = item.layout()
             if widget:
                 widget.deleteLater()
             elif child_layout:
-                while child_layout.count():
-                    child = child_layout.takeAt(0)
-                    if child.widget():
-                        child.widget().deleteLater()
+                self._clear_layout(child_layout)
+
+    def clear_body(self):
+        self._clear_layout(self.body)
 
     def current_state(self) -> str:
         return str(self.entity.get("state") or "disarmed").lower()
+
+    def state_text(self) -> str:
+        return self.current_state().replace("_", " ").upper()
+
+    def alarm_name(self) -> str:
+        return str(self.entity.get("name") or self.entity.get("entityId") or "Alarm Panel")
 
     def is_armed(self) -> bool:
         state = self.current_state()
@@ -7651,64 +7801,139 @@ class AlarmControlDialog(QDialog):
         else:
             self.render_arm_options()
 
-    def render_arm_options(self):
-        self.setFixedSize(470, 320)
-        self.title.setText(
-            "<span style='color:#55f0ff; letter-spacing:3px; font-size:12px; font-weight:900'>ALARM DISARMED</span>"
-            "<br><span style='font-size:32px; font-weight:1000; color:#ffffff'>Select Arm Mode</span>"
+    def header_html(self, eyebrow: str, title: str, accent: str = "#55f0ff") -> str:
+        safe_name = self.alarm_name()
+        return (
+            f"<span style='color:{accent}; letter-spacing:4px; font-size:12px; font-weight:1000'>{eyebrow}</span>"
+            f"<br><span style='font-size:36px; font-weight:1000; color:#ffffff'>{title}</span>"
+            f"<br><span style='font-size:13px; font-weight:800; color:#aebbd0'>{safe_name}</span>"
         )
 
-        buttons = QVBoxLayout()
-        buttons.setSpacing(12)
+    def make_status_panel(self, state_label: str, message: str, accent: str = "#55f0ff"):
+        panel = QFrame()
+        panel.setStyleSheet(f"""
+            QFrame {{
+                background:rgba(255,255,255,0.055);
+                border:1px solid rgba(255,255,255,0.105);
+                border-radius:26px;
+            }}
+            QLabel {{ background:transparent; border:0; }}
+        """)
+        row = QHBoxLayout(panel)
+        row.setContentsMargins(22, 16, 22, 16)
+        row.setSpacing(16)
 
-        self.arm_home = RoundButton("Arm Home", active=True, min_h=62)
-        self.arm_away = RoundButton("Arm Away  •  60 sec", active=True, kind="purple", min_h=62)
-        self.cancel = RoundButton("Cancel", active=False, min_h=54)
+        badge = QLabel("●")
+        badge.setAlignment(Qt.AlignCenter)
+        badge.setFixedSize(54, 54)
+        badge.setFont(font(26, QFont.Black))
+        badge.setStyleSheet(f"""
+            QLabel {{
+                color:{accent};
+                background:rgba(255,255,255,0.055);
+                border:1px solid rgba(255,255,255,0.10);
+                border-radius:27px;
+            }}
+        """)
+        row.addWidget(badge)
 
+        text = QLabel(f"<b>{state_label}</b><br><span style='color:#aebbd0'>{message}</span>")
+        text.setTextFormat(Qt.RichText)
+        text.setWordWrap(True)
+        text.setFont(font(12, QFont.Bold))
+        row.addWidget(text, 1)
+        return panel
+
+    def render_arm_options(self):
+        self.title.setText(self.header_html("ALARM DISARMED", "Select Arm Mode", "#55f0ff"))
+
+        self.body.addWidget(self.make_status_panel(
+            "Ready to arm",
+            "Choose a mode below. Arm Away starts a 60 second exit countdown before the alarm is armed.",
+            "#55f0ff",
+        ))
+
+        cards = QHBoxLayout()
+        cards.setSpacing(18)
+        self.arm_home = AlarmModeCard(
+            "Arm Home",
+            "Stay mode for when people are inside. Exterior protection is armed while you remain home.",
+            "⌂",
+            "cyan",
+        )
+        self.arm_away = AlarmModeCard(
+            "Arm Away",
+            "Full protection with a 60 second exit timer. The panel arms after the countdown finishes.",
+            "⏱",
+            "orange",
+        )
         self.arm_home.clicked.connect(lambda: self.send_action("arm_home"))
         self.arm_away.clicked.connect(self.begin_arm_away_countdown)
-        self.cancel.clicked.connect(self.reject)
+        cards.addWidget(self.arm_home, 1)
+        cards.addWidget(self.arm_away, 1)
+        self.body.addLayout(cards, 1)
 
-        buttons.addWidget(self.arm_home)
-        buttons.addWidget(self.arm_away)
-        buttons.addWidget(self.cancel)
-        self.body.addLayout(buttons)
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        cancel = RoundButton("Cancel", active=False, min_h=58)
+        cancel.setMinimumWidth(190)
+        cancel.clicked.connect(self.reject)
+        actions.addWidget(cancel)
+        actions.addStretch(1)
+        self.body.addLayout(actions)
 
     def render_keypad(self):
-        self.setFixedSize(470, 520)
-        self.title.setText(
-            "<span style='color:#ff4979; letter-spacing:3px; font-size:12px; font-weight:900'>ALARM ARMED</span>"
-            "<br><span style='font-size:32px; font-weight:1000; color:#ffffff'>Enter Code</span>"
-        )
+        state = self.current_state()
+        accent = "#ff4979" if state != "triggered" else "#ff365b"
+        title = "Alarm Triggered" if state == "triggered" else "Enter Code"
+        self.title.setText(self.header_html(self.state_text(), title, accent))
 
-        self.code_display = QLabel("••••")
+        self.body.addWidget(self.make_status_panel(
+            "Code required to disarm",
+            "Enter the alarm disarm code. The panel will send Disarm automatically after four digits.",
+            accent,
+        ))
+
+        content = QHBoxLayout()
+        content.setSpacing(22)
+
+        left = QVBoxLayout()
+        left.setSpacing(16)
+        left.addStretch(1)
+        self.code_display = QLabel("····")
         self.code_display.setAlignment(Qt.AlignCenter)
-        self.code_display.setFont(font(30, QFont.Black))
+        self.code_display.setFont(font(42, QFont.Black))
         self.code_display.setStyleSheet("""
             QLabel {
                 color:#ffffff;
                 background:rgba(255,255,255,0.07);
-                border:1px solid rgba(255,73,121,0.52);
-                border-radius:24px;
-                padding:12px;
-                letter-spacing:9px;
+                border:1px solid rgba(255,73,121,0.55);
+                border-radius:30px;
+                padding:24px 16px;
+                letter-spacing:12px;
             }
         """)
-        self.body.addWidget(self.code_display)
+        left.addWidget(self.code_display)
+        helper = QLabel("DISARM CODE")
+        helper.setAlignment(Qt.AlignCenter)
+        helper.setFont(font(11, QFont.Black))
+        helper.setStyleSheet("color:#ff9cb5; letter-spacing:3px;")
+        left.addWidget(helper)
+        left.addStretch(1)
+        content.addLayout(left, 1)
 
         keypad = QGridLayout()
-        keypad.setHorizontalSpacing(10)
-        keypad.setVerticalSpacing(10)
-
+        keypad.setHorizontalSpacing(12)
+        keypad.setVerticalSpacing(12)
         keys = [
             ("1", 0, 0), ("2", 0, 1), ("3", 0, 2),
             ("4", 1, 0), ("5", 1, 1), ("6", 1, 2),
             ("7", 2, 0), ("8", 2, 1), ("9", 2, 2),
             ("⌫", 3, 0), ("0", 3, 1), ("Cancel", 3, 2),
         ]
-
         for label, row, col in keys:
-            b = RoundButton(label, active=(label not in {"⌫", "Cancel"}), min_h=64)
+            b = RoundButton(label, active=(label not in {"⌫", "Cancel"}), min_h=72)
+            b.setMinimumWidth(92)
             if label == "Cancel":
                 b.setKind("danger")
                 b.clicked.connect(self.reject)
@@ -7717,8 +7942,9 @@ class AlarmControlDialog(QDialog):
             else:
                 b.clicked.connect(lambda checked=False, d=label: self.add_code_digit(d))
             keypad.addWidget(b, row, col)
-
-        self.body.addLayout(keypad)
+        content.addLayout(keypad, 1)
+        self.body.addLayout(content, 1)
+        self.update_code_display()
 
     def update_code_display(self):
         entered = "•" * len(self.code_buffer)
@@ -7748,66 +7974,76 @@ class AlarmControlDialog(QDialog):
 
     def invalid_disarm_code(self):
         self.code_buffer = ""
-        self.title.setText(
-            "<span style='color:#ff4979; letter-spacing:3px; font-size:12px; font-weight:900'>INVALID CODE</span>"
-            "<br><span style='font-size:32px; font-weight:1000; color:#ffffff'>Try Again</span>"
-        )
+        self.title.setText(self.header_html("INVALID CODE", "Try Again", "#ff4979"))
         self.code_display.setText("••••")
         self.code_display.setStyleSheet("""
             QLabel {
                 color:#ffffff;
                 background:rgba(255,54,91,0.18);
                 border:1px solid rgba(255,74,111,0.78);
-                border-radius:24px;
-                padding:12px;
-                letter-spacing:9px;
+                border-radius:30px;
+                padding:24px 16px;
+                letter-spacing:12px;
             }
         """)
         QTimer.singleShot(800, self.restore_keypad_after_invalid)
 
     def restore_keypad_after_invalid(self):
-        self.title.setText(
-            "<span style='color:#ff4979; letter-spacing:3px; font-size:12px; font-weight:900'>ALARM ARMED</span>"
-            "<br><span style='font-size:32px; font-weight:1000; color:#ffffff'>Enter Code</span>"
-        )
+        self.title.setText(self.header_html(self.state_text(), "Enter Code", "#ff4979"))
         self.code_display.setStyleSheet("""
             QLabel {
                 color:#ffffff;
                 background:rgba(255,255,255,0.07);
-                border:1px solid rgba(255,73,121,0.52);
-                border-radius:24px;
-                padding:12px;
-                letter-spacing:9px;
+                border:1px solid rgba(255,73,121,0.55);
+                border-radius:30px;
+                padding:24px 16px;
+                letter-spacing:12px;
             }
         """)
         self.update_code_display()
 
     def begin_arm_away_countdown(self):
         self.clear_body()
-        self.setFixedSize(470, 320)
-        self.remaining = 60
-        self.title.setText(
-            "<span style='color:#ffb65c; letter-spacing:3px; font-size:12px; font-weight:900'>ARMING AWAY</span>"
-            "<br><span style='font-size:32px; font-weight:1000; color:#ffffff'>Exit Timer</span>"
-        )
+        self.countdown_total = 60
+        self.remaining = self.countdown_total
+        self.title.setText(self.header_html("ARMING AWAY", "Exit Timer", "#ffb65c"))
 
-        self.countdown_label = QLabel("")
-        self.countdown_label.setAlignment(Qt.AlignCenter)
-        self.countdown_label.setFont(font(46, QFont.Black))
-        self.countdown_label.setStyleSheet("""
-            QLabel {
-                color:#ffffff;
-                background:rgba(255,91,121,0.16);
-                border:1px solid rgba(255,91,121,0.45);
-                border-radius:28px;
-                padding:18px;
-            }
-        """)
-        self.body.addWidget(self.countdown_label)
+        self.body.addWidget(self.make_status_panel(
+            "Leave now",
+            "The alarm will arm away automatically when the countdown reaches zero.",
+            "#ffb65c",
+        ))
 
-        cancel = RoundButton("Cancel Countdown", active=False, kind="danger", min_h=58)
+        mid = QHBoxLayout()
+        mid.setSpacing(28)
+        mid.addStretch(1)
+        self.countdown_ring = AlarmCountdownRing(self.countdown_total)
+        mid.addWidget(self.countdown_ring, 2)
+
+        info = QVBoxLayout()
+        info.setSpacing(14)
+        info.addStretch(1)
+        status = QLabel("ARM AWAY PENDING")
+        status.setAlignment(Qt.AlignCenter)
+        status.setFont(font(14, QFont.Black))
+        status.setStyleSheet("color:#ffcf95; letter-spacing:3px;")
+        info.addWidget(status)
+        detail = QLabel("The system is waiting for the exit delay to finish before sending Arm Away to Home Assistant.")
+        detail.setAlignment(Qt.AlignCenter)
+        detail.setWordWrap(True)
+        detail.setFont(font(12, QFont.Bold))
+        detail.setStyleSheet("color:#c4d0e5;")
+        info.addWidget(detail)
+        arm_now = RoundButton("Arm Now", active=True, kind="purple", min_h=62)
+        arm_now.clicked.connect(lambda: self.send_action("arm_away"))
+        info.addWidget(arm_now)
+        cancel = RoundButton("Cancel Countdown", active=False, kind="danger", min_h=62)
         cancel.clicked.connect(self.reject)
-        self.body.addWidget(cancel)
+        info.addWidget(cancel)
+        info.addStretch(1)
+        mid.addLayout(info, 1)
+        mid.addStretch(1)
+        self.body.addLayout(mid, 1)
 
         self.countdown_timer.start(1000)
         self.countdown_tick(first=True)
@@ -7819,7 +8055,8 @@ class AlarmControlDialog(QDialog):
             self.countdown_timer.stop()
             self.send_action("arm_away")
             return
-        self.countdown_label.setText(str(self.remaining))
+        if hasattr(self, "countdown_ring"):
+            self.countdown_ring.setRemaining(self.remaining)
 
     def reject(self):
         if self.countdown_timer.isActive():
@@ -7827,10 +8064,12 @@ class AlarmControlDialog(QDialog):
         super().reject()
 
     def set_busy(self, busy: bool):
-        for btn in self.findChildren(QPushButton):
+        for btn in self.findChildren(QAbstractButton):
             btn.setEnabled(not busy)
 
     def send_action(self, action: str, code: str = ""):
+        if self.countdown_timer.isActive():
+            self.countdown_timer.stop()
         self.set_busy(True)
         QApplication.processEvents()
         try:
@@ -7846,7 +8085,7 @@ class AlarmControlDialog(QDialog):
             self.accept()
         except Exception as exc:
             self.set_busy(False)
-            if action == "disarm":
+            if action == "disarm" and hasattr(self, "code_display"):
                 self.code_buffer = ""
                 self.update_code_display()
             QMessageBox.warning(self, "Alarm Action Failed", str(exc))
