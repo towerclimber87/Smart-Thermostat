@@ -338,12 +338,11 @@ def _normalize_mode(value: object, fallback: str = "cool") -> str:
         mode = mode.split(".", 1)[1]
     if mode in {"heat_cool", "auto"}:
         return "auto"
-    if mode in {"heat", "cool"}:
+    if mode in {"off", "heat", "cool"}:
         return mode
-    # Keep the wall panel in a valid operating mode even if HA sends off.
-    # The UI does not have an Off mode, so an off command should not corrupt
-    # the saved heat/cool/auto setting.
-    return fallback if fallback in {"heat", "cool", "auto"} else "cool"
+    if fallback == "":
+        return ""
+    return fallback if fallback in {"off", "heat", "cool", "auto"} else "cool"
 
 
 def _normalize_fan(value: object, fallback: str = "auto") -> str:
@@ -648,38 +647,14 @@ def _presence_home_override_payload(entity_ids: list[str] | None = None, *, reas
 
 
 def _allowed_mode_for_locks(mode: str, thermostat: dict, fallback: str = "cool") -> str:
-    requested = _normalize_mode(mode, fallback)
-    cool_available = not bool(thermostat.get("coolLocked"))
-    heat_available = not bool(thermostat.get("heatLocked"))
-    if requested == "cool" and cool_available:
-        return "cool"
-    if requested == "heat" and heat_available:
-        return "heat"
-    if requested == "auto" and (cool_available or heat_available):
-        return "auto"
-    fallback_mode = _normalize_mode(fallback, "cool")
-    if fallback_mode == "cool" and cool_available:
-        return "cool"
-    if fallback_mode == "heat" and heat_available:
-        return "heat"
-    if fallback_mode == "auto" and (cool_available or heat_available):
-        return "auto"
-    if cool_available:
-        return "cool"
-    if heat_available:
-        return "heat"
-    return "auto"
+    # Lockout is an output interlock, not a mode selector. A user may still
+    # select Heat/Cool/Auto/Off from the wall panel or Home Assistant, but the
+    # locked relay side must never energize, including during safety calls.
+    return _normalize_mode(mode, fallback)
 
 
 def _available_hvac_modes(thermostat: dict) -> list[str]:
-    modes: list[str] = []
-    if not bool(thermostat.get("coolLocked")):
-        modes.append("cool")
-    if not bool(thermostat.get("heatLocked")):
-        modes.append("heat")
-    if modes:
-        modes.append("heat_cool")
-    return modes
+    return ["off", "cool", "heat", "heat_cool"]
 
 def _deepcopy_json(value: object) -> object:
     return json.loads(json.dumps(value))
@@ -844,7 +819,9 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             base["currentTempUpdatedAt"] = _number(source.get("currentTempUpdatedAt", source.get("current_temp_updated_at")), base.get("currentTempUpdatedAt", 0), 0, None)
 
         if "autoActiveMode" in source:
-            base["autoActiveMode"] = _normalize_mode(source.get("autoActiveMode"), base["autoActiveMode"])
+            active = str(source.get("autoActiveMode") or base.get("autoActiveMode") or "cool").strip().lower()
+            if active in {"heat", "cool"}:
+                base["autoActiveMode"] = active
         if "autoPendingMode" in source:
             pending = str(source.get("autoPendingMode") or "").strip().lower()
             base["autoPendingMode"] = pending if pending in {"", "heat", "cool"} else ""
@@ -2978,12 +2955,6 @@ def _thermostat_outputs(thermostat: dict) -> dict:
     mode = _allowed_mode_for_locks(_normalize_mode(thermostat.get("mode"), "cool"), thermostat, "cool")
     active_mode = thermostat.get("autoActiveMode") if mode == "auto" else mode
     active_mode = _normalize_mode(active_mode, "cool")
-    if active_mode == "heat" and thermostat.get("heatLocked"):
-        active_mode = "cool" if not thermostat.get("coolLocked") else "locked"
-    if active_mode == "cool" and thermostat.get("coolLocked"):
-        active_mode = "heat" if not thermostat.get("heatLocked") else "locked"
-    if thermostat.get("heatLocked") and thermostat.get("coolLocked"):
-        active_mode = "locked"
     current = _number(thermostat.get("currentTemp"), 70)
     target = _number(thermostat.get("targetTemp"), 70)
     safety_low = _number(thermostat.get("safetyLow"), thermostat.get("awayHeat", 55), 45, 93)
@@ -3234,9 +3205,10 @@ def _handle_thermostat_update(payload: dict) -> dict:
     requested_mode = incoming.get("mode", incoming.get("hvac_mode", incoming.get("hvacMode")))
     requested_mode = _normalize_mode(requested_mode, "") if requested_mode is not None else ""
     if requested_mode in {"heat", "cool"}:
-        # Manual / physical mode changes always win. If the comfort auto-switch
-        # rule would have chosen the other side, hold the manual mode and show
-        # the UI notice instead of silently switching it back.
+        # Manual / physical mode changes always win, whether they came from the
+        # touchscreen buttons or Home Assistant. If the comfort auto-switch rule
+        # would have chosen the other side, hold the requested manual mode and
+        # let the UI show the same notice it shows for a front-panel tap.
         merged["autoSwitchNotice"] = _empty_auto_switch_notice()
         merged["autoPendingMode"] = ""
         merged["autoLockoutUntil"] = 0
@@ -3253,8 +3225,13 @@ def _handle_thermostat_update(payload: dict) -> dict:
             }
         else:
             merged["autoSwitchHold"] = _empty_auto_switch_hold()
-    elif requested_mode == "auto":
+    elif requested_mode in {"auto", "off"}:
+        merged["autoSwitchNotice"] = _empty_auto_switch_notice()
         merged["autoSwitchHold"] = _empty_auto_switch_hold()
+        merged["autoPendingMode"] = ""
+        merged["autoLockoutUntil"] = 0
+        merged["manualPendingMode"] = ""
+        merged["manualLockoutUntil"] = 0
 
     merged = _apply_comfort_auto_switch_logic(merged, notify=True)
     _write_thermostat_record(merged)

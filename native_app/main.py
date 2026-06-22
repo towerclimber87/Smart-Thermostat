@@ -1918,6 +1918,8 @@ class ThermostatScreen(Page):
         mode = str(t.get("mode") or "cool").lower()
         if mode in {"heat", "cool"}:
             return mode
+        if mode == "off":
+            return ""
         active = str(t.get("autoActiveMode") or t.get("activeMode") or "cool").lower()
         return active if active in {"heat", "cool"} else "cool"
 
@@ -2163,9 +2165,9 @@ class ThermostatScreen(Page):
         low = self.safe_float(t.get("safetyLow"), 55.0)
         high = self.safe_float(t.get("safetyHigh"), 85.0)
         if not safety_mode:
-            if current < low:
+            if current < low and not bool(t.get("heatLocked")):
                 safety_mode = "heat"
-            elif current > high:
+            elif current > high and not bool(t.get("coolLocked")):
                 safety_mode = "cool"
         if safety_mode in {"heat", "cool"}:
             self.bypass_pill.hide()
@@ -2557,9 +2559,9 @@ class ThermostatScreen(Page):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(16)
         lay.addStretch(1)
-        for mode in ["cool", "heat", "auto", "away"]:
+        for mode in ["off", "cool", "heat", "auto", "away"]:
             b = RoundButton(mode.capitalize(), active=False, min_h=38)
-            b.setFixedSize(94, 38)
+            b.setFixedSize(82, 38)
             b.clicked.connect(lambda checked=False, m=mode: self.set_mode(m))
             self.mode_buttons[mode] = b
             lay.addWidget(b)
@@ -7096,6 +7098,12 @@ class SettingsDialog(QDialog):
         self.add_section_value(safety_grid, "safetyHigh", "High Safety", t.get("safetyHigh", 85), 0, 1, 75, 100)
         self.add_section_value(safety_grid, "autoCoolOutdoorTarget", "Cool Mode Switch", t.get("autoCoolOutdoorTarget", 70), 1, 0, 40, 100)
         self.add_section_value(safety_grid, "autoHeatOutdoorTarget", "Heat Mode Switch", t.get("autoHeatOutdoorTarget", 65), 1, 1, 40, 100)
+        self.heat_lockout_button = RoundButton(self.lockout_button_text("heat"), active=bool(t.get("heatLocked")), kind="danger", min_h=30)
+        self.heat_lockout_button.clicked.connect(lambda checked=False: self.toggle_lockout("heat"))
+        self.cool_lockout_button = RoundButton(self.lockout_button_text("cool"), active=bool(t.get("coolLocked")), kind="danger", min_h=30)
+        self.cool_lockout_button.clicked.connect(lambda checked=False: self.toggle_lockout("cool"))
+        safety_grid.addWidget(self.heat_lockout_button, 2, 0)
+        safety_grid.addWidget(self.cool_lockout_button, 2, 1)
 
         changeover = self.add_section("Changeover / Fan", 1, 2, 1, 2)
         change_grid = self.section_grid(changeover, 2)
@@ -7235,6 +7243,28 @@ class SettingsDialog(QDialog):
         except Exception:
             return 0
 
+    def lockout_button_text(self, kind: str) -> str:
+        key = "heatLocked" if kind == "heat" else "coolLocked"
+        label = "Heat Lockout" if kind == "heat" else "Cool Lockout"
+        return f"{label}: {'ON' if bool((self.s.thermostat or {}).get(key)) else 'OFF'}"
+
+    def refresh_lockout_buttons(self):
+        for kind, attr in (("heat", "heat_lockout_button"), ("cool", "cool_lockout_button")):
+            button = getattr(self, attr, None)
+            if not button:
+                continue
+            key = "heatLocked" if kind == "heat" else "coolLocked"
+            active = bool((self.s.thermostat or {}).get(key))
+            button.setText(self.lockout_button_text(kind))
+            if hasattr(button, "setActive"):
+                button.setActive(active)
+
+    def toggle_lockout(self, kind: str):
+        key = "heatLocked" if kind == "heat" else "coolLocked"
+        current = bool((self.s.thermostat or {}).get(key))
+        self.set_thermostat({key: not current}, quiet=True, debounce=False, push=False)
+        self.refresh_lockout_buttons()
+
     def thermostat_name_summary_text(self) -> str:
         name = str((self.s.thermostat or {}).get("name") or "IHA Thermostat").strip() or "IHA Thermostat"
         return f"Name: {name}"
@@ -7289,6 +7319,8 @@ class SettingsDialog(QDialog):
             "autoChangeoverLockoutMinutes": self.val_number("autoChangeoverLockoutMinutes") * 60,
             "manualChangeoverLockoutMinutes": self.val_number("manualChangeoverLockoutMinutes"),
             "coolFanRemainOnMinutes": self.val_number("coolFanRemainOnMinutes"),
+            "heatLocked": bool((self.s.thermostat or {}).get("heatLocked")),
+            "coolLocked": bool((self.s.thermostat or {}).get("coolLocked")),
             "pauseFunction": {
                 "durationMinutes": self.val_number("doorPauseDurationMinutes") if "doorPauseDurationMinutes" in self.controls else int(float(pause.get("durationMinutes") or 5)),
                 "entries": copy.deepcopy(pause_entries),
