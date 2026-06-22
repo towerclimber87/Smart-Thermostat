@@ -59,6 +59,11 @@ USB_MOUNT_ROOTS = tuple(
     if x.strip()
 )
 MANUAL_CHANGEOVER_LOCKOUT_MINUTES = 10
+CONFIG_WEB_PORTAL_TIMEOUT_SECONDS = max(60.0, float(os.environ.get("SMART_THERMOSTAT_CONFIG_PORTAL_TIMEOUT_SECONDS", "900") or "900"))
+_CONFIG_WEB_PORTAL_LOCK = threading.RLock()
+_CONFIG_WEB_PORTAL_ENABLED_UNTIL = 0.0
+_CONFIG_WEB_PORTAL_STARTED_AT = 0.0
+_CONFIG_WEB_PORTAL_LAST_ACTIVITY_AT = 0.0
 _HA_STATES_CACHE_LOCK = threading.Lock()
 _HA_STATES_CACHE: dict[tuple[str, str], tuple[float, list[dict]]] = {}
 _HA_ENTITY_STATE_CACHE_LOCK = threading.Lock()
@@ -1718,19 +1723,89 @@ def _config_portal_url(server_port: int | str | None = None) -> str:
     return f"http://{ip}:{port}/config-transfer"
 
 
+def _config_web_portal_activate() -> dict:
+    now = time.monotonic()
+    with _CONFIG_WEB_PORTAL_LOCK:
+        global _CONFIG_WEB_PORTAL_ENABLED_UNTIL, _CONFIG_WEB_PORTAL_STARTED_AT, _CONFIG_WEB_PORTAL_LAST_ACTIVITY_AT
+        _CONFIG_WEB_PORTAL_STARTED_AT = now
+        _CONFIG_WEB_PORTAL_LAST_ACTIVITY_AT = now
+        _CONFIG_WEB_PORTAL_ENABLED_UNTIL = now + CONFIG_WEB_PORTAL_TIMEOUT_SECONDS
+        return {
+            "active": True,
+            "timeoutSeconds": int(CONFIG_WEB_PORTAL_TIMEOUT_SECONDS),
+        }
+
+
+def _config_web_portal_active(touch: bool = False) -> bool:
+    now = time.monotonic()
+    with _CONFIG_WEB_PORTAL_LOCK:
+        global _CONFIG_WEB_PORTAL_ENABLED_UNTIL, _CONFIG_WEB_PORTAL_LAST_ACTIVITY_AT
+        if _CONFIG_WEB_PORTAL_ENABLED_UNTIL <= now:
+            _CONFIG_WEB_PORTAL_ENABLED_UNTIL = 0.0
+            return False
+        if touch:
+            _CONFIG_WEB_PORTAL_LAST_ACTIVITY_AT = now
+            _CONFIG_WEB_PORTAL_ENABLED_UNTIL = now + CONFIG_WEB_PORTAL_TIMEOUT_SECONDS
+        return True
+
+
+def _config_web_portal_stop_payload() -> dict:
+    with _CONFIG_WEB_PORTAL_LOCK:
+        global _CONFIG_WEB_PORTAL_ENABLED_UNTIL, _CONFIG_WEB_PORTAL_STARTED_AT, _CONFIG_WEB_PORTAL_LAST_ACTIVITY_AT
+        was_active = _CONFIG_WEB_PORTAL_ENABLED_UNTIL > time.monotonic()
+        _CONFIG_WEB_PORTAL_ENABLED_UNTIL = 0.0
+        _CONFIG_WEB_PORTAL_STARTED_AT = 0.0
+        _CONFIG_WEB_PORTAL_LAST_ACTIVITY_AT = 0.0
+    return {
+        "ok": True,
+        "active": False,
+        "wasActive": was_active,
+        "message": "Config transfer portal stopped.",
+    }
+
+
+def _config_transfer_closed_html() -> str:
+    return """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Config Transfer Closed</title>
+  <style>
+    :root { color-scheme: dark; font-family: Arial, Helvetica, sans-serif; }
+    body { margin:0; min-height:100vh; display:grid; place-items:center; color:#f7fbff; background:linear-gradient(135deg,#071222,#101d35,#050913); }
+    .card { width:min(680px, calc(100% - 36px)); border:1px solid rgba(255,255,255,.14); border-radius:28px; padding:28px; background:rgba(255,255,255,.075); box-shadow:0 18px 55px rgba(0,0,0,.28); }
+    .eyebrow { color:#46e8ff; font-size:12px; font-weight:900; letter-spacing:4px; text-transform:uppercase; }
+    h1 { margin:8px 0 10px; font-size:clamp(32px,5vw,54px); line-height:.95; }
+    p { color:#a8b6cf; line-height:1.5; font-size:17px; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="eyebrow">Smart Thermostat</div>
+    <h1>Config transfer is closed</h1>
+    <p>Open Download Config or Upload Config again on the thermostat panel to temporarily enable this page.</p>
+  </main>
+</body>
+</html>"""
+
+
 def _config_web_portal_payload(server_port: int | str | None = None) -> dict:
     info = _system_info_payload(server_port)
     url = _config_portal_url(server_port)
+    portal = _config_web_portal_activate()
     return {
         "ok": True,
-        "message": "Config web portal is ready.",
+        "message": "Config transfer portal is ready.",
         "url": url,
         "ipAddress": info.get("ipAddress"),
         "port": info.get("port"),
         "address": info.get("address"),
         "thermostatName": info.get("thermostatName") or info.get("name"),
-        "note": "Open this address from a computer on the same network to download or upload the thermostat config.",
-        "resourceMode": "existing-backend",
+        "note": "Open this address from a computer on the same network to download or upload the thermostat config. Keep the panel popup open while transferring; closing it stops the portal.",
+        "resourceMode": "temporary-existing-backend-route",
+        "active": portal.get("active"),
+        "timeoutSeconds": portal.get("timeoutSeconds"),
     }
 
 
@@ -5806,9 +5881,14 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
             server_port = getattr(self.server, "server_address", (None, None))[1]
             return _json(self, 200, _system_info_payload(server_port))
         if path in {"/config-transfer", "/config", "/config-backup"}:
+            if not _config_web_portal_active(touch=True):
+                return _send_html(self, _config_transfer_closed_html())
             server_port = getattr(self.server, "server_address", (None, None))[1]
             return _send_html(self, _config_transfer_html(server_port))
         if path == "/api/system/config-export":
+            if not _config_web_portal_active(touch=True):
+                self.send_error(403, "Config transfer portal is closed")
+                return
             server_port = getattr(self.server, "server_address", (None, None))[1]
             return _send_json_download(self, _config_backup_filename(), _config_export_payload(server_port))
         if path == "/api/hardware/status":
@@ -5842,7 +5922,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action"}:
             self.send_error(404, "Not found")
             return
 
@@ -5870,12 +5950,18 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                 result = _config_web_portal_payload(server_port)
                 return _json(self, 200 if result.get("ok") else 500, result)
 
+            if path == "/api/system/config-web-portal/close":
+                result = _config_web_portal_stop_payload()
+                return _json(self, 200 if result.get("ok") else 500, result)
+
             if path == "/api/system/config-export-usb":
                 server_port = getattr(self.server, "server_address", (None, None))[1]
                 result = _config_export_usb_payload(server_port)
                 return _json(self, 200 if result.get("ok") else 400, result)
 
             if path == "/api/system/config-import":
+                if not _config_web_portal_active(touch=True):
+                    return _json(self, 403, {"ok": False, "error": "Config transfer portal is closed. Open Download Config or Upload Config again on the thermostat panel."})
                 result = _config_import_payload(payload)
                 return _json(self, 200 if result.get("ok") else 400, result)
 

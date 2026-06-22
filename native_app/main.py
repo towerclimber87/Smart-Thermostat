@@ -7893,7 +7893,7 @@ class MainWindow(Background):
 
         help_text = QLabel(
             f"Open this address from a computer on the same network to {action_text}. "
-            "The browser page shows panel stats and has Download Config / Upload Config buttons."
+            "Keep this popup open while transferring; closing it shuts off the config transfer portal."
         )
         help_text.setWordWrap(True)
         help_text.setFont(font(12, QFont.Bold))
@@ -7917,7 +7917,7 @@ class MainWindow(Background):
         url_label.setStyleSheet("color:#ffffff; padding:10px 0;")
         panel_layout.addWidget(url_label)
 
-        note = QLabel("This uses the existing thermostat backend instead of starting another heavy service, so it avoids the USB search and keeps resource use low.")
+        note = QLabel("The transfer page is only enabled while this popup is open. Closing this popup stops the transfer portal so it is not left available on the network.")
         note.setWordWrap(True)
         note.setFont(font(10, QFont.Bold))
         note.setStyleSheet("color:#9fb0c8;")
@@ -7927,7 +7927,7 @@ class MainWindow(Background):
         buttons = QHBoxLayout()
         buttons.setSpacing(10)
         copy_btn = RoundButton("Copy Address", active=True, min_h=48)
-        close_btn = RoundButton("Close", active=False, min_h=48)
+        close_btn = RoundButton("Close & Stop Portal", active=False, min_h=48)
         buttons.addStretch(1)
         buttons.addWidget(copy_btn)
         buttons.addWidget(close_btn)
@@ -7942,7 +7942,16 @@ class MainWindow(Background):
 
         copy_btn.clicked.connect(copy_url)
         close_btn.clicked.connect(dlg.accept)
-        dlg.exec_()
+        try:
+            dlg.exec_()
+        finally:
+            self.stop_config_portal()
+
+    def stop_config_portal(self):
+        try:
+            self.s.api.post("/api/system/config-web-portal/close", {})
+        except Exception:
+            pass
 
     def export_config(self):
         self.show_config_portal("download")
