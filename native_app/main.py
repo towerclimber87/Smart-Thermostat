@@ -7844,20 +7844,111 @@ class MainWindow(Background):
         except Exception as exc:
             self.toast.show_message(f"Restart failed: {exc}")
 
-    def export_config(self):
+    def show_config_portal(self, mode: str = ""):
         try:
-            data = self.s.api.post("/api/system/config-export-usb", {})
-            self.toast.show_message(data.get("message") or "Config downloaded to USB", 7000)
+            data = self.s.api.post("/api/system/config-web-portal", {})
+            url = str(data.get("url") or "").strip()
+            if not url:
+                raise RuntimeError(data.get("error") or "The config portal address was not returned.")
+            self.show_config_portal_dialog(data, mode=mode)
         except Exception as exc:
-            self.toast.show_message(f"USB download failed: {exc}", 8000)
+            self.toast.show_message(f"Config web portal failed: {exc}", 8000)
+
+    def show_config_portal_dialog(self, data: dict, mode: str = ""):
+        url = str(data.get("url") or "").strip()
+        address = str(data.get("address") or "").strip()
+        name = str(data.get("thermostatName") or "Smart Thermostat").strip() or "Smart Thermostat"
+        action_text = "download or upload"
+        if mode == "download":
+            action_text = "download a config backup"
+        elif mode == "upload":
+            action_text = "upload a config backup"
+
+        dlg = QDialog(self)
+        dlg.setModal(True)
+        dlg.setWindowTitle("Config Web Portal")
+        dlg.setFixedSize(720, 410)
+        dlg.setStyleSheet("""
+            QDialog {
+                background:qlineargradient(x1:0,y1:0,x2:1,y2:1,
+                    stop:0 #071222,
+                    stop:0.52 #101d35,
+                    stop:1 #0b1020);
+                color:#f7fbff;
+            }
+            QLabel {
+                color:#f7fbff;
+                background:transparent;
+                border:0;
+                font-family:Arial;
+            }
+        """)
+        root = QVBoxLayout(dlg)
+        root.setContentsMargins(26, 24, 26, 22)
+        root.setSpacing(14)
+
+        title = QLabel("<span style='color:#46e8ff; letter-spacing:4px; font-size:11px; font-weight:900'>CONFIG SERVER READY</span><br><span style='font-size:30px; font-weight:1000; color:#ffffff'>Web Config Transfer</span>")
+        title.setTextFormat(Qt.RichText)
+        root.addWidget(title)
+
+        help_text = QLabel(
+            f"Open this address from a computer on the same network to {action_text}. "
+            "The browser page shows panel stats and has Download Config / Upload Config buttons."
+        )
+        help_text.setWordWrap(True)
+        help_text.setFont(font(12, QFont.Bold))
+        help_text.setStyleSheet("color:#dce8ff;")
+        root.addWidget(help_text)
+
+        panel = GlassPanel(radius=22)
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(18, 16, 18, 16)
+        panel_layout.setSpacing(9)
+
+        name_label = QLabel(f"{name}  •  {address or 'Network address ready'}")
+        name_label.setFont(font(11, QFont.Black))
+        name_label.setStyleSheet("color:#96a7c2;")
+        panel_layout.addWidget(name_label)
+
+        url_label = QLabel(url)
+        url_label.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+        url_label.setWordWrap(True)
+        url_label.setFont(font(19, QFont.Black))
+        url_label.setStyleSheet("color:#ffffff; padding:10px 0;")
+        panel_layout.addWidget(url_label)
+
+        note = QLabel("This uses the existing thermostat backend instead of starting another heavy service, so it avoids the USB search and keeps resource use low.")
+        note.setWordWrap(True)
+        note.setFont(font(10, QFont.Bold))
+        note.setStyleSheet("color:#9fb0c8;")
+        panel_layout.addWidget(note)
+        root.addWidget(panel, 1)
+
+        buttons = QHBoxLayout()
+        buttons.setSpacing(10)
+        copy_btn = RoundButton("Copy Address", active=True, min_h=48)
+        close_btn = RoundButton("Close", active=False, min_h=48)
+        buttons.addStretch(1)
+        buttons.addWidget(copy_btn)
+        buttons.addWidget(close_btn)
+        root.addLayout(buttons)
+
+        def copy_url():
+            try:
+                QApplication.clipboard().setText(url)
+                self.toast.show_message("Config portal address copied", 3000)
+            except Exception:
+                pass
+
+        copy_btn.clicked.connect(copy_url)
+        close_btn.clicked.connect(dlg.accept)
+        dlg.exec_()
+
+    def export_config(self):
+        self.show_config_portal("download")
 
     def import_config(self):
-        try:
-            data = self.s.api.post("/api/system/config-import-usb", {})
-            self.reload_all()
-            self.toast.show_message(data.get("message") or "Config uploaded from USB", 7000)
-        except Exception as exc:
-            self.toast.show_message(f"USB upload failed: {exc}", 8000)
+        self.show_config_portal("upload")
 
     def force_panel_geometry(self):
         """Force the native kiosk window to cover the whole X screen.

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import html
 import json
 import mimetypes
 import os
@@ -1693,6 +1694,159 @@ def _send_json_download(handler: BaseHTTPRequestHandler, filename: str, payload:
     handler.end_headers()
     handler.close_connection = True
     handler.wfile.write(body)
+
+
+def _send_html(handler: BaseHTTPRequestHandler, body: str) -> None:
+    raw = body.encode("utf-8")
+    handler.send_response(200)
+    handler.send_header("Content-Type", "text/html; charset=utf-8")
+    handler.send_header("Content-Length", str(len(raw)))
+    handler.send_header("Cache-Control", "no-store")
+    handler.send_header("Connection", "close")
+    handler.end_headers()
+    handler.close_connection = True
+    handler.wfile.write(raw)
+
+
+def _config_portal_url(server_port: int | str | None = None) -> str:
+    info = _system_info_payload(server_port)
+    ip = str(info.get("ipAddress") or "127.0.0.1").strip() or "127.0.0.1"
+    try:
+        port = int(info.get("port") or server_port or 8080)
+    except (TypeError, ValueError):
+        port = 8080
+    return f"http://{ip}:{port}/config-transfer"
+
+
+def _config_web_portal_payload(server_port: int | str | None = None) -> dict:
+    info = _system_info_payload(server_port)
+    url = _config_portal_url(server_port)
+    return {
+        "ok": True,
+        "message": "Config web portal is ready.",
+        "url": url,
+        "ipAddress": info.get("ipAddress"),
+        "port": info.get("port"),
+        "address": info.get("address"),
+        "thermostatName": info.get("thermostatName") or info.get("name"),
+        "note": "Open this address from a computer on the same network to download or upload the thermostat config.",
+        "resourceMode": "existing-backend",
+    }
+
+
+def _config_transfer_html(server_port: int | str | None = None) -> str:
+    info = _system_info_payload(server_port)
+    config_record = _panel_config_payload()
+    name = html.escape(str(info.get("thermostatName") or info.get("name") or "Smart Thermostat"))
+    version = html.escape(str(info.get("version") or "--"))
+    address = html.escape(str(info.get("address") or "--"))
+    uptime = html.escape(str(info.get("uptime") or "--"))
+    thermal = html.escape(str(info.get("thermal") or "--"))
+    host = html.escape(str(info.get("host") or "--"))
+    updated = html.escape(str(config_record.get("updatedAt") or "--"))
+    cfg_version = html.escape(str(config_record.get("version") or "--"))
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{name} Config Transfer</title>
+  <style>
+    :root {{ color-scheme: dark; font-family: Arial, Helvetica, sans-serif; }}
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; min-height: 100vh; color: #f7fbff; background: radial-gradient(circle at 15% 0%, rgba(70,232,255,.24), transparent 28%), linear-gradient(135deg, #071222, #101d35 52%, #050913); }}
+    .wrap {{ width: min(980px, calc(100% - 36px)); margin: 0 auto; padding: 34px 0 46px; }}
+    .hero {{ display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; margin-bottom: 18px; }}
+    .eyebrow {{ color: #46e8ff; font-size: 12px; font-weight: 900; letter-spacing: 4px; text-transform: uppercase; }}
+    h1 {{ margin: 7px 0 8px; font-size: clamp(32px, 5vw, 58px); line-height: .95; }}
+    .muted {{ color: #a8b6cf; line-height: 1.45; }}
+    .pill {{ border: 1px solid rgba(255,255,255,.16); border-radius: 999px; padding: 10px 14px; color: #dce8ff; background: rgba(255,255,255,.07); white-space: nowrap; }}
+    .grid {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 20px 0; }}
+    .card {{ border: 1px solid rgba(255,255,255,.13); border-radius: 24px; padding: 18px; background: rgba(255,255,255,.075); box-shadow: 0 18px 55px rgba(0,0,0,.28); backdrop-filter: blur(14px); }}
+    .label {{ color: #8fa1be; font-size: 11px; font-weight: 900; letter-spacing: 2.5px; text-transform: uppercase; margin-bottom: 8px; }}
+    .value {{ font-size: 18px; font-weight: 900; overflow-wrap: anywhere; }}
+    .actions {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 18px; }}
+    .action-card {{ min-height: 240px; display: flex; flex-direction: column; gap: 12px; }}
+    button, .button {{ border: 0; border-radius: 18px; min-height: 56px; padding: 0 22px; display: inline-flex; align-items: center; justify-content: center; text-decoration: none; font-weight: 1000; font-size: 16px; color: white; cursor: pointer; background: linear-gradient(135deg, #14b8ff, #7c3aed); box-shadow: 0 12px 36px rgba(20,184,255,.22); }}
+    button.secondary {{ background: rgba(255,255,255,.10); box-shadow: none; border: 1px solid rgba(255,255,255,.15); }}
+    input[type=file] {{ width: 100%; padding: 14px; border-radius: 16px; color: #dce8ff; border: 1px dashed rgba(255,255,255,.28); background: rgba(0,0,0,.18); }}
+    .status {{ min-height: 48px; padding: 12px 14px; border-radius: 16px; color: #e9f4ff; background: rgba(0,0,0,.20); border: 1px solid rgba(255,255,255,.10); }}
+    .ok {{ color: #76ffc4; }} .bad {{ color: #ff8a8a; }}
+    @media (max-width: 760px) {{ .hero, .actions {{ grid-template-columns: 1fr; display: grid; }} .grid {{ grid-template-columns: 1fr 1fr; }} .pill {{ white-space: normal; }} }}
+    @media (max-width: 480px) {{ .grid {{ grid-template-columns: 1fr; }} }}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="hero">
+      <div>
+        <div class="eyebrow">Smart Thermostat</div>
+        <h1>{name}</h1>
+        <div class="muted">Download a backup into this browser or upload a saved backup to restore this panel. No USB drive is required.</div>
+      </div>
+      <div class="pill">{address}</div>
+    </section>
+
+    <section class="grid">
+      <div class="card"><div class="label">Version</div><div class="value">{version}</div></div>
+      <div class="card"><div class="label">Host</div><div class="value">{host}</div></div>
+      <div class="card"><div class="label">Thermal</div><div class="value">{thermal}</div></div>
+      <div class="card"><div class="label">Uptime</div><div class="value">{uptime}</div></div>
+      <div class="card"><div class="label">Config Version</div><div class="value">{cfg_version}</div></div>
+      <div class="card"><div class="label">Config Updated</div><div class="value">{updated}</div></div>
+      <div class="card"><div class="label">Backup Name</div><div class="value">Device + date</div></div>
+      <div class="card"><div class="label">Server</div><div class="value">Ready</div></div>
+    </section>
+
+    <section class="actions">
+      <div class="card action-card">
+        <div class="label">Download</div>
+        <div class="value">Save this panel's config</div>
+        <p class="muted">The filename includes the thermostat name and current date/time.</p>
+        <a class="button" href="/api/system/config-export">Download Config</a>
+      </div>
+      <div class="card action-card">
+        <div class="label">Upload</div>
+        <div class="value">Restore from a config file</div>
+        <input id="file" type="file" accept="application/json,.json" />
+        <button id="upload" type="button">Upload Config</button>
+        <div id="status" class="status muted">Choose a Smart Thermostat config backup, then press Upload Config.</div>
+      </div>
+    </section>
+  </main>
+<script>
+const fileInput = document.getElementById('file');
+const uploadButton = document.getElementById('upload');
+const statusBox = document.getElementById('status');
+function setStatus(text, kind) {{
+  statusBox.textContent = text;
+  statusBox.className = 'status ' + (kind || 'muted');
+}}
+uploadButton.addEventListener('click', async () => {{
+  const file = fileInput.files && fileInput.files[0];
+  if (!file) {{ setStatus('Select a config JSON file first.', 'bad'); return; }}
+  try {{
+    setStatus('Reading file...', 'muted');
+    const text = await file.text();
+    const payload = JSON.parse(text);
+    setStatus('Uploading config...', 'muted');
+    const response = await fetch('/api/system/config-import', {{
+      method: 'POST',
+      headers: {{ 'Accept': 'application/json', 'Content-Type': 'application/json' }},
+      body: JSON.stringify(payload)
+    }});
+    const data = await response.json().catch(() => ({{}}));
+    if (!response.ok || !data.ok) {{
+      throw new Error(data.error || data.message || 'Upload failed.');
+    }}
+    setStatus(data.message || 'Config uploaded. Restart or refresh the panel if needed.', 'ok');
+  }} catch (err) {{
+    setStatus(err && err.message ? err.message : String(err), 'bad');
+  }}
+}});
+</script>
+</body>
+</html>"""
 
 
 def _decode_proc_mount_field(value: str) -> str:
@@ -5651,6 +5805,9 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
         if path == "/api/system/info":
             server_port = getattr(self.server, "server_address", (None, None))[1]
             return _json(self, 200, _system_info_payload(server_port))
+        if path in {"/config-transfer", "/config", "/config-backup"}:
+            server_port = getattr(self.server, "server_address", (None, None))[1]
+            return _send_html(self, _config_transfer_html(server_port))
         if path == "/api/system/config-export":
             server_port = getattr(self.server, "server_address", (None, None))[1]
             return _send_json_download(self, _config_backup_filename(), _config_export_payload(server_port))
@@ -5685,7 +5842,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action"}:
             self.send_error(404, "Not found")
             return
 
@@ -5706,6 +5863,11 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
             if path == "/api/system/reboot":
                 result = _reboot_payload()
+                return _json(self, 200 if result.get("ok") else 500, result)
+
+            if path == "/api/system/config-web-portal":
+                server_port = getattr(self.server, "server_address", (None, None))[1]
+                result = _config_web_portal_payload(server_port)
                 return _json(self, 200 if result.get("ok") else 500, result)
 
             if path == "/api/system/config-export-usb":
