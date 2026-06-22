@@ -3567,22 +3567,20 @@ class AudioScreen(Page):
 
         top = QHBoxLayout()
         top.setSpacing(10)
-        for text, icon, kind in [
-            ("Movie", "🎬", "normal"),
-            ("Show", "▵", "normal"),
-            ("40%", "40", "normal"),
-            ("Max", "MAX", "danger"),
+        self.preset_buttons = {}
+        for preset, text, icon, kind in [
+            ("movie", "Movie", "🎥", "normal"),
+            ("show", "Show", "🎤", "normal"),
+            ("volume40", "40%", "🔊", "normal"),
+            ("max", "Max", "⚡", "danger"),
         ]:
             b = RoundButton(f"{icon}\n{text}", kind=kind, min_h=74)
             b.setMinimumWidth(122)
             b.setFont(font(11, QFont.Black))
+            b.setToolTip(f"Apply {text} audio preset")
+            b.clicked.connect(lambda checked=False, p=preset: self.apply_audio_preset(p))
+            self.preset_buttons[preset] = b
             top.addWidget(b)
-            if text == "40%":
-                b.clicked.connect(lambda: self.media_action("volume", 40))
-            elif text == "Max":
-                b.clicked.connect(lambda: self.media_action("volume", 100))
-            else:
-                b.clicked.connect(lambda checked=False, t=text: self.requestToast.emit(f"{t} preset sent"))
         top.addStretch(1)
         lay.addLayout(top)
 
@@ -3672,7 +3670,7 @@ class AudioScreen(Page):
 
         controls = QHBoxLayout()
         controls.setSpacing(14)
-        self.sub = HoldRoundButton("☊\nSub", active=False, min_h=66)
+        self.sub = HoldRoundButton("◉\nSub", active=False, min_h=66)
         self.sub.setMinimumWidth(98)
         transport = GlassPanel(radius=44)
         transport_lay = QHBoxLayout(transport)
@@ -3684,7 +3682,7 @@ class AudioScreen(Page):
         transport_lay.addWidget(self.prev)
         transport_lay.addWidget(self.play)
         transport_lay.addWidget(self.next)
-        self.sur = HoldRoundButton("⌬\nSurround", active=False, min_h=66)
+        self.sur = HoldRoundButton("⌁\nSurround", active=False, min_h=66)
         self.sur.setMinimumWidth(118)
         self.switch_buttons = {"subwoofer": self.sub, "surround": self.sur}
         controls.addWidget(self.sub)
@@ -3711,7 +3709,7 @@ class AudioScreen(Page):
         self.volume.setRange(0, 100)
         self.volume.setMinimumHeight(42)
         self.volume.setStyleSheet(SLIDER_H)
-        self.projector = HoldRoundButton("▭\nProjector", min_h=58)
+        self.projector = HoldRoundButton("▭▶\nProjector", min_h=58)
         self.projector.setMinimumWidth(118)
         self.switch_buttons["projector"] = self.projector
         vol_lay.addLayout(vol_row)
@@ -3864,11 +3862,11 @@ class AudioScreen(Page):
             on = state in {"on", "open", "true", "1"}
             button.setActive(on)
             if name == "subwoofer":
-                label = "☊\nSub"
+                label = "◉\nSub"
             elif name == "surround":
-                label = "⌬\nSurround"
+                label = "⌁\nSurround"
             else:
-                label = "▭\nProjector"
+                label = "▭▶\nProjector"
             suffix = "ON" if on else ("OFF" if assigned and state not in {"", "unknown", "unavailable"} else "Hold")
             button.setText(f"{label} {suffix}" if "\n" not in label else f"{label}\n{suffix}")
 
@@ -3908,6 +3906,199 @@ class AudioScreen(Page):
 
     def control_entity(self, name: str):
         return self.audio_control_record(name).get("entityId") or ""
+
+    def _audio_preset_definition(self, preset: str) -> dict:
+        """Return the local scene targets for audio presets.
+
+        Movie Mode is intentionally left unassigned until the exact desired
+        targets are confirmed, so the panel will not unexpectedly change the
+        projector or EQ values.
+        """
+        preset = str(preset or "").strip().lower()
+        presets = {
+            "show": {
+                "label": "Show Mode",
+                "numbers": {"gain": 0, "bass": 8, "treble": 8},
+                "switches": {"subwoofer": "off", "surround": "on"},
+            },
+            "volume40": {
+                "label": "40% Volume",
+                "volume": 40,
+                "numbers": {"gain": "max", "bass": "max", "treble": 8},
+                "switches": {"subwoofer": "on", "surround": "on"},
+            },
+            "max": {
+                "label": "Max",
+                "volume": 100,
+                "numbers": {"gain": "max", "bass": "max", "treble": 8},
+                "switches": {"subwoofer": "on", "surround": "on"},
+            },
+            "movie": {
+                "label": "Movie Mode",
+                "needsConfirmation": True,
+            },
+        }
+        return presets.get(preset, {})
+
+    def _round_audio_number_value(self, name: str, target):
+        record = self.audio_control_record(name)
+        try:
+            low = float(record.get("min", 0))
+            high = float(record.get("max", 100))
+            step = float(record.get("step", 1) or 1)
+        except Exception:
+            low, high, step = 0.0, 100.0, 1.0
+        if high <= low:
+            high = low + 100.0
+
+        if isinstance(target, str):
+            key = target.strip().lower()
+            if key == "max":
+                raw = high
+            elif key == "min":
+                raw = low
+            else:
+                raw = float(key)
+        else:
+            raw = float(target)
+
+        raw = float(clamp(raw, low, high))
+        if step > 0:
+            raw = round((raw - low) / step) * step + low
+            raw = float(clamp(raw, low, high))
+        if abs(raw - round(raw)) < 0.001:
+            return int(round(raw))
+        return round(raw, 2)
+
+    def _remember_number_state(self, name: str, value):
+        controls = self.config.setdefault("integrations", {}).setdefault("homeAssistant", {}).setdefault("audioControlEntities", {})
+        previous = controls.get(name) if isinstance(controls.get(name), dict) else self.audio_control_record(name)
+        updated = dict(previous or {})
+        updated["kind"] = name
+        updated["value"] = value
+        updated["state"] = str(value)
+        controls[name] = updated
+
+    def _remember_switch_state(self, name: str, action: str):
+        controls = self.config.setdefault("integrations", {}).setdefault("homeAssistant", {}).setdefault("audioControlEntities", {})
+        previous = controls.get(name) if isinstance(controls.get(name), dict) else self.audio_control_record(name)
+        updated = dict(previous or {})
+        updated["state"] = "on" if str(action).lower() == "on" else "off"
+        controls[name] = updated
+
+    def apply_audio_preset(self, preset: str):
+        definition = self._audio_preset_definition(preset)
+        label = definition.get("label") or "Audio preset"
+        if not definition:
+            self.requestToast.emit("Unknown audio preset")
+            return
+        if definition.get("needsConfirmation"):
+            self.requestToast.emit("Movie Mode needs target values first")
+            return
+
+        media_player_id = self.player_id()
+        missing: list[str] = []
+        number_actions: list[tuple[str, str, int | float]] = []
+        switch_actions: list[tuple[str, str, str]] = []
+        volume_value = definition.get("volume")
+
+        if volume_value is not None:
+            if not media_player_id:
+                missing.append("media player")
+            else:
+                try:
+                    pct = int(clamp(round(float(volume_value)), 0, 100))
+                    self.volume.blockSignals(True)
+                    self.volume.setValue(pct)
+                    self.volume.blockSignals(False)
+                    self.vol_value.setText(f"{pct}%")
+                    volume_value = pct
+                except Exception:
+                    volume_value = None
+
+        for name, target in (definition.get("numbers") or {}).items():
+            entity_id = self.control_entity(name)
+            if not entity_id:
+                missing.append(name)
+                continue
+            try:
+                value = self._round_audio_number_value(name, target)
+            except Exception:
+                missing.append(name)
+                continue
+            self._remember_number_state(name, value)
+            number_actions.append((name, entity_id, value))
+
+        for name, action in (definition.get("switches") or {}).items():
+            entity_id = self.control_entity(name)
+            if not entity_id:
+                missing.append(name.replace("subwoofer", "sub"))
+                continue
+            action = "on" if str(action).lower() == "on" else "off"
+            self._remember_switch_state(name, action)
+            switch_actions.append((name, entity_id, action))
+
+        self.apply_audio_control_state()
+        if not any([volume_value is not None and media_player_id, number_actions, switch_actions]):
+            self.requestToast.emit(f"{label}: no assigned controls")
+            return
+
+        self.requestToast.emit(f"Applying {label}...")
+
+        def worker():
+            result: dict[str, Any] = {"numbers": {}, "switches": {}, "missing": missing}
+            if volume_value is not None and media_player_id:
+                media = self.s.api.post(
+                    "/api/ha/media/action",
+                    self.s.ha_payload({"entityId": media_player_id, "action": "volume", "value": volume_value}),
+                )
+                result["state"] = media.get("state") if isinstance(media, dict) else None
+            for name, entity_id, value in number_actions:
+                resp = self.s.api.post(
+                    "/api/ha/audio/control/action",
+                    self.s.ha_payload({"entityId": entity_id, "value": value}),
+                )
+                control = resp.get("control") if isinstance(resp, dict) else None
+                if isinstance(control, dict):
+                    result["numbers"][name] = control
+            for name, entity_id, action in switch_actions:
+                resp = self.s.api.post(
+                    "/api/ha/audio/switch/action",
+                    self.s.ha_payload({"entityId": entity_id, "action": action}),
+                )
+                control = resp.get("control") if isinstance(resp, dict) else None
+                if isinstance(control, dict):
+                    result["switches"][name] = control
+            return result
+
+        def done(result):
+            if isinstance(result, dict):
+                if isinstance(result.get("state"), dict):
+                    self.player_state = result.get("state") or self.player_state
+                    self.apply_player_state()
+                controls = self.config.setdefault("integrations", {}).setdefault("homeAssistant", {}).setdefault("audioControlEntities", {})
+                for name, control in (result.get("numbers") or {}).items():
+                    previous = controls.get(name) if isinstance(controls.get(name), dict) else {}
+                    updated = dict(previous)
+                    updated.update(control)
+                    updated["kind"] = name
+                    controls[name] = updated
+                for name, control in (result.get("switches") or {}).items():
+                    previous = controls.get(name) if isinstance(controls.get(name), dict) else {}
+                    updated = dict(previous)
+                    updated.update(control)
+                    controls[name] = updated
+                self.apply_audio_control_state()
+            skipped = ", ".join(dict.fromkeys(missing))
+            self.requestToast.emit(f"{label} applied" + (f"; skipped {skipped}" if skipped else ""))
+            QTimer.singleShot(650, self.poll)
+
+        self.run_async(
+            "audio-preset",
+            worker,
+            done,
+            lambda err, label=label: self.requestToast.emit(f"{label} failed: {err}"),
+        )
 
     def set_number_control(self, name: str, value: int):
         eid = self.control_entity(name)
