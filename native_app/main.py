@@ -22,6 +22,7 @@ from PyQt5.QtGui import QColor, QCursor, QFont, QIcon, QImage, QPainter, QPen, Q
 from PyQt5.QtWidgets import (
     QApplication,
     QAbstractButton,
+    QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -123,6 +124,42 @@ def nested_get(data: dict, *keys, default=None):
             return default
         cur = cur.get(key)
     return default if cur is None else cur
+
+
+
+
+AUDIO_CONTROL_ORDER: list[tuple[str, str]] = [
+    ("gain", "Gain"),
+    ("bass", "Bass"),
+    ("treble", "Treble"),
+    ("projector", "Projector"),
+    ("subwoofer", "Sub"),
+    ("surround", "Surround Sound"),
+]
+AUDIO_CONTROL_DEFAULTS = {key: True for key, _label in AUDIO_CONTROL_ORDER}
+AUDIO_IDLE_SECONDS = 120.0
+
+
+def audio_ui_config(config: dict | None) -> dict:
+    cfg = config if isinstance(config, dict) else {}
+    audio = cfg.get("audio") if isinstance(cfg.get("audio"), dict) else {}
+    enabled = audio.get("enabledControls") if isinstance(audio.get("enabledControls"), dict) else {}
+    merged = dict(AUDIO_CONTROL_DEFAULTS)
+    for key in merged:
+        if key in enabled:
+            merged[key] = bool(enabled.get(key))
+    return {
+        "enabledControls": merged,
+        "autoNavigate": bool(audio.get("autoNavigate", False)),
+    }
+
+
+def audio_control_enabled(config: dict | None, key: str) -> bool:
+    return bool(audio_ui_config(config).get("enabledControls", {}).get(key, True))
+
+
+def audio_auto_navigate_enabled(config: dict | None) -> bool:
+    return bool(audio_ui_config(config).get("autoNavigate", False))
 
 
 def thermostat_detail_payload(payload: dict | None) -> dict:
@@ -290,6 +327,213 @@ class HoldRoundButton(RoundButton):
             event.accept()
             return
         super().mouseReleaseEvent(event)
+
+
+class ModernAudioButton(QAbstractButton):
+    """Smooth vector-icon audio tile used for presets and assignable controls."""
+    held = pyqtSignal()
+
+    def __init__(self, icon_key: str, label: str, *, active: bool = False, kind: str = "normal", min_h: int = 76, hold_ms: int = 700, holdable: bool = False, parent=None):
+        super().__init__(parent)
+        self.icon_key = str(icon_key or "")
+        self.label_text = str(label or "")
+        self.status_text = ""
+        self.active = bool(active)
+        self.kind = str(kind or "normal")
+        self.holdable = bool(holdable)
+        self._hold_fired = False
+        self._hold_timer = QTimer(self)
+        self._hold_timer.setSingleShot(True)
+        self._hold_timer.setInterval(max(250, int(hold_ms)))
+        self._hold_timer.timeout.connect(self._fire_hold)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setMinimumHeight(int(min_h))
+        self.setMinimumWidth(108)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setFont(font(10, QFont.Black))
+
+    def setActive(self, active: bool):
+        self.active = bool(active)
+        self.update()
+
+    def setStatus(self, status: str):
+        self.status_text = str(status or "")
+        self.update()
+
+    def setLabel(self, label: str):
+        self.label_text = str(label or "")
+        self.update()
+
+    def _fire_hold(self):
+        if not self.holdable:
+            return
+        self._hold_fired = True
+        self.held.emit()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self.holdable:
+            self._hold_fired = False
+            self._hold_timer.start()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._hold_timer.isActive():
+            self._hold_timer.stop()
+        if self._hold_fired:
+            self.setDown(False)
+            event.accept()
+            return
+        if event.button() == Qt.LeftButton and self.rect().contains(event.pos()):
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def _palette(self) -> tuple[QColor, QColor, QColor, QColor, QColor]:
+        if self.kind == "danger":
+            icon = QColor(255, 116, 120)
+            bg1 = QColor(72, 55, 65, 188)
+            bg2 = QColor(32, 32, 44, 218)
+            border = QColor(255, 116, 120, 82)
+        elif self.kind == "purple":
+            icon = QColor(211, 154, 255)
+            bg1 = QColor(68, 63, 93, 190)
+            bg2 = QColor(31, 34, 51, 218)
+            border = QColor(211, 154, 255, 82)
+        elif self.kind == "warm":
+            icon = QColor(255, 218, 86)
+            bg1 = QColor(69, 73, 73, 190)
+            bg2 = QColor(31, 36, 49, 218)
+            border = QColor(255, 218, 86, 82)
+        else:
+            icon = QColor(80, 232, 255)
+            bg1 = QColor(67, 83, 101, 186)
+            bg2 = QColor(26, 34, 51, 220)
+            border = QColor(80, 232, 255, 70)
+        if self.active:
+            bg1 = QColor(42, 126, 151, 220)
+            bg2 = QColor(39, 48, 86, 230)
+            border = QColor(icon.red(), icon.green(), icon.blue(), 160)
+        text = QColor(245, 248, 255)
+        return icon, bg1, bg2, border, text
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
+        rect = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        icon_col, bg1, bg2, border, text_col = self._palette()
+
+        g = QLinearGradient(rect.topLeft(), rect.bottomRight())
+        g.setColorAt(0.0, bg1)
+        g.setColorAt(1.0, bg2)
+        p.setBrush(QBrush(g))
+        p.setPen(QPen(border, 1.35))
+        p.drawRoundedRect(rect, 20, 20)
+
+        if self.active:
+            glow = QRadialGradient(rect.center(), max(rect.width(), rect.height()) * 0.72)
+            glow.setColorAt(0.0, QColor(icon_col.red(), icon_col.green(), icon_col.blue(), 44))
+            glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+            p.fillRect(rect, glow)
+
+        icon_size = min(36.0, max(24.0, rect.height() * 0.34))
+        icon_rect = QRectF(rect.center().x() - icon_size / 2, rect.top() + 12, icon_size, icon_size)
+        self._draw_icon(p, icon_rect, icon_col)
+
+        p.setPen(text_col)
+        p.setFont(font(9, QFont.Black))
+        label_y = icon_rect.bottom() + 8
+        label_rect = QRectF(rect.left() + 8, label_y, rect.width() - 16, 18)
+        p.drawText(label_rect, Qt.AlignCenter, self.label_text)
+        if self.status_text:
+            status_col = QColor(icon_col.red(), icon_col.green(), icon_col.blue(), 226) if self.active else QColor(210, 220, 238, 190)
+            p.setPen(status_col)
+            p.setFont(font(7, QFont.Black, 18))
+            status_rect = QRectF(rect.left() + 8, label_y + 18, rect.width() - 16, 15)
+            p.drawText(status_rect, Qt.AlignCenter, self.status_text.upper())
+
+    def _draw_icon(self, p: QPainter, r: QRectF, c: QColor):
+        p.save()
+        p.setRenderHint(QPainter.Antialiasing)
+        pen = QPen(c, max(2.0, r.width() / 14.0), Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        key = self.icon_key
+        x, y, w, h = r.x(), r.y(), r.width(), r.height()
+        cx, cy = r.center().x(), r.center().y()
+
+        if key == "movie":
+            body = QRectF(x + w * 0.16, y + h * 0.34, w * 0.52, h * 0.36)
+            p.drawRoundedRect(body, w * 0.08, w * 0.08)
+            p.drawEllipse(QRectF(x + w * 0.22, y + h * 0.16, w * 0.18, h * 0.18))
+            p.drawEllipse(QRectF(x + w * 0.44, y + h * 0.15, w * 0.2, h * 0.2))
+            path = QPainterPath()
+            path.moveTo(x + w * 0.70, y + h * 0.43)
+            path.lineTo(x + w * 0.90, y + h * 0.32)
+            path.lineTo(x + w * 0.90, y + h * 0.73)
+            path.lineTo(x + w * 0.70, y + h * 0.62)
+            path.closeSubpath()
+            p.drawPath(path)
+        elif key == "show":
+            mic = QRectF(cx - w * 0.14, y + h * 0.12, w * 0.28, h * 0.42)
+            p.drawRoundedRect(mic, w * 0.13, w * 0.13)
+            p.drawArc(QRectF(cx - w * 0.28, y + h * 0.34, w * 0.56, h * 0.42), 200 * 16, 140 * 16)
+            p.drawLine(QPointF(cx, y + h * 0.72), QPointF(cx, y + h * 0.88))
+            p.drawLine(QPointF(cx - w * 0.19, y + h * 0.88), QPointF(cx + w * 0.19, y + h * 0.88))
+        elif key in {"volume", "max"}:
+            path = QPainterPath()
+            path.moveTo(x + w * 0.14, y + h * 0.43)
+            path.lineTo(x + w * 0.32, y + h * 0.43)
+            path.lineTo(x + w * 0.50, y + h * 0.25)
+            path.lineTo(x + w * 0.50, y + h * 0.75)
+            path.lineTo(x + w * 0.32, y + h * 0.57)
+            path.lineTo(x + w * 0.14, y + h * 0.57)
+            path.closeSubpath()
+            p.drawPath(path)
+            p.drawArc(QRectF(x + w * 0.42, y + h * 0.28, w * 0.32, h * 0.44), -45 * 16, 90 * 16)
+            p.drawArc(QRectF(x + w * 0.49, y + h * 0.16, w * 0.40, h * 0.68), -45 * 16, 90 * 16)
+            if key == "max":
+                bolt = QPainterPath()
+                bolt.moveTo(x + w * 0.68, y + h * 0.08)
+                bolt.lineTo(x + w * 0.58, y + h * 0.43)
+                bolt.lineTo(x + w * 0.73, y + h * 0.43)
+                bolt.lineTo(x + w * 0.62, y + h * 0.90)
+                p.drawPath(bolt)
+        elif key == "sub":
+            box = QRectF(x + w * 0.23, y + h * 0.12, w * 0.54, h * 0.76)
+            p.drawRoundedRect(box, w * 0.12, w * 0.12)
+            p.drawEllipse(QRectF(cx - w * 0.18, cy - w * 0.18, w * 0.36, w * 0.36))
+            p.drawEllipse(QRectF(cx - w * 0.055, cy - w * 0.055, w * 0.11, w * 0.11))
+            p.drawLine(QPointF(x + w * 0.37, y + h * 0.22), QPointF(x + w * 0.63, y + h * 0.22))
+        elif key == "surround":
+            pts = [
+                QPointF(cx, y + h * 0.18),
+                QPointF(x + w * 0.24, y + h * 0.68),
+                QPointF(x + w * 0.76, y + h * 0.68),
+            ]
+            p.drawLine(pts[0], pts[1])
+            p.drawLine(pts[0], pts[2])
+            p.drawLine(pts[1], pts[2])
+            p.setBrush(QBrush(QColor(c.red(), c.green(), c.blue(), 38)))
+            for pt in pts:
+                p.drawEllipse(QRectF(pt.x() - w * 0.085, pt.y() - w * 0.085, w * 0.17, w * 0.17))
+            p.setBrush(Qt.NoBrush)
+        elif key == "projector":
+            body = QRectF(x + w * 0.12, y + h * 0.34, w * 0.66, h * 0.34)
+            p.drawRoundedRect(body, w * 0.08, w * 0.08)
+            p.drawEllipse(QRectF(x + w * 0.56, y + h * 0.39, w * 0.17, h * 0.17))
+            p.drawLine(QPointF(x + w * 0.24, y + h * 0.72), QPointF(x + w * 0.18, y + h * 0.88))
+            p.drawLine(QPointF(x + w * 0.58, y + h * 0.72), QPointF(x + w * 0.68, y + h * 0.88))
+            beam = QPainterPath()
+            beam.moveTo(x + w * 0.81, y + h * 0.42)
+            beam.lineTo(x + w * 0.96, y + h * 0.30)
+            beam.moveTo(x + w * 0.81, y + h * 0.60)
+            beam.lineTo(x + w * 0.96, y + h * 0.72)
+            p.drawPath(beam)
+        else:
+            p.drawEllipse(r.adjusted(w * 0.18, h * 0.18, -w * 0.18, -h * 0.18))
+        p.restore()
+
 
 
 class StatusToast(GlassPanel):
@@ -3568,15 +3812,14 @@ class AudioScreen(Page):
         top = QHBoxLayout()
         top.setSpacing(10)
         self.preset_buttons = {}
-        for preset, text, icon, kind in [
-            ("movie", "Movie", "🎥", "normal"),
-            ("show", "Show", "🎤", "normal"),
-            ("volume40", "40%", "🔊", "normal"),
-            ("max", "Max", "⚡", "danger"),
+        for preset, text, icon_key, kind in [
+            ("movie", "Movie", "movie", "warm"),
+            ("show", "Show", "show", "purple"),
+            ("volume40", "40%", "volume", "normal"),
+            ("max", "Max", "max", "danger"),
         ]:
-            b = RoundButton(f"{icon}\n{text}", kind=kind, min_h=74)
-            b.setMinimumWidth(122)
-            b.setFont(font(11, QFont.Black))
+            b = ModernAudioButton(icon_key, text, kind=kind, min_h=78, holdable=False)
+            b.setMinimumWidth(126)
             b.setToolTip(f"Apply {text} audio preset")
             b.clicked.connect(lambda checked=False, p=preset: self.apply_audio_preset(p))
             self.preset_buttons[preset] = b
@@ -3670,8 +3913,8 @@ class AudioScreen(Page):
 
         controls = QHBoxLayout()
         controls.setSpacing(14)
-        self.sub = HoldRoundButton("◉\nSub", active=False, min_h=66)
-        self.sub.setMinimumWidth(98)
+        self.sub = ModernAudioButton("sub", "Sub", active=False, min_h=74, holdable=True)
+        self.sub.setMinimumWidth(104)
         transport = GlassPanel(radius=44)
         transport_lay = QHBoxLayout(transport)
         transport_lay.setContentsMargins(10, 8, 10, 8)
@@ -3682,8 +3925,8 @@ class AudioScreen(Page):
         transport_lay.addWidget(self.prev)
         transport_lay.addWidget(self.play)
         transport_lay.addWidget(self.next)
-        self.sur = HoldRoundButton("⌁\nSurround", active=False, min_h=66)
-        self.sur.setMinimumWidth(118)
+        self.sur = ModernAudioButton("surround", "Surround", active=False, min_h=74, holdable=True)
+        self.sur.setMinimumWidth(124)
         self.switch_buttons = {"subwoofer": self.sub, "surround": self.sur}
         controls.addWidget(self.sub)
         controls.addWidget(transport, 1)
@@ -3709,17 +3952,20 @@ class AudioScreen(Page):
         self.volume.setRange(0, 100)
         self.volume.setMinimumHeight(42)
         self.volume.setStyleSheet(SLIDER_H)
-        self.projector = HoldRoundButton("▭▶\nProjector", min_h=58)
-        self.projector.setMinimumWidth(118)
+        self.projector = ModernAudioButton("projector", "Projector", min_h=64, holdable=True)
+        self.projector.setMinimumWidth(126)
         self.switch_buttons["projector"] = self.projector
         vol_lay.addLayout(vol_row)
         vol_lay.addWidget(self.volume)
         vol_lay.addWidget(self.projector, 0, Qt.AlignCenter)
         lay.addWidget(vol_panel)
 
-        eq = QHBoxLayout()
+        self.eq_wrap = QWidget()
+        eq = QHBoxLayout(self.eq_wrap)
+        eq.setContentsMargins(0, 0, 0, 0)
         eq.setSpacing(10)
         self.eq_sliders = {}
+        self.eq_cards = {}
         for name in ["Gain", "Bass", "Treble"]:
             key = name.lower()
             card = HoldCard(hold_ms=700)
@@ -3746,11 +3992,12 @@ class AudioScreen(Page):
             v.addWidget(label)
             v.addWidget(sl, 1, Qt.AlignHCenter)
             self.eq_sliders[key] = (sl, label)
+            self.eq_cards[key] = card
             sl.sliderReleased.connect(lambda n=key, s=sl: self.set_number_control(n, s.value()))
             card.held.connect(lambda n=key: self.assign_audio_control(n))
             label.held.connect(lambda n=key: self.assign_audio_control(n))
             eq.addWidget(card)
-        lay.addLayout(eq, 1)
+        lay.addWidget(self.eq_wrap, 1)
 
         self.prev.clicked.connect(lambda: self.media_action("previous"))
         self.play.clicked.connect(lambda: self.media_action("play_pause"))
@@ -3838,7 +4085,19 @@ class AudioScreen(Page):
         except Exception:
             return str(value)[:12]
 
+    def apply_audio_visibility(self):
+        eq_any = False
+        for key, card in getattr(self, "eq_cards", {}).items():
+            visible = audio_control_enabled(self.config, key)
+            card.setVisible(visible)
+            eq_any = eq_any or visible
+        if hasattr(self, "eq_wrap"):
+            self.eq_wrap.setVisible(eq_any)
+        for key, button in getattr(self, "switch_buttons", {}).items():
+            button.setVisible(audio_control_enabled(self.config, key))
+
     def apply_audio_control_state(self):
+        self.apply_audio_visibility()
         controls = self.audio_controls()
         for name, title in {"gain": "Gain", "bass": "Bass", "treble": "Treble"}.items():
             sl_label = self.eq_sliders.get(name)
@@ -3861,14 +4120,11 @@ class AudioScreen(Page):
             assigned = bool(isinstance(record, dict) and record.get("entityId"))
             on = state in {"on", "open", "true", "1"}
             button.setActive(on)
-            if name == "subwoofer":
-                label = "◉\nSub"
-            elif name == "surround":
-                label = "⌁\nSurround"
+            suffix = "ON" if on else ("OFF" if assigned and state not in {"", "unknown", "unavailable"} else "Hold to assign")
+            if hasattr(button, "setStatus"):
+                button.setStatus(suffix)
             else:
-                label = "▭▶\nProjector"
-            suffix = "ON" if on else ("OFF" if assigned and state not in {"", "unknown", "unavailable"} else "Hold")
-            button.setText(f"{label} {suffix}" if "\n" not in label else f"{label}\n{suffix}")
+                button.setText(suffix)
 
     def media_action(self, action: str, value=None):
         eid = self.player_id()
@@ -4017,6 +4273,8 @@ class AudioScreen(Page):
                     volume_value = None
 
         for name, target in (definition.get("numbers") or {}).items():
+            if not audio_control_enabled(self.config, name):
+                continue
             entity_id = self.control_entity(name)
             if not entity_id:
                 missing.append(name)
@@ -4030,6 +4288,8 @@ class AudioScreen(Page):
             number_actions.append((name, entity_id, value))
 
         for name, action in (definition.get("switches") or {}).items():
+            if not audio_control_enabled(self.config, name):
+                continue
             entity_id = self.control_entity(name)
             if not entity_id:
                 missing.append(name.replace("subwoofer", "sub"))
@@ -4273,7 +4533,21 @@ class AudioScreen(Page):
         self.volume.blockSignals(False)
         self.vol_value.setText(f"{pct}%")
 
-    def poll(self):
+    def current_audio_source(self) -> str:
+        st = self.player_state or {}
+        return str(st.get("source") or st.get("media_content_type") or "").strip()
+
+    def is_non_tv_audio_playing(self) -> bool:
+        st = self.player_state or {}
+        state_raw = str(st.get("state") or "").strip().lower()
+        if state_raw != "playing":
+            return False
+        source = self.current_audio_source().lower()
+        if source in {"tv", "television"} or source.startswith("tv ") or source.endswith(" tv"):
+            return False
+        return True
+
+    def poll_player_only(self):
         eid = self.player_id()
         if not eid:
             return
@@ -4286,6 +4560,9 @@ class AudioScreen(Page):
                 self.apply_player_state()
 
         self.run_async("audio-poll", lambda: self.s.api.post("/api/ha/media/states", payload), done, None)
+
+    def poll(self):
+        self.poll_player_only()
         controls = self.audio_controls()
         if any(self.audio_control_record(k).get("entityId") for k in ("gain", "bass", "treble")):
             def number_done(result):
@@ -5110,6 +5387,145 @@ class SimplePageSettingsDialog(QDialog):
 
     def fit_to_screen(self):
         fit_dialog_to_available_screen(self, margin=0)
+
+
+
+class AudioSettingsDialog(QDialog):
+    saved = pyqtSignal()
+
+    def __init__(self, state: AppState, parent=None):
+        super().__init__(parent)
+        self.s = state
+        self.checks: dict[str, QCheckBox] = {}
+        self.setWindowTitle("Audio Settings")
+        self.setModal(True)
+        self.setWindowFlag(Qt.FramelessWindowHint, True)
+        self.setMinimumSize(760, 500)
+        self.resize(1280, 800)
+        self.setStyleSheet("""
+            QDialog { background:#07101f; color:#f7fbff; }
+            QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
+            QCheckBox {
+                color:#f7fbff;
+                font-family:Arial;
+                font-weight:900;
+                font-size:17px;
+                spacing:14px;
+                padding:8px 4px;
+            }
+            QCheckBox::indicator {
+                width:30px;
+                height:30px;
+                border-radius:8px;
+                border:2px solid rgba(107,226,255,0.42);
+                background:rgba(7,13,25,0.86);
+            }
+            QCheckBox::indicator:checked {
+                background:#49e6ff;
+                border:2px solid rgba(255,255,255,0.55);
+            }
+            QCheckBox::indicator:unchecked {
+                background:rgba(7,13,25,0.86);
+            }
+        """)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(26, 18, 26, 22)
+        root.setSpacing(16)
+
+        header = QHBoxLayout()
+        title_col = QVBoxLayout()
+        title_col.setSpacing(4)
+        title = QLabel("Audio Settings")
+        title.setFont(font(30, QFont.Black))
+        title.setStyleSheet("color:#ffffff;")
+        sub = QLabel("Choose which audio controls appear on the main Audio page.")
+        sub.setFont(font(12, QFont.Black))
+        sub.setStyleSheet("color:rgba(219,227,244,0.72);")
+        title_col.addWidget(title)
+        title_col.addWidget(sub)
+        header.addLayout(title_col, 1)
+        cancel = RoundButton("Cancel", min_h=42)
+        cancel.setMinimumWidth(120)
+        cancel.clicked.connect(self.reject)
+        save = RoundButton("Save", active=True, min_h=42)
+        save.setMinimumWidth(140)
+        save.clicked.connect(self.save)
+        header.addWidget(cancel)
+        header.addWidget(save)
+        root.addLayout(header)
+
+        body = QHBoxLayout()
+        body.setSpacing(18)
+
+        controls_panel = GlassPanel(radius=24, strong=True)
+        controls_lay = QVBoxLayout(controls_panel)
+        controls_lay.setContentsMargins(22, 18, 22, 20)
+        controls_lay.setSpacing(8)
+        controls_title = QLabel("Visible Controls")
+        controls_title.setFont(font(19, QFont.Black))
+        controls_lay.addWidget(controls_title)
+        hint = QLabel("Turn off anything this room does not have assigned. Disabled items are hidden from the main Audio screen and skipped by scene buttons.")
+        hint.setWordWrap(True)
+        hint.setFont(font(11, QFont.Black))
+        hint.setStyleSheet("color:rgba(219,227,244,0.72);")
+        controls_lay.addWidget(hint)
+        controls_lay.addSpacing(8)
+
+        current = audio_ui_config(self.s.config)
+        enabled = current.get("enabledControls", {})
+        for key, label in AUDIO_CONTROL_ORDER:
+            row = GlassPanel(radius=18)
+            row_lay = QHBoxLayout(row)
+            row_lay.setContentsMargins(14, 7, 14, 7)
+            cb = QCheckBox(label)
+            cb.setChecked(bool(enabled.get(key, True)))
+            self.checks[key] = cb
+            row_lay.addWidget(cb, 1)
+            controls_lay.addWidget(row)
+        controls_lay.addStretch(1)
+        body.addWidget(controls_panel, 3)
+
+        nav_panel = GlassPanel(radius=24, strong=True)
+        nav_lay = QVBoxLayout(nav_panel)
+        nav_lay.setContentsMargins(22, 18, 22, 20)
+        nav_lay.setSpacing(14)
+        nav_title = QLabel("Auto-Navigate")
+        nav_title.setFont(font(19, QFont.Black))
+        nav_lay.addWidget(nav_title)
+        self.auto_nav = QCheckBox("Enable auto-navigate")
+        self.auto_nav.setChecked(bool(current.get("autoNavigate", False)))
+        nav_lay.addWidget(self.auto_nav)
+        desc = QLabel(
+            "When music is playing and the source is not TV, the panel returns to Audio after 2 minutes without touch. "
+            "When music is not playing, it returns to Thermostat after 2 minutes without touch. You can still navigate away any time."
+        )
+        desc.setWordWrap(True)
+        desc.setFont(font(12, QFont.Black))
+        desc.setStyleSheet("color:rgba(219,227,244,0.74); line-height:1.25;")
+        nav_lay.addWidget(desc)
+        nav_lay.addStretch(1)
+        body.addWidget(nav_panel, 2)
+        root.addLayout(body, 1)
+
+        QTimer.singleShot(0, self.fit_to_screen)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.fit_to_screen()
+
+    def fit_to_screen(self):
+        fit_dialog_to_available_screen(self, margin=0)
+
+    def save(self):
+        try:
+            audio = self.s.config.setdefault("audio", {})
+            audio["enabledControls"] = {key: bool(cb.isChecked()) for key, cb in self.checks.items()}
+            audio["autoNavigate"] = bool(self.auto_nav.isChecked())
+            self.s.save_config()
+            self.saved.emit()
+            self.accept()
+        except Exception as exc:
+            QMessageBox.warning(self, "Save failed", str(exc))
 
 
 
@@ -6557,12 +6973,21 @@ class MainWindow(Background):
         self._last_poll_by_page: dict[str, float] = {}
         self._poll_busy = False
         self._last_page_change_at = time.monotonic()
+        self._last_user_activity_at = time.monotonic()
+        self._last_auto_nav_at = 0.0
+        self._last_auto_nav_audio_poll_at = 0.0
         self._ignore_info_until = 0.0
         self._status_refresh_running = False
         self.statusRefreshCompleted.connect(self._handle_status_refresh_completed)
         self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self.refresh_status)
         self.status_timer.start(4000)
+        self.auto_nav_timer = QTimer(self)
+        self.auto_nav_timer.timeout.connect(self.check_auto_navigation)
+        self.auto_nav_timer.start(5000)
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
         QTimer.singleShot(100, self.boot)
 
     def boot(self):
@@ -6587,6 +7012,60 @@ class MainWindow(Background):
         super().resizeEvent(event)
         if self.toast.isVisible():
             self.toast.move((self.width() - self.toast.width()) // 2, self.height() - self.toast.height() - 28)
+
+    def eventFilter(self, obj, event):
+        try:
+            if event.type() in {
+                QEvent.MouseButtonPress,
+                QEvent.MouseButtonDblClick,
+                QEvent.TouchBegin,
+                QEvent.KeyPress,
+                QEvent.Wheel,
+            }:
+                self._last_user_activity_at = time.monotonic()
+        except Exception:
+            pass
+        return super().eventFilter(obj, event)
+
+    def audio_page_is_music_playing(self) -> bool:
+        page = self.pages.get("Audio")
+        if not isinstance(page, AudioScreen):
+            return False
+        return page.is_non_tv_audio_playing()
+
+    def poll_audio_for_auto_navigation(self, now: float):
+        if now - getattr(self, "_last_auto_nav_audio_poll_at", 0.0) < 10.0:
+            return
+        page = self.pages.get("Audio")
+        if not isinstance(page, AudioScreen):
+            return
+        try:
+            page.sync(self.s.config, self.s.thermostat)
+            page.poll_player_only()
+            self._last_auto_nav_audio_poll_at = now
+        except Exception:
+            pass
+
+    def check_auto_navigation(self):
+        try:
+            if not audio_auto_navigate_enabled(self.s.config):
+                return
+            if getattr(self, "navigation_locked", False):
+                return
+            if QApplication.activeModalWidget() is not None:
+                return
+            now = time.monotonic()
+            self.poll_audio_for_auto_navigation(now)
+            if now - getattr(self, "_last_user_activity_at", now) < AUDIO_IDLE_SECONDS:
+                return
+            if now - getattr(self, "_last_auto_nav_at", 0.0) < 15.0:
+                return
+            target = "Audio" if self.audio_page_is_music_playing() else "Thermostat"
+            if self.current_name != target:
+                self._last_auto_nav_at = now
+                self.set_page(target, force=True)
+        except Exception:
+            pass
 
     def set_page(self, name: str, force: bool = False):
         if name not in self.pages:
@@ -6849,6 +7328,9 @@ class MainWindow(Background):
                     return
             if self.current_name == "Thermostat":
                 dlg = SettingsDialog(self.s, self)
+                dlg.saved.connect(self.reload_all)
+            elif self.current_name == "Audio":
+                dlg = AudioSettingsDialog(self.s, self)
                 dlg.saved.connect(self.reload_all)
             elif self.current_name in {"Blinds", "Lights", "Room"}:
                 dlg = RoomManagerSettingsDialog(self.s, self.current_name, self)
