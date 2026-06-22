@@ -32,8 +32,23 @@ The native UI service launches X directly with `xinit` on `tty1`. This avoids th
 
 ## Services
 
-- `smart-thermostat-backend.service` runs `server.py` on `127.0.0.1:8080`.
+- `smart-thermostat-backend.service` runs `server.py` on `0.0.0.0:8080` so Home Assistant can reach it from the LAN.
 - `smart-thermostat-native.service` launches the Qt full-screen UI through X on `tty1`.
+- `avahi-daemon.service` advertises `_iha-thermostat._tcp.local` for Home Assistant discovery.
+
+## Home Assistant discovery/control
+
+The native app still uses the local backend API, but the backend now listens on the LAN at port `8080`. The installer also writes `/etc/avahi/services/iha-thermostat.service`, so Home Assistant can auto-discover the panel as `_iha-thermostat._tcp.local`.
+
+Expected checks on the Pi:
+
+```bash
+curl http://127.0.0.1:8080/api/discovery
+systemctl status avahi-daemon.service smart-thermostat-backend.service --no-pager -l
+cat /etc/avahi/services/iha-thermostat.service
+```
+
+If auto-discovery does not appear in Home Assistant, add the custom `iha` integration manually and enter the thermostat IP address with port `8080`. The integration accepts either `192.168.x.x` plus port `8080`, or a full URL such as `http://192.168.x.x:8080`.
 
 ## Useful checks
 
@@ -50,7 +65,7 @@ Backend:
 
 ```bash
 cd ~/Smart-Thermostat-Development
-python3 server.py --host 127.0.0.1 --port 8080
+python3 server.py --host 0.0.0.0 --port 8080
 ```
 
 Native UI from an existing X session:

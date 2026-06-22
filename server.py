@@ -2414,6 +2414,8 @@ def _thermostat_outputs(thermostat: dict) -> dict:
     }
 
 def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware: bool = False) -> dict:
+    serial = _stable_panel_serial()
+    sw_version = _read_version_value()
     record = _read_thermostat_record()
     if refresh_runtime:
         thermostat = _apply_runtime_thermostat_logic(record)
@@ -2456,12 +2458,24 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
         "coolFanHoldUntil": thermostat.get("coolFanHoldUntil", 0),
         "schedules": thermostat.get("schedules") or [],
         "relays": {"fan": outputs["fan"], "heat": outputs["heat"], "cool": outputs["cool"]},
+        "serial": serial,
+        "unique_id": serial,
+        "manufacturer": "IHA",
+        "model": "Smart Thermostat Wall Panel",
+        "sw_version": sw_version,
+        "swVersion": sw_version,
     }
     payload = {
         "ok": True,
         "version": record["version"],
         "updatedAt": record["updatedAt"],
         "name": thermostat.get("name") or "IHA Thermostat",
+        "serial": serial,
+        "unique_id": serial,
+        "manufacturer": "IHA",
+        "model": "Smart Thermostat Wall Panel",
+        "sw_version": sw_version,
+        "swVersion": sw_version,
         "thermostat": thermostat_detail,
         # Home Assistant integration payload. Older panel builds returned the
         # thermostat details under `thermostat`; the HA custom integration reads
@@ -3861,13 +3875,20 @@ def _discovery_payload() -> dict:
         "manufacturer": "IHA",
         "model": "Smart Thermostat Wall Panel",
         "sw_version": _read_version_value(),
+        "swVersion": _read_version_value(),
         "host": _local_host_name(),
+        "hostname": _local_host_name(),
+        "ip": _local_ip_address(),
+        "port": 8080,
+        "api_path": "/api",
+        "mdns_service": "_iha-thermostat._tcp.local.",
         "endpoints": {
             "status": "/api/thermostat/status",
             "control": "/api/thermostat/control",
             "discovery": "/api/discovery",
         },
         "thermostat": status["thermostat"],
+        "climate": status["thermostat"],
     }
 
 

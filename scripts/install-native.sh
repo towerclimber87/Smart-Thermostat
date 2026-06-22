@@ -43,6 +43,7 @@ apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
   python3 \
   python3-pyqt5 \
+  avahi-daemon \
   xserver-xorg \
   xinit \
   x11-xserver-utils \
@@ -119,6 +120,72 @@ $APP_USER ALL=(root) NOPASSWD: $SYSTEMD_RUN_BIN, $SYSTEMCTL_BIN, $MOUNT_BIN, $UM
 EOF
 chmod 0440 "$SUDOERS_FILE"
 
+# Advertise the native thermostat backend to Home Assistant over mDNS/DNS-SD.
+# The HA custom integration listens for _iha-thermostat._tcp.local.; this Avahi
+# service makes the native-only panel discoverable without needing the old web UI.
+mkdir -p /etc/avahi/services
+python3 - <<PY_AVAHI
+from pathlib import Path
+import html
+import json
+import os
+import socket
+
+app_dir = Path(${APP_DIR@Q})
+service_path = Path('/etc/avahi/services/iha-thermostat.service')
+
+def safe_slug(value: str) -> str:
+    return ''.join(ch.lower() if ch.isalnum() else '-' for ch in value).strip('-')
+
+def read_name() -> str:
+    for candidate in (app_dir / 'data' / 'thermostat-state.json', app_dir / 'data' / 'panel-config.json'):
+        try:
+            data = json.loads(candidate.read_text(encoding='utf-8'))
+        except Exception:
+            continue
+        for path in (('thermostat', 'name'), ('config', 'thermostat', 'name')):
+            current = data
+            for key in path:
+                current = current.get(key) if isinstance(current, dict) else None
+            if isinstance(current, str) and current.strip():
+                return current.strip()[:80]
+    return 'IHA Thermostat'
+
+def stable_serial() -> str:
+    configured = os.environ.get('SMART_THERMOSTAT_SERIAL', '').strip()
+    if configured:
+        return configured
+    for machine_path in (Path('/etc/machine-id'), Path('/var/lib/dbus/machine-id')):
+        try:
+            machine_id = machine_path.read_text(encoding='utf-8').strip()
+        except OSError:
+            machine_id = ''
+        if machine_id:
+            return f'iha-smart-thermostat-{machine_id[:12]}'
+    hostname = safe_slug(socket.gethostname() or 'local')
+    return f'iha-smart-thermostat-{hostname or "local"}'
+
+name = read_name()
+serial = stable_serial()
+xml = f"""<?xml version="1.0" standalone='no'?><!--*-nxml-*-->
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<service-group>
+  <name replace-wildcards="yes">{html.escape(name)} on %h</name>
+  <service>
+    <type>_iha-thermostat._tcp</type>
+    <port>8080</port>
+    <txt-record>path=/api/discovery</txt-record>
+    <txt-record>api_path=/api</txt-record>
+    <txt-record>serial={html.escape(serial)}</txt-record>
+    <txt-record>name={html.escape(name)}</txt-record>
+  </service>
+</service-group>
+"""
+service_path.write_text(xml, encoding='utf-8')
+print(f'Wrote Home Assistant discovery service: {service_path} ({serial})')
+PY_AVAHI
+systemctl enable --now avahi-daemon.service 2>/dev/null || true
+systemctl restart avahi-daemon.service 2>/dev/null || true
 
 sed -e "s|@APP_DIR@|$APP_DIR|g" -e "s|@APP_USER@|$APP_USER|g" -e "s|@APP_HOME@|$APP_HOME|g" \
   "$APP_DIR/systemd/smart-thermostat-backend.service.template" > /etc/systemd/system/smart-thermostat-backend.service
