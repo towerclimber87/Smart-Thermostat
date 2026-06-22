@@ -6677,6 +6677,7 @@ class SettingsDialog(QDialog):
         root.addWidget(scroll, 1)
 
         self.controls: dict[str, QLabel] = {}
+        self.value_control_widgets: dict[str, dict] = {}
         self._settings_save_timer = QTimer(self)
         self._settings_save_timer.setSingleShot(True)
         self._settings_save_timer.timeout.connect(self.push_pending_settings)
@@ -6715,31 +6716,111 @@ class SettingsDialog(QDialog):
         """)
         return p
 
+    def value_control_style(self, popped: bool = False) -> str:
+        if popped:
+            return """
+                QFrame {
+                    background:qlineargradient(x1:0,y1:0,x2:1,y2:1,
+                        stop:0 rgba(46,71,102,0.98),
+                        stop:1 rgba(11,24,47,0.98));
+                    border:2px solid rgba(85,240,255,0.78);
+                    border-radius:12px;
+                }
+            """
+        return """
+            QFrame {
+                background:qlineargradient(x1:0,y1:0,x2:1,y2:1,
+                    stop:0 rgba(27,39,59,0.96),
+                    stop:1 rgba(8,15,29,0.96));
+                border:1px solid rgba(111,139,166,0.38);
+                border-radius:9px;
+            }
+        """
+
+    def pop_value_control(self, key: str):
+        meta = self.value_control_widgets.get(key) or {}
+        panel = meta.get("panel")
+        val = meta.get("value")
+        minus = meta.get("minus")
+        plus = meta.get("plus")
+        if not panel or not val:
+            return
+        seq = int(meta.get("popSeq") or 0) + 1
+        meta["popSeq"] = seq
+        panel.setMinimumHeight(50)
+        panel.setMaximumHeight(58)
+        panel.setStyleSheet(self.value_control_style(True))
+        val.setMinimumWidth(68)
+        val.setFont(font(14, QFont.Black))
+        val.setStyleSheet("color:#ffffff; background:rgba(85,240,255,0.16); border:1px solid rgba(85,240,255,0.45); border-radius:10px; padding:2px 6px;")
+        for button in (minus, plus):
+            if button:
+                button.setFixedSize(48, 40)
+                button.setFont(font(16, QFont.Black))
+        panel.updateGeometry()
+        val.repaint()
+        QTimer.singleShot(900, lambda k=key, s=seq: self.reset_value_control(k, s))
+
+    def reset_value_control(self, key: str, seq: int | None = None):
+        meta = self.value_control_widgets.get(key) or {}
+        if seq is not None and int(meta.get("popSeq") or 0) != int(seq):
+            return
+        panel = meta.get("panel")
+        val = meta.get("value")
+        minus = meta.get("minus")
+        plus = meta.get("plus")
+        if panel:
+            panel.setMinimumHeight(44)
+            panel.setMaximumHeight(50)
+            panel.setStyleSheet(self.value_control_style(False))
+            panel.updateGeometry()
+        if val:
+            val.setMinimumWidth(56)
+            val.setFont(font(11, QFont.Black))
+            val.setStyleSheet("color:#ffffff; background:transparent; border:0;")
+        for button in (minus, plus):
+            if button:
+                button.setFixedSize(40, 34)
+                button.setFont(font(13, QFont.Black))
+                if hasattr(button, "refresh"):
+                    button.refresh()
+
+    def mark_settings_dirty(self):
+        self._settings_dirty = True
+        self._last_settings_error = ""
+        self.s.status_refresh_paused_until = max(getattr(self.s, "status_refresh_paused_until", 0.0), time.monotonic() + 8.0)
+
     def value_control(self, key: str, label: str, value, low=None, high=None, suffix="°") -> QFrame:
-        panel = self.settings_panel(9)
-        panel.setMinimumHeight(34)
-        panel.setMaximumHeight(38)
+        panel = QFrame()
+        panel.setMinimumHeight(44)
+        panel.setMaximumHeight(50)
+        panel.setStyleSheet(self.value_control_style(False))
         lay = QHBoxLayout(panel)
-        lay.setContentsMargins(6, 3, 6, 3)
-        lay.setSpacing(4)
+        lay.setContentsMargins(7, 4, 7, 4)
+        lay.setSpacing(6)
         lab = QLabel(label)
-        lab.setFont(font(7, QFont.Black))
+        lab.setFont(font(8, QFont.Black))
         lab.setStyleSheet("color:#e7efff; background:transparent; border:0;")
         lab.setWordWrap(False)
-        minus = RoundButton("−", min_h=24)
-        minus.setFixedSize(28, 24)
+        minus = RoundButton("−", min_h=34)
+        minus.setFixedSize(40, 34)
+        minus.setFont(font(13, QFont.Black))
         val = QLabel(str(value) + suffix)
         val.setAlignment(Qt.AlignCenter)
-        val.setMinimumWidth(40)
-        val.setFont(font(9, QFont.Black))
+        val.setMinimumWidth(56)
+        val.setFont(font(11, QFont.Black))
         val.setStyleSheet("color:#ffffff; background:transparent; border:0;")
-        plus = RoundButton("+", min_h=24)
-        plus.setFixedSize(28, 24)
+        plus = RoundButton("+", min_h=34)
+        plus.setFixedSize(40, 34)
+        plus.setFont(font(13, QFont.Black))
         lay.addWidget(lab, 1)
         lay.addWidget(minus)
         lay.addWidget(val)
         lay.addWidget(plus)
         self.controls[key] = val
+        self.value_control_widgets[key] = {"panel": panel, "minus": minus, "plus": plus, "value": val, "popSeq": 0}
+        minus.pressed.connect(lambda k=key: self.pop_value_control(k))
+        plus.pressed.connect(lambda k=key: self.pop_value_control(k))
         minus.clicked.connect(lambda: self.adjust_value(key, -1, low, high, suffix))
         plus.clicked.connect(lambda: self.adjust_value(key, 1, low, high, suffix))
         return panel
@@ -6801,6 +6882,9 @@ class SettingsDialog(QDialog):
     def edit_settings_code(self):
         code = CodeKeypadDialog.get_code(self, "Settings Code", "New 4-Digit Code")
         if code is None:
+            return
+        confirmed = CodeKeypadDialog.get_code(self, "Confirm Settings Code", "Re-enter New Code", verify_code=code)
+        if confirmed is None:
             return
         self.s.config.setdefault("security", {})["settingsCode"] = code
         try:
@@ -7345,11 +7429,11 @@ class SettingsDialog(QDialog):
         if high is not None:
             val = min(high, val)
         self.controls[key].setText(str(val) + suffix)
-        # Force the tiny value label to repaint before any save work is queued.
-        # On the Pi touchscreen this makes repeated taps feel immediate instead
-        # of waiting for a thermostat API round-trip.
+        # Plus/minus settings are intentionally local until Save Settings.
+        # Keeping the API out of the tap path makes repeated touchscreen taps
+        # immediate and avoids waiting on a thermostat round-trip.
         self.controls[key].repaint()
-        self.apply_values(debounce=True)
+        self.mark_settings_dirty()
 
     def build_settings_changes(self) -> dict:
         limits = copy.deepcopy(self.s.thermostat.get("limits") or {})
