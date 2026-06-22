@@ -319,16 +319,8 @@ class ThermostatDial(QWidget):
         rect = QRectF((self.width() - side) / 2, (self.height() - side) / 2, side, side)
         center = rect.center()
 
-        heat_active = str(self.active_mode or self.mode).lower() == "heat"
-        # Keep heat clearly red, not Home Assistant's orange. Cool uses the
-        # existing cyan/blue accent. The same color is used for the faint full
-        # sweep and the stronger current-to-target operating band.
-        heat_color = QColor(255, 52, 72)
-        cool_color = T.CYAN
-        active_color = heat_color if heat_active else cool_color
-
         shadow = QRadialGradient(center, side * 0.54)
-        shadow.setColorAt(0.70, QColor(active_color.red(), active_color.green(), active_color.blue(), 42))
+        shadow.setColorAt(0.70, QColor(70, 120, 255, 54))
         shadow.setColorAt(1.00, QColor(0, 0, 0, 0))
         p.fillRect(self.rect(), shadow)
 
@@ -340,6 +332,10 @@ class ThermostatDial(QWidget):
         c = tick_rect.center()
         radius_outer = tick_rect.width() / 2
         radius_inner = radius_outer - side * 0.08
+        heat_active = str(self.active_mode or self.mode).lower() == "heat"
+        heat_color = QColor(255, 72, 83)
+        cool_color = T.CYAN
+        active_color = heat_color if heat_active else cool_color
 
         def pct_for_temp(temp: float) -> float:
             return max(0.0, min(1.0, (float(temp) - self.min_temp) / max(1.0, self.max_temp - self.min_temp)))
@@ -348,50 +344,69 @@ class ThermostatDial(QWidget):
         target_pct = pct_for_temp(self.target)
         band_low = min(current_pct, target_pct)
         band_high = max(current_pct, target_pct)
-        has_band = abs(current_pct - target_pct) > 0.015
+        has_gap = abs(current_pct - target_pct) > 0.015
 
-        # Draw a faint full-mode sweep first so heat always has a red scale and
-        # cool always has a blue/cyan scale from the low end through the high end.
-        # The current-to-target band is then drawn darker over that same track.
-        arc_rect = rect.adjusted(side * 0.165, side * 0.165, -side * 0.165, -side * 0.165)
-        start_angle = int(225 * 16)
-        span = int(-270 * 16)
-        faint_arc = QColor(active_color.red(), active_color.green(), active_color.blue(), 58)
-        p.setPen(QPen(faint_arc, side * 0.065, Qt.SolidLine, Qt.RoundCap))
-        p.drawArc(arc_rect, start_angle, span)
+        # Home Assistant-style progress:
+        # - the full dial track stays neutral gray
+        # - a faint heat/cool color runs only from the low end to the first existing marker
+        # - the existing current-to-target band stays the stronger/darker color
+        # Nothing after the second marker should get the faint active color.
+        faint_band_high = band_low if has_gap else current_pct
 
-        target_ang = self._angle_for_temp(self.target)
-        current_ang = self._angle_for_temp(self.current)
-
-        if has_band:
-            band_start_ang = max(current_ang, target_ang)
-            band_end_ang = min(current_ang, target_ang)
-            band_span = int((band_end_ang - band_start_ang) * 16)
-            p.setPen(QPen(QColor(active_color.red(), active_color.green(), active_color.blue(), 232), side * 0.071, Qt.SolidLine, Qt.RoundCap))
-            p.drawArc(arc_rect, int(band_start_ang * 16), band_span)
-
-        # Keep the scale marks faint in the active mode color, then strengthen
-        # only the marks between the current room temperature and selected setpoint.
         for i in range(91):
             pct = i / 90
             angle = math.radians(225 - pct * 270)
             is_major = i % 10 == 0
             is_mid = i % 5 == 0
-            in_band = has_band and band_low <= pct <= band_high
+            in_dark_band = band_low <= pct <= band_high and has_gap
+            in_faint_band = pct <= faint_band_high + 1e-6 and not in_dark_band
             inner_offset = side * (0.105 if is_major else 0.087 if is_mid else 0.066)
             x1 = c.x() + math.cos(angle) * (radius_outer - inner_offset)
             y1 = c.y() - math.sin(angle) * (radius_outer - inner_offset)
             x2 = c.x() + math.cos(angle) * radius_outer
             y2 = c.y() - math.sin(angle) * radius_outer
-            if in_band:
-                alpha = 225 if is_major else 196 if is_mid else 160
+            if in_dark_band:
+                alpha = 230 if is_major else 205 if is_mid else 175
+                col = QColor(active_color.red(), active_color.green(), active_color.blue(), alpha)
+                width = 5 if is_major else 4 if is_mid else 3
+            elif in_faint_band:
+                alpha = 78 if is_major else 62 if is_mid else 46
+                col = QColor(active_color.red(), active_color.green(), active_color.blue(), alpha)
                 width = 5 if is_major else 4 if is_mid else 3
             else:
-                alpha = 86 if is_major else 62 if is_mid else 42
+                col = QColor(112, 118, 126, 58 if is_major else 40 if is_mid else 26)
                 width = 4 if is_major else 3 if is_mid else 2
-            col = QColor(active_color.red(), active_color.green(), active_color.blue(), alpha)
             p.setPen(QPen(col, width, Qt.SolidLine, Qt.RoundCap))
             p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+
+        arc_rect = rect.adjusted(side * 0.165, side * 0.165, -side * 0.165, -side * 0.165)
+        start_angle = int(225 * 16)
+        span = int(-270 * 16)
+        p.setPen(QPen(QColor(106, 112, 120, 36), side * 0.065, Qt.SolidLine, Qt.RoundCap))
+        p.drawArc(arc_rect, start_angle, span)
+        target_ang = self._angle_for_temp(self.target)
+        current_ang = self._angle_for_temp(self.current)
+
+        def angle_for_pct(pct: float) -> float:
+            pct = max(0.0, min(1.0, pct))
+            return 225 - (270 * pct)
+
+        # Faint mode-colored track from the low end only to the first marker.
+        # This is intentionally not a full-scale color wash.
+        if faint_band_high > 0.001:
+            faint_end_ang = angle_for_pct(faint_band_high)
+            faint_span = int((faint_end_ang - 225) * 16)
+            p.setPen(QPen(QColor(active_color.red(), active_color.green(), active_color.blue(), 66), side * 0.07, Qt.SolidLine, Qt.RoundCap))
+            p.drawArc(arc_rect, int(225 * 16), faint_span)
+
+        # Strong highlight only between the current and target markers.
+        if has_gap:
+            band_start_ang = angle_for_pct(band_low)
+            band_end_ang = angle_for_pct(band_high)
+            band_span = int((band_end_ang - band_start_ang) * 16)
+            grad_pen = QPen(active_color, side * 0.07, Qt.SolidLine, Qt.RoundCap)
+            p.setPen(grad_pen)
+            p.drawArc(arc_rect, int(band_start_ang * 16), band_span)
 
         inner = rect.adjusted(side * 0.29, side * 0.29, -side * 0.29, -side * 0.29)
         g = QRadialGradient(inner.center(), inner.width() / 2)
