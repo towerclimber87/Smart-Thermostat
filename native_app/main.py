@@ -365,6 +365,7 @@ class Header(QWidget):
         # Current/Set pills are redundant there. Keep them visible on Blinds,
         # Audio, Lights, and Room where they provide useful context.
         show_temp_pills = name != "Thermostat"
+        self.lock_button.setVisible(name == "Thermostat")
         self.current_pill.setVisible(show_temp_pills)
         self.set_pill.setVisible(show_temp_pills)
 
@@ -432,9 +433,9 @@ class ThermostatActionBanner(GlassPanel):
     def __init__(self, parent=None):
         super().__init__(parent, radius=24, strong=True)
         self.kind = "info"
-        self.setFixedWidth(520)
+        self.setFixedWidth(540)
         self.setMinimumHeight(134)
-        self.setMaximumHeight(190)
+        self.setMaximumHeight(230)
         self.title = QLabel("", self)
         self.title.setFont(font(17, QFont.Black))
         self.title.setStyleSheet("color:#ffffff; background:transparent; border:0;")
@@ -447,7 +448,7 @@ class ThermostatActionBanner(GlassPanel):
         self.bypass = RoundButton("Bypass", active=True, kind="purple", min_h=38)
         self.dismiss.setFixedWidth(120)
         self.revert.setFixedWidth(120)
-        self.bypass.setFixedWidth(120)
+        self.bypass.setFixedWidth(180)
         buttons = QHBoxLayout()
         buttons.setContentsMargins(0, 0, 0, 0)
         buttons.setSpacing(10)
@@ -468,6 +469,18 @@ class ThermostatActionBanner(GlassPanel):
 
     def set_alert(self, kind: str, title: str, body: str, *, dismiss=False, revert=False, bypass=False, dismiss_text="Dismiss", revert_text="Revert", bypass_text="Bypass"):
         self.kind = kind or "info"
+        if self.kind == "door-pause":
+            self.setMinimumHeight(168)
+            self.setMaximumHeight(238)
+            self.title.setFont(font(22, QFont.Black))
+            self.body.setFont(font(13, QFont.Black))
+            self.bypass.setFixedWidth(190)
+        else:
+            self.setMinimumHeight(134)
+            self.setMaximumHeight(190)
+            self.title.setFont(font(17, QFont.Black))
+            self.body.setFont(font(11, QFont.Black))
+            self.bypass.setFixedWidth(180)
         self.title.setText(title)
         self.body.setText(body)
         self.dismiss.setText(dismiss_text or "Dismiss")
@@ -480,17 +493,20 @@ class ThermostatActionBanner(GlassPanel):
             "heat": "rgba(255,72,83,0.58)",
             "cool": "rgba(65,225,255,0.48)",
             "lockout": "rgba(188,132,255,0.50)",
-            "door-pause": "rgba(255,178,73,0.54)",
+            "door-pause": "rgba(255,154,36,0.76)",
             "auto": "rgba(72,214,255,0.42)",
             "safety": "rgba(255,72,83,0.56)" if "Heat" in title else "rgba(65,225,255,0.50)",
         }.get(self.kind, "rgba(72,214,255,0.38)")
+        border = "rgba(255,231,164,0.52)" if self.kind == "door-pause" else "rgba(255,255,255,0.20)"
+        radius = 26 if self.kind == "door-pause" else 24
+        border_width = 2 if self.kind == "door-pause" else 1
         self.setStyleSheet(f"""
             ThermostatActionBanner {{
                 background:qlineargradient(x1:0,y1:0,x2:1,y2:1,
                     stop:0 {color},
                     stop:1 rgba(11,18,35,0.92));
-                border:1px solid rgba(255,255,255,0.20);
-                border-radius:24px;
+                border:{border_width}px solid {border};
+                border-radius:{radius}px;
             }}
         """)
         self.adjustSize()
@@ -970,16 +986,16 @@ class ThermostatScreen(Page):
         """)
         self.door_countdown = QLabel("")
         self.door_countdown.setAlignment(Qt.AlignCenter)
-        self.door_countdown.setFont(font(10, QFont.Black, 18))
-        self.door_countdown.setMinimumWidth(250)
+        self.door_countdown.setFont(font(12, QFont.Black, 18))
+        self.door_countdown.setMinimumWidth(330)
         self.door_countdown.setStyleSheet("""
             color:#fff4dc;
             background:qlineargradient(x1:0,y1:0,x2:1,y2:1,
-                stop:0 rgba(166,86,24,0.80),
-                stop:1 rgba(52,35,24,0.82));
-            border:1px solid rgba(255,194,104,0.52);
-            border-radius:14px;
-            padding:7px 14px;
+                stop:0 rgba(196,102,26,0.92),
+                stop:1 rgba(58,36,20,0.92));
+            border:2px solid rgba(255,215,135,0.68);
+            border-radius:16px;
+            padding:9px 18px;
             letter-spacing:1px;
         """)
         self.door_countdown.hide()
@@ -1216,12 +1232,19 @@ class ThermostatScreen(Page):
     def position_alert_banner(self):
         if not hasattr(self, "alert_banner"):
             return
-        if getattr(self.alert_banner, "kind", "") == "lockout":
+        kind = getattr(self.alert_banner, "kind", "")
+        if kind == "lockout":
             w = min(470, max(390, self.width() - 160))
             self.alert_banner.setFixedWidth(w)
             self.alert_banner.adjustSize()
             x = min(max(280, self.width() // 4), max(12, self.width() - self.alert_banner.width() - 26))
             y = 104
+        elif kind == "door-pause":
+            w = min(660, max(540, self.width() - 96))
+            self.alert_banner.setFixedWidth(w)
+            self.alert_banner.adjustSize()
+            x = max(12, (self.width() - self.alert_banner.width()) // 2)
+            y = 54
         else:
             w = min(520, max(420, self.width() - 120))
             self.alert_banner.setFixedWidth(w)
@@ -1396,6 +1419,25 @@ class ThermostatScreen(Page):
             return f"{h}h {m:02d}m"
         return f"{minutes}m {sec:02d}s"
 
+    def pause_entry_name(self, entry: dict | None, fallback: str = "Door") -> str:
+        if not isinstance(entry, dict):
+            return fallback
+        for key in ("name", "friendlyName", "friendly_name", "haName", "entityId", "entity_id"):
+            value = str(entry.get(key) or "").strip()
+            if value:
+                return value
+        return fallback
+
+    def comfort_pause_countdown_allowed(self, t: dict | None = None, pause: dict | None = None) -> bool:
+        t = t or self.thermostat_view()
+        pause = pause if isinstance(pause, dict) else (t.get("pauseFunction") if isinstance(t.get("pauseFunction"), dict) else {})
+        if "countdownAllowed" in pause:
+            return bool(pause.get("countdownAllowed"))
+        outputs = t.get("outputs") if isinstance(t.get("outputs"), dict) else {}
+        mode = str(t.get("mode") or "").lower()
+        active = str(t.get("autoActiveMode") or "").lower() if mode == "auto" else mode
+        return (active == "cool" and bool(outputs.get("cool"))) or (active == "heat" and bool(outputs.get("heat")))
+
     def update_alert_banner(self):
         if not hasattr(self, "alert_banner"):
             return
@@ -1428,16 +1470,16 @@ class ThermostatScreen(Page):
             self.bypass_pill.hide()
             self.notice.hide()
             entries = pause.get("entries") if isinstance(pause.get("entries"), list) else []
-            names = [str(e.get("name") or e.get("entityId") or "Door") for e in entries if isinstance(e, dict) and self.pause_entry_is_open(e)]
-            door_name = names[0] if names else "Selected door"
+            open_entries = [e for e in entries if isinstance(e, dict) and self.pause_entry_is_open(e)]
+            door_name = self.pause_entry_name(open_entries[0], "Selected door") if open_entries else "Selected door"
             self.alert_banner.set_alert(
                 "door-pause",
                 "Comfort Paused",
-                f"{door_name} is open. Using the away setpoint until it closes.",
+                f"{door_name} is open.\nUsing the away setpoint until it closes.",
                 dismiss=False,
                 revert=False,
                 bypass=True,
-                bypass_text="Snooze 5 min",
+                bypass_text="Snooze 5 Minutes",
             )
             self.position_alert_banner()
             return
@@ -1670,8 +1712,8 @@ class ThermostatScreen(Page):
             return
 
         now_ms = int(time.time() * 1000)
-        name = str(entry.get("name") or entry.get("entityId") or "Door").strip() or "Door"
-        short_name = compact_name(name, 28).upper()
+        name = self.pause_entry_name(entry, "Door")
+        short_name = compact_name(name, 30).upper()
         duration_ms = int(max(1, min(60, float(pause.get("durationMinutes") or 5))) * 60000)
         snooze_until = int(float(pause.get("snoozeUntil") or 0))
         if snooze_until > now_ms:
@@ -1680,7 +1722,11 @@ class ThermostatScreen(Page):
             self.door_countdown.show()
             return
         if pause.get("active"):
-            self.door_countdown.setText(f"{short_name} OPEN\nAWAY TEMP")
+            self.door_countdown.setText(f"{short_name} OPEN\nCOMFORT PAUSED")
+            self.door_countdown.show()
+            return
+        if not self.comfort_pause_countdown_allowed(t, pause):
+            self.door_countdown.setText(f"{short_name} OPEN\nWAITING FOR ACTIVE HEAT/COOL")
             self.door_countdown.show()
             return
         opened_at = int(float(entry.get("openedAt") or now_ms))

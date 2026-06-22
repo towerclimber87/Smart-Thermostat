@@ -184,6 +184,8 @@ DEFAULT_THERMOSTAT = {
         "previousLastComfortTarget": None,
         "activeEntityIds": [],
         "snoozeUntil": 0,
+        "countdownAllowed": False,
+        "countdownReason": "",
     },
     "autoSwitchNotice": {"active": False, "source": "", "fromMode": "", "toMode": "", "switchTemp": 0, "outdoorTemp": 0, "coolTarget": 0, "heatTarget": 0, "createdAt": 0},
     "autoSwitchHold": {"active": False, "source": "", "mode": "", "suggestedMode": "", "reason": "", "dismissed": False, "createdAt": 0},
@@ -548,6 +550,8 @@ def _normalize_pause_function(value: object) -> dict:
         "previousLastComfortTarget": previous_last,
         "activeEntityIds": _normalize_presence_entity_list(source.get("activeEntityIds", [])),
         "snoozeUntil": _number(source.get("snoozeUntil", source.get("snoozedUntil", 0)), 0, 0, None),
+        "countdownAllowed": bool(source.get("countdownAllowed")),
+        "countdownReason": str(source.get("countdownReason") or "").strip()[:80],
     }
 
 
@@ -832,6 +836,8 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
         base["pauseFunction"]["active"] = False
         base["pauseFunction"]["activeEntityIds"] = []
         base["pauseFunction"]["snoozeUntil"] = 0
+        base["pauseFunction"]["countdownAllowed"] = False
+        base["pauseFunction"]["countdownReason"] = ""
     if not base["pauseFunction"].get("active"):
         base["pauseFunction"]["pausedAt"] = 0
         base["pauseFunction"]["previousTargetTemp"] = None
@@ -941,6 +947,8 @@ def _thermostat_persist_payload(thermostat: dict) -> dict:
         "previousLastComfortTarget": None,
         "activeEntityIds": [],
         "snoozeUntil": 0,
+        "countdownAllowed": False,
+        "countdownReason": "",
     }
     return persistent
 
@@ -2259,6 +2267,27 @@ def _restore_from_door_pause(thermostat: dict, pause: dict) -> dict:
     return restored
 
 
+def _door_pause_countdown_allowed(thermostat: dict) -> bool:
+    """Only let the comfort-pause countdown run while equipment is active.
+
+    A door can be open all day while the thermostat is idle; that should show
+    the open entry, but it should not burn down the timer or switch to away
+    setpoints until cooling is actually cooling or heating is actually heating.
+    Auto mode follows the currently active heat/cool side.
+    """
+    try:
+        outputs = _thermostat_outputs(thermostat)
+    except Exception:
+        return False
+    mode = _normalize_mode(thermostat.get("mode"), "")
+    active_mode = _normalize_mode(thermostat.get("autoActiveMode"), "") if mode == "auto" else mode
+    if active_mode == "cool" and bool(outputs.get("cool")):
+        return True
+    if active_mode == "heat" and bool(outputs.get("heat")):
+        return True
+    return False
+
+
 def _apply_door_pause_logic(thermostat: dict) -> dict:
     """Apply the configured door countdown and temporary away setpoint.
 
@@ -2283,17 +2312,29 @@ def _apply_door_pause_logic(thermostat: dict) -> dict:
             "previousLastComfortTarget": None,
             "activeEntityIds": [],
             "snoozeUntil": 0,
+            "countdownAllowed": False,
+            "countdownReason": "",
         })
         t["pauseFunction"] = pause
         return _merge_thermostat_state(t)
 
     now_ms = int(time.time() * 1000)
     duration_ms = _normalize_pause_function_duration(pause.get("durationMinutes"), 5) * 60000
+    countdown_allowed = _door_pause_countdown_allowed(t)
+    pause["countdownAllowed"] = bool(countdown_allowed)
+    pause["countdownReason"] = "" if countdown_allowed else "waiting-for-active-hvac"
+
     open_entries: list[dict] = []
     for entry in entries:
         if _pause_entry_open_state(entry):
-            if not _number(entry.get("openedAt"), 0, 0):
-                entry["openedAt"] = now_ms
+            if countdown_allowed or pause.get("active"):
+                if not _number(entry.get("openedAt"), 0, 0):
+                    entry["openedAt"] = now_ms
+            else:
+                # The entry is open, but the thermostat is idle or not actively
+                # running the selected heat/cool side. Do not let the countdown
+                # start or continue until equipment is actually running.
+                entry["openedAt"] = 0
             open_entries.append(entry)
         else:
             entry["openedAt"] = 0
@@ -2308,12 +2349,14 @@ def _apply_door_pause_logic(thermostat: dict) -> dict:
             "previousLastComfortTarget": None,
             "activeEntityIds": [],
             "snoozeUntil": 0,
+            "countdownAllowed": False,
+            "countdownReason": "",
         })
         t["pauseFunction"] = pause
         return _merge_thermostat_state(t)
 
     open_ids = [str(entry.get("entityId") or "") for entry in open_entries if str(entry.get("entityId") or "")]
-    first_opened_at = min(int(_number(entry.get("openedAt"), now_ms, 0)) for entry in open_entries)
+    first_opened_at = min(int(_number(entry.get("openedAt"), now_ms, 0)) for entry in open_entries) if countdown_allowed else now_ms
     snooze_until = int(_number(pause.get("snoozeUntil"), 0, 0))
 
     if snooze_until and now_ms < snooze_until:
@@ -2325,11 +2368,21 @@ def _apply_door_pause_logic(thermostat: dict) -> dict:
             "previousTargetTemp": None,
             "previousLastComfortTarget": None,
             "activeEntityIds": [],
+            "countdownAllowed": False,
+            "countdownReason": "",
         })
     elif not bool(t.get("away")):
         if pause.get("active"):
             t["targetTemp"] = _door_pause_away_target(t)
             pause["activeEntityIds"] = open_ids
+        elif not countdown_allowed:
+            pause.update({
+                "active": False,
+                "pausedAt": 0,
+                "previousTargetTemp": None,
+                "previousLastComfortTarget": None,
+                "activeEntityIds": [],
+            })
         elif now_ms - first_opened_at >= duration_ms:
             pause["active"] = True
             pause["pausedAt"] = now_ms
@@ -2349,6 +2402,8 @@ def _apply_door_pause_logic(thermostat: dict) -> dict:
             "previousTargetTemp": None,
             "previousLastComfortTarget": None,
             "activeEntityIds": [],
+            "countdownAllowed": False,
+            "countdownReason": "",
         })
 
     if snooze_until and now_ms >= snooze_until:
@@ -2374,6 +2429,8 @@ def _apply_door_pause_snooze_request(existing: dict, minutes: object = 5) -> dic
         "previousLastComfortTarget": None,
         "activeEntityIds": [],
         "snoozeUntil": now_ms + snooze_minutes * 60000,
+        "countdownAllowed": False,
+        "countdownReason": "snoozed",
     })
     t["pauseFunction"] = pause
     return _merge_thermostat_state(t)
