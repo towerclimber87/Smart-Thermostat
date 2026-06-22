@@ -146,6 +146,7 @@ DEFAULT_THERMOSTAT = {
     "away": False,
     "awaySource": "",
     "manualAwayPresenceLatch": None,
+    "presenceHomeOverride": None,
     "awayHeat": 55,
     "awayCool": 85,
     "safetyLow": 55,
@@ -615,6 +616,28 @@ def _normalize_manual_away_presence_latch(value: object) -> dict | None:
     }
 
 
+def _normalize_presence_home_override(value: object) -> dict | None:
+    if not isinstance(value, dict) or value.get("active") is False:
+        return None
+    started_at = _number(value.get("startedAt"), int(time.time() * 1000), 0, None)
+    entity_ids = _normalize_presence_entity_list(value.get("entityIds", value.get("blockedEntityIds", [])))
+    return {
+        "active": True,
+        "startedAt": started_at,
+        "entityIds": entity_ids,
+        "reason": str(value.get("reason") or "manual-return-home").strip()[:80] or "manual-return-home",
+    }
+
+
+def _presence_home_override_payload(entity_ids: list[str] | None = None, *, reason: str = "manual-return-home") -> dict:
+    return {
+        "active": True,
+        "startedAt": int(time.time() * 1000),
+        "entityIds": _normalize_presence_entity_list(entity_ids or []),
+        "reason": reason,
+    }
+
+
 def _allowed_mode_for_locks(mode: str, thermostat: dict, fallback: str = "cool") -> str:
     requested = _normalize_mode(mode, fallback)
     cool_available = not bool(thermostat.get("coolLocked"))
@@ -740,6 +763,8 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             base["awaySource"] = _normalize_away_source(source.get("awaySource"))
         if "manualAwayPresenceLatch" in source:
             base["manualAwayPresenceLatch"] = _normalize_manual_away_presence_latch(source.get("manualAwayPresenceLatch"))
+        if "presenceHomeOverride" in source:
+            base["presenceHomeOverride"] = _normalize_presence_home_override(source.get("presenceHomeOverride"))
 
         if "heatLocked" in source:
             base["heatLocked"] = _boolish(source.get("heatLocked"))
@@ -865,6 +890,7 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
         base["coolRelayWasOn"] = False
     base["awaySource"] = _normalize_away_source(base.get("awaySource"))
     base["manualAwayPresenceLatch"] = _normalize_manual_away_presence_latch(base.get("manualAwayPresenceLatch"))
+    base["presenceHomeOverride"] = _normalize_presence_home_override(base.get("presenceHomeOverride"))
     base["pauseFunction"] = _normalize_pause_function(base.get("pauseFunction"))
     if not base["pauseFunction"].get("entries"):
         base["pauseFunction"]["active"] = False
@@ -882,6 +908,10 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
         base["manualAwayPresenceLatch"] = None
     elif base["awaySource"] != "manual":
         base["manualAwayPresenceLatch"] = None
+    if base["away"] or not base.get("people"):
+        # A manual Home override only makes sense while the thermostat is in
+        # Home mode and person tracking is configured.
+        base["presenceHomeOverride"] = None
     mode_limits = base["limits"].get(base["mode"], {"min": 45, "max": 95})
     if not base["away"] and not base.get("pauseFunction", {}).get("active"):
         base["targetTemp"] = _number(base["targetTemp"], 70, mode_limits.get("min"), mode_limits.get("max"))
@@ -900,6 +930,7 @@ THERMOSTAT_PERSIST_KEYS = (
     "away",
     "awaySource",
     "manualAwayPresenceLatch",
+    "presenceHomeOverride",
     "awayHeat",
     "awayCool",
     "safetyLow",
@@ -2242,10 +2273,18 @@ def _apply_presence_away_logic(thermostat: dict) -> dict:
     states = _person_states_for_schedule(entity_ids, thermostat)
     if not states:
         return thermostat
-    any_home = any(states.get(entity_id) == "home" for entity_id in entity_ids)
+    home_entity_ids = [entity_id for entity_id in entity_ids if states.get(entity_id) == "home"]
+    any_home = bool(home_entity_ids)
     updated = dict(thermostat)
     away_source = str(updated.get("awaySource") or "").strip().lower()
+    home_override = _normalize_presence_home_override(updated.get("presenceHomeOverride"))
+
     if any_home:
+        # A real Home report proves the phone/person tracker is back online, so
+        # release a manual Return Home override and allow future all-away
+        # transitions to work normally again.
+        if home_override:
+            updated["presenceHomeOverride"] = None
         if bool(updated.get("away")) and away_source in {"presence", "auto", ""}:
             updated["away"] = False
             updated["awaySource"] = "presence"
@@ -2253,12 +2292,20 @@ def _apply_presence_away_logic(thermostat: dict) -> dict:
             if updated.get("lastComfortTarget"):
                 updated["targetTemp"] = updated.get("lastComfortTarget")
     else:
-        if not bool(updated.get("away")) and away_source in {"presence", "auto", ""}:
+        if home_override:
+            # The user deliberately tapped Return Home while the assigned people
+            # still report Away/unknown. Keep Home until at least one assigned
+            # person reports Home again; this covers dead phones and stale
+            # presence data without disabling Auto Away forever.
+            updated["away"] = False
+            updated["awaySource"] = ""
+            updated["manualAwayPresenceLatch"] = None
+            updated["presenceHomeOverride"] = home_override
+        elif not bool(updated.get("away")) and away_source in {"presence", "auto", ""}:
             updated["away"] = True
             updated["awaySource"] = "presence"
             updated["manualAwayPresenceLatch"] = None
     return _merge_thermostat_state(updated)
-
 
 def _pause_entry_open_state(entry: dict) -> bool:
     """Return True when a configured inside-door entry should pause comfort."""
@@ -2787,6 +2834,20 @@ def _handle_thermostat_update(payload: dict) -> dict:
     bypass_mode = str(incoming.get("bypassChangeoverLockout") or "").strip().lower()
     if bypass_mode not in {"heat", "cool"} and incoming.get("bypassChangeoverLockout"):
         bypass_mode = str(existing.get("manualPendingMode") or existing.get("autoPendingMode") or "").strip().lower()
+    existing_away_source = str(existing.get("awaySource") or "").strip().lower()
+    incoming_requests_home = (
+        "away" in incoming
+        and bool(existing.get("away"))
+        and existing_away_source in {"presence", "auto"}
+        and not bool(incoming.get("away"))
+    )
+    if incoming_requests_home and "presenceHomeOverride" not in incoming:
+        incoming = dict(incoming)
+        incoming["presenceHomeOverride"] = _presence_home_override_payload(
+            _thermostat_person_entity_ids(existing),
+            reason="manual-return-home",
+        )
+
     if bypass_mode in {"heat", "cool"}:
         existing = dict(existing)
         if bypass_mode == "heat":

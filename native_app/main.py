@@ -2027,7 +2027,26 @@ class ThermostatScreen(Page):
         )
 
     def return_home_from_away(self):
+        source = str(self.thermostat.get("awaySource") or self.s.thermostat.get("awaySource") or "").lower()
         changes = {"away": False, "awaySource": "", "manualAwayPresenceLatch": None}
+        if source in {"presence", "auto"}:
+            people = self.thermostat.get("people") or self.s.thermostat.get("people") or []
+            entity_ids = []
+            for person in people:
+                if not isinstance(person, dict):
+                    continue
+                entity_id = str(person.get("entityId") or person.get("entity_id") or "").strip()
+                if entity_id and entity_id not in entity_ids:
+                    entity_ids.append(entity_id)
+            changes["presenceHomeOverride"] = {
+                "active": True,
+                "startedAt": int(time.time() * 1000),
+                "entityIds": entity_ids,
+                "reason": "manual-return-home",
+            }
+            self.s.thermostat["presenceHomeOverride"] = copy.deepcopy(changes["presenceHomeOverride"])
+        else:
+            self.s.thermostat["presenceHomeOverride"] = None
         self.s.thermostat["away"] = False
         self.s.thermostat["awaySource"] = ""
         self.s.thermostat["manualAwayPresenceLatch"] = None
@@ -2202,7 +2221,7 @@ class ThermostatScreen(Page):
         if away:
             source = str(t.get("awaySource") or "").lower()
             if source == "presence":
-                self.away_body.setText("No assigned people are home. Tap to return Home, or it will return automatically when someone comes home.")
+                self.away_body.setText("No assigned people are home. Tap Return Home to hold Home until one assigned person reports Home again.")
             else:
                 self.away_body.setText("Tap to return Home and resume normal comfort.")
             self.position_away_overlay()
