@@ -5917,6 +5917,7 @@ class AudioSettingsDialog(QDialog):
             preset: copy.deepcopy(audio_preset_definition(self.s.config, preset))
             for preset, _label, _icon, _kind in AUDIO_PRESET_ORDER
         }
+        self.scene_mode = False
         self.setWindowTitle("Audio Settings")
         self.setModal(True)
         self.setWindowFlag(Qt.FramelessWindowHint, True)
@@ -5968,6 +5969,14 @@ class AudioSettingsDialog(QDialog):
         title_col.addWidget(title)
         title_col.addWidget(sub)
         header.addLayout(title_col, 1)
+        self.options_btn = RoundButton("Audio Options", active=True, min_h=42)
+        self.options_btn.setMinimumWidth(150)
+        self.options_btn.clicked.connect(lambda checked=False: self.set_scene_mode(False))
+        self.set_scenes_btn = RoundButton("Set Scenes", min_h=42)
+        self.set_scenes_btn.setMinimumWidth(140)
+        self.set_scenes_btn.clicked.connect(lambda checked=False: self.set_scene_mode(True))
+        header.addWidget(self.options_btn)
+        header.addWidget(self.set_scenes_btn)
         cancel = RoundButton("Cancel", min_h=42)
         cancel.setMinimumWidth(120)
         cancel.clicked.connect(self.reject)
@@ -5978,10 +5987,13 @@ class AudioSettingsDialog(QDialog):
         header.addWidget(save)
         root.addLayout(header)
 
-        body = QHBoxLayout()
+        self.options_widget = QWidget()
+        body = QHBoxLayout(self.options_widget)
+        body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(16)
 
-        controls_panel = GlassPanel(radius=24, strong=True)
+        self.controls_panel = GlassPanel(radius=24, strong=True)
+        controls_panel = self.controls_panel
         controls_lay = QVBoxLayout(controls_panel)
         controls_lay.setContentsMargins(20, 16, 20, 18)
         controls_lay.setSpacing(7)
@@ -6013,7 +6025,8 @@ class AudioSettingsDialog(QDialog):
         controls_lay.addStretch(1)
         body.addWidget(controls_panel, 3)
 
-        nav_panel = GlassPanel(radius=24, strong=True)
+        self.nav_panel = GlassPanel(radius=24, strong=True)
+        nav_panel = self.nav_panel
         nav_lay = QVBoxLayout(nav_panel)
         nav_lay.setContentsMargins(20, 16, 20, 18)
         nav_lay.setSpacing(12)
@@ -6032,9 +6045,10 @@ class AudioSettingsDialog(QDialog):
         nav_lay.addWidget(desc)
         nav_lay.addStretch(1)
         body.addWidget(nav_panel, 2)
-        root.addLayout(body, 1)
+        root.addWidget(self.options_widget, 1)
 
-        scene_panel = GlassPanel(radius=24, strong=True)
+        self.scene_panel = GlassPanel(radius=24, strong=True)
+        scene_panel = self.scene_panel
         scene_lay = QVBoxLayout(scene_panel)
         scene_lay.setContentsMargins(20, 14, 20, 14)
         scene_lay.setSpacing(10)
@@ -6050,26 +6064,33 @@ class AudioSettingsDialog(QDialog):
         scene_top.addWidget(self.scene_name)
         scene_lay.addLayout(scene_top)
 
-        self.scene_editor = QWidget()
-        self.scene_editor_lay = QHBoxLayout(self.scene_editor)
-        self.scene_editor_lay.setContentsMargins(0, 0, 0, 0)
-        self.scene_editor_lay.setSpacing(10)
-        scene_lay.addWidget(self.scene_editor, 1)
-
         scene_buttons = QHBoxLayout()
         scene_buttons.setSpacing(10)
         self.scene_buttons: dict[str, ModernAudioButton] = {}
         for preset, text, icon_key, kind in AUDIO_PRESET_ORDER:
-            btn = ModernAudioButton(icon_key, text, kind=kind, min_h=62, holdable=False)
-            btn.setMinimumWidth(116)
+            btn = ModernAudioButton(icon_key, text, kind=kind, min_h=70, holdable=False)
+            btn.setMinimumWidth(128)
             btn.clicked.connect(lambda checked=False, p=preset: self.select_scene(p))
             self.scene_buttons[preset] = btn
             scene_buttons.addWidget(btn)
         scene_buttons.addStretch(1)
         scene_lay.addLayout(scene_buttons)
+
+        self.scene_hint = QLabel("Pick a scene tile above, adjust the targets below, then press Save.")
+        self.scene_hint.setFont(font(11, QFont.Black))
+        self.scene_hint.setStyleSheet("color:rgba(219,227,244,0.72);")
+        self.scene_hint.setWordWrap(True)
+        scene_lay.addWidget(self.scene_hint)
+
+        self.scene_editor = QWidget()
+        self.scene_editor_lay = QHBoxLayout(self.scene_editor)
+        self.scene_editor_lay.setContentsMargins(0, 0, 0, 0)
+        self.scene_editor_lay.setSpacing(10)
+        scene_lay.addWidget(self.scene_editor, 1)
         root.addWidget(scene_panel, 2)
 
         self.build_scene_editor()
+        self.set_scene_mode(False)
         QTimer.singleShot(0, self.fit_to_screen)
 
     def showEvent(self, event):
@@ -6078,6 +6099,18 @@ class AudioSettingsDialog(QDialog):
 
     def fit_to_screen(self):
         fit_dialog_to_available_screen(self, margin=0)
+
+    def set_scene_mode(self, enabled: bool):
+        self.scene_mode = bool(enabled)
+        if hasattr(self, "options_widget"):
+            self.options_widget.setVisible(not self.scene_mode)
+        if hasattr(self, "scene_panel"):
+            self.scene_panel.setVisible(self.scene_mode)
+        if hasattr(self, "options_btn"):
+            self.options_btn.setActive(not self.scene_mode)
+        if hasattr(self, "set_scenes_btn"):
+            self.set_scenes_btn.setActive(self.scene_mode)
+        self.fit_to_screen()
 
     def _clear_layout(self, layout: QHBoxLayout | QVBoxLayout | QGridLayout):
         while layout.count():
