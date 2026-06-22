@@ -8,6 +8,7 @@ from PyQt5.QtGui import QBrush, QColor, QConicalGradient, QFont, QLinearGradient
 from PyQt5.QtWidgets import (
     QApplication,
     QAbstractButton,
+    QAbstractItemView,
     QDialog,
     QFrame,
     QGridLayout,
@@ -18,6 +19,7 @@ from PyQt5.QtWidgets import (
     QListWidgetItem,
     QPushButton,
     QScrollArea,
+    QScroller,
     QSizePolicy,
     QSlider,
     QVBoxLayout,
@@ -1020,8 +1022,12 @@ class EntityPickerDialog(QDialog):
             QLabel { color: #f6f8ff; font-family: Arial; font-weight: 900; }
             QLineEdit { background: rgba(55,66,86,0.85); color:#f6f8ff; border:1px solid rgba(150,170,205,0.25); border-radius:14px; padding:10px; font-weight:800; }
             QListWidget { background: rgba(28,36,54,0.92); color:#eef3ff; border:1px solid rgba(150,170,205,0.24); border-radius:18px; padding:6px; }
-            QListWidget::item { padding:10px; border-bottom:1px solid rgba(255,255,255,0.06); }
+            QListWidget::item { padding:12px; border-bottom:1px solid rgba(255,255,255,0.06); }
             QListWidget::item:selected { background:#3edfff; color:#06121d; border-radius:10px; }
+            QScrollBar:vertical { background:rgba(255,255,255,0.06); width:28px; margin:2px; border-radius:14px; }
+            QScrollBar::handle:vertical { background:rgba(180,210,255,0.55); min-height:54px; border-radius:12px; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background:transparent; }
         """)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(12,10,12,10)
@@ -1034,6 +1040,17 @@ class EntityPickerDialog(QDialog):
         self.search.mousePressEvent = lambda event: self.open_search_keyboard()
         lay.addWidget(self.search)
         self.list = QListWidget()
+        self.list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.list.setAutoScroll(False)
+        try:
+            self.list.setWheelScrollLines(6)
+        except Exception:
+            pass
+        try:
+            QScroller.grabGesture(self.list.viewport(), QScroller.LeftMouseButtonGesture)
+        except Exception:
+            pass
         lay.addWidget(self.list, 1)
         btns = QHBoxLayout()
         self.cancel = RoundButton("Cancel")

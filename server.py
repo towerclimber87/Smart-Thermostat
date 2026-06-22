@@ -364,6 +364,8 @@ def _normalize_external_air_entity(value: object) -> dict | None:
     if not entity_id or "." not in entity_id:
         return None
     domain = str(value.get("domain") or entity_id.split(".", 1)[0]).strip().lower()
+    if domain not in {"switch", "input_boolean"}:
+        return None
     name = str(value.get("name") or value.get("friendlyName") or value.get("friendly_name") or value.get("haName") or entity_id).strip() or entity_id
     return {
         "entityId": entity_id[:160],

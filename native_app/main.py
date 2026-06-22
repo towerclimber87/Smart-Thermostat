@@ -4476,16 +4476,24 @@ class SettingsDialog(QDialog):
         return "external" if mode in {"external", "home-assistant", "ha", "remote"} else "internal"
 
     def external_air_entity(self, kind: str) -> dict | None:
+        def allowed(entry: dict | None) -> dict | None:
+            if not isinstance(entry, dict):
+                return None
+            eid = str(entry.get("entityId") or entry.get("entity_id") or "").strip()
+            if not eid or "." not in eid:
+                return None
+            domain = str(entry.get("domain") or eid.split(".", 1)[0]).strip().lower()
+            return entry if domain in {"switch", "input_boolean"} else None
+
         kind = "heat" if str(kind).lower() == "heat" else "cool"
         t = self.s.thermostat if isinstance(self.s.thermostat, dict) else {}
         key = "externalHeatEntity" if kind == "heat" else "externalCoolEntity"
-        entry = t.get(key)
-        if isinstance(entry, dict) and str(entry.get("entityId") or entry.get("entity_id") or "").strip():
+        entry = allowed(t.get(key))
+        if entry:
             return entry
         ha = self.s.ha()
         ha_key = "externalHeatControlEntity" if kind == "heat" else "externalCoolControlEntity"
-        entry = ha.get(ha_key) if isinstance(ha, dict) else None
-        return entry if isinstance(entry, dict) else None
+        return allowed(ha.get(ha_key) if isinstance(ha, dict) else None)
 
     def external_air_summary_text(self, kind: str) -> str:
         label = "Heat" if str(kind).lower() == "heat" else "Cool"
@@ -4543,7 +4551,8 @@ class SettingsDialog(QDialog):
             stored.insert(0, current_entry)
 
         entities = []
-        domains = ["switch", "input_boolean", "light", "fan", "climate", "humidifier", "water_heater"]
+        domains = ["switch", "input_boolean"]
+        allowed_domains = set(domains)
         try:
             data = self.s.api.post("/api/ha/entities", self.s.ha_payload({"domains": domains}))
             entities = data.get("entities") or []
@@ -4558,7 +4567,7 @@ class SettingsDialog(QDialog):
             if not eid or "." not in eid:
                 continue
             domain = str(item.get("domain") or eid.split(".", 1)[0]).strip().lower()
-            if domain not in set(domains):
+            if domain not in allowed_domains:
                 continue
             by_id[eid] = {
                 "entityId": eid,
@@ -4568,7 +4577,7 @@ class SettingsDialog(QDialog):
             }
         entities = list(by_id.values())
         if not entities:
-            QMessageBox.warning(self, f"External {label} Entry", "No controllable Home Assistant entries found. Use a switch/input_boolean/light/fan/climate helper for this control.")
+            QMessageBox.warning(self, f"External {label} Entry", "No Home Assistant switch or input_boolean entries found for external air control.")
             return
 
         dlg = EntityPickerDialog(f"Choose External {label} Entry", entities, self)
@@ -4577,7 +4586,10 @@ class SettingsDialog(QDialog):
                 eid = str(e.get("entityId") or e.get("entity_id") or "").strip()
                 if not eid:
                     return
-                domain = str(e.get("domain") or (eid.split(".", 1)[0] if "." in eid else "switch"))
+                domain = str(e.get("domain") or (eid.split(".", 1)[0] if "." in eid else "switch")).strip().lower()
+                if domain not in allowed_domains:
+                    QMessageBox.warning(self, f"External {label} Entry", "External air control can only use switch or input_boolean entries.")
+                    return
                 selected = {
                     "entityId": eid,
                     "name": str(e.get("name") or e.get("friendly_name") or eid),
@@ -4597,6 +4609,10 @@ class SettingsDialog(QDialog):
                 self.s.update_thermostat({"airControlMode": "external", thermo_key: selected})
                 self.update_air_control_widgets()
                 self.saved.emit()
+                try:
+                    dlg.accept()
+                except Exception:
+                    pass
             except Exception as exc:
                 QMessageBox.warning(self, f"External {label} Entry", str(exc))
         dlg.selected.connect(apply)
