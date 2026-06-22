@@ -377,6 +377,7 @@ class AppState:
         self.thermostat: dict = {}
         self.system_info: dict = {}
         self.last_error = ""
+        self.status_refresh_paused_until = 0.0
 
     def ha(self) -> dict:
         return nested_get(self.config, "integrations", "homeAssistant", default={}) or {}
@@ -4309,6 +4310,7 @@ class SimplePageSettingsDialog(QDialog):
 
 class SettingsDialog(QDialog):
     saved = pyqtSignal()
+    thermostatUpdateCompleted = pyqtSignal(object)
 
     def __init__(self, state: AppState, parent=None):
         super().__init__(parent)
@@ -4409,8 +4411,18 @@ class SettingsDialog(QDialog):
         root.addLayout(bottom)
 
         self.controls: dict[str, QLabel] = {}
+        self._settings_save_timer = QTimer(self)
+        self._settings_save_timer.setSingleShot(True)
+        self._settings_save_timer.timeout.connect(self.push_pending_settings)
+        self._pending_settings_changes: dict | None = None
+        self._pending_settings_quiet = True
+        self._settings_saving = False
+        self._settings_dirty = False
+        self._settings_update_seq = 0
+        self._last_settings_error = ""
+        self.thermostatUpdateCompleted.connect(self.handle_settings_update_completed)
         self.build()
-        self.done.clicked.connect(self.accept)
+        self.done.clicked.connect(self.close_settings)
         self.hardware.clicked.connect(self.show_hardware)
         self.history.clicked.connect(self.show_history)
         self.bottom_save.clicked.connect(self.save_all)
@@ -4978,21 +4990,64 @@ class SettingsDialog(QDialog):
         code_grid.setColumnStretch(0, 1)
         code_grid.setColumnStretch(1, 1)
 
-        self.grid.setRowStretch(5, 1)
+        unit = self.add_section("Thermostat Unit", 5, 0, 1, 4)
+        unit_row = QHBoxLayout()
+        unit_row.setSpacing(8)
+        self.thermostat_name_label = QLabel(self.thermostat_name_summary_text())
+        self.thermostat_name_label.setWordWrap(True)
+        self.thermostat_name_label.setFont(font(10, QFont.Black))
+        self.thermostat_name_label.setStyleSheet("color:#dfe9ff; background:rgba(5,10,20,0.42); border:1px dashed rgba(160,180,210,0.26); border-radius:10px; padding:7px;")
+        edit_name = RoundButton("Change Name", active=True, min_h=34)
+        edit_name.setMinimumWidth(150)
+        edit_name.clicked.connect(self.edit_thermostat_name)
+        unit_row.addWidget(self.thermostat_name_label, 1)
+        unit_row.addWidget(edit_name)
+        unit.layout().addLayout(unit_row)
+
+        self.grid.setRowStretch(6, 1)
 
     def val_number(self, key):
         text = self.controls[key].text().split()[0].replace("°", "")
-        try: return int(float(text))
-        except Exception: return 0
+        try:
+            return int(float(text))
+        except Exception:
+            return 0
+
+    def thermostat_name_summary_text(self) -> str:
+        name = str((self.s.thermostat or {}).get("name") or "IHA Thermostat").strip() or "IHA Thermostat"
+        return f"Name: {name}\nThis is the name shown on the panel and reported to Home Assistant."
+
+    def edit_thermostat_name(self):
+        current = str((self.s.thermostat or {}).get("name") or "IHA Thermostat")
+        value = TextKeyboardDialog.get_text(self, "Thermostat Name", current)
+        if value is None:
+            return
+        name = str(value or "").strip()[:80]
+        if not name:
+            QMessageBox.warning(self, "Thermostat Name", "Please enter a name.")
+            return
+        if name == current:
+            return
+        self.s.thermostat["name"] = name
+        if hasattr(self, "thermostat_name_label"):
+            self.thermostat_name_label.setText(self.thermostat_name_summary_text())
+            self.thermostat_name_label.repaint()
+        self.set_thermostat({"name": name}, quiet=False, debounce=False)
 
     def adjust_value(self, key, delta, low, high, suffix):
         val = self.val_number(key) + delta
-        if low is not None: val = max(low, val)
-        if high is not None: val = min(high, val)
+        if low is not None:
+            val = max(low, val)
+        if high is not None:
+            val = min(high, val)
         self.controls[key].setText(str(val) + suffix)
-        self.apply_values()
+        # Force the tiny value label to repaint before any save work is queued.
+        # On the Pi touchscreen this makes repeated taps feel immediate instead
+        # of waiting for a thermostat API round-trip.
+        self.controls[key].repaint()
+        self.apply_values(debounce=True)
 
-    def apply_values(self):
+    def build_settings_changes(self) -> dict:
         limits = copy.deepcopy(self.s.thermostat.get("limits") or {})
         limits.setdefault("cool", {})["min"] = self.val_number("coolMin")
         limits.setdefault("cool", {})["max"] = self.val_number("coolMax")
@@ -5002,7 +5057,7 @@ class SettingsDialog(QDialog):
         limits.setdefault("auto", {})["max"] = max(limits["cool"]["max"], limits["heat"]["max"])
         pause = self.s.thermostat.get("pauseFunction") if isinstance(self.s.thermostat.get("pauseFunction"), dict) else {}
         pause_entries = pause.get("entries") if isinstance(pause.get("entries"), list) else []
-        changes = {
+        return {
             "safetyLow": self.val_number("safetyLow"),
             "safetyHigh": self.val_number("safetyHigh"),
             "awayHeat": self.val_number("awayHeat"),
@@ -5024,14 +5079,89 @@ class SettingsDialog(QDialog):
             },
             "limits": limits,
         }
-        self.set_thermostat(changes, quiet=True)
 
-    def set_thermostat(self, changes, quiet=False):
-        try:
-            self.s.update_thermostat(changes)
-            self.saved.emit()
-        except Exception as exc:
-            if not quiet: QMessageBox.warning(self, "Update failed", str(exc))
+    def apply_values(self, debounce: bool = True):
+        self.set_thermostat(self.build_settings_changes(), quiet=True, debounce=debounce)
+
+    def merge_dicts(self, base: dict | None, changes: dict | None) -> dict:
+        merged = copy.deepcopy(base or {})
+        for key, value in (changes or {}).items():
+            if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                merged[key] = self.merge_dicts(merged.get(key), value)
+            else:
+                merged[key] = copy.deepcopy(value)
+        return merged
+
+    def apply_thermostat_changes_locally(self, changes: dict):
+        self.s.thermostat = self.merge_dicts(self.s.thermostat, changes)
+
+    def set_thermostat(self, changes, quiet=False, debounce=False):
+        if not isinstance(changes, dict) or not changes:
+            return
+        self.apply_thermostat_changes_locally(changes)
+        # Prevent the normal 4-second status poll from repainting stale server
+        # values over the instant local setting change while a debounced save is
+        # still being delivered.
+        self.s.status_refresh_paused_until = max(getattr(self.s, "status_refresh_paused_until", 0.0), time.monotonic() + 2.5)
+        self.saved.emit()
+        self._pending_settings_changes = self.merge_dicts(self._pending_settings_changes, changes)
+        self._pending_settings_quiet = bool(getattr(self, "_pending_settings_quiet", True)) and bool(quiet)
+        if debounce:
+            self._settings_save_timer.start(220)
+        else:
+            self._settings_save_timer.stop()
+            self.push_pending_settings()
+
+    def push_pending_settings(self):
+        if self._settings_saving:
+            self._settings_dirty = True
+            return
+        if not self._pending_settings_changes:
+            return
+        changes = copy.deepcopy(self._pending_settings_changes)
+        quiet = bool(getattr(self, "_pending_settings_quiet", True))
+        self._pending_settings_changes = None
+        self._pending_settings_quiet = True
+        self._settings_saving = True
+        self._settings_dirty = False
+        self._settings_update_seq += 1
+        seq = self._settings_update_seq
+
+        def worker():
+            try:
+                result = self.s.api.thermostat_update(changes)
+                self.thermostatUpdateCompleted.emit({"seq": seq, "result": result, "error": None, "quiet": quiet})
+            except Exception as exc:
+                self.thermostatUpdateCompleted.emit({"seq": seq, "result": None, "error": str(exc), "quiet": quiet})
+
+        threading.Thread(target=worker, name="settings-thermostat-save", daemon=True).start()
+
+    def handle_settings_update_completed(self, info: object):
+        data = info if isinstance(info, dict) else {}
+        self._settings_saving = False
+        error = str(data.get("error") or "")
+        quiet = bool(data.get("quiet", True))
+        if error:
+            self._last_settings_error = error
+            if not quiet and self.isVisible():
+                QMessageBox.warning(self, "Update failed", error)
+        elif not self._settings_dirty and not self._pending_settings_changes:
+            result = data.get("result")
+            if isinstance(result, dict):
+                self.s.thermostat = result
+                if hasattr(self, "thermostat_name_label"):
+                    self.thermostat_name_label.setText(self.thermostat_name_summary_text())
+        if self._settings_dirty or self._pending_settings_changes:
+            self._settings_dirty = False
+            self.s.status_refresh_paused_until = max(getattr(self.s, "status_refresh_paused_until", 0.0), time.monotonic() + 2.5)
+            QTimer.singleShot(0, self.push_pending_settings)
+        else:
+            self.s.status_refresh_paused_until = time.monotonic() + 0.2
+
+    def close_settings(self):
+        self._settings_save_timer.stop()
+        self.push_pending_settings()
+        self.accept()
 
     def show_saved_then_close(self):
         dlg = QDialog(self)
@@ -5073,7 +5203,7 @@ class SettingsDialog(QDialog):
         self.accept()
 
     def save_all(self):
-        self.apply_values()
+        self.apply_values(debounce=False)
         try:
             self.s.save_config()
             self.saved.emit()
@@ -5701,6 +5831,8 @@ class MainWindow(Background):
         self._status_refresh_running = False
         data = info if isinstance(info, dict) else {}
         if data.get("error"):
+            return
+        if time.monotonic() < getattr(self.s, "status_refresh_paused_until", 0.0):
             return
         status = data.get("data")
         if isinstance(status, dict):
