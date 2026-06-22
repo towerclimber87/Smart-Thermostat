@@ -138,6 +138,7 @@ AUDIO_CONTROL_ORDER: list[tuple[str, str]] = [
 ]
 AUDIO_CONTROL_DEFAULTS = {key: True for key, _label in AUDIO_CONTROL_ORDER}
 AUDIO_IDLE_SECONDS = 120.0
+AUDIO_FAST_NAV_POLL_SECONDS = 2.0
 
 
 def audio_ui_config(config: dict | None) -> dict:
@@ -6987,7 +6988,9 @@ class MainWindow(Background):
         self._last_auto_nav_audio_poll_at = 0.0
         self._auto_nav_audio_poll_running = False
         self._auto_nav_audio_is_playing = False
+        self._auto_nav_audio_previous_is_playing = False
         self._auto_nav_audio_state_at = 0.0
+        self._last_audio_manual_leave_at = -AUDIO_IDLE_SECONDS
         self._ignore_info_until = 0.0
         self._status_refresh_running = False
         self.statusRefreshCompleted.connect(self._handle_status_refresh_completed)
@@ -6996,7 +6999,7 @@ class MainWindow(Background):
         self.status_timer.start(4000)
         self.auto_nav_timer = QTimer(self)
         self.auto_nav_timer.timeout.connect(self.check_auto_navigation)
-        self.auto_nav_timer.start(5000)
+        self.auto_nav_timer.start(1000)
         app = QApplication.instance()
         if app is not None:
             app.installEventFilter(self)
@@ -7053,7 +7056,7 @@ class MainWindow(Background):
         return False
 
     def poll_audio_for_auto_navigation(self, now: float):
-        if now - getattr(self, "_last_auto_nav_audio_poll_at", 0.0) < 5.0:
+        if now - getattr(self, "_last_auto_nav_audio_poll_at", 0.0) < AUDIO_FAST_NAV_POLL_SECONDS:
             return
         if getattr(self, "_auto_nav_audio_poll_running", False):
             return
@@ -7062,6 +7065,7 @@ class MainWindow(Background):
             return
         eid = page.player_id()
         if not eid:
+            self._auto_nav_audio_previous_is_playing = bool(getattr(self, "_auto_nav_audio_is_playing", False))
             self._auto_nav_audio_is_playing = False
             self._auto_nav_audio_state_at = now
             return
@@ -7072,15 +7076,32 @@ class MainWindow(Background):
         def done(result):
             self._auto_nav_audio_poll_running = False
             players = (result or {}).get("players") or []
+            was_playing = bool(getattr(self, "_auto_nav_audio_is_playing", False))
+            is_playing = False
             if players:
                 player = players[0]
                 page.player_state = player
                 if self.current_name == "Audio":
                     page.apply_player_state()
-                self._auto_nav_audio_is_playing = page.state_is_non_tv_audio_playing(player)
-            else:
-                self._auto_nav_audio_is_playing = False
+                is_playing = page.state_is_non_tv_audio_playing(player)
+            self._auto_nav_audio_previous_is_playing = was_playing
+            self._auto_nav_audio_is_playing = is_playing
             self._auto_nav_audio_state_at = time.monotonic()
+
+            # A new real-music start should jump to Audio quickly. The two-minute
+            # idle delay only applies after the user manually leaves Audio while
+            # music is already playing. This prevents an immediate bounce-back.
+            if (
+                is_playing
+                and not was_playing
+                and self.current_name != "Audio"
+                and audio_auto_navigate_enabled(self.s.config)
+                and not getattr(self, "navigation_locked", False)
+                and QApplication.activeModalWidget() is None
+                and time.monotonic() - getattr(self, "_last_audio_manual_leave_at", 0.0) >= AUDIO_IDLE_SECONDS
+            ):
+                self._last_auto_nav_at = time.monotonic()
+                self.set_page("Audio", force=True)
 
         def failed(_err):
             self._auto_nav_audio_poll_running = False
@@ -7119,8 +7140,11 @@ class MainWindow(Background):
             self.toast.show_message("Locked to Thermostat")
             QTimer.singleShot(60, lambda: self.sync_visible_page("Thermostat"))
             return
-        self.current_name = name
+        previous_name = self.current_name
         now = time.monotonic()
+        if previous_name == "Audio" and name != "Audio" and not force and self.audio_page_is_music_playing():
+            self._last_audio_manual_leave_at = now
+        self.current_name = name
         self._last_page_change_at = now
         # Touchscreens can emit a ghost release after a nav tap. Do not let
         # that release open the nearby info button while the page is changing.
