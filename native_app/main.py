@@ -352,6 +352,86 @@ def fit_dialog_to_available_screen(dialog: QDialog, margin: int = 0):
 
 
 
+class ScheduleClockButton(QPushButton):
+    """Compact modern schedule button used in the thermostat header.
+
+    A drawn icon is more reliable than Unicode clock glyphs on the Pi because
+    installed fonts vary between images. This keeps the schedule control crisp
+    and consistent on the native 10-inch touchscreen.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip("Schedules")
+        self.setAccessibleName("Schedules")
+        self.setFixedSize(58, 52)
+        self.setFocusPolicy(Qt.NoFocus)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
+        outer = QRectF(self.rect()).adjusted(1.0, 1.0, -1.0, -1.0)
+        pressed = self.isDown()
+
+        bg = QLinearGradient(outer.topLeft(), outer.bottomRight())
+        if pressed:
+            bg.setColorAt(0.0, QColor(64, 201, 242, 218))
+            bg.setColorAt(1.0, QColor(76, 129, 232, 222))
+            border = QColor(171, 245, 255, 236)
+            icon = QColor(2, 18, 34, 236)
+            accent = QColor(255, 255, 255, 242)
+        else:
+            bg.setColorAt(0.0, QColor(74, 87, 109, 188))
+            bg.setColorAt(1.0, QColor(24, 33, 51, 224))
+            border = QColor(130, 229, 255, 120)
+            icon = QColor(235, 246, 255, 232)
+            accent = QColor(71, 224, 255, 238)
+
+        p.setBrush(QBrush(bg))
+        p.setPen(QPen(border, 1.5))
+        p.drawRoundedRect(outer, 17, 17)
+
+        halo = QRadialGradient(outer.center(), max(outer.width(), outer.height()) * 0.55)
+        halo.setColorAt(0.0, QColor(71, 224, 255, 34 if not pressed else 58))
+        halo.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.fillRect(outer, halo)
+
+        center = QPointF(outer.center().x() - 2.0, outer.center().y() - 1.0)
+        radius = min(outer.width(), outer.height()) * 0.27
+        clock_rect = QRectF(center.x() - radius, center.y() - radius, radius * 2, radius * 2)
+
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(icon, 2.35, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.drawEllipse(clock_rect)
+
+        tick_pen = QPen(icon, 1.45, Qt.SolidLine, Qt.RoundCap)
+        tick_pen.setColor(QColor(icon.red(), icon.green(), icon.blue(), 176))
+        p.setPen(tick_pen)
+        for angle_deg in (0, 90, 180, 270):
+            angle = math.radians(angle_deg - 90)
+            outer_pt = QPointF(center.x() + math.cos(angle) * (radius - 3.1), center.y() + math.sin(angle) * (radius - 3.1))
+            inner_pt = QPointF(center.x() + math.cos(angle) * (radius - 6.0), center.y() + math.sin(angle) * (radius - 6.0))
+            p.drawLine(inner_pt, outer_pt)
+
+        p.setPen(QPen(icon, 2.25, Qt.SolidLine, Qt.RoundCap))
+        p.drawLine(center, QPointF(center.x(), center.y() - radius * 0.52))
+        p.setPen(QPen(accent, 2.55, Qt.SolidLine, Qt.RoundCap))
+        p.drawLine(center, QPointF(center.x() + radius * 0.50, center.y() + radius * 0.18))
+        p.setBrush(QBrush(accent))
+        p.setPen(Qt.NoPen)
+        p.drawEllipse(QRectF(center.x() - 2.2, center.y() - 2.2, 4.4, 4.4))
+
+        badge_radius = 8.2
+        badge_center = QPointF(outer.right() - 13.2, outer.bottom() - 12.8)
+        p.setBrush(QBrush(accent))
+        p.setPen(QPen(QColor(255, 255, 255, 216), 1.1))
+        p.drawEllipse(QRectF(badge_center.x() - badge_radius, badge_center.y() - badge_radius, badge_radius * 2, badge_radius * 2))
+        p.setPen(QPen(QColor(2, 18, 34, 235), 2.0, Qt.SolidLine, Qt.RoundCap))
+        p.drawLine(QPointF(badge_center.x() - 3.5, badge_center.y()), QPointF(badge_center.x() + 3.5, badge_center.y()))
+        p.drawLine(QPointF(badge_center.x(), badge_center.y() - 3.5), QPointF(badge_center.x(), badge_center.y() + 3.5))
+
+
 
 class HoldLabel(QLabel):
     held = pyqtSignal()
@@ -1741,10 +1821,7 @@ class ThermostatScreen(Page):
         self.virtual_panel.tempChanged.connect(self.set_virtual_temp)
         self.minus = IconCircle("−", "minus", 82)
         self.plus = IconCircle("+", "plus", 82)
-        self.schedule_button = RoundButton("◷", active=False, min_h=46)
-        self.schedule_button.setFixedSize(50, 46)
-        self.schedule_button.setFont(font(22, QFont.Black))
-        self.schedule_button.setToolTip("Schedules")
+        self.schedule_button = ScheduleClockButton()
         # Open on press instead of release. The touchscreen can occasionally
         # drop the release/click event near screen edges, which made the timer
         # button appear dead. A guard in open_schedule_manager prevents double-open.
