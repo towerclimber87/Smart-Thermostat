@@ -544,6 +544,108 @@ class RoomControlCard(HoldCard):
         self.dashed = not bool(control.get("haEntityId"))
         self.update()
 
+    def _icon_kind(self) -> str:
+        entity_id = str(self.control.get("haEntityId") or "").lower()
+        domain = str(self.control.get("domain") or (entity_id.split(".", 1)[0] if "." in entity_id else "switch")).lower()
+        icon = str(self.control.get("icon") or "").lower()
+        device_class = str(self.control.get("deviceClass") or self.control.get("device_class") or "").lower()
+        name = str(self.control.get("haName") or self.control.get("name") or entity_id).lower()
+        hay = " ".join([icon, device_class, domain, name, entity_id])
+        if not self.control.get("haEntityId"):
+            return "assign"
+        if domain == "lock" or "lock" in hay:
+            return "lock"
+        if domain == "cover" or any(x in hay for x in ("blind", "shade", "shutter", "garage", "curtain", "door")):
+            return "cover"
+        if domain == "fan" or "fan" in hay:
+            return "fan"
+        if domain == "light" or any(x in hay for x in ("light", "lamp", "bulb", "sconce")):
+            return "light"
+        if any(x in hay for x in ("tv", "television", "projector", "display", "screen")):
+            return "screen"
+        if any(x in hay for x in ("outlet", "plug", "socket")):
+            return "outlet"
+        if domain in {"button", "input_button", "scene", "script"}:
+            return "button"
+        return "switch"
+
+    def _draw_room_icon(self, p: QPainter, rect: QRectF, kind: str, active: bool, assigned: bool):
+        fg = T.GREEN if active else (T.CYAN if not assigned else QColor(210, 232, 240, 170))
+        p.setPen(QPen(fg, max(2.0, rect.width() * 0.045), Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.setBrush(Qt.NoBrush)
+        cx, cy = rect.center().x(), rect.center().y()
+        w, h = rect.width(), rect.height()
+
+        if kind == "assign":
+            p.drawLine(QPointF(cx - w * 0.18, cy), QPointF(cx + w * 0.18, cy))
+            p.drawLine(QPointF(cx, cy - h * 0.18), QPointF(cx, cy + h * 0.18))
+            return
+
+        if kind == "light":
+            p.drawEllipse(QRectF(cx - w * 0.19, cy - h * 0.25, w * 0.38, h * 0.38))
+            p.drawLine(QPointF(cx - w * 0.10, cy + h * 0.03), QPointF(cx + w * 0.10, cy + h * 0.03))
+            p.drawLine(QPointF(cx - w * 0.08, cy + h * 0.14), QPointF(cx + w * 0.08, cy + h * 0.14))
+            p.drawLine(QPointF(cx - w * 0.05, cy + h * 0.24), QPointF(cx + w * 0.05, cy + h * 0.24))
+            return
+
+        if kind == "fan":
+            p.drawEllipse(QRectF(cx - 3, cy - 3, 6, 6))
+            for angle in (90, 210, 330):
+                a = math.radians(angle)
+                bx, by = math.cos(a), math.sin(a)
+                path = QPainterPath(QPointF(cx + bx * w * 0.07, cy + by * h * 0.07))
+                path.quadTo(QPointF(cx + bx * w * 0.29 - by * w * 0.08, cy + by * h * 0.29 + bx * h * 0.08),
+                            QPointF(cx + bx * w * 0.35, cy + by * h * 0.35))
+                p.drawPath(path)
+            return
+
+        if kind == "lock":
+            unlocked = str(self.control.get("state") or "").lower() in {"unlocked", "open"}
+            if unlocked:
+                p.drawArc(QRectF(cx - w * 0.30, cy - h * 0.36, w * 0.34, h * 0.34), 25 * 16, 155 * 16)
+            else:
+                p.drawArc(QRectF(cx - w * 0.22, cy - h * 0.36, w * 0.44, h * 0.40), 0, 180 * 16)
+            body = QRectF(cx - w * 0.28, cy - h * 0.06, w * 0.56, h * 0.38)
+            p.setBrush(QColor(fg.red(), fg.green(), fg.blue(), 30))
+            p.drawRoundedRect(body, 7, 7)
+            p.setBrush(fg)
+            p.setPen(Qt.NoPen)
+            p.drawEllipse(QRectF(cx - 2.4, cy + h * 0.08, 4.8, 4.8))
+            return
+
+        if kind == "cover":
+            frame = QRectF(cx - w * 0.30, cy - h * 0.31, w * 0.60, h * 0.60)
+            p.drawRoundedRect(frame, 4, 4)
+            for y in (0.18, 0.02, -0.14):
+                p.drawLine(QPointF(frame.left() + 4, cy + h * y), QPointF(frame.right() - 4, cy + h * y))
+            return
+
+        if kind == "screen":
+            body = QRectF(cx - w * 0.32, cy - h * 0.24, w * 0.64, h * 0.42)
+            p.drawRoundedRect(body, 5, 5)
+            p.drawLine(QPointF(cx - w * 0.10, cy + h * 0.28), QPointF(cx + w * 0.10, cy + h * 0.28))
+            p.drawLine(QPointF(cx, cy + h * 0.18), QPointF(cx, cy + h * 0.28))
+            return
+
+        if kind == "outlet":
+            p.drawEllipse(QRectF(cx - w * 0.24, cy - h * 0.28, w * 0.48, h * 0.56))
+            p.drawLine(QPointF(cx - w * 0.08, cy - h * 0.07), QPointF(cx - w * 0.08, cy + h * 0.08))
+            p.drawLine(QPointF(cx + w * 0.08, cy - h * 0.07), QPointF(cx + w * 0.08, cy + h * 0.08))
+            return
+
+        if kind == "button":
+            path = QPainterPath(QPointF(cx - w * 0.16, cy - h * 0.22))
+            path.lineTo(QPointF(cx - w * 0.16, cy + h * 0.22))
+            path.lineTo(QPointF(cx + w * 0.20, cy))
+            path.closeSubpath()
+            p.setBrush(QColor(fg.red(), fg.green(), fg.blue(), 35))
+            p.drawPath(path)
+            return
+
+        # Default modern power/switch glyph.
+        p.drawArc(QRectF(cx - w * 0.26, cy - h * 0.21, w * 0.52, h * 0.52), 35 * 16, 290 * 16)
+        p.drawLine(QPointF(cx, cy - h * 0.31), QPointF(cx, cy - h * 0.04))
+
     def paintEvent(self, event):
         super().paintEvent(event)
         p = QPainter(self)
@@ -551,6 +653,7 @@ class RoomControlCard(HoldCard):
         r = QRectF(self.rect())
         active = bool(self.control.get("on"))
         assigned = bool(self.control.get("haEntityId"))
+        protected = bool(str(self.control.get("accessCode") or "").strip())
 
         if active:
             glow = QRadialGradient(QPointF(r.width()*0.28, r.height()*0.28), r.width()*0.58)
@@ -571,10 +674,7 @@ class RoomControlCard(HoldCard):
         p.setBrush(g)
         p.setPen(QPen(QColor(89, 229, 249, 66), 1.2))
         p.drawRoundedRect(icon, 14, 14)
-        p.setFont(font(max(22, int(icon_size * 0.45)), QFont.Black))
-        p.setPen(T.GREEN if active else T.CYAN if not assigned else QColor(186, 220, 230, 145))
-        symbol = "⏻" if assigned else "+"
-        p.drawText(icon, Qt.AlignCenter, symbol)
+        self._draw_room_icon(p, icon.adjusted(7, 7, -7, -7), self._icon_kind(), active, assigned)
 
         badge_w = max(42, min(54, int(r.width() * 0.36)))
         badge = QRectF(r.width()-badge_w-pad, 18, badge_w, 24)
@@ -595,16 +695,18 @@ class RoomControlCard(HoldCard):
                 cur = w
             else:
                 cur = (cur + " " + w).strip()
-        if cur: lines.append(cur)
+        if cur:
+            lines.append(cur)
         lines = lines[:2]
         p.setFont(font(max(10, min(14, int(r.width() * 0.085))), QFont.Black))
         p.setPen(T.TEXT if assigned else T.TEXT_DIM)
-        p.drawText(QRectF(pad, r.height()-64, r.width()-(pad*2), 36), Qt.AlignLeft | Qt.AlignVCenter, "\n".join(lines))
+        p.drawText(QRectF(pad, r.height()-64, r.width()-(pad*2), 38), Qt.AlignLeft | Qt.AlignVCenter, "\n".join(lines))
         p.setFont(font(6, QFont.Black, 10))
         p.setPen(T.TEXT_MUTED)
-        p.drawText(QRectF(pad, r.height()-31, r.width()-(pad*2), 13), Qt.AlignLeft, (self.control.get("domain") or "switch").upper() if assigned else "UNASSIGNED")
-        p.setPen(T.CYAN)
-        p.drawText(QRectF(pad, r.height()-18, r.width()-(pad*2), 13), Qt.AlignLeft, "HOLD TO ASSIGN")
+        domain_text = (self.control.get("domain") or "switch").upper() if assigned else "UNASSIGNED"
+        if protected:
+            domain_text = f"{domain_text}  •  CODE"
+        p.drawText(QRectF(pad, r.height()-24, r.width()-(pad*2), 14), Qt.AlignLeft, domain_text)
         p.setPen(QPen(QColor(160, 180, 210, 42), 2))
         p.drawLine(pad, int(r.height()-8), int(r.width()-pad), int(r.height()-8))
 

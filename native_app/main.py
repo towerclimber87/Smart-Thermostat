@@ -117,6 +117,31 @@ def as_bool_state(value: Any) -> bool:
     return text in {"on", "open", "opening", "playing", "heat", "cool", "true", "1"}
 
 
+def room_control_active(state: Any, domain: str | None = None) -> bool:
+    text = str(state or "").strip().lower()
+    domain = str(domain or "").strip().lower()
+    if domain == "lock":
+        return text in {"unlocked", "open", "opening"}
+    if domain == "cover":
+        return text in {"open", "opening"}
+    return as_bool_state(text)
+
+
+def room_control_next_action(ctl: dict) -> str:
+    entity_id = str((ctl or {}).get("haEntityId") or "")
+    domain = str((ctl or {}).get("domain") or (entity_id.split(".", 1)[0] if "." in entity_id else "")).lower()
+    state = str((ctl or {}).get("state") or "").strip().lower()
+    if domain == "lock":
+        return "unlock" if state in {"locked", "locking"} or not bool((ctl or {}).get("on")) else "lock"
+    if domain == "cover":
+        return "open" if state in {"closed", "closing"} or not bool((ctl or {}).get("on")) else "close"
+    if domain in {"button", "input_button"}:
+        return "press"
+    if domain in {"scene", "script"}:
+        return "run"
+    return "toggle"
+
+
 def nested_get(data: dict, *keys, default=None):
     cur = data
     for key in keys:
@@ -3188,28 +3213,74 @@ class RoomScreen(Page):
             for card, ctl in zip(self.cards, controls):
                 card.setControl(ctl)
 
+    def _apply_room_state_to_control(self, ctl: dict, state: dict):
+        if not isinstance(state, dict):
+            return
+        domain = state.get("domain") or ctl.get("domain") or ""
+        ctl["state"] = state.get("state") or ctl.get("state") or "unknown"
+        ctl["on"] = room_control_active(ctl.get("state"), domain)
+        ctl["haName"] = state.get("name") or ctl.get("haName")
+        ctl["name"] = state.get("name") or ctl.get("name") or ctl.get("haName")
+        ctl["domain"] = domain or ctl.get("domain")
+        for meta_key in ("deviceClass", "icon", "supportedFeatures", "currentPosition"):
+            if meta_key in state:
+                ctl[meta_key] = state.get(meta_key)
+
+    def _entry_code_for_action(self, ctl: dict, action: str) -> str | None:
+        code = str((ctl or {}).get("accessCode") or "").strip()
+        if not code:
+            return None
+        entity_id = str((ctl or {}).get("haEntityId") or "")
+        domain = str((ctl or {}).get("domain") or (entity_id.split(".", 1)[0] if "." in entity_id else "")).lower()
+        # Locks can always be locked quickly. The code protects unlock/open.
+        if domain == "lock" and str(action or "").lower() not in {"unlock", "open", "on"}:
+            return None
+        return code
+
     def toggle_control(self, ctl: dict):
         eid = ctl.get("haEntityId") or ""
         if not eid:
             self.requestAssign.emit("room", ctl, "room")
             return
-        ctl["on"] = not bool(ctl.get("on"))
-        self.sync(self.s.config, self.s.thermostat)
-        self.requestToast.emit(f"{ctl.get('haName') or ctl.get('name')} toggled")
-        payload = self.s.ha_payload({"entityId": eid, "action": "toggle", "code": (self.config.get("alarm") or {}).get("disarmCode", "")})
+        action = room_control_next_action(ctl)
+        required_code = self._entry_code_for_action(ctl, action)
+        entered_code = None
+        if required_code:
+            label = ctl.get("haName") or ctl.get("name") or "Entry"
+            entered_code = CodeKeypadDialog.get_code(self, "Entry Locked", f"Enter Code for {compact_name(label, 20)}", required_code)
+            if entered_code is None:
+                return
+        previous_state = ctl.get("state")
+        previous_on = bool(ctl.get("on"))
+        if action in {"toggle", "on", "off", "lock", "unlock", "open", "close"}:
+            if action == "toggle":
+                ctl["on"] = not previous_on
+            elif action in {"on", "unlock", "open"}:
+                ctl["on"] = True
+            elif action in {"off", "lock", "close"}:
+                ctl["on"] = False
+            self.sync(self.s.config, self.s.thermostat)
+        self.requestToast.emit(f"{ctl.get('haName') or ctl.get('name')} {action.replace('_', ' ')} sent")
+        service_code = entered_code or (self.config.get("alarm") or {}).get("disarmCode", "")
+        payload = self.s.ha_payload({"entityId": eid, "action": action, "code": service_code})
 
         def done(result):
             state = (result or {}).get("control") or {} if isinstance(result, dict) else {}
             if state:
-                ctl["on"] = as_bool_state(state.get("state"))
-                ctl["haName"] = state.get("name") or ctl.get("haName")
+                self._apply_room_state_to_control(ctl, state)
                 self.sync(self.s.config, self.s.thermostat)
+
+        def failed(err):
+            ctl["state"] = previous_state
+            ctl["on"] = previous_on
+            self.sync(self.s.config, self.s.thermostat)
+            self.requestToast.emit(f"Control failed: {err}")
 
         self.run_async(
             "room-action",
             lambda: self.s.api.post("/api/ha/room/action", payload),
             done,
-            lambda err: self.requestToast.emit(f"Control failed: {err}"),
+            failed,
         )
 
     def poll(self):
@@ -3227,8 +3298,7 @@ class RoomScreen(Page):
             for ctl in controls:
                 st = by_id.get(ctl.get("haEntityId"))
                 if st:
-                    ctl["on"] = as_bool_state(st.get("state"))
-                    ctl["haName"] = st.get("name") or ctl.get("haName")
+                    self._apply_room_state_to_control(ctl, st)
             self.sync(self.s.config, self.s.thermostat)
 
         self.run_async("room-poll", lambda: self.s.api.post("/api/ha/room/states", payload), done, None)
@@ -5213,6 +5283,25 @@ class RoomManagerSettingsDialog(QDialog):
         self.hint.setStyleSheet("color:#c9d5ea;")
         root.addWidget(self.hint)
 
+        self.active_tab = "rooms"
+        self.tab_panel = None
+        self.rooms_tab_btn = None
+        self.code_tab_btn = None
+        if self.page_name == "Room":
+            self.tab_panel = QHBoxLayout()
+            self.tab_panel.setSpacing(10)
+            self.rooms_tab_btn = RoundButton("Rooms", active=True, min_h=44)
+            self.code_tab_btn = RoundButton("Code", min_h=44)
+            self.rooms_tab_btn.setMinimumWidth(150)
+            self.code_tab_btn.setMinimumWidth(150)
+            self.rooms_tab_btn.clicked.connect(lambda checked=False: self.select_settings_tab("rooms"))
+            self.code_tab_btn.clicked.connect(lambda checked=False: self.select_settings_tab("code"))
+            self.tab_panel.addStretch(1)
+            self.tab_panel.addWidget(self.rooms_tab_btn)
+            self.tab_panel.addWidget(self.code_tab_btn)
+            self.tab_panel.addStretch(1)
+            root.addLayout(self.tab_panel)
+
         self.entry_panel = GlassPanel(radius=22, strong=True)
         self.entry_panel.setMinimumHeight(90)
         entry_lay = QHBoxLayout(self.entry_panel)
@@ -5253,10 +5342,35 @@ class RoomManagerSettingsDialog(QDialog):
         self.room_lay.setHorizontalSpacing(8)
         self.room_lay.setVerticalSpacing(8)
 
+        self.code_panel = GlassPanel(radius=24, strong=True)
+        code_root = QVBoxLayout(self.code_panel)
+        code_root.setContentsMargins(12, 12, 12, 12)
+        code_root.setSpacing(8)
+        self.code_hint = QLabel("Set a 4-digit local code for any Room entry. Switches require the code before toggling. Locks can lock normally, but require the code before unlocking.")
+        self.code_hint.setWordWrap(True)
+        self.code_hint.setAlignment(Qt.AlignCenter)
+        self.code_hint.setFont(font(10, QFont.Black))
+        self.code_hint.setStyleSheet("color:#c9d5ea; background:transparent; border:0;")
+        code_root.addWidget(self.code_hint)
+        self.code_scroll = QScrollArea()
+        self.code_scroll.setWidgetResizable(True)
+        self.code_scroll.setFrameShape(QFrame.NoFrame)
+        self.code_scroll.setStyleSheet("QScrollArea { background:transparent; border:0; } QScrollBar:vertical { width:18px; background:rgba(255,255,255,0.04); border-radius:9px; } QScrollBar::handle:vertical { background:rgba(85,240,255,0.38); border-radius:9px; min-height:44px; }")
+        self.code_content = QWidget()
+        self.code_content.setStyleSheet("background:transparent; border:0;")
+        self.code_lay = QVBoxLayout(self.code_content)
+        self.code_lay.setContentsMargins(0, 0, 0, 0)
+        self.code_lay.setSpacing(8)
+        self.code_scroll.setWidget(self.code_content)
+        code_root.addWidget(self.code_scroll, 1)
+        root.addWidget(self.code_panel, 1)
+        self.code_panel.hide()
+
         bottom = QHBoxLayout()
         self.add_btn = RoundButton("Add Room", active=True, min_h=50)
         self.delete_btn = RoundButton("Delete Selected", kind="danger", min_h=50)
         close_btn = RoundButton("Close", min_h=50)
+        self.close_btn = close_btn
         self.add_btn.setMinimumWidth(160)
         self.delete_btn.setMinimumWidth(190)
         close_btn.setMinimumWidth(150)
@@ -5279,6 +5393,115 @@ class RoomManagerSettingsDialog(QDialog):
 
     def fit_to_screen(self):
         fit_dialog_to_available_screen(self, margin=0)
+
+    def select_settings_tab(self, tab: str):
+        if self.page_name != "Room":
+            return
+        self.active_tab = "code" if tab == "code" else "rooms"
+        is_code = self.active_tab == "code"
+        if self.rooms_tab_btn:
+            self.rooms_tab_btn.setActive(not is_code)
+        if self.code_tab_btn:
+            self.code_tab_btn.setActive(is_code)
+        self.entry_panel.setVisible(not is_code)
+        self.room_panel.setVisible(not is_code)
+        self.code_panel.setVisible(is_code)
+        self.add_btn.setVisible(not is_code)
+        self.delete_btn.setVisible(not is_code)
+        self.hint.setText(
+            "Assign per-entry codes to Room controls. A protected switch needs its code before it toggles; a protected lock needs its code before it unlocks."
+            if is_code else
+            "Add/delete rooms, then select a room and set how many entries it should show. New empty entries appear on that page so they can be assigned to Home Assistant devices."
+        )
+        if is_code:
+            self.rebuild_code_entries()
+
+    def _all_room_control_entries(self) -> list[tuple[str, str, dict, int]]:
+        section, rooms = self.ensure_model()
+        entries: list[tuple[str, str, dict, int]] = []
+        for room_key, room in rooms.items():
+            room_label = room.get("label") or str(room_key).replace("-", " ").title()
+            for idx, ctl in enumerate(room.get("controls") or []):
+                if isinstance(ctl, dict):
+                    entries.append((str(room_key), room_label, ctl, idx))
+        return entries
+
+    def rebuild_code_entries(self):
+        if not hasattr(self, "code_lay"):
+            return
+        while self.code_lay.count():
+            item = self.code_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        entries = self._all_room_control_entries()
+        if not entries:
+            empty = QLabel("No Room entries yet. Go to Rooms, add entries, then assign Home Assistant devices on the Room page.")
+            empty.setWordWrap(True)
+            empty.setAlignment(Qt.AlignCenter)
+            empty.setFont(font(14, QFont.Black))
+            empty.setStyleSheet("color:#c9d5ea; background:transparent; border:0; padding:28px;")
+            self.code_lay.addWidget(empty)
+            self.code_lay.addStretch(1)
+            return
+        for room_key, room_label, ctl, idx in entries:
+            row = GlassPanel(radius=18, strong=False)
+            row.setMinimumHeight(84)
+            lay = QHBoxLayout(row)
+            lay.setContentsMargins(12, 8, 12, 8)
+            lay.setSpacing(10)
+            name = ctl.get("haName") or ctl.get("name") or f"Control {idx + 1}"
+            eid = ctl.get("haEntityId") or "Unassigned"
+            domain = ctl.get("domain") or (str(eid).split(".", 1)[0] if "." in str(eid) else "switch")
+            code_set = bool(str(ctl.get("accessCode") or "").strip())
+            text = QLabel(
+                f"<span style='font-size:17px; font-weight:1000; color:#ffffff'>{room_label} • {name}</span>"
+                f"<br><span style='font-size:11px; font-weight:900; color:#9fb0c8'>{domain.upper()} • {eid}</span>"
+            )
+            text.setTextFormat(Qt.RichText)
+            text.setMinimumWidth(420)
+            lay.addWidget(text, 1)
+            status = QLabel("CODE SET" if code_set else "NO CODE")
+            status.setAlignment(Qt.AlignCenter)
+            status.setFont(font(10, QFont.Black, 16))
+            status.setMinimumWidth(120)
+            status.setStyleSheet(
+                "color:#7dffce; background:rgba(73,255,196,0.12); border:1px solid rgba(73,255,196,0.35); border-radius:16px; padding:8px;"
+                if code_set else
+                "color:#9fb0c8; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:16px; padding:8px;"
+            )
+            lay.addWidget(status)
+            set_btn = RoundButton("Change Code" if code_set else "Set Code", active=True, min_h=48)
+            set_btn.setMinimumWidth(150)
+            clear_btn = RoundButton("Clear", kind="danger", min_h=48)
+            clear_btn.setMinimumWidth(110)
+            clear_btn.setEnabled(code_set)
+            set_btn.clicked.connect(lambda checked=False, c=ctl: self.set_entry_code(c))
+            clear_btn.clicked.connect(lambda checked=False, c=ctl: self.clear_entry_code(c))
+            lay.addWidget(set_btn)
+            lay.addWidget(clear_btn)
+            self.code_lay.addWidget(row)
+        self.code_lay.addStretch(1)
+
+    def set_entry_code(self, ctl: dict):
+        code = CodeKeypadDialog.get_code(self, "Entry Code", "New 4-Digit Code")
+        if code is None:
+            return
+        ctl["accessCode"] = str(code)
+        try:
+            self.s.save_config()
+            self.saved.emit()
+            self.rebuild_code_entries()
+        except Exception as exc:
+            QMessageBox.warning(self, "Save failed", str(exc))
+
+    def clear_entry_code(self, ctl: dict):
+        ctl.pop("accessCode", None)
+        try:
+            self.s.save_config()
+            self.saved.emit()
+            self.rebuild_code_entries()
+        except Exception as exc:
+            QMessageBox.warning(self, "Save failed", str(exc))
 
     def ensure_model(self) -> tuple[dict, dict]:
         section = self.s.config.setdefault(self.domain, {})
@@ -5342,6 +5565,8 @@ class RoomManagerSettingsDialog(QDialog):
             self.room_lay.addWidget(btn, idx // 4, idx % 4)
         self.delete_btn.setEnabled(len(rooms) > 1)
         self.update_entry_controls()
+        if self.page_name == "Room" and self.active_tab == "code":
+            self.rebuild_code_entries()
 
     def select_room(self, key: str):
         self.selected_key = key
@@ -7688,6 +7913,11 @@ class MainWindow(Background):
             obj["name"] = ent.get("name") or obj.get("name") or obj["haEntityId"]
             if ent.get("domain"):
                 obj["domain"] = ent.get("domain")
+            obj["state"] = ent.get("state") or obj.get("state") or "unknown"
+            obj["on"] = room_control_active(obj.get("state"), obj.get("domain"))
+            for meta_key in ("deviceClass", "icon", "supportedFeatures", "currentPosition"):
+                if meta_key in ent:
+                    obj[meta_key] = ent.get(meta_key)
             try:
                 self.s.save_config()
                 self.sync_runtime_only()
