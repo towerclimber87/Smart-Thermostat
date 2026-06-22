@@ -271,7 +271,7 @@ class ThermostatDial(QWidget):
         if current is not None:
             try: self.current = float(current)
             except Exception: pass
-        if target is not None:
+        if target is not None and not self.dragging:
             try: self.target = float(target)
             except Exception: pass
         if mode:

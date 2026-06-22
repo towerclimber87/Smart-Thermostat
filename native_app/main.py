@@ -781,6 +781,13 @@ class AppState:
         self.system_info: dict = {}
         self.last_error = ""
         self.status_refresh_paused_until = 0.0
+        # Local setpoint hold used by the native dial/buttons. Home Assistant and
+        # the local backend can briefly report the old target while a just-touched
+        # setpoint is still round-tripping. Keep the newly selected target on
+        # screen for a short window so the dial does not snap backward and then
+        # jump forward again.
+        self._target_override_value: int | None = None
+        self._target_override_until = 0.0
 
     def ha(self) -> dict:
         return nested_get(self.config, "integrations", "homeAssistant", default={}) or {}
@@ -861,8 +868,36 @@ class AppState:
         self.config = record.get("config") or self.config
         return record
 
+    def set_target_override(self, value: float, hold_seconds: float = 8.0):
+        """Hold a locally selected setpoint against stale status refreshes."""
+        try:
+            val = int(round(float(value)))
+        except Exception:
+            return
+        self._target_override_value = val
+        self._target_override_until = time.monotonic() + max(1.0, float(hold_seconds))
+        if not isinstance(self.thermostat, dict):
+            self.thermostat = {}
+        self.thermostat["targetTemp"] = val
+        self.thermostat["lastComfortTarget"] = val
+
+    def clear_target_override(self):
+        self._target_override_value = None
+        self._target_override_until = 0.0
+
+    def apply_target_override(self, thermostat: dict) -> dict:
+        if not isinstance(thermostat, dict):
+            return thermostat
+        now = time.monotonic()
+        if self._target_override_value is None or now >= self._target_override_until:
+            self.clear_target_override()
+            return thermostat
+        thermostat["targetTemp"] = self._target_override_value
+        thermostat["lastComfortTarget"] = self._target_override_value
+        return thermostat
+
     def ingest_thermostat(self, payload: dict | None) -> dict:
-        self.thermostat = thermostat_detail_payload(payload)
+        self.thermostat = self.apply_target_override(thermostat_detail_payload(payload))
         return self.thermostat
 
     def load(self):
@@ -1427,9 +1462,12 @@ class ScheduleManagerDialog(QDialog):
         effective = active if mode == "auto" and active in {"heat", "cool"} else mode
         target = sched.get("heatSetpoint") if effective == "heat" else sched.get("coolSetpoint")
         try:
-            self.s.update_thermostat({"targetTemp": int(float(target)), "lastComfortTarget": int(float(target))})
+            val = int(float(target))
+            self.s.set_target_override(val)
+            self.s.update_thermostat({"targetTemp": val, "lastComfortTarget": val})
             self.changed.emit()
         except Exception as exc:
+            self.s.clear_target_override()
             QMessageBox.warning(self, "Schedule", str(exc))
 
 
@@ -2305,8 +2343,7 @@ class ThermostatScreen(Page):
         except Exception:
             self.requestToast.emit("Schedule target is invalid")
             return
-        self.s.thermostat["targetTemp"] = val
-        self.s.thermostat["lastComfortTarget"] = val
+        self.s.set_target_override(val)
         self.sync(self.s.config, self.s.thermostat)
 
         def done(result):
@@ -2318,7 +2355,7 @@ class ThermostatScreen(Page):
             "schedule-run",
             lambda: self.s.api.thermostat_update({"targetTemp": val, "lastComfortTarget": val}),
             done,
-            lambda err: self.requestToast.emit(f"Schedule failed: {err}"),
+            lambda err: (self.s.clear_target_override(), self.requestToast.emit(f"Schedule failed: {err}")),
         )
 
 
@@ -2465,7 +2502,8 @@ class ThermostatScreen(Page):
         )
 
     def change_target(self, delta: int):
-        self.set_target(float(self.thermostat.get("targetTemp", self.thermostat.get("target_temp", 70))) + delta)
+        t = self.thermostat_view()
+        self.set_target(float(t.get("targetTemp", t.get("target_temp", 70))) + delta)
 
     def set_target(self, value: float):
         try:
@@ -2475,12 +2513,11 @@ class ThermostatScreen(Page):
             active = str(t.get("autoActiveMode") or t.get("activeMode") or "").lower()
             range_key = active if mode == "auto" and active in {"cool", "heat"} else mode
             lim = limits.get(range_key) or limits.get(mode) or limits.get("auto") or {"min": 55, "max": 90}
-            val = clamp(round(float(value)), float(lim.get("min", 55)), float(lim.get("max", 90)))
+            val = int(clamp(round(float(value)), float(lim.get("min", 55)), float(lim.get("max", 90))))
         except Exception as exc:
             self.requestToast.emit(f"Set temp failed: {exc}")
             return
-        self.s.thermostat["targetTemp"] = val
-        self.s.thermostat["lastComfortTarget"] = val
+        self.s.set_target_override(val)
         self.sync(self.s.config, self.s.thermostat)
 
         def done(result):
@@ -2492,7 +2529,7 @@ class ThermostatScreen(Page):
             "thermostat-target",
             lambda: self.s.api.thermostat_update({"targetTemp": val, "lastComfortTarget": val}),
             done,
-            lambda err: self.requestToast.emit(f"Set temp failed: {err}"),
+            lambda err: (self.s.clear_target_override(), self.requestToast.emit(f"Set temp failed: {err}")),
         )
 
     def set_virtual_temp(self, value: float):
