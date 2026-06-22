@@ -1448,6 +1448,16 @@ class ThermostatScreen(Page):
     def pause_entry_name(self, entry: dict | None, fallback: str = "Door") -> str:
         if not isinstance(entry, dict):
             return fallback
+        entity_id = str(entry.get("entityId") or entry.get("entity_id") or "").strip()
+
+        # Prefer Home Assistant's friendly name over the stored picker/entity
+        # label. Older configs can carry the raw entity id in name, which made
+        # the comfort-pause popup say binary_sensor.whatever instead of the
+        # HA friendly name.
+        for key in ("friendlyName", "friendly_name", "haName", "name"):
+            value = str(entry.get(key) or "").strip()
+            if value and value != entity_id:
+                return value
         for key in ("name", "friendlyName", "friendly_name", "haName", "entityId", "entity_id"):
             value = str(entry.get(key) or "").strip()
             if value:
@@ -4652,7 +4662,10 @@ class SettingsDialog(QDialog):
             entities = []
 
         by_id = {}
-        for item in list(entities) + list(stored):
+        # Load saved entries first, then let the live HA entity list overwrite
+        # them. That keeps the picker and the saved selection on HA's current
+        # friendly_name instead of an older/raw entry label.
+        for item in list(stored) + list(entities):
             if not isinstance(item, dict):
                 continue
             eid = str(item.get("entityId") or item.get("entity_id") or "").strip()
@@ -4661,9 +4674,11 @@ class SettingsDialog(QDialog):
             domain = str(item.get("domain") or (eid.split(".", 1)[0] if "." in eid else "")).strip()
             if domain not in {"binary_sensor", "cover"}:
                 continue
+            name = str(item.get("friendlyName") or item.get("friendly_name") or item.get("name") or eid).strip() or eid
             by_id[eid] = {
                 "entityId": eid,
-                "name": str(item.get("name") or item.get("friendly_name") or eid),
+                "name": name,
+                "friendlyName": name,
                 "domain": domain,
                 "state": item.get("state"),
                 "deviceClass": item.get("deviceClass") or item.get("device_class") or "",
@@ -4682,9 +4697,11 @@ class SettingsDialog(QDialog):
                 if not eid:
                     return
                 domain = str(e.get("domain") or (eid.split(".", 1)[0] if "." in eid else "binary_sensor"))
+                selected_name = str(e.get("friendlyName") or e.get("friendly_name") or e.get("name") or eid).strip() or eid
                 selected = {
                     "entityId": eid,
-                    "name": str(e.get("name") or e.get("friendly_name") or eid),
+                    "name": selected_name,
+                    "friendlyName": selected_name,
                     "domain": domain,
                     "state": str(e.get("state") or "unknown"),
                     "deviceClass": str(e.get("deviceClass") or e.get("device_class") or ""),

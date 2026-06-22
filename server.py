@@ -474,6 +474,27 @@ def _normalize_pause_function_duration(value: object, fallback: int = 5) -> int:
     return max(1, min(60, raw))
 
 
+def _preferred_ha_display_name(entity_id: object, *candidates: object) -> str:
+    """Pick the best user-facing Home Assistant label for an entity.
+
+    Door/comfort-pause entries can be saved from older configs with the raw
+    entity id as their name.  When a live HA state has attributes.friendly_name,
+    prefer that over the saved label so the popup shows the same friendly name
+    the user sees in Home Assistant.
+    """
+    eid = str(entity_id or "").strip()
+    fallback = eid or "Entity"
+    for candidate in candidates:
+        value = str(candidate or "").strip()
+        if value and value != eid:
+            return value
+    for candidate in candidates:
+        value = str(candidate or "").strip()
+        if value:
+            return value
+    return fallback
+
+
 def _normalize_pause_function_entry(entry: object) -> dict | None:
     if isinstance(entry, str):
         entry = {"entityId": entry}
@@ -483,7 +504,13 @@ def _normalize_pause_function_entry(entry: object) -> dict | None:
     if not entity_id or "." not in entity_id:
         return None
     domain = str(entry.get("domain") or _pause_function_domain_from_entity_id(entity_id)).strip().lower()
-    name = str(entry.get("name") or entry.get("friendlyName") or entry.get("haName") or entry.get("friendly_name") or entity_id).strip() or entity_id
+    name = _preferred_ha_display_name(
+        entity_id,
+        entry.get("friendlyName"),
+        entry.get("friendly_name"),
+        entry.get("haName"),
+        entry.get("name"),
+    )
     state = str(entry.get("state") or "unknown").strip().lower()
     device_class = str(entry.get("deviceClass") or entry.get("device_class") or "").strip().lower()
     try:
@@ -502,6 +529,7 @@ def _normalize_pause_function_entry(entry: object) -> dict | None:
     return {
         "entityId": entity_id[:160],
         "name": name[:120],
+        "friendlyName": name[:120],
         "domain": domain[:40],
         "deviceClass": device_class[:60],
         "state": state[:80],
@@ -2240,11 +2268,17 @@ def _refresh_pause_function_entry_states(entries: list[dict]) -> list[dict]:
             item = _ha_state_cached(ha_url, token, entity_id, ttl=1.0)
             if isinstance(item, dict) and item.get("entity_id"):
                 fresh = _normalize_generic_entity(item)
-                # Preserve a user-facing label if one was saved, but refresh the
-                # live state, device class and cover position from HA.
-                saved_name = current.get("name") or fresh.get("name")
+                # Refresh the live state/device class from HA and use HA's
+                # friendly_name for display. Older saved configs sometimes have
+                # the raw entity id or picker label in name; the popup should
+                # show the actual Home Assistant friendly name when available.
+                attrs = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
+                saved_name = current.get("name") or current.get("friendlyName") or current.get("friendly_name")
+                ha_name = attrs.get("friendly_name") or fresh.get("name")
                 current.update(fresh)
-                current["name"] = str(saved_name or entity_id)
+                display_name = _preferred_ha_display_name(entity_id, ha_name, saved_name)
+                current["name"] = display_name
+                current["friendlyName"] = display_name
         except Exception as exc:
             print(f"Door pause state update failed for {entity_id}: {exc}", flush=True)
         refreshed.append(_normalize_pause_function_entry(current) or current)
