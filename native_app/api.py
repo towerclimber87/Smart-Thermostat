@@ -15,7 +15,7 @@ class ApiError(RuntimeError):
 @dataclass
 class ApiClient:
     base_url: str = os.environ.get("SMART_THERMOSTAT_API", "http://127.0.0.1:8080")
-    timeout: float = float(os.environ.get("SMART_THERMOSTAT_API_TIMEOUT", "3.5"))
+    timeout: float = float(os.environ.get("SMART_THERMOSTAT_API_TIMEOUT", "1.5"))
 
     def _url(self, path: str) -> str:
         if not path.startswith("/"):

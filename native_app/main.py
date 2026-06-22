@@ -9,7 +9,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 # Allow running from this folder without installing a package.
 APP_DIR = Path(__file__).resolve().parent
@@ -162,16 +162,51 @@ class Page(QWidget):
     requestToast = pyqtSignal(str)
     requestAssign = pyqtSignal(str, object, str)  # domain group, object, target kind
     configChanged = pyqtSignal()
+    asyncCompleted = pyqtSignal(object)
 
     def __init__(self, app_state: "AppState", parent=None):
         super().__init__(parent)
         self.s = app_state
         self.config: dict = {}
         self.thermostat: dict = {}
+        self._async_jobs: dict[str, tuple[Callable | None, Callable | None]] = {}
+        self.asyncCompleted.connect(self._handle_async_completed)
 
     def sync(self, config: dict, thermostat: dict):
         self.config = config or {}
         self.thermostat = thermostat or {}
+
+    def run_async(self, name: str, worker: Callable[[], Any], on_success: Callable[[Any], None] | None = None, on_error: Callable[[str], None] | None = None):
+        """Run slow API/Home Assistant work off the Qt UI thread.
+
+        Touch feedback and local state updates should happen before this is
+        called. The callback is delivered back through a Qt signal so UI changes
+        still run on the main thread.
+        """
+        job_id = f"{name}-{time.monotonic_ns()}"
+        self._async_jobs[job_id] = (on_success, on_error)
+
+        def target():
+            try:
+                result = worker()
+                self.asyncCompleted.emit({"id": job_id, "result": result, "error": None})
+            except Exception as exc:
+                self.asyncCompleted.emit({"id": job_id, "result": None, "error": str(exc)})
+
+        threading.Thread(target=target, name=f"ui-{name}", daemon=True).start()
+
+    def _handle_async_completed(self, info: object):
+        data = info if isinstance(info, dict) else {}
+        callbacks = self._async_jobs.pop(str(data.get("id") or ""), None)
+        if not callbacks:
+            return
+        on_success, on_error = callbacks
+        if data.get("error"):
+            if on_error:
+                on_error(str(data.get("error")))
+            return
+        if on_success:
+            on_success(data.get("result"))
 
     def poll(self):
         pass
@@ -1654,12 +1689,25 @@ class ThermostatScreen(Page):
         self.door_countdown.show()
 
     def snooze_door_pause(self):
-        try:
-            self.s.update_thermostat({"pauseFunction": {"action": "snooze", "snoozeMinutes": 5}})
-            self.sync(self.s.config, self.s.thermostat)
-            self.requestToast.emit("Door pause snoozed for 5 minutes")
-        except Exception as exc:
-            self.requestToast.emit(f"Snooze failed: {exc}")
+        changes = {"pauseFunction": {"action": "snooze", "snoozeMinutes": 5}}
+        pause = self.s.thermostat.setdefault("pauseFunction", {})
+        if isinstance(pause, dict):
+            pause["snoozeUntil"] = int(time.time() * 1000) + 300000
+            pause["active"] = False
+        self.sync(self.s.config, self.s.thermostat)
+        self.requestToast.emit("Door pause snoozed for 5 minutes")
+
+        def done(result):
+            if isinstance(result, dict):
+                self.s.thermostat = result
+                self.sync(self.s.config, self.s.thermostat)
+
+        self.run_async(
+            "door-snooze",
+            lambda: self.s.api.thermostat_update(changes),
+            done,
+            lambda err: self.requestToast.emit(f"Snooze failed: {err}"),
+        )
 
 
     def refresh_schedule_shortcuts(self):
@@ -1707,10 +1755,25 @@ class ThermostatScreen(Page):
         effective = active if mode == "auto" and active in {"heat", "cool"} else mode
         target = sched.get("heatSetpoint") if effective == "heat" else sched.get("coolSetpoint")
         try:
-            self.s.update_thermostat({"targetTemp": int(float(target)), "lastComfortTarget": int(float(target))})
-            self.sync(self.s.config, self.s.thermostat)
-        except Exception as exc:
-            self.requestToast.emit(f"Schedule failed: {exc}")
+            val = int(float(target))
+        except Exception:
+            self.requestToast.emit("Schedule target is invalid")
+            return
+        self.s.thermostat["targetTemp"] = val
+        self.s.thermostat["lastComfortTarget"] = val
+        self.sync(self.s.config, self.s.thermostat)
+
+        def done(result):
+            if isinstance(result, dict):
+                self.s.thermostat = result
+                self.sync(self.s.config, self.s.thermostat)
+
+        self.run_async(
+            "schedule-run",
+            lambda: self.s.api.thermostat_update({"targetTemp": val, "lastComfortTarget": val}),
+            done,
+            lambda err: self.requestToast.emit(f"Schedule failed: {err}"),
+        )
 
 
     def _mode_bar(self):
@@ -1776,34 +1839,65 @@ class ThermostatScreen(Page):
         menu.exec_(self.fan_status_button.mapToGlobal(self.fan_status_button.rect().topLeft()))
 
     def set_mode(self, mode: str):
-        try:
-            if mode == "away":
-                going_away = not bool(self.thermostat.get("away"))
-                self.s.update_thermostat({"away": going_away, "awaySource": "manual" if going_away else ""})
-            else:
-                # Physical/manual button taps should visibly win immediately.
-                self.s.thermostat["mode"] = mode
-                self.s.thermostat["away"] = False
-                self.s.thermostat["awaySource"] = ""
+        if mode == "away":
+            going_away = not bool(self.thermostat.get("away"))
+            changes = {"away": going_away, "awaySource": "manual" if going_away else ""}
+            self.s.thermostat["away"] = going_away
+            self.s.thermostat["awaySource"] = changes["awaySource"]
+        else:
+            # Physical/manual button taps should visibly win immediately.
+            changes = {"mode": mode, "away": False, "awaySource": ""}
+            self.s.thermostat["mode"] = mode
+            self.s.thermostat["away"] = False
+            self.s.thermostat["awaySource"] = ""
+        self.sync(self.s.config, self.s.thermostat)
+
+        def done(result):
+            if isinstance(result, dict):
+                self.s.thermostat = result
                 self.sync(self.s.config, self.s.thermostat)
-                self.s.update_thermostat({"mode": mode, "away": False, "awaySource": ""})
-            self.sync(self.s.config, self.s.thermostat)
-        except Exception as exc:
-            self.requestToast.emit(f"Thermostat update failed: {exc}")
+
+        self.run_async(
+            "thermostat-mode",
+            lambda: self.s.api.thermostat_update(changes),
+            done,
+            lambda err: self.requestToast.emit(f"Thermostat update failed: {err}"),
+        )
 
     def return_home_from_away(self):
-        try:
-            self.s.update_thermostat({"away": False, "awaySource": "", "manualAwayPresenceLatch": None})
-            self.sync(self.s.config, self.s.thermostat)
-        except Exception as exc:
-            self.requestToast.emit(f"Home failed: {exc}")
+        changes = {"away": False, "awaySource": "", "manualAwayPresenceLatch": None}
+        self.s.thermostat["away"] = False
+        self.s.thermostat["awaySource"] = ""
+        self.s.thermostat["manualAwayPresenceLatch"] = None
+        self.sync(self.s.config, self.s.thermostat)
+
+        def done(result):
+            if isinstance(result, dict):
+                self.s.thermostat = result
+                self.sync(self.s.config, self.s.thermostat)
+
+        self.run_async(
+            "thermostat-home",
+            lambda: self.s.api.thermostat_update(changes),
+            done,
+            lambda err: self.requestToast.emit(f"Home failed: {err}"),
+        )
 
     def set_fan(self, fan: str):
-        try:
-            self.s.update_thermostat({"fan": fan})
-            self.sync(self.s.config, self.s.thermostat)
-        except Exception as exc:
-            self.requestToast.emit(f"Fan update failed: {exc}")
+        self.s.thermostat["fan"] = fan
+        self.sync(self.s.config, self.s.thermostat)
+
+        def done(result):
+            if isinstance(result, dict):
+                self.s.thermostat = result
+                self.sync(self.s.config, self.s.thermostat)
+
+        self.run_async(
+            "thermostat-fan",
+            lambda: self.s.api.thermostat_update({"fan": fan}),
+            done,
+            lambda err: self.requestToast.emit(f"Fan update failed: {err}"),
+        )
 
     def change_target(self, delta: int):
         self.set_target(float(self.thermostat.get("targetTemp", self.thermostat.get("target_temp", 70))) + delta)
@@ -1817,10 +1911,24 @@ class ThermostatScreen(Page):
             range_key = active if mode == "auto" and active in {"cool", "heat"} else mode
             lim = limits.get(range_key) or limits.get(mode) or limits.get("auto") or {"min": 55, "max": 90}
             val = clamp(round(float(value)), float(lim.get("min", 55)), float(lim.get("max", 90)))
-            self.s.update_thermostat({"targetTemp": val, "lastComfortTarget": val})
-            self.sync(self.s.config, self.s.thermostat)
         except Exception as exc:
             self.requestToast.emit(f"Set temp failed: {exc}")
+            return
+        self.s.thermostat["targetTemp"] = val
+        self.s.thermostat["lastComfortTarget"] = val
+        self.sync(self.s.config, self.s.thermostat)
+
+        def done(result):
+            if isinstance(result, dict):
+                self.s.thermostat = result
+                self.sync(self.s.config, self.s.thermostat)
+
+        self.run_async(
+            "thermostat-target",
+            lambda: self.s.api.thermostat_update({"targetTemp": val, "lastComfortTarget": val}),
+            done,
+            lambda err: self.requestToast.emit(f"Set temp failed: {err}"),
+        )
 
     def set_virtual_temp(self, value: float):
         self.virtual_temp_pending = float(value)
@@ -2380,9 +2488,8 @@ class RoomScreen(Page):
 
     def set_room(self, key: str):
         self.config.setdefault("roomControl", {})["room"] = key
-        try: self.s.save_config()
-        except Exception: pass
         self.rebuild()
+        self.run_async("room-save", lambda: self.s.api.save_config(self.config), None, None)
 
     def populate_cards(self):
         for c in self.cards:
@@ -2424,15 +2531,24 @@ class RoomScreen(Page):
         if not eid:
             self.requestAssign.emit("room", ctl, "room")
             return
-        try:
-            result = self.s.api.post("/api/ha/room/action", self.s.ha_payload({"entityId": eid, "action": "toggle", "code": (self.config.get("alarm") or {}).get("disarmCode", "")}))
-            state = result.get("control") or {}
-            ctl["on"] = as_bool_state(state.get("state")) if state else not bool(ctl.get("on"))
-            self.s.save_config()
-            self.requestToast.emit(f"{ctl.get('haName') or ctl.get('name')} toggled")
-            self.sync(self.s.config, self.s.thermostat)
-        except Exception as exc:
-            self.requestToast.emit(f"Control failed: {exc}")
+        ctl["on"] = not bool(ctl.get("on"))
+        self.sync(self.s.config, self.s.thermostat)
+        self.requestToast.emit(f"{ctl.get('haName') or ctl.get('name')} toggled")
+        payload = self.s.ha_payload({"entityId": eid, "action": "toggle", "code": (self.config.get("alarm") or {}).get("disarmCode", "")})
+
+        def done(result):
+            state = (result or {}).get("control") or {} if isinstance(result, dict) else {}
+            if state:
+                ctl["on"] = as_bool_state(state.get("state"))
+                ctl["haName"] = state.get("name") or ctl.get("haName")
+                self.sync(self.s.config, self.s.thermostat)
+
+        self.run_async(
+            "room-action",
+            lambda: self.s.api.post("/api/ha/room/action", payload),
+            done,
+            lambda err: self.requestToast.emit(f"Control failed: {err}"),
+        )
 
     def poll(self):
         controls = []
@@ -2442,17 +2558,18 @@ class RoomScreen(Page):
                 controls.append(ctl)
         if not controls:
             return
-        try:
-            result = self.s.api.post("/api/ha/room/states", self.s.ha_payload({"entityIds": [c["haEntityId"] for c in controls]}))
-            by_id = {x.get("entityId"): x for x in result.get("controls") or []}
+        payload = self.s.ha_payload({"entityIds": [c["haEntityId"] for c in controls]})
+
+        def done(result):
+            by_id = {x.get("entityId"): x for x in (result or {}).get("controls") or []}
             for ctl in controls:
                 st = by_id.get(ctl.get("haEntityId"))
                 if st:
                     ctl["on"] = as_bool_state(st.get("state"))
                     ctl["haName"] = st.get("name") or ctl.get("haName")
             self.sync(self.s.config, self.s.thermostat)
-        except Exception:
-            pass
+
+        self.run_async("room-poll", lambda: self.s.api.post("/api/ha/room/states", payload), done, None)
 
 
 class LightsScreen(Page):
@@ -2526,9 +2643,8 @@ class LightsScreen(Page):
 
     def set_room(self, key):
         self.config.setdefault("lights", {})["room"] = key
-        try: self.s.save_config()
-        except Exception: pass
         self.rebuild()
+        self.run_async("lights-save-room", lambda: self.s.api.save_config(self.config), None, None)
         # Do not wait for the normal poll cadence when changing rooms.
         QTimer.singleShot(80, self.poll)
 
@@ -2770,21 +2886,29 @@ class LightsScreen(Page):
         entity_id = str(light.get("haEntityId") or "")
         if not entity_id:
             return
-        try:
-            payload = {"entityId": entity_id, "action": action, "refresh": False}
-            if brightness is not None:
-                payload["brightness"] = int(clamp(brightness, 0, 100))
-                payload["transition"] = 0.25
-            if color:
-                payload["color"] = color
-            elif light.get("colorSupported") and light.get("color"):
-                payload["color"] = light.get("color")
-            self._set_light_optimistic(light, payload.get("brightness"), action=action, color=payload.get("color"))
-            self.s.api.post("/api/ha/light/action", self.s.ha_payload(payload))
-            self._light_settle_until[entity_id] = time.monotonic() + 0.80
+        payload = {"entityId": entity_id, "action": action, "refresh": False}
+        if brightness is not None:
+            payload["brightness"] = int(clamp(brightness, 0, 100))
+            payload["transition"] = 0.25
+        if color:
+            payload["color"] = color
+        elif light.get("colorSupported") and light.get("color"):
+            payload["color"] = light.get("color")
+        self._set_light_optimistic(light, payload.get("brightness"), action=action, color=payload.get("color"))
+        self._light_settle_until[entity_id] = time.monotonic() + 0.80
+
+        def worker():
+            return self.s.api.post("/api/ha/light/action", self.s.ha_payload(payload))
+
+        def done(_result):
             QTimer.singleShot(950, self.poll)
-        except Exception as exc:
-            self.requestToast.emit(f"Light failed: {exc}")
+
+        self.run_async(
+            "light-action",
+            worker,
+            done,
+            lambda err: self.requestToast.emit(f"Light failed: {err}"),
+        )
 
     def _apply_light_state(self, light: dict, st: dict):
         if not st:
@@ -2981,9 +3105,8 @@ class BlindsScreen(Page):
 
     def set_room(self, key):
         self.config.setdefault("blinds", {})["room"] = key
-        try: self.s.save_config()
-        except Exception: pass
         self.rebuild()
+        self.run_async("blinds-save-room", lambda: self.s.api.save_config(self.config), None, None)
 
     def populate_cards(self):
         for c in self.cards:
@@ -3026,30 +3149,32 @@ class BlindsScreen(Page):
         if not blind.get("haEntityId"):
             self.requestAssign.emit("cover", blind, "blind")
             return
-        try:
-            payload = {"entityId": blind.get("haEntityId"), "action": action}
-            desired_position = None
-            if position is not None:
-                desired_position = max(0, min(100, int(position)))
-                payload["position"] = desired_position
+        payload = {"entityId": blind.get("haEntityId"), "action": action}
+        desired_position = None
+        if position is not None:
+            desired_position = max(0, min(100, int(position)))
+            payload["position"] = desired_position
 
-            # Optimistic update so drag feels instant. Keep this pending long
-            # enough for the blind motor to physically reach the target. During
-            # that period, status polling will not snap the icon back to the
-            # old in-motion position.
-            if action == "open":
-                desired_position = 100
-            elif action == "close":
-                desired_position = 0
+        # Optimistic update so drag feels instant. Keep this pending long
+        # enough for the blind motor to physically reach the target. During
+        # that period, status polling will not snap the icon back to the
+        # old in-motion position.
+        if action == "open":
+            desired_position = 100
+        elif action == "close":
+            desired_position = 0
 
-            if desired_position is not None:
-                blind["position"] = desired_position
-                blind["pendingPosition"] = desired_position
-                blind["pendingPositionUntil"] = time.time() + 18.0
-            self.sync(self.s.config, self.s.thermostat)
+        if desired_position is not None:
+            blind["position"] = desired_position
+            blind["pendingPosition"] = desired_position
+            blind["pendingPositionUntil"] = time.time() + 18.0
+        self.sync(self.s.config, self.s.thermostat)
+        if not quiet:
+            label = f"{int(desired_position)}%" if action == "position" and desired_position is not None else action
+            self.requestToast.emit(f"{blind.get('haName') or blind.get('name')} {label}")
 
-            result = self.s.api.post("/api/ha/cover/action", self.s.ha_payload(payload))
-            state = result.get("state") or {}
+        def done(result):
+            state = (result or {}).get("state") or {} if isinstance(result, dict) else {}
             if state.get("currentPosition") is not None:
                 reported = int(state.get("currentPosition") or 0)
                 pending = blind.get("pendingPosition")
@@ -3059,21 +3184,24 @@ class BlindsScreen(Page):
                     blind.pop("pendingPosition", None)
                     blind.pop("pendingPositionUntil", None)
             blind["haName"] = state.get("name") or blind.get("haName")
-            self.s.save_config()
             self.sync(self.s.config, self.s.thermostat)
-            if not quiet:
-                label = f"{int(desired_position)}%" if action == "position" and desired_position is not None else action
-                self.requestToast.emit(f"{blind.get('haName') or blind.get('name')} {label}")
-        except Exception as exc:
-            self.requestToast.emit(f"Blind failed: {exc}")
+
+        self.run_async(
+            "blind-action",
+            lambda: self.s.api.post("/api/ha/cover/action", self.s.ha_payload(payload)),
+            done,
+            lambda err: self.requestToast.emit(f"Blind failed: {err}"),
+        )
 
     def poll(self):
         active = nested_get(self.config, "blinds", "room", default="living")
         blinds = [x for x in nested_get(self.config, "blinds", "rooms", active, "blinds", default=[]) or [] if x.get("haEntityId")]
-        if not blinds: return
-        try:
-            result = self.s.api.post("/api/ha/cover/states", self.s.ha_payload({"entityIds": [b["haEntityId"] for b in blinds]}))
-            by_id = {x.get("entityId"): x for x in result.get("covers") or []}
+        if not blinds:
+            return
+        payload = self.s.ha_payload({"entityIds": [b["haEntityId"] for b in blinds]})
+
+        def done(result):
+            by_id = {x.get("entityId"): x for x in (result or {}).get("covers") or []}
             now = time.time()
             for blind in blinds:
                 st = by_id.get(blind.get("haEntityId"))
@@ -3091,8 +3219,8 @@ class BlindsScreen(Page):
                             blind.pop("pendingPositionUntil", None)
                     blind["haName"] = st.get("name") or blind.get("haName")
             self.sync(self.s.config, self.s.thermostat)
-        except Exception:
-            pass
+
+        self.run_async("blind-poll", lambda: self.s.api.post("/api/ha/cover/states", payload), done, None)
 
 
 class AudioScreen(Page):
@@ -3250,12 +3378,28 @@ class AudioScreen(Page):
         if not eid:
             self.requestToast.emit("No media player selected")
             return
-        try:
-            result = self.s.api.post("/api/ha/media/action", self.s.ha_payload({"entityId": eid, "action": action, "value": value}))
-            self.player_state = result.get("state") or self.player_state
-            self.apply_player_state()
-        except Exception as exc:
-            self.requestToast.emit(f"Media failed: {exc}")
+        if action == "volume" and value is not None:
+            try:
+                pct = int(float(value) * 100)
+                self.volume.blockSignals(True)
+                self.volume.setValue(pct)
+                self.volume.blockSignals(False)
+                self.vol_label.setText(f"Volume                                                              {pct}%")
+            except Exception:
+                pass
+        payload = self.s.ha_payload({"entityId": eid, "action": action, "value": value})
+
+        def done(result):
+            if isinstance(result, dict):
+                self.player_state = result.get("state") or self.player_state
+                self.apply_player_state()
+
+        self.run_async(
+            "audio-media",
+            lambda: self.s.api.post("/api/ha/media/action", payload),
+            done,
+            lambda err: self.requestToast.emit(f"Media failed: {err}"),
+        )
 
     def control_entity(self, name: str):
         controls = nested_get(self.config, "integrations", "homeAssistant", "audioControlEntities", default={}) or {}
@@ -3269,20 +3413,26 @@ class AudioScreen(Page):
         if not eid:
             self.requestToast.emit(f"No {name} control assigned")
             return
-        try:
-            self.s.api.post("/api/ha/audio/control/action", self.s.ha_payload({"entityId": eid, "value": value}))
-        except Exception as exc:
-            self.requestToast.emit(f"{name} failed: {exc}")
+        payload = self.s.ha_payload({"entityId": eid, "value": value})
+        self.run_async(
+            "audio-number",
+            lambda: self.s.api.post("/api/ha/audio/control/action", payload),
+            None,
+            lambda err, n=name: self.requestToast.emit(f"{n} failed: {err}"),
+        )
 
     def toggle_audio_switch(self, name: str):
         eid = self.control_entity(name)
         if not eid:
             self.requestToast.emit(f"No {name} switch assigned")
             return
-        try:
-            self.s.api.post("/api/ha/audio/switch/action", self.s.ha_payload({"entityId": eid, "action": "toggle"}))
-        except Exception as exc:
-            self.requestToast.emit(f"{name} failed: {exc}")
+        payload = self.s.ha_payload({"entityId": eid, "action": "toggle"})
+        self.run_async(
+            "audio-switch",
+            lambda: self.s.api.post("/api/ha/audio/switch/action", payload),
+            None,
+            lambda err, n=name: self.requestToast.emit(f"{n} failed: {err}"),
+        )
 
     def apply_player_state(self):
         st = self.player_state or {}
@@ -3300,15 +3450,17 @@ class AudioScreen(Page):
 
     def poll(self):
         eid = self.player_id()
-        if not eid: return
-        try:
-            result = self.s.api.post("/api/ha/media/states", self.s.ha_payload({"entityIds": [eid]}))
-            players = result.get("players") or []
+        if not eid:
+            return
+        payload = self.s.ha_payload({"entityIds": [eid]})
+
+        def done(result):
+            players = (result or {}).get("players") or []
             if players:
                 self.player_state = players[0]
                 self.apply_player_state()
-        except Exception:
-            pass
+
+        self.run_async("audio-poll", lambda: self.s.api.post("/api/ha/media/states", payload), done, None)
 
 
 class CodeKeypadDialog(QDialog):
@@ -5320,6 +5472,8 @@ class AlarmControlDialog(QDialog):
 
 
 class MainWindow(Background):
+    statusRefreshCompleted = pyqtSignal(object)
+
     def __init__(self):
         super().__init__()
         self.api = ApiClient()
@@ -5364,6 +5518,8 @@ class MainWindow(Background):
         self._poll_busy = False
         self._last_page_change_at = time.monotonic()
         self._ignore_info_until = 0.0
+        self._status_refresh_running = False
+        self.statusRefreshCompleted.connect(self._handle_status_refresh_completed)
         self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self.refresh_status)
         self.status_timer.start(4000)
@@ -5481,11 +5637,29 @@ class MainWindow(Background):
             pass
 
     def refresh_status(self):
-        try:
-            self.s.refresh_status()
+        if getattr(self, "_status_refresh_running", False):
+            return
+        self._status_refresh_running = True
+        api = self.s.api
+
+        def worker():
+            try:
+                data = api.thermostat_status()
+                self.statusRefreshCompleted.emit({"data": data, "error": None})
+            except Exception as exc:
+                self.statusRefreshCompleted.emit({"data": None, "error": str(exc)})
+
+        threading.Thread(target=worker, name="thermostat-status-refresh", daemon=True).start()
+
+    def _handle_status_refresh_completed(self, info: object):
+        self._status_refresh_running = False
+        data = info if isinstance(info, dict) else {}
+        if data.get("error"):
+            return
+        status = data.get("data")
+        if isinstance(status, dict):
+            self.s.thermostat = status
             self.sync_runtime_only()
-        except Exception:
-            pass
 
     def sync_runtime_only(self):
         t = self.s.thermostat or {}
@@ -5765,9 +5939,36 @@ def main():
     # physical pixels map directly to the X screen size reported after rotation.
     os.environ.setdefault("QT_AUTO_SCREEN_SCALE_FACTOR", "0")
     os.environ.setdefault("QT_SCALE_FACTOR", "1")
+
+    # Make the panel feel like a tablet: no Qt menu/dialog animation delays,
+    # synthesize mouse events directly from the touchscreen, and use a short
+    # drag threshold so sliders respond as soon as the finger moves.
+    for attr_name, enabled in (
+        ("AA_SynthesizeMouseForUnhandledTouchEvents", True),
+        ("AA_SynthesizeTouchForUnhandledMouseEvents", False),
+        ("AA_UseHighDpiPixmaps", False),
+    ):
+        attr = getattr(Qt, attr_name, None)
+        if attr is not None:
+            QApplication.setAttribute(attr, enabled)
+
     app = QApplication(sys.argv)
     app.setApplicationName("Smart Thermostat Native")
     app.setFont(font(10, QFont.Bold))
+    try:
+        app.setStartDragTime(120)
+        app.setStartDragDistance(6)
+        for effect in (
+            getattr(Qt, "UI_AnimateMenu", None),
+            getattr(Qt, "UI_FadeMenu", None),
+            getattr(Qt, "UI_AnimateCombo", None),
+            getattr(Qt, "UI_AnimateTooltip", None),
+            getattr(Qt, "UI_FadeTooltip", None),
+        ):
+            if effect is not None:
+                app.setEffectEnabled(effect, False)
+    except Exception:
+        pass
     w = MainWindow()
     if os.environ.get("SMART_THERMOSTAT_WINDOWED") == "1":
         w.resize(1600, 900)
