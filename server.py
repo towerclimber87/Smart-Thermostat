@@ -5042,14 +5042,21 @@ def _fetch_ha_weather_state(ha_url: str, token: str, entity_id: str = "weather.h
     return _normalize_weather_item(item)
 
 
+def _audio_control_entity_id(controls: dict, kind: str) -> str:
+    value = (controls or {}).get(kind)
+    if isinstance(value, dict):
+        return str(value.get("entityId") or value.get("entity_id") or "").strip()
+    return str(value or "").strip()
+
+
 def _fetch_ha_switch_control_states(ha_url: str, token: str, controls: dict) -> dict:
     kinds = ("subwoofer", "surround", "projector")
-    entity_by_kind = {
-        kind: str((controls.get(kind) or {}).get("entityId") or "").strip()
-        for kind in kinds
-    }
-    wanted = [entity_id for entity_id in entity_by_kind.values() if entity_id.startswith("switch.")]
-    items = _fetch_ha_state_items_for_entities(ha_url, token, wanted, {"switch"}, all_states_threshold=2)
+    entity_by_kind = {kind: _audio_control_entity_id(controls, kind) for kind in kinds}
+    wanted = [
+        entity_id for entity_id in entity_by_kind.values()
+        if entity_id.startswith("switch.") or entity_id.startswith("input_boolean.")
+    ]
+    items = _fetch_ha_state_items_for_entities(ha_url, token, wanted, {"switch", "input_boolean"}, all_states_threshold=2)
     by_id = {str(item.get("entity_id", "")): item for item in items}
     refreshed: dict[str, dict | None] = {}
     for kind in kinds:
@@ -5061,19 +5068,20 @@ def _fetch_ha_switch_control_states(ha_url: str, token: str, controls: dict) -> 
 
 def _call_switch_service(ha_url: str, token: str, entity_id: str, action: str) -> dict:
     entity_id = (entity_id or "").strip()
-    if not entity_id.startswith("switch."):
-        raise ValueError("Entity must be a switch.* entity")
+    domain = entity_id.split(".", 1)[0] if "." in entity_id else ""
+    if domain not in {"switch", "input_boolean"}:
+        raise ValueError("Entity must be a switch.* or input_boolean.* entity")
     action = (action or "toggle").strip().lower()
     service = {"on": "turn_on", "off": "turn_off", "toggle": "toggle"}.get(action)
     if not service:
         raise ValueError("Unsupported switch action")
-    _ha_json_request(ha_url, token, "POST", f"/api/services/switch/{service}", {"entity_id": entity_id})
+    _ha_json_request(ha_url, token, "POST", f"/api/services/{domain}/{service}", {"entity_id": entity_id})
     _invalidate_ha_state_cache(ha_url, token)
     try:
         item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
         return _normalize_generic_entity(item)
     except Exception:
-        return {"entityId": entity_id, "name": entity_id, "domain": "switch", "state": action}
+        return {"entityId": entity_id, "name": entity_id, "domain": domain, "state": action}
 
 
 def _room_control_domain(entity_id: str) -> str:
@@ -5487,10 +5495,7 @@ def _fetch_ha_audio_controls(ha_url: str, token: str, media_player_id: str, medi
 
 def _fetch_ha_audio_control_states(ha_url: str, token: str, controls: dict) -> dict:
     kinds = ("gain", "bass", "treble")
-    entity_by_kind = {
-        kind: str((controls.get(kind) or {}).get("entityId") or "").strip()
-        for kind in kinds
-    }
+    entity_by_kind = {kind: _audio_control_entity_id(controls, kind) for kind in kinds}
     wanted = [entity_id for entity_id in entity_by_kind.values() if entity_id.startswith("number.")]
     items = _fetch_ha_state_items_for_entities(ha_url, token, wanted, {"number"}, all_states_threshold=2)
     by_id = {str(item.get("entity_id", "")): item for item in items}

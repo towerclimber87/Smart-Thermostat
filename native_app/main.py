@@ -168,6 +168,39 @@ def fit_dialog_to_available_screen(dialog: QDialog, margin: int = 0):
     dialog.move(geo.x() + margin, geo.y() + margin)
 
 
+
+
+class HoldLabel(QLabel):
+    held = pyqtSignal()
+
+    def __init__(self, text: str = "", hold_ms: int = 700, parent=None):
+        super().__init__(text, parent)
+        self._hold_fired = False
+        self._hold_timer = QTimer(self)
+        self._hold_timer.setSingleShot(True)
+        self._hold_timer.setInterval(hold_ms)
+        self._hold_timer.timeout.connect(self._fire_hold)
+        self.setCursor(Qt.PointingHandCursor)
+
+    def _fire_hold(self):
+        self._hold_fired = True
+        self.held.emit()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._hold_fired = False
+            self._hold_timer.start()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._hold_timer.isActive():
+            self._hold_timer.stop()
+        if self._hold_fired:
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
 class HoldRoundButton(RoundButton):
     held = pyqtSignal()
 
@@ -3533,11 +3566,12 @@ class AudioScreen(Page):
         lay.addLayout(header)
         controls = QHBoxLayout()
         controls.setSpacing(12)
-        self.sub = RoundButton("Sub", active=False, min_h=56)
+        self.sub = HoldRoundButton("Sub", active=False, min_h=56)
         self.prev = IconCircle("◀◀", "previous", 58)
         self.play = IconCircle("▶", "play_pause", 74, active=True)
         self.next = IconCircle("▶▶", "next", 58)
-        self.sur = RoundButton("Surround", active=False, min_h=56)
+        self.sur = HoldRoundButton("Surround", active=False, min_h=56)
+        self.switch_buttons = {"subwoofer": self.sub, "surround": self.sur}
         for w in [self.sub, self.prev, self.play, self.next, self.sur]:
             controls.addWidget(w)
         lay.addLayout(controls)
@@ -3552,17 +3586,20 @@ class AudioScreen(Page):
         self.volume.setStyleSheet(SLIDER_H)
         vol_lay.addWidget(self.vol_label)
         vol_lay.addWidget(self.volume)
-        self.projector = RoundButton("▭", min_h=54)
-        self.projector.setMaximumWidth(86)
+        self.projector = HoldRoundButton("Proj", min_h=54)
+        self.projector.setMaximumWidth(96)
+        self.switch_buttons["projector"] = self.projector
         vol_lay.addWidget(self.projector, 0, Qt.AlignCenter)
         lay.addWidget(vol_panel)
         eq = QHBoxLayout()
         self.eq_sliders = {}
         for name in ["Gain", "Bass", "Treble"]:
-            card = GlassPanel(radius=22)
+            key = name.lower()
+            card = HoldCard(hold_ms=700)
             card.setMinimumHeight(165)
+            card.setToolTip(f"Hold to assign {name}")
             v = QVBoxLayout(card)
-            label = QLabel(f"{name}\n--")
+            label = HoldLabel(f"{name}\n--")
             label.setAlignment(Qt.AlignCenter)
             label.setFont(font(10, QFont.Black))
             label.setStyleSheet("color:#dbe3f4;")
@@ -3573,8 +3610,10 @@ class AudioScreen(Page):
                 QSlider::handle:vertical { height:32px; width:32px; margin:0 -11px; border-radius:16px; background:#f8f5ff; }
             """)
             v.addWidget(label); v.addWidget(sl, 1, Qt.AlignCenter)
-            self.eq_sliders[name.lower()] = (sl, label)
-            sl.sliderReleased.connect(lambda n=name.lower(), s=sl: self.set_number_control(n, s.value()))
+            self.eq_sliders[key] = (sl, label)
+            sl.sliderReleased.connect(lambda n=key, s=sl: self.set_number_control(n, s.value()))
+            card.held.connect(lambda n=key: self.assign_audio_control(n))
+            label.held.connect(lambda n=key: self.assign_audio_control(n))
             eq.addWidget(card)
         lay.addLayout(eq)
         self.prev.clicked.connect(lambda: self.media_action("previous"))
@@ -3584,6 +3623,9 @@ class AudioScreen(Page):
         self.sub.clicked.connect(lambda: self.toggle_audio_switch("subwoofer"))
         self.sur.clicked.connect(lambda: self.toggle_audio_switch("surround"))
         self.projector.clicked.connect(lambda: self.toggle_audio_switch("projector"))
+        self.sub.held.connect(lambda: self.assign_audio_control("subwoofer"))
+        self.sur.held.connect(lambda: self.assign_audio_control("surround"))
+        self.projector.held.connect(lambda: self.assign_audio_control("projector"))
 
     def player_id(self):
         ha = self.s.ha()
@@ -3599,6 +3641,96 @@ class AudioScreen(Page):
                 title = p.get("name") or title
         self.room_title.setText(title)
         self.source_label.setText(title)
+        self.apply_audio_control_state()
+
+    def audio_controls(self) -> dict:
+        return nested_get(self.config, "integrations", "homeAssistant", "audioControlEntities", default={}) or {}
+
+    def audio_control_record(self, name: str) -> dict:
+        value = self.audio_controls().get(name)
+        if isinstance(value, dict):
+            return value
+        if value:
+            entity_id = str(value)
+            domain = entity_id.split(".", 1)[0] if "." in entity_id else ""
+            return {"entityId": entity_id, "name": entity_id, "domain": domain}
+        return {}
+
+    def assign_audio_control(self, name: str):
+        group = "audio-number" if name in {"gain", "bass", "treble"} else "audio-toggle"
+        self.requestAssign.emit(group, {"audioControlKind": name}, name)
+
+    def number_value_to_slider(self, record: dict, value) -> int:
+        try:
+            val = float(value)
+        except Exception:
+            return 50
+        try:
+            low = float(record.get("min", 0))
+            high = float(record.get("max", 100))
+        except Exception:
+            low, high = 0.0, 100.0
+        if high <= low:
+            return int(clamp(round(val), 0, 100))
+        return int(clamp(round(((val - low) / (high - low)) * 100), 0, 100))
+
+    def slider_to_number_value(self, name: str, slider_value: int):
+        record = self.audio_control_record(name)
+        try:
+            low = float(record.get("min", 0))
+            high = float(record.get("max", 100))
+            step = float(record.get("step", 1) or 1)
+        except Exception:
+            return int(slider_value)
+        raw = low + (float(slider_value) / 100.0) * (high - low)
+        if step > 0:
+            raw = round((raw - low) / step) * step + low
+        if abs(raw - round(raw)) < 0.001:
+            return int(round(raw))
+        return round(raw, 2)
+
+    def _number_label_value(self, value) -> str:
+        if value is None or value == "":
+            return "--"
+        try:
+            number = float(value)
+            if abs(number - round(number)) < 0.001:
+                return str(int(round(number)))
+            return f"{number:.1f}"
+        except Exception:
+            return str(value)[:12]
+
+    def apply_audio_control_state(self):
+        controls = self.audio_controls()
+        for name, title in {"gain": "Gain", "bass": "Bass", "treble": "Treble"}.items():
+            sl_label = self.eq_sliders.get(name)
+            if not sl_label:
+                continue
+            slider, label = sl_label
+            record = controls.get(name) if isinstance(controls.get(name), dict) else self.audio_control_record(name)
+            value = record.get("value", record.get("state")) if isinstance(record, dict) else None
+            if isinstance(record, dict) and record.get("entityId"):
+                if value is not None and not slider.isSliderDown():
+                    slider.blockSignals(True)
+                    slider.setValue(self.number_value_to_slider(record, value))
+                    slider.blockSignals(False)
+                label.setText(f"{title}\n{self._number_label_value(value)}")
+            else:
+                label.setText(f"{title}\nHold")
+        for name, button in getattr(self, "switch_buttons", {}).items():
+            record = controls.get(name) if isinstance(controls.get(name), dict) else self.audio_control_record(name)
+            state = str(record.get("state") or "").lower() if isinstance(record, dict) else ""
+            assigned = bool(isinstance(record, dict) and record.get("entityId"))
+            on = state in {"on", "open", "true", "1"}
+            button.setActive(on)
+            if name == "subwoofer":
+                label = "Sub"
+            elif name == "surround":
+                label = "Surround"
+            else:
+                label = "Proj"
+            suffix = "ON" if on else ("OFF" if assigned and state not in {"", "unknown", "unavailable"} else "Hold")
+            button.setText(f"{label}\n{suffix}")
 
     def media_action(self, action: str, value=None):
         eid = self.player_id()
@@ -3629,22 +3761,34 @@ class AudioScreen(Page):
         )
 
     def control_entity(self, name: str):
-        controls = nested_get(self.config, "integrations", "homeAssistant", "audioControlEntities", default={}) or {}
-        value = controls.get(name)
-        if isinstance(value, dict):
-            return value.get("entityId") or ""
-        return value or ""
+        return self.audio_control_record(name).get("entityId") or ""
 
     def set_number_control(self, name: str, value: int):
         eid = self.control_entity(name)
         if not eid:
             self.requestToast.emit(f"No {name} control assigned")
             return
-        payload = self.s.ha_payload({"entityId": eid, "value": value})
+        actual_value = self.slider_to_number_value(name, value)
+        sl_label = self.eq_sliders.get(name)
+        if sl_label:
+            _, label = sl_label
+            label.setText(f"{name.capitalize()}\n{self._number_label_value(actual_value)}")
+        payload = self.s.ha_payload({"entityId": eid, "value": actual_value})
+        def done(result):
+            control = (result or {}).get("control") if isinstance(result, dict) else None
+            if isinstance(control, dict):
+                controls = self.config.setdefault("integrations", {}).setdefault("homeAssistant", {}).setdefault("audioControlEntities", {})
+                previous = controls.get(name) if isinstance(controls.get(name), dict) else {}
+                updated = dict(previous)
+                updated.update(control)
+                updated["kind"] = name
+                controls[name] = updated
+                self.apply_audio_control_state()
+
         self.run_async(
             "audio-number",
             lambda: self.s.api.post("/api/ha/audio/control/action", payload),
-            None,
+            done,
             lambda err, n=name: self.requestToast.emit(f"{n} failed: {err}"),
         )
 
@@ -3654,10 +3798,20 @@ class AudioScreen(Page):
             self.requestToast.emit(f"No {name} switch assigned")
             return
         payload = self.s.ha_payload({"entityId": eid, "action": "toggle"})
+        def done(result):
+            control = (result or {}).get("control") if isinstance(result, dict) else None
+            if isinstance(control, dict):
+                controls = self.config.setdefault("integrations", {}).setdefault("homeAssistant", {}).setdefault("audioControlEntities", {})
+                previous = controls.get(name) if isinstance(controls.get(name), dict) else {}
+                updated = dict(previous)
+                updated.update(control)
+                controls[name] = updated
+                self.apply_audio_control_state()
+
         self.run_async(
             "audio-switch",
             lambda: self.s.api.post("/api/ha/audio/switch/action", payload),
-            None,
+            done,
             lambda err, n=name: self.requestToast.emit(f"{n} failed: {err}"),
         )
 
@@ -3688,6 +3842,33 @@ class AudioScreen(Page):
                 self.apply_player_state()
 
         self.run_async("audio-poll", lambda: self.s.api.post("/api/ha/media/states", payload), done, None)
+        controls = self.audio_controls()
+        if any(self.audio_control_record(k).get("entityId") for k in ("gain", "bass", "treble")):
+            def number_done(result):
+                fresh = (result or {}).get("controls") if isinstance(result, dict) else None
+                if isinstance(fresh, dict):
+                    target = self.config.setdefault("integrations", {}).setdefault("homeAssistant", {}).setdefault("audioControlEntities", {})
+                    for key, value in fresh.items():
+                        if isinstance(value, dict):
+                            previous = target.get(key) if isinstance(target.get(key), dict) else {}
+                            merged = dict(previous)
+                            merged.update(value)
+                            target[key] = merged
+                    self.apply_audio_control_state()
+            self.run_async("audio-number-poll", lambda: self.s.api.post("/api/ha/audio/control_states", self.s.ha_payload({"controls": controls})), number_done, None)
+        if any(self.audio_control_record(k).get("entityId") for k in ("subwoofer", "surround", "projector")):
+            def switch_done(result):
+                fresh = (result or {}).get("controls") if isinstance(result, dict) else None
+                if isinstance(fresh, dict):
+                    target = self.config.setdefault("integrations", {}).setdefault("homeAssistant", {}).setdefault("audioControlEntities", {})
+                    for key, value in fresh.items():
+                        if isinstance(value, dict):
+                            previous = target.get(key) if isinstance(target.get(key), dict) else {}
+                            merged = dict(previous)
+                            merged.update(value)
+                            target[key] = merged
+                    self.apply_audio_control_state()
+            self.run_async("audio-switch-poll", lambda: self.s.api.post("/api/ha/audio/switch_states", self.s.ha_payload({"controls": controls})), switch_done, None)
 
 
 class CodeKeypadDialog(QDialog):
@@ -6123,6 +6304,10 @@ class MainWindow(Background):
             return ["light"]
         if group == "cover":
             return ["cover"]
+        if group == "audio-number":
+            return ["number"]
+        if group == "audio-toggle":
+            return ["switch", "input_boolean"]
         return []
 
     def cached_entities_for(self, group: str) -> list[dict]:
@@ -6133,6 +6318,10 @@ class MainWindow(Background):
             return ha.get("lightAvailableEntities") or []
         if group == "cover":
             return ha.get("coverEntities") or []
+        if group == "audio-number":
+            return (ha.get("audioAvailableEntities") or {}).get("numbers") or []
+        if group == "audio-toggle":
+            return (ha.get("audioAvailableEntities") or {}).get("switches") or []
         return []
 
     def assign_entity(self, group: str, obj: dict, kind: str):
@@ -6147,7 +6336,43 @@ class MainWindow(Background):
         if not entities:
             self.toast.show_message("No Home Assistant entities available")
             return
-        dlg = EntityPickerDialog(f"Assign {kind.capitalize()} Entry", entities, self)
+        display_kind = str(kind or "entry").replace("_", " ").replace("subwoofer", "sub").title()
+        dlg = EntityPickerDialog(f"Assign {display_kind} Entity", entities, self)
+
+        if group in {"audio-number", "audio-toggle"}:
+            target_kind = str((obj or {}).get("audioControlKind") or kind or "").strip().lower()
+
+            def apply_audio(ent):
+                entity_id = ent.get("entityId") or ent.get("entity_id") or ""
+                domain = ent.get("domain") or (entity_id.split(".", 1)[0] if "." in entity_id else "")
+                record = {
+                    "entityId": entity_id,
+                    "name": ent.get("name") or entity_id,
+                    "domain": domain,
+                }
+                if group == "audio-number":
+                    record["kind"] = target_kind
+                    for key in ("min", "max", "step", "unit", "mode", "value", "state"):
+                        if key in ent:
+                            record[key] = ent.get(key)
+                else:
+                    for key in ("state", "deviceClass", "icon"):
+                        if key in ent:
+                            record[key] = ent.get(key)
+                try:
+                    ha = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
+                    controls = ha.setdefault("audioControlEntities", {})
+                    controls[target_kind] = record
+                    self.s.save_config()
+                    self.sync_runtime_only()
+                    self.toast.show_message(f"Assigned {record.get('name') or entity_id}")
+                except Exception as exc:
+                    self.toast.show_message(f"Save failed: {exc}")
+
+            dlg.selected.connect(apply_audio)
+            dlg.exec_()
+            return
+
         def apply(ent):
             obj["haEntityId"] = ent.get("entityId") or ent.get("entity_id") or ""
             obj["haName"] = ent.get("name") or obj["haEntityId"]
