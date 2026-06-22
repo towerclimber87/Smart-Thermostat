@@ -3960,21 +3960,20 @@ class AudioScreen(Page):
         vol_lay.addWidget(self.projector, 0, Qt.AlignCenter)
         lay.addWidget(vol_panel)
 
-        self.eq_wrap = QWidget()
-        eq = QHBoxLayout(self.eq_wrap)
-        eq.setContentsMargins(0, 0, 0, 0)
+        eq = QHBoxLayout()
         eq.setSpacing(10)
         self.eq_sliders = {}
         self.eq_cards = {}
         for name in ["Gain", "Bass", "Treble"]:
             key = name.lower()
             card = HoldCard(hold_ms=700)
-            card.setMinimumHeight(260)
+            card.setMinimumHeight(232)
+            card.setMaximumHeight(246)
             card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             card.setToolTip(f"Hold to assign {name}")
             v = QVBoxLayout(card)
-            v.setContentsMargins(14, 12, 14, 14)
-            v.setSpacing(8)
+            v.setContentsMargins(14, 10, 14, 12)
+            v.setSpacing(6)
             label = HoldLabel(f"{name}\n--")
             label.setAlignment(Qt.AlignCenter)
             label.setFont(font(10, QFont.Black))
@@ -3982,7 +3981,7 @@ class AudioScreen(Page):
             sl = QSlider(Qt.Vertical)
             sl.setRange(0, 100)
             sl.setValue(50)
-            sl.setMinimumHeight(210)
+            sl.setMinimumHeight(162)
             sl.setStyleSheet("""
                 QSlider::groove:vertical { width:12px; border-radius:6px; background:rgba(160,170,190,0.23); }
                 QSlider::add-page:vertical { width:12px; border-radius:6px; background:#49e6ff; }
@@ -3997,7 +3996,7 @@ class AudioScreen(Page):
             card.held.connect(lambda n=key: self.assign_audio_control(n))
             label.held.connect(lambda n=key: self.assign_audio_control(n))
             eq.addWidget(card)
-        lay.addWidget(self.eq_wrap, 1)
+        lay.addLayout(eq, 1)
 
         self.prev.clicked.connect(lambda: self.media_action("previous"))
         self.play.clicked.connect(lambda: self.media_action("play_pause"))
@@ -4086,13 +4085,8 @@ class AudioScreen(Page):
             return str(value)[:12]
 
     def apply_audio_visibility(self):
-        eq_any = False
         for key, card in getattr(self, "eq_cards", {}).items():
-            visible = audio_control_enabled(self.config, key)
-            card.setVisible(visible)
-            eq_any = eq_any or visible
-        if hasattr(self, "eq_wrap"):
-            self.eq_wrap.setVisible(eq_any)
+            card.setVisible(audio_control_enabled(self.config, key))
         for key, button in getattr(self, "switch_buttons", {}).items():
             button.setVisible(audio_control_enabled(self.config, key))
 
@@ -4117,14 +4111,12 @@ class AudioScreen(Page):
         for name, button in getattr(self, "switch_buttons", {}).items():
             record = controls.get(name) if isinstance(controls.get(name), dict) else self.audio_control_record(name)
             state = str(record.get("state") or "").lower() if isinstance(record, dict) else ""
-            assigned = bool(isinstance(record, dict) and record.get("entityId"))
             on = state in {"on", "open", "true", "1"}
             button.setActive(on)
-            suffix = "ON" if on else ("OFF" if assigned and state not in {"", "unknown", "unavailable"} else "Hold to assign")
+            # The highlight is the on/off indicator. Keep these tiles clean with no
+            # ON/OFF text under Sub, Surround, or Projector.
             if hasattr(button, "setStatus"):
-                button.setStatus(suffix)
-            else:
-                button.setText(suffix)
+                button.setStatus("")
 
     def media_action(self, action: str, value=None):
         eid = self.player_id()
@@ -4535,17 +4527,34 @@ class AudioScreen(Page):
 
     def current_audio_source(self) -> str:
         st = self.player_state or {}
-        return str(st.get("source") or st.get("media_content_type") or "").strip()
+        return str(st.get("source") or st.get("sourceName") or st.get("source_name") or "").strip()
 
-    def is_non_tv_audio_playing(self) -> bool:
-        st = self.player_state or {}
+    def state_is_tv_audio(self, st: dict | None = None) -> bool:
+        st = st if isinstance(st, dict) else (self.player_state or {})
+        source = str(st.get("source") or st.get("sourceName") or st.get("source_name") or "").strip().lower()
+        title = str(st.get("mediaTitle") or st.get("media_title") or "").strip().lower()
+        content_id = str(st.get("mediaContentId") or st.get("media_content_id") or "").strip().lower()
+        content_type = str(st.get("mediaContentType") or st.get("media_content_type") or "").strip().lower()
+        tv_markers = ("x-sonos-htastream", ":spdif", "spdif", "hdmi", "television")
+        if source in {"tv", "television"} or source.startswith("tv ") or source.endswith(" tv"):
+            return True
+        if title == "tv":
+            return True
+        if any(marker in content_id for marker in tv_markers):
+            return True
+        if content_type in {"tv", "television"}:
+            return True
+        return False
+
+    def state_is_non_tv_audio_playing(self, st: dict | None = None) -> bool:
+        st = st if isinstance(st, dict) else (self.player_state or {})
         state_raw = str(st.get("state") or "").strip().lower()
         if state_raw != "playing":
             return False
-        source = self.current_audio_source().lower()
-        if source in {"tv", "television"} or source.startswith("tv ") or source.endswith(" tv"):
-            return False
-        return True
+        return not self.state_is_tv_audio(st)
+
+    def is_non_tv_audio_playing(self) -> bool:
+        return self.state_is_non_tv_audio_playing(self.player_state or {})
 
     def poll_player_only(self):
         eid = self.player_id()
@@ -6976,6 +6985,9 @@ class MainWindow(Background):
         self._last_user_activity_at = time.monotonic()
         self._last_auto_nav_at = 0.0
         self._last_auto_nav_audio_poll_at = 0.0
+        self._auto_nav_audio_poll_running = False
+        self._auto_nav_audio_is_playing = False
+        self._auto_nav_audio_state_at = 0.0
         self._ignore_info_until = 0.0
         self._status_refresh_running = False
         self.statusRefreshCompleted.connect(self._handle_status_refresh_completed)
@@ -7029,22 +7041,52 @@ class MainWindow(Background):
 
     def audio_page_is_music_playing(self) -> bool:
         page = self.pages.get("Audio")
-        if not isinstance(page, AudioScreen):
-            return False
-        return page.is_non_tv_audio_playing()
+        if isinstance(page, AudioScreen) and page.is_non_tv_audio_playing():
+            self._auto_nav_audio_is_playing = True
+            self._auto_nav_audio_state_at = time.monotonic()
+            return True
+        # Use the last background poll result when the Audio page is not visible.
+        # The poll runs asynchronously, so checking only the page state can be stale
+        # and was preventing the two-minute return-to-audio behavior from firing.
+        if time.monotonic() - getattr(self, "_auto_nav_audio_state_at", 0.0) <= 20.0:
+            return bool(getattr(self, "_auto_nav_audio_is_playing", False))
+        return False
 
     def poll_audio_for_auto_navigation(self, now: float):
-        if now - getattr(self, "_last_auto_nav_audio_poll_at", 0.0) < 10.0:
+        if now - getattr(self, "_last_auto_nav_audio_poll_at", 0.0) < 5.0:
+            return
+        if getattr(self, "_auto_nav_audio_poll_running", False):
             return
         page = self.pages.get("Audio")
         if not isinstance(page, AudioScreen):
             return
-        try:
-            page.sync(self.s.config, self.s.thermostat)
-            page.poll_player_only()
-            self._last_auto_nav_audio_poll_at = now
-        except Exception:
-            pass
+        eid = page.player_id()
+        if not eid:
+            self._auto_nav_audio_is_playing = False
+            self._auto_nav_audio_state_at = now
+            return
+        payload = self.s.ha_payload({"entityIds": [eid]})
+        self._last_auto_nav_audio_poll_at = now
+        self._auto_nav_audio_poll_running = True
+
+        def done(result):
+            self._auto_nav_audio_poll_running = False
+            players = (result or {}).get("players") or []
+            if players:
+                player = players[0]
+                page.player_state = player
+                if self.current_name == "Audio":
+                    page.apply_player_state()
+                self._auto_nav_audio_is_playing = page.state_is_non_tv_audio_playing(player)
+            else:
+                self._auto_nav_audio_is_playing = False
+            self._auto_nav_audio_state_at = time.monotonic()
+
+        def failed(_err):
+            self._auto_nav_audio_poll_running = False
+            self._auto_nav_audio_state_at = time.monotonic()
+
+        page.run_async("audio-auto-nav-poll", lambda: self.s.api.post("/api/ha/media/states", payload), done, failed)
 
     def check_auto_navigation(self):
         try:
