@@ -54,6 +54,7 @@ def fit_dialog_to_available_screen(dialog: QDialog, margin: int = 0):
 
 
 class Background(QWidget):
+
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
@@ -646,6 +647,16 @@ class RoomControlCard(HoldCard):
         p.drawArc(QRectF(cx - w * 0.26, cy - h * 0.21, w * 0.52, h * 0.52), 35 * 16, 290 * 16)
         p.drawLine(QPointF(cx, cy - h * 0.31), QPointF(cx, cy - h * 0.04))
 
+    def _code_protected(self) -> bool:
+        if not str(self.control.get("accessCode") or "").strip():
+            return False
+        required = self.control.get("codeRequiredStates")
+        if isinstance(required, dict):
+            return any(bool(value) for value in required.values())
+        if isinstance(required, (list, tuple, set)):
+            return bool(required)
+        return True
+
     def paintEvent(self, event):
         super().paintEvent(event)
         p = QPainter(self)
@@ -653,7 +664,7 @@ class RoomControlCard(HoldCard):
         r = QRectF(self.rect())
         active = bool(self.control.get("on"))
         assigned = bool(self.control.get("haEntityId"))
-        protected = bool(str(self.control.get("accessCode") or "").strip())
+        protected = self._code_protected()
 
         if active:
             glow = QRadialGradient(QPointF(r.width()*0.28, r.height()*0.28), r.width()*0.58)

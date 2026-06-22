@@ -127,19 +127,78 @@ def room_control_active(state: Any, domain: str | None = None) -> bool:
     return as_bool_state(text)
 
 
-def room_control_next_action(ctl: dict) -> str:
+def room_control_domain_for(ctl: dict | None) -> str:
     entity_id = str((ctl or {}).get("haEntityId") or "")
-    domain = str((ctl or {}).get("domain") or (entity_id.split(".", 1)[0] if "." in entity_id else "")).lower()
-    state = str((ctl or {}).get("state") or "").strip().lower()
+    return str((ctl or {}).get("domain") or (entity_id.split(".", 1)[0] if "." in entity_id else "switch")).strip().lower()
+
+
+def room_control_code_state_choices(ctl: dict | None) -> list[tuple[str, str]]:
+    domain = room_control_domain_for(ctl)
     if domain == "lock":
-        return "unlock" if state in {"locked", "locking"} or not bool((ctl or {}).get("on")) else "lock"
+        return [("lock", "Lock"), ("unlock", "Unlock")]
     if domain == "cover":
-        return "open" if state in {"closed", "closing"} or not bool((ctl or {}).get("on")) else "close"
+        return [("open", "Open"), ("close", "Close")]
+    if domain in {"button", "input_button"}:
+        return [("press", "Press")]
+    if domain in {"scene", "script"}:
+        return [("run", "Run")]
+    if domain == "media_player":
+        return [("on", "On"), ("off", "Off"), ("play_pause", "Play/Pause")]
+    if domain == "vacuum":
+        return [("start", "Start"), ("return_to_base", "Return Home"), ("stop", "Stop")]
+    return [("on", "On"), ("off", "Off")]
+
+
+def room_control_legacy_required_actions(ctl: dict | None) -> set[str]:
+    domain = room_control_domain_for(ctl)
+    if domain == "lock":
+        # Preserve the old behavior: locking was quick, unlocking required the entry code.
+        return {"unlock"}
+    return {action for action, _label in room_control_code_state_choices(ctl)}
+
+
+def room_control_required_state_map(ctl: dict | None) -> dict[str, bool]:
+    choices = {action for action, _label in room_control_code_state_choices(ctl)}
+    raw = (ctl or {}).get("codeRequiredStates")
+    if isinstance(raw, dict):
+        return {action: bool(raw.get(action, False)) for action in choices}
+    if isinstance(raw, (list, tuple, set)):
+        selected = {str(action).strip().lower() for action in raw}
+        return {action: action in selected for action in choices}
+    legacy = room_control_legacy_required_actions(ctl)
+    return {action: action in legacy for action in choices}
+
+
+def room_control_action_requires_code(ctl: dict | None, action: str) -> bool:
+    if not str((ctl or {}).get("accessCode") or "").strip():
+        return False
+    action_key = str(action or "").strip().lower()
+    if action_key == "toggle":
+        action_key = "off" if room_control_active((ctl or {}).get("state"), room_control_domain_for(ctl)) else "on"
+    return bool(room_control_required_state_map(ctl).get(action_key, False))
+
+
+def room_control_has_code_protection(ctl: dict | None) -> bool:
+    return bool(str((ctl or {}).get("accessCode") or "").strip()) and any(room_control_required_state_map(ctl).values())
+
+
+def room_control_next_action(ctl: dict) -> str:
+    domain = room_control_domain_for(ctl)
+    state = str((ctl or {}).get("state") or "").strip().lower()
+    active = room_control_active(state, domain) if state else bool((ctl or {}).get("on"))
+    if domain == "lock":
+        return "unlock" if state in {"locked", "locking"} or not active else "lock"
+    if domain == "cover":
+        return "open" if state in {"closed", "closing"} or not active else "close"
     if domain in {"button", "input_button"}:
         return "press"
     if domain in {"scene", "script"}:
         return "run"
-    return "toggle"
+    if domain == "media_player":
+        return "off" if active else "on"
+    if domain == "vacuum":
+        return "return_to_base" if active else "start"
+    return "off" if active else "on"
 
 
 def nested_get(data: dict, *keys, default=None):
@@ -3299,12 +3358,7 @@ class RoomScreen(Page):
 
     def _entry_code_for_action(self, ctl: dict, action: str) -> str | None:
         code = str((ctl or {}).get("accessCode") or "").strip()
-        if not code:
-            return None
-        entity_id = str((ctl or {}).get("haEntityId") or "")
-        domain = str((ctl or {}).get("domain") or (entity_id.split(".", 1)[0] if "." in entity_id else "")).lower()
-        # Locks can always be locked quickly. The code protects unlock/open.
-        if domain == "lock" and str(action or "").lower() not in {"unlock", "open", "on"}:
+        if not code or not room_control_action_requires_code(ctl, action):
             return None
         return code
 
@@ -5556,7 +5610,7 @@ class RoomManagerSettingsDialog(QDialog):
         code_root = QVBoxLayout(self.code_panel)
         code_root.setContentsMargins(12, 12, 12, 12)
         code_root.setSpacing(8)
-        self.code_hint = QLabel("Set a 4-digit local code for any Room entry. Switches require the code before toggling. Locks can lock normally, but require the code before unlocking.")
+        self.code_hint = QLabel("Set a 4-digit local code for any Room entry, then choose exactly which target states require that code. For example, a switch can require a code for ON while OFF stays unlocked.")
         self.code_hint.setWordWrap(True)
         self.code_hint.setAlignment(Qt.AlignCenter)
         self.code_hint.setFont(font(10, QFont.Black))
@@ -5619,7 +5673,7 @@ class RoomManagerSettingsDialog(QDialog):
         self.add_btn.setVisible(not is_code)
         self.delete_btn.setVisible(not is_code)
         self.hint.setText(
-            "Assign per-entry codes to Room controls. A protected switch needs its code before it toggles; a protected lock needs its code before it unlocks."
+            "Assign per-entry codes to Room controls, then choose which target states are protected. Switches show On/Off, covers show Open/Close, and locks show Lock/Unlock."
             if is_code else
             "Add/delete rooms, then select a room and set how many entries it should show. New empty entries appear on that page so they can be assigned to Home Assistant devices."
         )
@@ -5655,48 +5709,121 @@ class RoomManagerSettingsDialog(QDialog):
             return
         for room_key, room_label, ctl, idx in entries:
             row = GlassPanel(radius=18, strong=False)
-            row.setMinimumHeight(84)
-            lay = QHBoxLayout(row)
-            lay.setContentsMargins(12, 8, 12, 8)
-            lay.setSpacing(10)
+            row.setMinimumHeight(126)
+            row_lay = QVBoxLayout(row)
+            row_lay.setContentsMargins(12, 8, 12, 8)
+            row_lay.setSpacing(6)
+
+            top_lay = QHBoxLayout()
+            top_lay.setContentsMargins(0, 0, 0, 0)
+            top_lay.setSpacing(10)
             name = ctl.get("haName") or ctl.get("name") or f"Control {idx + 1}"
             eid = ctl.get("haEntityId") or "Unassigned"
             domain = ctl.get("domain") or (str(eid).split(".", 1)[0] if "." in str(eid) else "switch")
             code_set = bool(str(ctl.get("accessCode") or "").strip())
+            protected = room_control_has_code_protection(ctl)
             text = QLabel(
                 f"<span style='font-size:17px; font-weight:1000; color:#ffffff'>{room_label} • {name}</span>"
                 f"<br><span style='font-size:11px; font-weight:900; color:#9fb0c8'>{domain.upper()} • {eid}</span>"
             )
             text.setTextFormat(Qt.RichText)
-            text.setMinimumWidth(420)
-            lay.addWidget(text, 1)
-            status = QLabel("CODE SET" if code_set else "NO CODE")
+            text.setMinimumWidth(390)
+            top_lay.addWidget(text, 1)
+            status = QLabel("PROTECTED" if protected else "CODE SET" if code_set else "NO CODE")
             status.setAlignment(Qt.AlignCenter)
             status.setFont(font(10, QFont.Black, 16))
             status.setMinimumWidth(120)
             status.setStyleSheet(
                 "color:#7dffce; background:rgba(73,255,196,0.12); border:1px solid rgba(73,255,196,0.35); border-radius:16px; padding:8px;"
+                if protected else
+                "color:#ffe29a; background:rgba(255,210,96,0.10); border:1px solid rgba(255,210,96,0.32); border-radius:16px; padding:8px;"
                 if code_set else
                 "color:#9fb0c8; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.12); border-radius:16px; padding:8px;"
             )
-            lay.addWidget(status)
-            set_btn = RoundButton("Change Code" if code_set else "Set Code", active=True, min_h=48)
-            set_btn.setMinimumWidth(150)
-            clear_btn = RoundButton("Clear", kind="danger", min_h=48)
-            clear_btn.setMinimumWidth(110)
+            top_lay.addWidget(status)
+            set_btn = RoundButton("Change Code" if code_set else "Set Code", active=True, min_h=46)
+            set_btn.setMinimumWidth(148)
+            clear_btn = RoundButton("Clear", kind="danger", min_h=46)
+            clear_btn.setMinimumWidth(104)
             clear_btn.setEnabled(code_set)
             set_btn.clicked.connect(lambda checked=False, c=ctl: self.set_entry_code(c))
             clear_btn.clicked.connect(lambda checked=False, c=ctl: self.clear_entry_code(c))
-            lay.addWidget(set_btn)
-            lay.addWidget(clear_btn)
+            top_lay.addWidget(set_btn)
+            top_lay.addWidget(clear_btn)
+            row_lay.addLayout(top_lay)
+
+            state_lay = QHBoxLayout()
+            state_lay.setContentsMargins(0, 0, 0, 0)
+            state_lay.setSpacing(8)
+            label = QLabel("Require code for:")
+            label.setFont(font(10, QFont.Black, 16))
+            label.setStyleSheet("color:#c9d5ea; background:transparent; border:0;")
+            label.setMinimumWidth(138)
+            state_lay.addWidget(label)
+            required_states = room_control_required_state_map(ctl)
+            choices = room_control_code_state_choices(ctl)
+            for action, state_label in choices:
+                cb = QCheckBox(state_label)
+                cb.setCursor(Qt.PointingHandCursor)
+                cb.setFont(font(11, QFont.Black))
+                cb.setChecked(code_set and bool(required_states.get(action, False)))
+                cb.setEnabled(code_set)
+                cb.setStyleSheet("""
+                    QCheckBox {
+                        color:#eef6ff;
+                        spacing:8px;
+                        background:rgba(255,255,255,0.055);
+                        border:1px solid rgba(255,255,255,0.12);
+                        border-radius:16px;
+                        padding:8px 12px;
+                    }
+                    QCheckBox:disabled { color:#75849b; background:rgba(255,255,255,0.03); }
+                    QCheckBox::indicator { width:22px; height:22px; border-radius:7px; border:2px solid rgba(147,232,255,0.60); background:rgba(0,0,0,0.18); }
+                    QCheckBox::indicator:checked { background:#55f0ff; border:2px solid #55f0ff; }
+                    QCheckBox::indicator:disabled { border:2px solid rgba(150,165,185,0.28); background:rgba(255,255,255,0.035); }
+                """)
+                cb.stateChanged.connect(lambda state, c=ctl, a=action: self.set_code_required_state(c, a, state == Qt.Checked))
+                state_lay.addWidget(cb)
+            state_lay.addStretch(1)
+            if not code_set:
+                helper = QLabel("Set a code first")
+                helper.setFont(font(9, QFont.Black, 14))
+                helper.setStyleSheet("color:#7f90aa; background:transparent; border:0;")
+                state_lay.addWidget(helper)
+            row_lay.addLayout(state_lay)
             self.code_lay.addWidget(row)
         self.code_lay.addStretch(1)
+
+    def _default_code_required_states(self, ctl: dict) -> dict[str, bool]:
+        legacy = room_control_legacy_required_actions(ctl)
+        return {action: action in legacy for action, _label in room_control_code_state_choices(ctl)}
 
     def set_entry_code(self, ctl: dict):
         code = CodeKeypadDialog.get_code(self, "Entry Code", "New 4-Digit Code")
         if code is None:
             return
         ctl["accessCode"] = str(code)
+        if not isinstance(ctl.get("codeRequiredStates"), dict):
+            ctl["codeRequiredStates"] = self._default_code_required_states(ctl)
+        try:
+            self.s.save_config()
+            self.saved.emit()
+            self.rebuild_code_entries()
+        except Exception as exc:
+            QMessageBox.warning(self, "Save failed", str(exc))
+
+    def set_code_required_state(self, ctl: dict, action: str, required: bool):
+        if not str((ctl or {}).get("accessCode") or "").strip():
+            return
+        choices = {state_action for state_action, _label in room_control_code_state_choices(ctl)}
+        action = str(action or "").strip().lower()
+        if action not in choices:
+            return
+        states = ctl.get("codeRequiredStates")
+        if not isinstance(states, dict):
+            states = self._default_code_required_states(ctl)
+        ctl["codeRequiredStates"] = {state_action: bool(states.get(state_action, False)) for state_action in choices}
+        ctl["codeRequiredStates"][action] = bool(required)
         try:
             self.s.save_config()
             self.saved.emit()
@@ -5706,6 +5833,7 @@ class RoomManagerSettingsDialog(QDialog):
 
     def clear_entry_code(self, ctl: dict):
         ctl.pop("accessCode", None)
+        ctl.pop("codeRequiredStates", None)
         try:
             self.s.save_config()
             self.saved.emit()
