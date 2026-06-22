@@ -2056,6 +2056,22 @@ def _ha_credentials_from_panel_config() -> tuple[str, str]:
         return "", ""
 
 
+def _configured_home_assistant_door_entry() -> dict | None:
+    """Return the saved Doors/comfort-pause HA entity from panel config.
+
+    This keeps older configs working when the entity was saved under
+    integrations.homeAssistant.doorEntity but pauseFunction.entries is empty.
+    """
+    try:
+        record = _read_panel_config_record()
+        config = record.get("config") if isinstance(record, dict) else {}
+        ha = (((config or {}).get("integrations") or {}).get("homeAssistant") or {})
+        door = ha.get("doorEntity") if isinstance(ha, dict) else None
+        return _normalize_pause_function_entry(door) if door else None
+    except Exception:
+        return None
+
+
 def _person_states_for_schedule(entity_ids: list[str], thermostat: dict) -> dict[str, str]:
     wanted = {str(entity_id or "").strip() for entity_id in entity_ids if str(entity_id or "").strip()}
     if not wanted:
@@ -2218,7 +2234,7 @@ def _refresh_pause_function_entry_states(entries: list[dict]) -> list[dict]:
                 current.update(fresh)
                 current["name"] = str(saved_name or entity_id)
         except Exception as exc:
-            print(f"Inside-door pause state update failed for {entity_id}: {exc}", flush=True)
+            print(f"Door pause state update failed for {entity_id}: {exc}", flush=True)
         refreshed.append(_normalize_pause_function_entry(current) or current)
     return refreshed
 
@@ -2244,7 +2260,7 @@ def _restore_from_door_pause(thermostat: dict, pause: dict) -> dict:
 
 
 def _apply_door_pause_logic(thermostat: dict) -> dict:
-    """Apply the configured inside-door countdown and temporary away setpoint.
+    """Apply the configured door countdown and temporary away setpoint.
 
     The selected entry and delay are persisted, but the active countdown,
     previous target and snooze state are runtime-only so normal sensor polling
@@ -2252,7 +2268,12 @@ def _apply_door_pause_logic(thermostat: dict) -> dict:
     """
     t = _merge_thermostat_state(thermostat)
     pause = _normalize_pause_function(t.get("pauseFunction"))
-    entries = _refresh_pause_function_entry_states(pause.get("entries") or [])
+    entries = pause.get("entries") or []
+    if not entries:
+        configured_entry = _configured_home_assistant_door_entry()
+        if configured_entry:
+            entries = [configured_entry]
+    entries = _refresh_pause_function_entry_states(entries)
     pause["entries"] = entries
     if not entries:
         pause.update({

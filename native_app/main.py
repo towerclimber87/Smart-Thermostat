@@ -996,7 +996,7 @@ class ThermostatScreen(Page):
         away_lay.addStretch(1)
         self.away_overlay.mousePressEvent = lambda event: self.return_home_from_away()
         self.away_overlay.hide()
-        self.door_card = InfoTile("Inside Doors", "CLOSED", "▯", good=True)
+        self.door_card = InfoTile("Doors", "CLOSED", "▯", good=True)
         self.alarm_card = InfoTile("Alarmo", "DISARMED", "盾", good=True)
         self.virtual_panel = VirtualOutputsPanel()
         self.virtual_temp_pending: float | None = None
@@ -1597,23 +1597,37 @@ class ThermostatScreen(Page):
 
     def selected_pause_entry(self) -> dict | None:
         pause = self.thermostat_view().get("pauseFunction")
-        if not isinstance(pause, dict):
-            return None
-        entries = pause.get("entries") if isinstance(pause.get("entries"), list) else []
-        return entries[0] if entries and isinstance(entries[0], dict) else None
+        if isinstance(pause, dict):
+            entries = pause.get("entries") if isinstance(pause.get("entries"), list) else []
+            for entry in entries:
+                if isinstance(entry, dict) and str(entry.get("entityId") or entry.get("entity_id") or "").strip():
+                    return entry
+
+        # Older/saved configs can have the chosen door entry saved under the
+        # Home Assistant integration while the live thermostat pauseFunction has
+        # not caught up yet. Fall back to that saved doorEntity so the homepage
+        # tile does not incorrectly say NOT SET after the user already chose one.
+        try:
+            ha = self.s.ha()
+            door = ha.get("doorEntity") if isinstance(ha, dict) else None
+            if isinstance(door, dict) and str(door.get("entityId") or door.get("entity_id") or "").strip():
+                return door
+        except Exception:
+            pass
+        return None
 
     def update_door_pause_ui(self):
         t = self.thermostat_view()
         pause = t.get("pauseFunction") if isinstance(t.get("pauseFunction"), dict) else {}
         entry = self.selected_pause_entry()
         if not entry:
-            self.door_card.title = "Inside Doors"
+            self.door_card.title = "Doors"
             self.door_card.setGood(False)
             self.door_card.setValue("NOT SET")
             self.door_countdown.hide()
             return
         open_state = self.pause_entry_is_open(entry)
-        self.door_card.title = "Inside Doors"
+        self.door_card.title = "Doors"
         self.door_card.setGood(not open_state)
         self.door_card.setValue("OPEN" if open_state else "CLOSED")
         if not open_state:
@@ -4365,7 +4379,7 @@ class SettingsDialog(QDialog):
     def inside_door_summary_text(self) -> str:
         entry = self.current_inside_door_entry()
         if not entry:
-            return "No entry selected. Choose the HA door/contact/cover used by the Inside Doors tile."
+            return "No entry selected. Choose the HA door/contact/cover used by the Doors tile."
         name = str(entry.get("name") or entry.get("friendly_name") or entry.get("entityId") or "Selected Entry")
         entity_id = str(entry.get("entityId") or entry.get("entity_id") or "")
         return f"{name}\nUsing {entity_id}"
@@ -4421,10 +4435,10 @@ class SettingsDialog(QDialog):
             }
         entities = list(by_id.values())
         if not entities:
-            QMessageBox.warning(self, "Inside Doors", "No Home Assistant binary_sensor or cover entries found.")
+            QMessageBox.warning(self, "Doors", "No Home Assistant binary_sensor or cover entries found.")
             return
 
-        dlg = EntityPickerDialog("Choose Inside Doors Entry", entities, self)
+        dlg = EntityPickerDialog("Choose Doors Entry", entities, self)
         def apply(e):
             try:
                 eid = str(e.get("entityId") or e.get("entity_id") or "").strip()
@@ -4466,7 +4480,7 @@ class SettingsDialog(QDialog):
                     self.inside_door_label.setText(self.inside_door_summary_text())
                 self.saved.emit()
             except Exception as exc:
-                QMessageBox.warning(self, "Inside Doors", str(exc))
+                QMessageBox.warning(self, "Doors", str(exc))
         dlg.selected.connect(apply)
         dlg.exec_()
 
@@ -4728,7 +4742,7 @@ class SettingsDialog(QDialog):
         choose_outdoor.clicked.connect(self.choose_outdoor_temp_sensor)
         outdoor_source.layout().addWidget(choose_outdoor, 0, Qt.AlignRight)
 
-        door_source = self.add_section("Inside Doors / Comfort Pause", 3, 2, 1, 2)
+        door_source = self.add_section("Doors / Comfort Pause", 3, 2, 1, 2)
         self.inside_door_label = QLabel(self.inside_door_summary_text())
         self.inside_door_label.setWordWrap(True)
         self.inside_door_label.setFont(font(8, QFont.Black))
