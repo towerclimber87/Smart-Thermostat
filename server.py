@@ -36,6 +36,7 @@ APP_STARTED_AT = time.time()
 HA_STATES_CACHE_TTL_SECONDS = float(os.environ.get("SMART_THERMOSTAT_HA_STATES_CACHE_TTL_SECONDS", "8.0"))
 HA_ENTITY_STATE_CACHE_TTL_SECONDS = float(os.environ.get("SMART_THERMOSTAT_HA_ENTITY_STATE_CACHE_TTL_SECONDS", "8.0"))
 HA_REQUEST_TIMEOUT_SECONDS = float(os.environ.get("SMART_THERMOSTAT_HA_REQUEST_TIMEOUT_SECONDS", "3.0"))
+EXTERNAL_HA_AIR_VERIFY_INTERVAL_SECONDS = max(5.0, float(os.environ.get("SMART_THERMOSTAT_EXTERNAL_AIR_VERIFY_SECONDS", "30") or "30"))
 ACCESS_LOGS_ENABLED = os.environ.get("SMART_THERMOSTAT_ACCESS_LOGS", "0").strip().lower() in {"1", "true", "yes", "on"}
 HISTORY_PERSISTENCE_MODE = os.environ.get("SMART_THERMOSTAT_HISTORY_PERSISTENCE", "daily").strip().lower() or "daily"
 HISTORY_SAVE_ON_SHUTDOWN = os.environ.get("SMART_THERMOSTAT_HISTORY_SAVE_ON_SHUTDOWN", "0").strip().lower() in {"1", "true", "yes", "on"}
@@ -109,6 +110,7 @@ _EXTERNAL_HA_AIR_LOCK = threading.RLock()
 _EXTERNAL_HA_AIR_LAST_STATES = {"heat": None, "cool": None}
 _EXTERNAL_HA_AIR_LAST_ENTITIES = {"heat": "", "cool": ""}
 _EXTERNAL_HA_AIR_RETRY_AFTER = {"heat": 0.0, "cool": 0.0}
+_EXTERNAL_HA_AIR_NEXT_VERIFY_AT = {"heat": 0.0, "cool": 0.0}
 _EXTERNAL_HA_AIR_LAST_ERROR_AT = {"heat": 0.0, "cool": 0.0}
 _HARDWARE_LAST_I2C_SCAN = {"at": 0.0, "payload": None}
 _LOCAL_TEMP_SENSOR_LOCK = threading.RLock()
@@ -2967,6 +2969,17 @@ def _external_air_entity_for_kind(thermostat: dict, kind: str) -> dict | None:
     return _normalize_external_air_entity(thermostat.get(key))
 
 
+def _external_ha_state_is_on(item: dict | None) -> bool | None:
+    if not isinstance(item, dict):
+        return None
+    state = str(item.get("state") or "").strip().lower()
+    if state in {"on", "true", "1"}:
+        return True
+    if state in {"off", "false", "0"}:
+        return False
+    return None
+
+
 def _apply_external_ha_air_outputs(thermostat: dict, outputs: dict) -> None:
     if _normalize_air_control_mode(thermostat.get("airControlMode")) != "external":
         return
@@ -2998,14 +3011,40 @@ def _apply_external_ha_air_outputs(thermostat: dict, outputs: dict) -> None:
             last_entity = str(_EXTERNAL_HA_AIR_LAST_ENTITIES.get(kind) or "")
             last_state = _EXTERNAL_HA_AIR_LAST_STATES.get(kind)
             retry_after = float(_EXTERNAL_HA_AIR_RETRY_AFTER.get(kind) or 0.0)
+            next_verify_at = float(_EXTERNAL_HA_AIR_NEXT_VERIFY_AT.get(kind) or 0.0)
             needs_call = last_entity != entity_id or last_state is None or bool(last_state) != want_on
-            if not needs_call or (retry_after and now < retry_after and last_entity == entity_id):
+            can_try_now = not (retry_after and now < retry_after and last_entity == entity_id)
+
+            # In external mode, do not only trust the command we sent earlier.
+            # Wireless HA commands can be missed by remote heat/cool helpers, so
+            # every 30 seconds verify the actual HA state and re-apply the desired
+            # on/off state when it drifted.
+            if (not needs_call) and can_try_now and now >= next_verify_at:
+                try:
+                    item = _ha_state_cached(ha_url, token, entity_id, ttl=0.0)
+                    actual_on = _external_ha_state_is_on(item)
+                    if actual_on is not None:
+                        _EXTERNAL_HA_AIR_LAST_ENTITIES[kind] = entity_id
+                        _EXTERNAL_HA_AIR_LAST_STATES[kind] = actual_on
+                        needs_call = actual_on != want_on
+                    _EXTERNAL_HA_AIR_NEXT_VERIFY_AT[kind] = now + EXTERNAL_HA_AIR_VERIFY_INTERVAL_SECONDS
+                except Exception as exc:
+                    _EXTERNAL_HA_AIR_RETRY_AFTER[kind] = time.monotonic() + 30.0
+                    _EXTERNAL_HA_AIR_NEXT_VERIFY_AT[kind] = now + EXTERNAL_HA_AIR_VERIFY_INTERVAL_SECONDS
+                    last_error_at = float(_EXTERNAL_HA_AIR_LAST_ERROR_AT.get(kind) or 0.0)
+                    if now - last_error_at > 60.0:
+                        _EXTERNAL_HA_AIR_LAST_ERROR_AT[kind] = now
+                        print(f"External {kind} air state verify failed for {entity_id}: {exc}", flush=True)
+                    continue
+
+            if not needs_call or not can_try_now:
                 continue
             try:
                 _call_room_control_service(ha_url, token, entity_id, "on" if want_on else "off")
                 _EXTERNAL_HA_AIR_LAST_ENTITIES[kind] = entity_id
                 _EXTERNAL_HA_AIR_LAST_STATES[kind] = want_on
                 _EXTERNAL_HA_AIR_RETRY_AFTER[kind] = 0.0
+                _EXTERNAL_HA_AIR_NEXT_VERIFY_AT[kind] = time.monotonic() + EXTERNAL_HA_AIR_VERIFY_INTERVAL_SECONDS
             except Exception as exc:
                 _EXTERNAL_HA_AIR_RETRY_AFTER[kind] = time.monotonic() + 30.0
                 last_error_at = float(_EXTERNAL_HA_AIR_LAST_ERROR_AT.get(kind) or 0.0)
@@ -3037,6 +3076,7 @@ def _release_external_ha_air_outputs(thermostat: dict) -> None:
                 _EXTERNAL_HA_AIR_LAST_STATES[kind] = False
                 _EXTERNAL_HA_AIR_LAST_ENTITIES[kind] = entity_id
                 _EXTERNAL_HA_AIR_RETRY_AFTER[kind] = 0.0
+                _EXTERNAL_HA_AIR_NEXT_VERIFY_AT[kind] = time.monotonic() + EXTERNAL_HA_AIR_VERIFY_INTERVAL_SECONDS
             except Exception as exc:
                 _EXTERNAL_HA_AIR_RETRY_AFTER[kind] = time.monotonic() + 30.0
                 print(f"External {kind} air release failed for {entity_id}: {exc}", flush=True)

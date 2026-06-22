@@ -1057,7 +1057,7 @@ class EntityPickerDialog(QDialog):
         self.use = RoundButton("Assign Selected", active=True)
         btns.addStretch(1); btns.addWidget(self.cancel); btns.addWidget(self.use)
         lay.addLayout(btns)
-        self.cancel.clicked.connect(self.reject)
+        self.cancel.clicked.connect(self._cancel)
         self.use.clicked.connect(self._choose_current)
         self.list.itemDoubleClicked.connect(lambda item: self._choose_item(item))
         self.search.textChanged.connect(self.refresh)
@@ -1091,11 +1091,18 @@ class EntityPickerDialog(QDialog):
             item.setData(Qt.UserRole, {"name": name, "entityId": entity, "domain": domain})
             self.list.addItem(item)
 
+    def _cancel(self):
+        self.reject()
+        self.close()
+
     def _choose_current(self):
         item = self.list.currentItem()
         if item:
             self._choose_item(item)
 
     def _choose_item(self, item: QListWidgetItem):
-        self.selected.emit(item.data(Qt.UserRole))
-        self.accept()
+        data = item.data(Qt.UserRole)
+        self.selected.emit(data)
+        # Close on the next event-loop pass so any connected save handler can
+        # finish first, but every picker closes after Assign Selected.
+        QTimer.singleShot(0, self.accept)
