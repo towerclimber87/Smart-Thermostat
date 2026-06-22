@@ -82,6 +82,29 @@ def nested_get(data: dict, *keys, default=None):
     return default if cur is None else cur
 
 
+def thermostat_detail_payload(payload: dict | None) -> dict:
+    """Return the actual thermostat state from the local API response.
+
+    /api/thermostat/status and /api/thermostat/control return a wrapper with
+    metadata plus a nested `thermostat` object. The UI should edit/sync against
+    that nested object because it contains persistent settings such as limits,
+    away setpoints, pause settings, and the unit name. Keep wrapper-only fields
+    like outputs available as extras so older call sites do not lose context.
+    """
+    if not isinstance(payload, dict):
+        return {}
+    detail = payload.get("thermostat") if isinstance(payload.get("thermostat"), dict) else None
+    if not detail:
+        return copy.deepcopy(payload)
+    merged = copy.deepcopy(detail)
+    for key, value in payload.items():
+        if key in {"thermostat", "climate"}:
+            continue
+        if key not in merged:
+            merged[key] = copy.deepcopy(value)
+    return merged
+
+
 def slug_room_key(label: str, rooms: dict) -> str:
     base = "".join(ch.lower() if ch.isalnum() else "-" for ch in str(label or "room")).strip("-")
     base = "-".join(part for part in base.split("-") if part) or "room"
@@ -408,22 +431,24 @@ class AppState:
         self.config = record.get("config") or self.config
         return record
 
+    def ingest_thermostat(self, payload: dict | None) -> dict:
+        self.thermostat = thermostat_detail_payload(payload)
+        return self.thermostat
+
     def load(self):
         rec = self.api.get_config_record()
         self.config = rec.get("config") or {}
-        self.thermostat = self.api.thermostat_status()
+        self.ingest_thermostat(self.api.thermostat_status())
         try:
             self.system_info = self.api.get("/api/system/info")
         except Exception:
             self.system_info = {}
 
     def refresh_status(self):
-        self.thermostat = self.api.thermostat_status()
-        return self.thermostat
+        return self.ingest_thermostat(self.api.thermostat_status())
 
     def update_thermostat(self, changes: dict):
-        self.thermostat = self.api.thermostat_update(changes)
-        return self.thermostat
+        return self.ingest_thermostat(self.api.thermostat_update(changes))
 
 
 class ThermostatActionBanner(GlassPanel):
@@ -1746,7 +1771,7 @@ class ThermostatScreen(Page):
 
         def done(result):
             if isinstance(result, dict):
-                self.s.thermostat = result
+                self.s.ingest_thermostat(result)
                 self.sync(self.s.config, self.s.thermostat)
 
         self.run_async(
@@ -1812,7 +1837,7 @@ class ThermostatScreen(Page):
 
         def done(result):
             if isinstance(result, dict):
-                self.s.thermostat = result
+                self.s.ingest_thermostat(result)
                 self.sync(self.s.config, self.s.thermostat)
 
         self.run_async(
@@ -1901,7 +1926,7 @@ class ThermostatScreen(Page):
 
         def done(result):
             if isinstance(result, dict):
-                self.s.thermostat = result
+                self.s.ingest_thermostat(result)
                 self.sync(self.s.config, self.s.thermostat)
 
         self.run_async(
@@ -1920,7 +1945,7 @@ class ThermostatScreen(Page):
 
         def done(result):
             if isinstance(result, dict):
-                self.s.thermostat = result
+                self.s.ingest_thermostat(result)
                 self.sync(self.s.config, self.s.thermostat)
 
         self.run_async(
@@ -1936,7 +1961,7 @@ class ThermostatScreen(Page):
 
         def done(result):
             if isinstance(result, dict):
-                self.s.thermostat = result
+                self.s.ingest_thermostat(result)
                 self.sync(self.s.config, self.s.thermostat)
 
         self.run_async(
@@ -1967,7 +1992,7 @@ class ThermostatScreen(Page):
 
         def done(result):
             if isinstance(result, dict):
-                self.s.thermostat = result
+                self.s.ingest_thermostat(result)
                 self.sync(self.s.config, self.s.thermostat)
 
         self.run_async(
@@ -4311,6 +4336,7 @@ class SimplePageSettingsDialog(QDialog):
 class SettingsDialog(QDialog):
     saved = pyqtSignal()
     thermostatUpdateCompleted = pyqtSignal(object)
+    settingsSaveCompleted = pyqtSignal(object)
 
     def __init__(self, state: AppState, parent=None):
         super().__init__(parent)
@@ -4421,6 +4447,7 @@ class SettingsDialog(QDialog):
         self._settings_update_seq = 0
         self._last_settings_error = ""
         self.thermostatUpdateCompleted.connect(self.handle_settings_update_completed)
+        self.settingsSaveCompleted.connect(self.handle_save_all_completed)
         self.build()
         self.done.clicked.connect(self.close_settings)
         self.hardware.clicked.connect(self.show_hardware)
@@ -5095,19 +5122,24 @@ class SettingsDialog(QDialog):
     def apply_thermostat_changes_locally(self, changes: dict):
         self.s.thermostat = self.merge_dicts(self.s.thermostat, changes)
 
-    def set_thermostat(self, changes, quiet=False, debounce=False):
+    def set_thermostat(self, changes, quiet=False, debounce=False, push=False):
         if not isinstance(changes, dict) or not changes:
             return
         self.apply_thermostat_changes_locally(changes)
-        # Prevent the normal 4-second status poll from repainting stale server
-        # values over the instant local setting change while a debounced save is
-        # still being delivered.
-        self.s.status_refresh_paused_until = max(getattr(self.s, "status_refresh_paused_until", 0.0), time.monotonic() + 2.5)
-        self.saved.emit()
+        # Do not emit saved/reload on every plus/minus tap. That used to force a
+        # synchronous full reload while the finger was still tapping, causing the
+        # 1+ second lag and sometimes repainting old values back over the new
+        # number. Keep the change local and let Save Settings perform the
+        # authoritative thermostat write.
+        self.s.status_refresh_paused_until = max(getattr(self.s, "status_refresh_paused_until", 0.0), time.monotonic() + 8.0)
         self._pending_settings_changes = self.merge_dicts(self._pending_settings_changes, changes)
         self._pending_settings_quiet = bool(getattr(self, "_pending_settings_quiet", True)) and bool(quiet)
+        if not push:
+            self._settings_dirty = True
+            self._settings_save_timer.stop()
+            return
         if debounce:
-            self._settings_save_timer.start(220)
+            self._settings_save_timer.start(350)
         else:
             self._settings_save_timer.stop()
             self.push_pending_settings()
@@ -5138,6 +5170,12 @@ class SettingsDialog(QDialog):
 
     def handle_settings_update_completed(self, info: object):
         data = info if isinstance(info, dict) else {}
+        try:
+            seq = int(data.get("seq") or 0)
+        except Exception:
+            seq = 0
+        if seq and seq < self._settings_update_seq:
+            return
         self._settings_saving = False
         error = str(data.get("error") or "")
         quiet = bool(data.get("quiet", True))
@@ -5148,7 +5186,7 @@ class SettingsDialog(QDialog):
         elif not self._settings_dirty and not self._pending_settings_changes:
             result = data.get("result")
             if isinstance(result, dict):
-                self.s.thermostat = result
+                self.s.ingest_thermostat(result)
                 if hasattr(self, "thermostat_name_label"):
                     self.thermostat_name_label.setText(self.thermostat_name_summary_text())
         if self._settings_dirty or self._pending_settings_changes:
@@ -5203,17 +5241,61 @@ class SettingsDialog(QDialog):
         self.accept()
 
     def save_all(self):
-        self.apply_values(debounce=False)
+        self._settings_save_timer.stop()
+        changes = self.merge_dicts(self._pending_settings_changes, self.build_settings_changes())
+        self.apply_thermostat_changes_locally(changes)
+        self._pending_settings_changes = None
+        self._settings_dirty = False
+        self._settings_saving = True
+        self._settings_update_seq += 1
+        seq = self._settings_update_seq
+        self.s.status_refresh_paused_until = max(getattr(self.s, "status_refresh_paused_until", 0.0), time.monotonic() + 8.0)
+        self.bottom_save.setEnabled(False)
+        self.bottom_save.setText("Saving…")
+
+        def worker():
+            try:
+                thermostat_result = self.s.api.thermostat_update(changes)
+                config_record = self.s.api.save_config(self.s.config)
+                self.settingsSaveCompleted.emit({
+                    "seq": seq,
+                    "thermostat": thermostat_result,
+                    "config": config_record,
+                    "error": None,
+                })
+            except Exception as exc:
+                self.settingsSaveCompleted.emit({"seq": seq, "error": str(exc)})
+
+        threading.Thread(target=worker, name="settings-save-all", daemon=True).start()
+
+    def handle_save_all_completed(self, info: object):
+        data = info if isinstance(info, dict) else {}
         try:
-            self.s.save_config()
-            self.saved.emit()
-            if hasattr(self, "security_code_field"):
-                self.security_code_field.setText(self.masked_code(str((self.s.config.get("alarm") or {}).get("disarmCode") or "")))
-            if hasattr(self, "settings_code_field"):
-                self.settings_code_field.setText(self.masked_code(str((self.s.config.get("security") or {}).get("settingsCode") or "")))
-            self.show_saved_then_close()
-        except Exception as exc:
-            QMessageBox.warning(self, "Save failed", str(exc))
+            seq = int(data.get("seq") or 0)
+        except Exception:
+            seq = 0
+        if seq and seq < self._settings_update_seq:
+            return
+        self._settings_saving = False
+        self.bottom_save.setEnabled(True)
+        self.bottom_save.setText("Save Settings")
+        error = str(data.get("error") or "")
+        if error:
+            self._last_settings_error = error
+            QMessageBox.warning(self, "Save failed", error)
+            return
+        thermostat_result = data.get("thermostat")
+        if isinstance(thermostat_result, dict):
+            self.s.ingest_thermostat(thermostat_result)
+        config_record = data.get("config")
+        if isinstance(config_record, dict):
+            self.s.config = config_record.get("config") or self.s.config
+        if hasattr(self, "security_code_field"):
+            self.security_code_field.setText(self.masked_code(str((self.s.config.get("alarm") or {}).get("disarmCode") or "")))
+        if hasattr(self, "settings_code_field"):
+            self.settings_code_field.setText(self.masked_code(str((self.s.config.get("security") or {}).get("settingsCode") or "")))
+        self.saved.emit()
+        self.show_saved_then_close()
 
     def choose_temp_sensor(self):
         ha = self.s.ha()
@@ -5836,7 +5918,7 @@ class MainWindow(Background):
             return
         status = data.get("data")
         if isinstance(status, dict):
-            self.s.thermostat = status
+            self.s.ingest_thermostat(status)
             self.sync_runtime_only()
 
     def sync_runtime_only(self):

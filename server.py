@@ -737,20 +737,24 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             ("currentTemp", base["currentTemp"], -40, 130),
             ("currentTempUpdatedAt", base.get("currentTempUpdatedAt", 0), 0, None),
             ("virtualTempOverrideUntil", base.get("virtualTempOverrideUntil", 0), 0, None),
-            ("targetTemp", base["targetTemp"], 45, 95),
-            ("lastComfortTarget", base["lastComfortTarget"], 45, 95),
-            ("awayHeat", base["awayHeat"], 45, 72),
-            ("awayCool", base["awayCool"], 72, 95),
-            ("safetyLow", base.get("safetyLow", base.get("awayHeat", 55)), 45, 93),
-            ("safetyHigh", base.get("safetyHigh", base.get("awayCool", 85)), 47, 95),
+            ("targetTemp", base["targetTemp"], 40, 100),
+            ("lastComfortTarget", base["lastComfortTarget"], 40, 100),
+            # Match the values the native settings screen actually offers.
+            # Otherwise the UI can show “saved” while the backend silently
+            # clamps values like Heat Away 40 or Cool Away 100 back to older
+            # limits.
+            ("awayHeat", base["awayHeat"], 40, 75),
+            ("awayCool", base["awayCool"], 75, 100),
+            ("safetyLow", base.get("safetyLow", base.get("awayHeat", 55)), 40, 75),
+            ("safetyHigh", base.get("safetyHigh", base.get("awayCool", 85)), 75, 100),
             ("humidity", base["humidity"], 0, 100),
             ("outdoorTemp", base["outdoorTemp"], -40, 130),
             ("outdoorWindSpeed", base.get("outdoorWindSpeed", 0), 0, 250),
-            ("autoCoolOutdoorTarget", base["autoCoolOutdoorTarget"], 41, 100),
-            ("autoHeatOutdoorTarget", base["autoHeatOutdoorTarget"], 40, 99),
+            ("autoCoolOutdoorTarget", base["autoCoolOutdoorTarget"], 40, 100),
+            ("autoHeatOutdoorTarget", base["autoHeatOutdoorTarget"], 40, 100),
             ("autoChangeoverLockoutMinutes", base["autoChangeoverLockoutMinutes"], 0, 720),
             ("manualChangeoverLockoutMinutes", base.get("manualChangeoverLockoutMinutes", MANUAL_CHANGEOVER_LOCKOUT_MINUTES), 0, 60),
-            ("coolFanRemainOnMinutes", base["coolFanRemainOnMinutes"], 0, 10),
+            ("coolFanRemainOnMinutes", base["coolFanRemainOnMinutes"], 0, 15),
             ("autoLockoutUntil", base["autoLockoutUntil"], 0, None),
             ("manualLockoutUntil", base.get("manualLockoutUntil", 0), 0, None),
             ("lastHeatRunAt", base["lastHeatRunAt"], 0, None),
@@ -794,12 +798,12 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
         for mode in ("cool", "heat", "auto"):
             current = base["limits"].get(mode) or DEFAULT_THERMOSTAT["limits"][mode]
             update = incoming_limits.get(mode) if isinstance(incoming_limits.get(mode), dict) else {}
-            low = _intish(update.get("min", current.get("min")), current.get("min"), 45, 95)
-            high = _intish(update.get("max", current.get("max")), current.get("max"), low + 2, 95)
+            low = _intish(update.get("min", current.get("min")), current.get("min"), 40, 100)
+            high = _intish(update.get("max", current.get("max")), current.get("max"), low + 2, 100)
             base["limits"][mode] = {"min": min(low, high - 2), "max": high}
 
-    base["safetyLow"] = int(max(45, min(93, round(_number(base.get("safetyLow"), base.get("awayHeat", 55), 45, 93)))))
-    base["safetyHigh"] = int(max(base["safetyLow"] + 2, min(95, round(_number(base.get("safetyHigh"), base.get("awayCool", 85), 47, 95)))))
+    base["safetyLow"] = int(max(40, min(75, round(_number(base.get("safetyLow"), base.get("awayHeat", 55), 40, 75)))))
+    base["safetyHigh"] = int(max(base["safetyLow"] + 2, min(100, round(_number(base.get("safetyHigh"), base.get("awayCool", 85), 75, 100)))))
     base["autoHeatOutdoorTarget"] = min(base["autoHeatOutdoorTarget"], base["autoCoolOutdoorTarget"] - 1)
     base["mode"] = _allowed_mode_for_locks(base["mode"], base, base["mode"])
     if base.get("autoActiveMode") == "heat" and base.get("heatLocked"):
