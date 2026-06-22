@@ -3962,6 +3962,13 @@ class AudioScreen(Page):
         self._cover_url = ""
         self._cover_loading_url = ""
         self._cover_cache: dict[str, bytes] = {}
+        # Local slider holds keep Home Assistant's delayed state refreshes from
+        # snapping the native sliders back to the previous value while the new
+        # value is still round-tripping. These are intentionally RAM-only.
+        self._audio_number_local: dict[str, dict[str, Any]] = {}
+        self._audio_volume_local: dict[str, Any] = {"value": None, "until": 0.0}
+        self._audio_assign_short_ms = 700
+        self._audio_assign_reassign_ms = 6000
         root = QHBoxLayout(self)
         root.setContentsMargins(28, 6, 28, 18)
         root.setSpacing(18)
@@ -4154,6 +4161,7 @@ class AudioScreen(Page):
             v.addWidget(sl, 1, Qt.AlignHCenter)
             self.eq_sliders[key] = (sl, label)
             self.eq_cards[key] = card
+            sl.valueChanged.connect(lambda value, n=key: self.on_audio_number_slider_changed(n, value))
             sl.sliderReleased.connect(lambda n=key, s=sl: self.set_number_control(n, s.value()))
             card.held.connect(lambda n=key: self.assign_audio_control(n))
             label.held.connect(lambda n=key: self.assign_audio_control(n))
@@ -4163,6 +4171,7 @@ class AudioScreen(Page):
         self.prev.clicked.connect(lambda: self.media_action("previous"))
         self.play.clicked.connect(lambda: self.media_action("play_pause"))
         self.next.clicked.connect(lambda: self.media_action("next"))
+        self.volume.valueChanged.connect(lambda value: self.on_volume_slider_changed(value))
         self.volume.sliderReleased.connect(lambda: self.media_action("volume", self.volume.value()))
         self.sub.clicked.connect(lambda: self.toggle_audio_switch("subwoofer"))
         self.sur.clicked.connect(lambda: self.toggle_audio_switch("surround"))
@@ -4208,6 +4217,76 @@ class AudioScreen(Page):
     def assign_audio_control(self, name: str):
         group = "audio-number" if name in {key for key, _label in AUDIO_NUMBER_CONTROL_ORDER} else "audio-toggle"
         self.requestAssign.emit(group, {"audioControlKind": name}, name)
+
+    def _set_audio_hold_ms(self, widget, hold_ms: int):
+        try:
+            hold_ms = max(250, int(hold_ms))
+        except Exception:
+            hold_ms = self._audio_assign_short_ms
+        for timer_name in ("_timer", "_hold_timer"):
+            timer = getattr(widget, timer_name, None)
+            if timer is not None:
+                try:
+                    timer.setInterval(hold_ms)
+                except Exception:
+                    pass
+
+    def _audio_reassign_hold_ms(self, name: str) -> int:
+        return self._audio_assign_reassign_ms if self.control_entity(name) else self._audio_assign_short_ms
+
+    def _audio_number_local_active(self, name: str) -> dict | None:
+        local = self._audio_number_local.get(name)
+        if not isinstance(local, dict):
+            return None
+        if float(local.get("until") or 0.0) <= time.monotonic():
+            self._audio_number_local.pop(name, None)
+            return None
+        return local
+
+    def _hold_audio_number_local(self, name: str, slider_value: int, seconds: float = 8.0):
+        try:
+            slider_value = int(clamp(round(float(slider_value)), 0, 100))
+        except Exception:
+            slider_value = 50
+        actual_value = self.slider_to_number_value(name, slider_value)
+        self._audio_number_local[name] = {
+            "slider": slider_value,
+            "actual": actual_value,
+            "until": time.monotonic() + max(0.5, float(seconds)),
+        }
+        return actual_value
+
+    def _clear_audio_number_local(self, name: str):
+        self._audio_number_local.pop(name, None)
+
+    def on_audio_number_slider_changed(self, name: str, value: int):
+        actual_value = self._hold_audio_number_local(name, value, 2.0 if self.eq_sliders.get(name, (None, None))[0] and self.eq_sliders[name][0].isSliderDown() else 0.75)
+        sl_label = self.eq_sliders.get(name)
+        if sl_label:
+            _slider, label = sl_label
+            label.setText(self._audio_number_label_text(name, self._number_label_value(actual_value)))
+
+    def _audio_volume_local_active(self) -> dict | None:
+        local = self._audio_volume_local if isinstance(self._audio_volume_local, dict) else {}
+        if float(local.get("until") or 0.0) <= time.monotonic():
+            self._audio_volume_local = {"value": None, "until": 0.0}
+            return None
+        return local
+
+    def _hold_audio_volume_local(self, value: int, seconds: float = 8.0) -> int:
+        try:
+            pct = int(clamp(round(float(value)), 0, 100))
+        except Exception:
+            pct = 0
+        self._audio_volume_local = {"value": pct, "until": time.monotonic() + max(0.5, float(seconds))}
+        self.vol_value.setText(f"{pct}%")
+        return pct
+
+    def _clear_audio_volume_local(self):
+        self._audio_volume_local = {"value": None, "until": 0.0}
+
+    def on_volume_slider_changed(self, value: int):
+        self._hold_audio_volume_local(value, 2.0 if self.volume.isSliderDown() else 0.75)
 
     def number_value_to_slider(self, record: dict, value) -> int:
         try:
@@ -4270,20 +4349,44 @@ class AudioScreen(Page):
                 continue
             slider, label = sl_label
             record = controls.get(name) if isinstance(controls.get(name), dict) else self.audio_control_record(name)
-            value = record.get("value", record.get("state")) if isinstance(record, dict) else None
-            if isinstance(record, dict) and record.get("entityId"):
+            assigned = isinstance(record, dict) and bool(record.get("entityId"))
+            hold_ms = self._audio_reassign_hold_ms(name)
+            self._set_audio_hold_ms(getattr(self, "eq_cards", {}).get(name), hold_ms)
+            self._set_audio_hold_ms(label, hold_ms)
+            if assigned:
+                local = self._audio_number_local_active(name)
+                if local:
+                    if not slider.isSliderDown():
+                        slider.blockSignals(True)
+                        slider.setValue(int(local.get("slider", slider.value())))
+                        slider.blockSignals(False)
+                    label.setText(self._audio_number_label_text(name, self._number_label_value(local.get("actual"))))
+                    continue
+                value = record.get("value", record.get("state"))
                 if value is not None and not slider.isSliderDown():
                     slider.blockSignals(True)
                     slider.setValue(self.number_value_to_slider(record, value))
                     slider.blockSignals(False)
                 label.setText(self._audio_number_label_text(name, self._number_label_value(value)))
+                slider.setEnabled(True)
+                label.setToolTip("Hold 6 seconds to reassign")
+                if getattr(self, "eq_cards", {}).get(name):
+                    self.eq_cards[name].setToolTip(f"Hold 6 seconds to reassign {title}")
             else:
+                self._clear_audio_number_local(name)
                 label.setText(self._audio_number_label_text(name, "Hold"))
+                slider.setEnabled(True)
+                label.setToolTip("Hold to assign")
+                if getattr(self, "eq_cards", {}).get(name):
+                    self.eq_cards[name].setToolTip(f"Hold to assign {title}")
         for name, button in getattr(self, "switch_buttons", {}).items():
             record = controls.get(name) if isinstance(controls.get(name), dict) else self.audio_control_record(name)
+            assigned = isinstance(record, dict) and bool(record.get("entityId"))
+            self._set_audio_hold_ms(button, self._audio_reassign_hold_ms(name))
             state = str(record.get("state") or "").lower() if isinstance(record, dict) else ""
             on = state in {"on", "open", "true", "1"}
             button.setActive(on)
+            button.setToolTip("Hold 6 seconds to reassign" if assigned else "Hold to assign")
             # The highlight is the on/off indicator. Keep these tiles clean with no
             # ON/OFF text under Sub, Surround, or Projector.
             if hasattr(button, "setStatus"):
@@ -4300,6 +4403,7 @@ class AudioScreen(Page):
                 raw = float(value)
                 pct = int(clamp(round(raw * 100 if raw <= 1 else raw), 0, 100))
                 send_value = pct
+                self._hold_audio_volume_local(pct, 8.0)
                 self.volume.blockSignals(True)
                 self.volume.setValue(pct)
                 self.volume.blockSignals(False)
@@ -4316,11 +4420,17 @@ class AudioScreen(Page):
                 self.apply_player_state()
                 QTimer.singleShot(700, self.poll)
 
+        def failed(err):
+            if action == "volume":
+                self._clear_audio_volume_local()
+                self.apply_player_state()
+            self.requestToast.emit(f"Media failed: {err}")
+
         self.run_async(
             "audio-media",
             lambda: self.s.api.post("/api/ha/media/action", payload),
             done,
-            lambda err: self.requestToast.emit(f"Media failed: {err}"),
+            failed,
         )
 
     def control_entity(self, name: str):
@@ -4393,6 +4503,7 @@ class AudioScreen(Page):
             else:
                 try:
                     pct = int(clamp(round(float(volume_value)), 0, 100))
+                    self._hold_audio_volume_local(pct, 8.0)
                     self.volume.blockSignals(True)
                     self.volume.setValue(pct)
                     self.volume.blockSignals(False)
@@ -4414,6 +4525,7 @@ class AudioScreen(Page):
                 missing.append(AUDIO_CONTROL_LABELS.get(name, name))
                 continue
             self._remember_number_state(name, value)
+            self._hold_audio_number_local(name, self.number_value_to_slider(self.audio_control_record(name), value), 8.0)
             number_actions.append((name, entity_id, value))
 
         for name, action in (definition.get("switches") or {}).items():
@@ -4492,9 +4604,10 @@ class AudioScreen(Page):
     def set_number_control(self, name: str, value: int):
         eid = self.control_entity(name)
         if not eid:
+            self._clear_audio_number_local(name)
             self.requestToast.emit(f"No {name} control assigned")
             return
-        actual_value = self.slider_to_number_value(name, value)
+        actual_value = self._hold_audio_number_local(name, value, 8.0)
         sl_label = self.eq_sliders.get(name)
         if sl_label:
             _, label = sl_label
@@ -4510,12 +4623,18 @@ class AudioScreen(Page):
                 updated["kind"] = name
                 controls[name] = updated
                 self.apply_audio_control_state()
+                QTimer.singleShot(850, self.poll)
+
+        def failed(err, n=name):
+            self._clear_audio_number_local(n)
+            self.apply_audio_control_state()
+            self.requestToast.emit(f"{n} failed: {err}")
 
         self.run_async(
             "audio-number",
             lambda: self.s.api.post("/api/ha/audio/control/action", payload),
             done,
-            lambda err, n=name: self.requestToast.emit(f"{n} failed: {err}"),
+            failed,
         )
 
     def toggle_audio_switch(self, name: str):
@@ -4653,13 +4772,26 @@ class AudioScreen(Page):
         vol = st.get("volumeLevel")
         if vol is None:
             vol = st.get("volume_level")
+        local_volume = self._audio_volume_local_active()
+        if local_volume:
+            try:
+                pct = int(clamp(round(float(local_volume.get("value"))), 0, 100))
+            except Exception:
+                pct = self.volume.value() or 0
+            if not self.volume.isSliderDown():
+                self.volume.blockSignals(True)
+                self.volume.setValue(pct)
+                self.volume.blockSignals(False)
+            self.vol_value.setText(f"{pct}%")
+            return
         try:
             pct = int(clamp(round(float(vol) * 100), 0, 100))
         except Exception:
             pct = self.volume.value() or 0
-        self.volume.blockSignals(True)
-        self.volume.setValue(pct)
-        self.volume.blockSignals(False)
+        if not self.volume.isSliderDown():
+            self.volume.blockSignals(True)
+            self.volume.setValue(pct)
+            self.volume.blockSignals(False)
         self.vol_value.setText(f"{pct}%")
 
     def current_audio_source(self) -> str:
