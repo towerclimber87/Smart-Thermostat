@@ -423,11 +423,26 @@ class ThermostatDial(QWidget):
 
         p.setPen(T.TEXT)
         # The mode/equipment text is already shown above the dial, so keep the
-        # center clean and make the current temperature the visual focus.
-        p.setFont(font(max(50, int(side * 0.162)), QFont.Black))
-        p.drawText(QRectF(inner.x(), inner.y() + inner.height() * 0.22, inner.width(), inner.height() * 0.44), Qt.AlignCenter, fmt_temp(self.current).replace("°", ""))
-        p.setFont(font(max(16, int(side * 0.039)), QFont.Black))
-        p.drawText(QRectF(inner.x() + inner.width() * 0.62, inner.y() + inner.height() * 0.33, 44, 34), Qt.AlignLeft | Qt.AlignVCenter, "°F")
+        # center clean and make the current temperature the visual focus. Draw
+        # the number and °F as one measured group so the unit never sits on top
+        # of the last digit when the value gets wider.
+        current_text = fmt_temp(self.current).replace("°", "")
+        number_font = font(max(50, int(side * 0.162)), QFont.Black)
+        unit_font = font(max(16, int(side * 0.039)), QFont.Black)
+        number_rect = QRectF(inner.x(), inner.y() + inner.height() * 0.22, inner.width(), inner.height() * 0.44)
+
+        p.setFont(number_font)
+        number_w = p.fontMetrics().horizontalAdvance(current_text)
+        p.setFont(unit_font)
+        unit_w = p.fontMetrics().horizontalAdvance("°F")
+        unit_gap = max(10, int(side * 0.026))
+        group_w = number_w + unit_gap + unit_w
+        number_left = inner.center().x() - group_w / 2
+
+        p.setFont(number_font)
+        p.drawText(QRectF(number_left, number_rect.y(), number_w, number_rect.height()), Qt.AlignRight | Qt.AlignVCenter, current_text)
+        p.setFont(unit_font)
+        p.drawText(QRectF(number_left + number_w + unit_gap, inner.y() + inner.height() * 0.315, max(52, unit_w + 10), 36), Qt.AlignLeft | Qt.AlignVCenter, "°F")
 
         set_rect = QRectF(inner.x(), inner.y() + inner.height() * 0.66, inner.width(), 34)
         p.setFont(font(12, QFont.Black))
