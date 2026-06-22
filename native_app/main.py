@@ -1145,11 +1145,20 @@ class ThermostatScreen(Page):
         self.virtual_panel.tempChanged.connect(self.set_virtual_temp)
         self.minus = IconCircle("−", "minus", 82)
         self.plus = IconCircle("+", "plus", 82)
+        self.schedule_button = RoundButton("◷", active=False, min_h=46)
+        self.schedule_button.setFixedSize(50, 46)
+        self.schedule_button.setFont(font(22, QFont.Black))
+        self.schedule_button.setToolTip("Schedules")
+        # Open on press instead of release. The touchscreen can occasionally
+        # drop the release/click event near screen edges, which made the timer
+        # button appear dead. A guard in open_schedule_manager prevents double-open.
+        self.schedule_button.pressed.connect(self.open_schedule_manager)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(42, 18, 42, 34)
         root.setSpacing(0)
         title_row = QHBoxLayout()
+        title_row.setSpacing(12)
         left_title = QVBoxLayout()
         left_title.setSpacing(8)
         left_title.addWidget(self.outdoor, 0, Qt.AlignLeft)
@@ -1160,6 +1169,7 @@ class ThermostatScreen(Page):
         title_row.addLayout(left_title)
         title_row.addStretch(1)
         title_row.addWidget(self.door_countdown, 0, Qt.AlignRight | Qt.AlignTop)
+        title_row.addWidget(self.schedule_button, 0, Qt.AlignRight | Qt.AlignTop)
         root.addLayout(title_row)
 
         mid = QGridLayout()
@@ -1197,15 +1207,6 @@ class ThermostatScreen(Page):
         self.schedule_shortcuts_lay.setContentsMargins(0, 0, 0, 0)
         self.schedule_shortcuts_lay.setSpacing(6)
         left_col.addWidget(self.schedule_shortcuts, 0, Qt.AlignLeft)
-        self.schedule_button = RoundButton("◷", active=False, min_h=46)
-        self.schedule_button.setFixedSize(50, 46)
-        self.schedule_button.setFont(font(22, QFont.Black))
-        # Open on press instead of release. The touchscreen can occasionally
-        # drop the release/click event near the lower-left edge, which made the
-        # timer button appear dead. A guard in open_schedule_manager prevents
-        # double-open.
-        self.schedule_button.pressed.connect(self.open_schedule_manager)
-        left_col.addWidget(self.schedule_button, 0, Qt.AlignLeft)
         mid.addLayout(left_col, 0, 0, 2, 1)
         mid.addWidget(self.minus, 0, 1, 2, 1, Qt.AlignCenter)
 
