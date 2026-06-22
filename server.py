@@ -112,6 +112,8 @@ _EXTERNAL_HA_AIR_LAST_ENTITIES = {"heat": "", "cool": ""}
 _EXTERNAL_HA_AIR_RETRY_AFTER = {"heat": 0.0, "cool": 0.0}
 _EXTERNAL_HA_AIR_NEXT_VERIFY_AT = {"heat": 0.0, "cool": 0.0}
 _EXTERNAL_HA_AIR_LAST_ERROR_AT = {"heat": 0.0, "cool": 0.0}
+_THERMOSTAT_ASYNC_OUTPUT_LOCK = threading.Lock()
+_THERMOSTAT_ASYNC_OUTPUT_SEQ = 0
 _HARDWARE_LAST_I2C_SCAN = {"at": 0.0, "payload": None}
 _LOCAL_TEMP_SENSOR_LOCK = threading.RLock()
 _LOCAL_TEMP_SENSOR_CACHE = {"at": 0.0, "payload": None}
@@ -2702,6 +2704,37 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
     return payload
 
 
+def _schedule_thermostat_outputs_apply(thermostat: dict, *, reason: str = "control") -> None:
+    """Apply relay/external HA outputs after the API response path returns.
+
+    A touchscreen setpoint change should update and acknowledge quickly. External
+    Home Assistant switch/input_boolean calls can take several seconds or time
+    out on Wi-Fi, so do that work in a coalesced background pass instead of
+    making /api/thermostat/control wait for it. The autonomous 2-second control
+    loop still provides the normal safety net; this is just an immediate kick.
+    """
+    global _THERMOSTAT_ASYNC_OUTPUT_SEQ
+    snapshot = _merge_thermostat_state(thermostat or {})
+    with _THERMOSTAT_ASYNC_OUTPUT_LOCK:
+        _THERMOSTAT_ASYNC_OUTPUT_SEQ += 1
+        seq = _THERMOSTAT_ASYNC_OUTPUT_SEQ
+
+    def _worker() -> None:
+        try:
+            # Coalesce rapid repeated taps/slider changes so only the newest
+            # desired setpoint/mode drives the external HA equipment call.
+            time.sleep(0.05)
+            with _THERMOSTAT_ASYNC_OUTPUT_LOCK:
+                if seq != _THERMOSTAT_ASYNC_OUTPUT_SEQ:
+                    return
+            outputs = _thermostat_outputs(snapshot)
+            _apply_thermostat_outputs_to_hardware(outputs, snapshot)
+        except Exception as exc:  # noqa: BLE001 - never let async apply kill the server
+            print(f"Thermostat async output apply failed ({reason}): {exc}", flush=True)
+
+    threading.Thread(target=_worker, name=f"thermostat-output-{reason}", daemon=True).start()
+
+
 def _handle_thermostat_update(payload: dict) -> dict:
     existing = _read_thermostat_record()["thermostat"]
     incoming = payload.get("thermostat", payload) if isinstance(payload, dict) else {}
@@ -2762,7 +2795,14 @@ def _handle_thermostat_update(payload: dict) -> dict:
 
     merged = _apply_comfort_auto_switch_logic(merged, notify=True)
     _write_thermostat_record(merged)
-    return _thermostat_status_payload(refresh_runtime=True, apply_hardware=True)
+
+    # Keep the control endpoint fast. The native UI has already made the local
+    # setpoint change visible, and it only needs confirmation that the setting
+    # persisted. Hardware/external HA output application is kicked to a
+    # background worker so a slow HA switch command cannot surface as
+    # "Set temp failed: timed out" on the touchscreen.
+    _schedule_thermostat_outputs_apply(merged, reason="control")
+    return _thermostat_status_payload(refresh_runtime=False, apply_hardware=False)
 
 
 def _local_host_name() -> str:

@@ -16,6 +16,7 @@ class ApiError(RuntimeError):
 class ApiClient:
     base_url: str = os.environ.get("SMART_THERMOSTAT_API", "http://127.0.0.1:8080")
     timeout: float = float(os.environ.get("SMART_THERMOSTAT_API_TIMEOUT", "1.5"))
+    control_timeout: float = float(os.environ.get("SMART_THERMOSTAT_CONTROL_TIMEOUT", "4.0"))
 
     def _url(self, path: str) -> str:
         if not path.startswith("/"):
@@ -34,7 +35,7 @@ class ApiClient:
         except json.JSONDecodeError as exc:
             raise ApiError(f"Bad JSON from {path}: {exc}") from exc
 
-    def post(self, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    def post(self, path: str, payload: dict[str, Any] | None = None, *, timeout: float | None = None) -> dict[str, Any]:
         body = json.dumps(payload or {}).encode("utf-8")
         req = request.Request(
             self._url(path),
@@ -43,7 +44,7 @@ class ApiClient:
             method="POST",
         )
         try:
-            with request.urlopen(req, timeout=self.timeout) as resp:
+            with request.urlopen(req, timeout=self.timeout if timeout is None else timeout) as resp:
                 raw = resp.read().decode("utf-8")
         except error.HTTPError as exc:
             raw = ""
@@ -83,7 +84,7 @@ class ApiClient:
         return self.get("/api/thermostat/status")
 
     def thermostat_update(self, changes: dict[str, Any]) -> dict[str, Any]:
-        return self.post("/api/thermostat/control", {"thermostat": changes})
+        return self.post("/api/thermostat/control", {"thermostat": changes}, timeout=self.control_timeout)
 
     @staticmethod
     def ha_payload(config: dict[str, Any], extra: dict[str, Any] | None = None) -> dict[str, Any]:
