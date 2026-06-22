@@ -408,6 +408,56 @@ class AppState:
     def ha_payload(self, extra: dict | None = None) -> dict:
         return ApiClient.ha_payload(self.config, extra)
 
+    def legacy_config_schedules(self) -> list[dict]:
+        """Return schedules saved by older builds in panel config, if present."""
+        candidates: list[object] = []
+        cfg = self.config if isinstance(self.config, dict) else {}
+        candidates.append(cfg.get("schedules"))
+        thermo = cfg.get("thermostat") if isinstance(cfg.get("thermostat"), dict) else {}
+        candidates.append(thermo.get("schedules"))
+        for key in ("schedule", "scheduleConfig", "thermostatSchedule", "thermostatSchedules"):
+            candidates.append(cfg.get(key))
+            if isinstance(thermo, dict):
+                candidates.append(thermo.get(key))
+        for candidate in candidates:
+            if isinstance(candidate, list):
+                schedules = [copy.deepcopy(x) for x in candidate if isinstance(x, dict)]
+                if schedules:
+                    return schedules
+            if isinstance(candidate, dict):
+                inner = candidate.get("schedules") or candidate.get("items") or candidate.get("entries")
+                if isinstance(inner, list):
+                    schedules = [copy.deepcopy(x) for x in inner if isinstance(x, dict)]
+                    if schedules:
+                        return schedules
+        return []
+
+    def thermostat_schedules(self) -> list[dict]:
+        """Canonical schedule list for the native UI.
+
+        New builds persist schedules in data/thermostat-state.json. Some earlier
+        builds kept them in the panel config instead. Use both locations so the
+        homepage shortcut buttons do not disappear after an update/migration.
+        """
+        t = self.thermostat if isinstance(self.thermostat, dict) else {}
+        schedules = t.get("schedules") if isinstance(t.get("schedules"), list) else []
+        if schedules:
+            return [copy.deepcopy(x) for x in schedules if isinstance(x, dict)]
+        schedules = self.legacy_config_schedules()
+        if schedules:
+            self.thermostat["schedules"] = copy.deepcopy(schedules)
+        return schedules
+
+    def set_thermostat_schedules_local(self, schedules: list[dict]):
+        schedules = [copy.deepcopy(x) for x in schedules if isinstance(x, dict)]
+        if not isinstance(self.thermostat, dict):
+            self.thermostat = {}
+        self.thermostat["schedules"] = copy.deepcopy(schedules)
+        cfg = self.config if isinstance(self.config, dict) else {}
+        thermo = cfg.setdefault("thermostat", {}) if isinstance(cfg, dict) else {}
+        if isinstance(thermo, dict):
+            thermo["schedules"] = copy.deepcopy(schedules)
+
     def refresh_alarm_state(self):
         """Read the current Alarmo/HA alarm state instead of trusting saved config."""
         ha = self.ha()
@@ -439,6 +489,11 @@ class AppState:
         rec = self.api.get_config_record()
         self.config = rec.get("config") or {}
         self.ingest_thermostat(self.api.thermostat_status())
+        # Older builds stored thermostat schedules in panel-config.json. If the
+        # thermostat-state file does not have them yet, mirror that legacy copy
+        # into the live state so shortcut buttons and the schedule manager still
+        # show them immediately after boot.
+        self.thermostat_schedules()
         try:
             self.system_info = self.api.get("/api/system/info")
         except Exception:
@@ -896,9 +951,7 @@ class ScheduleManagerDialog(QDialog):
         self.refresh()
 
     def schedules(self) -> list[dict]:
-        t = self.s.thermostat or {}
-        schedules = t.get("schedules") if isinstance(t.get("schedules"), list) else []
-        return copy.deepcopy(schedules)
+        return self.s.thermostat_schedules()
 
     def refresh(self):
         while self.body_lay.count():
@@ -946,9 +999,18 @@ class ScheduleManagerDialog(QDialog):
         return panel
 
     def save_schedules(self, schedules: list[dict]):
-        self.s.update_thermostat({"schedules": schedules})
+        # Update the native UI first so shortcut buttons return instantly, then
+        # persist to the backend. This prevents a slow local API write from
+        # making the schedule screen look like it did nothing.
+        self.s.set_thermostat_schedules_local(schedules)
         self.changed.emit()
         self.refresh()
+        try:
+            self.s.update_thermostat({"schedules": schedules})
+            self.s.set_thermostat_schedules_local(self.s.thermostat_schedules())
+            self.changed.emit()
+        except Exception as exc:
+            QMessageBox.warning(self, "Schedules", f"Schedule save failed: {exc}")
 
     def new_schedule(self):
         dlg = ScheduleEditDialog(self.s, None, self)
@@ -1138,7 +1200,11 @@ class ThermostatScreen(Page):
         self.schedule_button = RoundButton("◷", active=False, min_h=46)
         self.schedule_button.setFixedSize(50, 46)
         self.schedule_button.setFont(font(22, QFont.Black))
-        self.schedule_button.clicked.connect(self.open_schedule_manager)
+        # Open on press instead of release. The touchscreen can occasionally
+        # drop the release/click event near the lower-left edge, which made the
+        # timer button appear dead. A guard in open_schedule_manager prevents
+        # double-open.
+        self.schedule_button.pressed.connect(self.open_schedule_manager)
         left_col.addWidget(self.schedule_button, 0, Qt.AlignLeft)
         mid.addLayout(left_col, 0, 0, 2, 1)
         mid.addWidget(self.minus, 0, 1, 2, 1, Qt.AlignCenter)
@@ -1799,7 +1865,8 @@ class ThermostatScreen(Page):
             item = self.schedule_shortcuts_lay.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        schedules = self.thermostat_view().get("schedules") or []
+        schedules = self.s.thermostat_schedules()
+        self.schedule_shortcuts.setVisible(bool(schedules))
         for sched in schedules[:3]:
             name = str(sched.get("name") or "Schedule").strip()[:18] or "Schedule"
             b = RoundButton(name, active=False, min_h=32)
@@ -1826,10 +1893,23 @@ class ThermostatScreen(Page):
             self.schedule_shortcuts_lay.addWidget(b)
 
     def open_schedule_manager(self):
-        dlg = ScheduleManagerDialog(self.s, self)
-        dlg.changed.connect(lambda: (self.sync(self.s.config, self.s.thermostat), self.refresh_schedule_shortcuts()))
-        dlg.exec_()
-        self.sync(self.s.config, self.s.thermostat)
+        if getattr(self, "_schedule_dialog_open", False):
+            return
+        self._schedule_dialog_open = True
+        try:
+            dlg = ScheduleManagerDialog(self.s, self.window() or self)
+            dlg.setWindowModality(Qt.ApplicationModal)
+            dlg.setWindowFlags(dlg.windowFlags() | Qt.Dialog | Qt.WindowStaysOnTopHint)
+            dlg.changed.connect(lambda: (self.sync(self.s.config, self.s.thermostat), self.refresh_schedule_shortcuts()))
+            QTimer.singleShot(0, dlg.raise_)
+            QTimer.singleShot(0, dlg.activateWindow)
+            dlg.exec_()
+            self.sync(self.s.config, self.s.thermostat)
+            self.refresh_schedule_shortcuts()
+        except Exception as exc:
+            self.requestToast.emit(f"Schedule popup failed: {exc}")
+        finally:
+            self._schedule_dialog_open = False
 
     def apply_schedule_now(self, sched: dict):
         mode = str(self.thermostat_view().get("mode") or "cool").lower()

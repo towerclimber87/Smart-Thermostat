@@ -1002,6 +1002,37 @@ def _atomic_write_json(path: Path, record: dict) -> None:
     temp_path.replace(path)
 
 
+
+def _legacy_panel_config_schedules() -> list[dict]:
+    """Return schedules saved in old panel config locations, if any."""
+    try:
+        record = _read_panel_config_record()
+        config = record.get("config") if isinstance(record, dict) else {}
+        if not isinstance(config, dict):
+            return []
+        candidates: list[object] = [config.get("schedules")]
+        thermo = config.get("thermostat") if isinstance(config.get("thermostat"), dict) else {}
+        if isinstance(thermo, dict):
+            candidates.append(thermo.get("schedules"))
+        for key in ("schedule", "scheduleConfig", "thermostatSchedule", "thermostatSchedules"):
+            candidates.append(config.get(key))
+            if isinstance(thermo, dict):
+                candidates.append(thermo.get(key))
+        for candidate in candidates:
+            if isinstance(candidate, list):
+                schedules = _normalize_schedule_entries(candidate)
+                if schedules:
+                    return schedules
+            if isinstance(candidate, dict):
+                inner = candidate.get("schedules") or candidate.get("items") or candidate.get("entries")
+                if isinstance(inner, list):
+                    schedules = _normalize_schedule_entries(inner)
+                    if schedules:
+                        return schedules
+    except Exception:
+        return []
+    return []
+
 def _read_thermostat_record_from_disk() -> dict:
     if not THERMOSTAT_STATE_FILE.exists():
         thermostat = _merge_thermostat_state()
@@ -1011,6 +1042,10 @@ def _read_thermostat_record_from_disk() -> dict:
     except (OSError, json.JSONDecodeError):
         raw = {}
     thermostat = _merge_thermostat_state(raw.get("thermostat", raw if isinstance(raw, dict) else {}))
+    if not thermostat.get("schedules"):
+        legacy_schedules = _legacy_panel_config_schedules()
+        if legacy_schedules:
+            thermostat["schedules"] = legacy_schedules
     return {
         "version": int(raw.get("version", 1)) if isinstance(raw, dict) else 1,
         "updatedAt": int(raw.get("updatedAt", 0) or 0) if isinstance(raw, dict) else 0,
