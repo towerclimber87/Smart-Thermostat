@@ -319,8 +319,16 @@ class ThermostatDial(QWidget):
         rect = QRectF((self.width() - side) / 2, (self.height() - side) / 2, side, side)
         center = rect.center()
 
+        heat_active = str(self.active_mode or self.mode).lower() == "heat"
+        # Keep heat clearly red, not Home Assistant's orange. Cool uses the
+        # existing cyan/blue accent. The same color is used for the faint full
+        # sweep and the stronger current-to-target operating band.
+        heat_color = QColor(255, 52, 72)
+        cool_color = T.CYAN
+        active_color = heat_color if heat_active else cool_color
+
         shadow = QRadialGradient(center, side * 0.54)
-        shadow.setColorAt(0.70, QColor(70, 120, 255, 54))
+        shadow.setColorAt(0.70, QColor(active_color.red(), active_color.green(), active_color.blue(), 42))
         shadow.setColorAt(1.00, QColor(0, 0, 0, 0))
         p.fillRect(self.rect(), shadow)
 
@@ -332,10 +340,6 @@ class ThermostatDial(QWidget):
         c = tick_rect.center()
         radius_outer = tick_rect.width() / 2
         radius_inner = radius_outer - side * 0.08
-        heat_active = str(self.active_mode or self.mode).lower() == "heat"
-        heat_color = QColor(255, 72, 83)
-        cool_color = T.CYAN
-        active_color = heat_color if heat_active else cool_color
 
         def pct_for_temp(temp: float) -> float:
             return max(0.0, min(1.0, (float(temp) - self.min_temp) / max(1.0, self.max_temp - self.min_temp)))
@@ -344,48 +348,50 @@ class ThermostatDial(QWidget):
         target_pct = pct_for_temp(self.target)
         band_low = min(current_pct, target_pct)
         band_high = max(current_pct, target_pct)
+        has_band = abs(current_pct - target_pct) > 0.015
 
-        # Base scale ticks stay dim. The highlighted ticks only cover the
-        # actual space between current room temp and the selected set temp.
-        # This makes the dial read like "where we are" vs "where we are going"
-        # instead of filling from the low limit all the way to the target.
+        # Draw a faint full-mode sweep first so heat always has a red scale and
+        # cool always has a blue/cyan scale from the low end through the high end.
+        # The current-to-target band is then drawn darker over that same track.
+        arc_rect = rect.adjusted(side * 0.165, side * 0.165, -side * 0.165, -side * 0.165)
+        start_angle = int(225 * 16)
+        span = int(-270 * 16)
+        faint_arc = QColor(active_color.red(), active_color.green(), active_color.blue(), 58)
+        p.setPen(QPen(faint_arc, side * 0.065, Qt.SolidLine, Qt.RoundCap))
+        p.drawArc(arc_rect, start_angle, span)
+
+        target_ang = self._angle_for_temp(self.target)
+        current_ang = self._angle_for_temp(self.current)
+
+        if has_band:
+            band_start_ang = max(current_ang, target_ang)
+            band_end_ang = min(current_ang, target_ang)
+            band_span = int((band_end_ang - band_start_ang) * 16)
+            p.setPen(QPen(QColor(active_color.red(), active_color.green(), active_color.blue(), 232), side * 0.071, Qt.SolidLine, Qt.RoundCap))
+            p.drawArc(arc_rect, int(band_start_ang * 16), band_span)
+
+        # Keep the scale marks faint in the active mode color, then strengthen
+        # only the marks between the current room temperature and selected setpoint.
         for i in range(91):
             pct = i / 90
             angle = math.radians(225 - pct * 270)
             is_major = i % 10 == 0
             is_mid = i % 5 == 0
-            in_band = band_low <= pct <= band_high and abs(current_pct - target_pct) > 0.015
+            in_band = has_band and band_low <= pct <= band_high
             inner_offset = side * (0.105 if is_major else 0.087 if is_mid else 0.066)
             x1 = c.x() + math.cos(angle) * (radius_outer - inner_offset)
             y1 = c.y() - math.sin(angle) * (radius_outer - inner_offset)
             x2 = c.x() + math.cos(angle) * radius_outer
             y2 = c.y() - math.sin(angle) * radius_outer
             if in_band:
-                alpha = 205 if is_major else 180 if is_mid else 145
-                col = QColor(active_color.red(), active_color.green(), active_color.blue(), alpha)
+                alpha = 225 if is_major else 196 if is_mid else 160
                 width = 5 if is_major else 4 if is_mid else 3
             else:
-                col = QColor(105, 143, 175, 82 if is_major else 58 if is_mid else 40)
+                alpha = 86 if is_major else 62 if is_mid else 42
                 width = 4 if is_major else 3 if is_mid else 2
+            col = QColor(active_color.red(), active_color.green(), active_color.blue(), alpha)
             p.setPen(QPen(col, width, Qt.SolidLine, Qt.RoundCap))
             p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
-
-        arc_rect = rect.adjusted(side * 0.165, side * 0.165, -side * 0.165, -side * 0.165)
-        start_angle = int(225 * 16)
-        span = int(-270 * 16)
-        p.setPen(QPen(QColor(105, 142, 255, 52), side * 0.065, Qt.SolidLine, Qt.RoundCap))
-        p.drawArc(arc_rect, start_angle, span)
-        target_ang = self._angle_for_temp(self.target)
-        current_ang = self._angle_for_temp(self.current)
-
-        # Highlight only the current-to-target band.
-        if abs(current_pct - target_pct) > 0.015:
-            band_start_ang = max(current_ang, target_ang)
-            band_end_ang = min(current_ang, target_ang)
-            band_span = int((band_end_ang - band_start_ang) * 16)
-            grad_pen = QPen(active_color, side * 0.07, Qt.SolidLine, Qt.RoundCap)
-            p.setPen(grad_pen)
-            p.drawArc(arc_rect, int(band_start_ang * 16), band_span)
 
         inner = rect.adjusted(side * 0.29, side * 0.29, -side * 0.29, -side * 0.29)
         g = QRadialGradient(inner.center(), inner.width() / 2)
