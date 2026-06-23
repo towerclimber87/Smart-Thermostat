@@ -8,6 +8,23 @@ fi
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+write_if_changed() {
+  local target="$1"
+  local mode="${2:-}"
+  local tmp
+  tmp="$(mktemp)"
+  cat >"$tmp"
+  if [[ ! -f "$target" ]] || ! cmp -s "$tmp" "$target"; then
+    mkdir -p "$(dirname "$target")"
+    if [[ -n "$mode" ]]; then
+      install -m "$mode" "$tmp" "$target"
+    else
+      install -m 0644 "$tmp" "$target"
+    fi
+  fi
+  rm -f "$tmp"
+}
+
 # Prefer the real owner of the project folder. The panel Fetch Update path runs
 # this installer from a root-owned transient systemd unit, where SUDO_USER and
 # logname can be empty or wrong. If we guess the wrong user here, the native
@@ -39,27 +56,49 @@ if [[ ! -f "$APP_DIR/server.py" || ! -f "$APP_DIR/native_app/main.py" ]]; then
   exit 1
 fi
 
-apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y \
-  python3 \
-  python3-pyqt5 \
-  avahi-daemon \
-  xserver-xorg \
-  xinit \
-  x11-xserver-utils \
-  xserver-xorg-legacy \
-  unclutter \
+REQUIRED_PACKAGES=(
+  python3
+  python3-pyqt5
+  avahi-daemon
+  xserver-xorg
+  xinit
+  x11-xserver-utils
+  xserver-xorg-legacy
+  unclutter
   dbus-x11
+)
+MISSING_PACKAGES=()
+for pkg in "${REQUIRED_PACKAGES[@]}"; do
+  if ! dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q "install ok installed"; then
+    MISSING_PACKAGES+=("$pkg")
+  fi
+done
+if (( ${#MISSING_PACKAGES[@]} )); then
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y "${MISSING_PACKAGES[@]}"
+else
+  echo "Native UI dependencies already installed; skipping apt package refresh."
+fi
 
-# Let systemd launch the appliance X server as the pi user.
-mkdir -p /etc/X11
-cat >/etc/X11/Xwrapper.config <<EOF
+# Let systemd launch the appliance X server as the pi user. Only touch the
+# config file when content actually changes, so updates do not create avoidable
+# SD-card metadata writes.
+write_if_changed /etc/X11/Xwrapper.config <<EOF
 allowed_users=anybody
 needs_root_rights=yes
 EOF
 
-chown -R "$APP_USER:$APP_USER" "$APP_DIR"
-chmod +x "$APP_DIR/scripts/native-xinit.sh" "$APP_DIR/scripts/run-native.sh"
+APP_UID="$(id -u "$APP_USER" 2>/dev/null || echo 0)"
+APP_GID="$(id -g "$APP_USER" 2>/dev/null || echo 0)"
+CURRENT_OWNER="$(stat -c '%u:%g' "$APP_DIR" 2>/dev/null || echo '')"
+if [[ "$CURRENT_OWNER" != "$APP_UID:$APP_GID" ]]; then
+  chown -R "$APP_USER:$APP_USER" "$APP_DIR"
+else
+  echo "Project ownership already correct; skipping recursive chown."
+fi
+for script in "$APP_DIR/scripts/native-xinit.sh" "$APP_DIR/scripts/run-native.sh"; do
+  [[ -x "$script" ]] || chmod +x "$script"
+done
 
 # Stop and disable browser/web kiosk services if they exist. The new backend still listens on 8080 for local API calls.
 for svc in smart-thermostat-kiosk.service smart-thermostat-web.service smart-thermostat-native.service; do
@@ -115,10 +154,9 @@ RUNTIME_USB_ROOT="/tmp/smart-thermostat-usb"
 mkdir -p "$RUNTIME_USB_ROOT"
 chown "$APP_USER:$APP_USER" "$RUNTIME_USB_ROOT" 2>/dev/null || true
 
-cat >"$SUDOERS_FILE" <<EOF
+write_if_changed "$SUDOERS_FILE" 0440 <<EOF
 $APP_USER ALL=(root) NOPASSWD: $SYSTEMD_RUN_BIN, $SYSTEMCTL_BIN, $MOUNT_BIN, $UMOUNT_BIN
 EOF
-chmod 0440 "$SUDOERS_FILE"
 
 # Advertise the native thermostat backend to Home Assistant over mDNS/DNS-SD.
 # The HA custom integration listens for _iha-thermostat._tcp.local.; this Avahi
@@ -181,16 +219,24 @@ xml = f"""<?xml version="1.0" standalone='no'?><!--*-nxml-*-->
   </service>
 </service-group>
 """
-service_path.write_text(xml, encoding='utf-8')
-print(f'Wrote Home Assistant discovery service: {service_path} ({serial})')
+current = ''
+try:
+    current = service_path.read_text(encoding='utf-8')
+except OSError:
+    pass
+if current != xml:
+    service_path.write_text(xml, encoding='utf-8')
+    print(f'Wrote Home Assistant discovery service: {service_path} ({serial})')
+else:
+    print(f'Home Assistant discovery service already current: {service_path} ({serial})')
 PY_AVAHI
 systemctl enable --now avahi-daemon.service 2>/dev/null || true
 systemctl restart avahi-daemon.service 2>/dev/null || true
 
 sed -e "s|@APP_DIR@|$APP_DIR|g" -e "s|@APP_USER@|$APP_USER|g" -e "s|@APP_HOME@|$APP_HOME|g" \
-  "$APP_DIR/systemd/smart-thermostat-backend.service.template" > /etc/systemd/system/smart-thermostat-backend.service
+  "$APP_DIR/systemd/smart-thermostat-backend.service.template" | write_if_changed /etc/systemd/system/smart-thermostat-backend.service
 sed -e "s|@APP_DIR@|$APP_DIR|g" -e "s|@APP_USER@|$APP_USER|g" -e "s|@APP_HOME@|$APP_HOME|g" \
-  "$APP_DIR/systemd/smart-thermostat-native.service.template" > /etc/systemd/system/smart-thermostat-native.service
+  "$APP_DIR/systemd/smart-thermostat-native.service.template" | write_if_changed /etc/systemd/system/smart-thermostat-native.service
 
 systemctl daemon-reload
 systemctl enable smart-thermostat-backend.service

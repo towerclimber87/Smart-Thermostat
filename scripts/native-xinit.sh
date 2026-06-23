@@ -2,15 +2,28 @@
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LOG_DIR="$APP_DIR/data/logs"
-mkdir -p "$LOG_DIR"
+# Runtime logs/caches must not live in the Git checkout. On the Pi this is
+# provided by systemd RuntimeDirectory=/run/smart-thermostat-native, which is
+# tmpfs. The /tmp fallback keeps manual runs from writing data/logs/*.log.
+RUNTIME_DIR="${SMART_THERMOSTAT_RUNTIME_DIR:-/tmp/smart-thermostat-native}"
+LOG_DIR="$RUNTIME_DIR/logs"
+CACHE_DIR="${XDG_CACHE_HOME:-$RUNTIME_DIR/cache}"
+PYCACHE_DIR="${PYTHONPYCACHEPREFIX:-$RUNTIME_DIR/pycache}"
+mkdir -p "$LOG_DIR" "$CACHE_DIR" "$PYCACHE_DIR"
+chmod 700 "$RUNTIME_DIR" 2>/dev/null || true
 
-exec >>"$LOG_DIR/native-ui.log" 2>&1
+LOG_FILE="$LOG_DIR/native-ui.log"
+: >"$LOG_FILE"
+exec >>"$LOG_FILE" 2>&1
 
 echo "===== Smart Thermostat native X session starting: $(date) ====="
+echo "Runtime directory: $RUNTIME_DIR"
 
 export SMART_THERMOSTAT_API="${SMART_THERMOSTAT_API:-http://127.0.0.1:8080}"
 export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"
+export XDG_CACHE_HOME="$CACHE_DIR"
+export PYTHONPYCACHEPREFIX="$PYCACHE_DIR"
+export QT_LOGGING_RULES="${QT_LOGGING_RULES:-*.debug=false;qt.qpa.*=false}"
 
 # Keep appliance display awake.
 xset s off || true

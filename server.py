@@ -48,6 +48,7 @@ USB_CONFIG_FILENAME = os.environ.get("SMART_THERMOSTAT_USB_CONFIG_FILENAME", "sm
 # data/usb-mounts, which makes git clean fail with "Device or resource busy"
 # when a thumb drive is still mounted there. Use a runtime folder outside the
 # repo instead.
+RUNTIME_DIR = Path(os.environ.get("SMART_THERMOSTAT_RUNTIME_DIR", "/tmp/smart-thermostat-runtime")).expanduser()
 USB_RUNTIME_MOUNT_ROOT = Path(os.environ.get("SMART_THERMOSTAT_USB_RUNTIME_MOUNT_ROOT", "/tmp/smart-thermostat-usb")).expanduser()
 USB_LEGACY_MOUNT_ROOT = DATA_DIR / "usb-mounts"
 USB_MOUNT_ROOTS = tuple(
@@ -4505,10 +4506,13 @@ def _fetch_update_payload() -> dict:
     if not (ROOT / ".git").exists():
         return {"ok": False, "error": "This thermostat folder is not connected to Git."}
 
-    logs = DATA_DIR / "logs"
-    logs.mkdir(parents=True, exist_ok=True)
-    log_path = logs / "fetch-update.log"
-    script_path = logs / "self-update.sh"
+    # Keep transient self-update scripts/logs out of the Git checkout and out
+    # of the backend service RuntimeDirectory. The update restarts this service,
+    # so the script must live somewhere that survives that restart.
+    runtime = Path(os.environ.get("SMART_THERMOSTAT_UPDATE_RUNTIME_DIR", "/tmp/smart-thermostat-self-update")).expanduser()
+    runtime.mkdir(parents=True, exist_ok=True)
+    log_path = runtime / "fetch-update.log"
+    script_path = runtime / "self-update.sh"
 
     script = f"""#!/usr/bin/env bash
 set -Eeuo pipefail

@@ -13,7 +13,10 @@ Environment=HOME=@APP_HOME@
 Environment=USER=@APP_USER@
 Environment=LOGNAME=@APP_USER@
 Environment=DISPLAY=:0
-Environment=XAUTHORITY=@APP_HOME@/.Xauthority
+Environment=XAUTHORITY=/run/smart-thermostat-native/Xauthority
+Environment=SMART_THERMOSTAT_RUNTIME_DIR=/run/smart-thermostat-native
+Environment=XDG_CACHE_HOME=/run/smart-thermostat-native/cache
+Environment=PYTHONPYCACHEPREFIX=/run/smart-thermostat-native/pycache
 Environment=QT_QPA_PLATFORM=xcb
 Environment=QT_X11_NO_MITSHM=1
 Environment=LIBGL_ALWAYS_SOFTWARE=1
@@ -27,7 +30,9 @@ TTYVTDisallocate=yes
 StandardInput=tty
 StandardOutput=journal
 StandardError=journal
-ExecStart=/usr/bin/xinit @APP_DIR@/scripts/native-xinit.sh -- /usr/bin/Xorg :0 vt1 -nolisten tcp -keeptty -nocursor
+RuntimeDirectory=smart-thermostat-native
+RuntimeDirectoryMode=0700
+ExecStart=/usr/bin/xinit @APP_DIR@/scripts/native-xinit.sh -- /usr/bin/Xorg :0 vt1 -nolisten tcp -keeptty -nocursor -logfile /run/smart-thermostat-native/Xorg.0.log
 Restart=always
 RestartSec=2
 

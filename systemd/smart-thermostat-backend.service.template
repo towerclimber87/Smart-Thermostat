@@ -8,7 +8,12 @@ Type=simple
 User=@APP_USER@
 WorkingDirectory=@APP_DIR@
 Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPYCACHEPREFIX=/run/smart-thermostat-backend/pycache
+Environment=SMART_THERMOSTAT_RUNTIME_DIR=/run/smart-thermostat-backend
+Environment=XDG_CACHE_HOME=/run/smart-thermostat-backend/cache
 Environment=PORT=8080
+RuntimeDirectory=smart-thermostat-backend
+RuntimeDirectoryMode=0700
 ExecStart=/usr/bin/python3 @APP_DIR@/server.py --host 0.0.0.0 --port 8080
 Restart=always
 RestartSec=2
