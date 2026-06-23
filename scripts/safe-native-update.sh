@@ -66,25 +66,40 @@ shutil.rmtree(root, ignore_errors=True)
 PY_CLEANUP
 }
 
+repair_data_permissions() {
+  mkdir -p "$APP_DIR/data"
+  chown -R "$APP_USER:$APP_USER" "$APP_DIR/data" 2>/dev/null || true
+  find "$APP_DIR/data" -type d -exec chmod u+rwx,g+rx {} + 2>/dev/null || true
+  find "$APP_DIR/data" -type f -name '*.json' -exec chmod u+rw,g+rw {} + 2>/dev/null || true
+  find "$APP_DIR/data" -maxdepth 1 -type f -name '*.tmp' -delete 2>/dev/null || true
+}
+
 ts="$(date +%F-%H%M%S)"
 backup_dir="$BACKUP_ROOT/$ts"
 mkdir -p "$backup_dir"
 cleanup_legacy_usb_mounts
+repair_data_permissions
 for file in panel-config.json thermostat-state.json thermostat-schedules.json thermostat-schedules.backup.json hvac-history.json; do
   if [[ -f "data/$file" ]]; then
     cp -av "data/$file" "$backup_dir/$file"
   fi
 done
 
+# Git reset/clean is run as the panel user. Repair data ownership first so Git
+# can unlink tracked data files that may have been made root-owned by a previous
+# sudo restore.
+repair_data_permissions
 run_as_app_user git fetch origin Development
 run_as_app_user git reset --hard origin/Development
 cleanup_legacy_usb_mounts
+repair_data_permissions
 run_as_app_user git clean -fd
 
 mkdir -p data
 if compgen -G "$backup_dir/*" >/dev/null; then
   cp -av "$backup_dir/." data/.
 fi
+repair_data_permissions
 chmod +x scripts/*.sh
 sudo ./scripts/install-native.sh
 sudo systemctl daemon-reload

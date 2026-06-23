@@ -96,7 +96,22 @@ if [[ "$CURRENT_OWNER" != "$APP_UID:$APP_GID" ]]; then
 else
   echo "Project ownership already correct; skipping recursive chown."
 fi
-for script in "$APP_DIR/scripts/native-xinit.sh" "$APP_DIR/scripts/run-native.sh"; do
+
+# The backend writes live settings to data/*.json through temp files such as
+# thermostat-state.json.tmp. Manual restores and sudo-run updates can leave the
+# data folder or restored JSON files owned by root even when the project folder
+# itself is owned by the panel user. That causes both failures below:
+#   - Set temp failed: [Errno 13] Permission denied: .../data/thermostat-state.json.tmp
+#   - git reset unable to unlink old data/*.json: Permission denied
+# Repair the writable runtime data area every install, even when the project
+# owner already looked correct.
+install -d -o "$APP_USER" -g "$APP_USER" -m 0775 "$APP_DIR/data"
+chown -R "$APP_USER:$APP_USER" "$APP_DIR/data" 2>/dev/null || true
+find "$APP_DIR/data" -type d -exec chmod u+rwx,g+rx {} + 2>/dev/null || true
+find "$APP_DIR/data" -type f -name '*.json' -exec chmod u+rw,g+rw {} + 2>/dev/null || true
+find "$APP_DIR/data" -maxdepth 1 -type f -name '*.tmp' -delete 2>/dev/null || true
+
+for script in "$APP_DIR/scripts/native-xinit.sh" "$APP_DIR/scripts/run-native.sh" "$APP_DIR/scripts/safe-native-update.sh"; do
   [[ -x "$script" ]] || chmod +x "$script"
 done
 
