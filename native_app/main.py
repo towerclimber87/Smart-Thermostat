@@ -2107,33 +2107,97 @@ class ThermostatScreen(Page):
         neutral_off = str(t.get("mode") or "").lower() == "off" and safety not in {"heat", "cool"}
         heat_mode = self.active_visual_mode() == "heat"
 
-        # Base climate-page ambience. This keeps the thermostat screen vivid
-        # even while the equipment is idle, closer to the clean glassy look of
-        # the reference layout without adding polling or animation load.
+        # Futuristic base ambience: a darker sci-fi glass backdrop with neon
+        # accent fields keeps the page feeling current without turning into a
+        # noisy dashboard.
+        base = QLinearGradient(0, 0, r.width(), r.height())
         if neutral_off:
-            off_glow = QRadialGradient(QPointF(r.width() * 0.50, r.height() * 0.42), r.width() * 0.55)
-            off_glow.setColorAt(0.0, QColor(130, 146, 170, 18))
-            off_glow.setColorAt(0.62, QColor(72, 84, 104, 10))
-            off_glow.setColorAt(1.0, QColor(0, 0, 0, 0))
-            p.fillRect(r, off_glow)
+            base.setColorAt(0.0, QColor(4, 9, 18))
+            base.setColorAt(0.52, QColor(9, 15, 28))
+            base.setColorAt(1.0, QColor(3, 7, 14))
         else:
-            base_cool = QRadialGradient(QPointF(r.width() * 0.47, r.height() * 0.46), r.width() * 0.50)
-            base_cool.setColorAt(0.0, QColor(58, 145, 255, 32))
-            base_cool.setColorAt(0.55, QColor(44, 100, 220, 16))
-            base_cool.setColorAt(1.0, QColor(0, 0, 0, 0))
-            p.fillRect(r, base_cool)
+            base.setColorAt(0.0, QColor(3, 8, 20))
+            base.setColorAt(0.48, QColor(8, 15, 34))
+            base.setColorAt(1.0, QColor(3, 7, 16))
+        p.fillRect(r, base)
 
-            base_purple = QRadialGradient(QPointF(r.width() * 0.63, r.height() * 0.35), r.width() * 0.44)
-            base_purple.setColorAt(0.0, QColor(154, 104, 255, 26))
-            base_purple.setColorAt(0.62, QColor(84, 62, 190, 12))
-            base_purple.setColorAt(1.0, QColor(0, 0, 0, 0))
-            p.fillRect(r, base_purple)
+        depth = QLinearGradient(0, 0, 0, r.height())
+        depth.setColorAt(0.0, QColor(255, 255, 255, 8 if neutral_off else 14))
+        depth.setColorAt(0.20, QColor(255, 255, 255, 2))
+        depth.setColorAt(0.72, QColor(0, 0, 0, 0))
+        depth.setColorAt(1.0, QColor(0, 0, 0, 36 if neutral_off else 44))
+        p.fillRect(r, depth)
 
-            base_teal = QRadialGradient(QPointF(r.width() * 0.12, r.height() * 0.70), r.width() * 0.36)
-            base_teal.setColorAt(0.0, QColor(50, 255, 195, 22))
-            base_teal.setColorAt(0.62, QColor(28, 138, 128, 10))
-            base_teal.setColorAt(1.0, QColor(0, 0, 0, 0))
-            p.fillRect(r, base_teal)
+        if neutral_off:
+            ambient_specs = (
+                (0.50, 0.40, 0.60, QColor(148, 164, 188, 22), QColor(72, 88, 114, 8)),
+                (0.22, 0.74, 0.34, QColor(90, 118, 168, 14), QColor(40, 52, 88, 6)),
+                (0.82, 0.14, 0.24, QColor(114, 94, 182, 10), QColor(44, 34, 82, 4)),
+            )
+        else:
+            ambient_specs = (
+                (0.44, 0.42, 0.62, QColor(72, 202, 255, 28), QColor(20, 94, 215, 10)),
+                (0.80, 0.22, 0.34, QColor(178, 88, 255, 22), QColor(86, 44, 180, 8)),
+                (0.12, 0.80, 0.38, QColor(66, 255, 214, 16), QColor(18, 114, 124, 6)),
+            )
+        for cx_ratio, cy_ratio, radius_ratio, inner, outer in ambient_specs:
+            glow = QRadialGradient(QPointF(r.width() * cx_ratio, r.height() * cy_ratio), r.width() * radius_ratio)
+            glow.setColorAt(0.0, inner)
+            glow.setColorAt(0.64, outer)
+            glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+            p.fillRect(r, glow)
+
+        # Edge lighting and a soft vignette make the whole page feel like a
+        # lit glass panel instead of a flat fill.
+        rim = QLinearGradient(0, 0, r.width(), 0)
+        rim.setColorAt(0.0, QColor(92, 228, 255, 14 if neutral_off else 26))
+        rim.setColorAt(0.18, QColor(255, 255, 255, 4))
+        rim.setColorAt(0.76, QColor(255, 255, 255, 0))
+        rim.setColorAt(1.0, QColor(188, 110, 255, 10 if neutral_off else 18))
+        p.fillRect(r, rim)
+
+        top_sheen = QLinearGradient(0, 0, 0, r.height())
+        top_sheen.setColorAt(0.0, QColor(255, 255, 255, 18 if neutral_off else 24))
+        top_sheen.setColorAt(0.24, QColor(255, 255, 255, 6))
+        top_sheen.setColorAt(0.58, QColor(255, 255, 255, 0))
+        top_sheen.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.fillRect(r, top_sheen)
+
+        vignette = QRadialGradient(QPointF(r.center()), max(r.width(), r.height()) * 0.82)
+        vignette.setColorAt(0.0, QColor(0, 0, 0, 0))
+        vignette.setColorAt(0.68, QColor(0, 0, 0, 0))
+        vignette.setColorAt(1.0, QColor(0, 0, 0, 56 if neutral_off else 68))
+        p.fillRect(r, vignette)
+
+        # Futuristic contour ribbons and a faint HUD grid add motion/depth but
+        # stay subtle enough that the UI still reads clearly.
+        p.setBrush(Qt.NoBrush)
+        contour_pen = QPen(QColor(174, 215, 255, 12 if neutral_off else 18), 1.4, Qt.SolidLine, Qt.RoundCap)
+        p.setPen(contour_pen)
+        for band in range(4):
+            start_y = r.height() * (0.18 + band * 0.16)
+            start_x = -60 - band * 40
+            path = QPainterPath(QPointF(start_x, start_y))
+            path.cubicTo(
+                QPointF(r.width() * 0.18, start_y - 36 - band * 6),
+                QPointF(r.width() * 0.52, start_y + 34 + band * 10),
+                QPointF(r.width() + 120, start_y - 8 + band * 10),
+            )
+            p.drawPath(path)
+
+        grid_pen = QPen(QColor(104, 140, 196, 7 if neutral_off else 10), 1)
+        p.setPen(grid_pen)
+        grid_step = 72
+        for x in range(-grid_step, r.width() + grid_step, grid_step):
+            p.drawLine(QPointF(x, 0), QPointF(x + r.height() * 0.24, r.height()))
+        for y in range(28, r.height(), 68):
+            p.drawLine(QPointF(0, y), QPointF(r.width(), y))
+
+        p.setPen(QPen(QColor(95, 230, 255, 20 if neutral_off else 30), 1.4, Qt.SolidLine, Qt.RoundCap))
+        for ring_scale in (0.18, 0.25, 0.32):
+            rr = min(r.width(), r.height()) * ring_scale
+            center = QPointF(r.width() * 0.84, r.height() * 0.16)
+            p.drawArc(int(center.x() - rr), int(center.y() - rr), int(rr * 2), int(rr * 2), 36 * 16, 92 * 16)
 
         # Temperature ambience. The old thresholds were too subtle and did not
         # show heat until the room was already very warm. Start warming the room
@@ -2169,20 +2233,60 @@ class ThermostatScreen(Page):
         heat_mode_visual = bool(heat_mode and cold_ratio <= 0 and hot_ratio <= 0)
 
         if cold_ratio > 0:
-            # Strong blue wash from the left side of the room.
+            # Cold state: futuristic cryo look with cyan lighting, frosted
+            # ribbons, and subtle digital particles.
             g = QRadialGradient(QPointF(r.width() * 0.25, r.height() * 0.43), r.width() * 0.86)
-            g.setColorAt(0.0, QColor(35, 205, 255, int(150 * cold_ratio)))
-            g.setColorAt(0.42, QColor(22, 106, 220, int(108 * cold_ratio)))
-            g.setColorAt(0.74, QColor(8, 40, 105, int(58 * cold_ratio)))
+            g.setColorAt(0.0, QColor(58, 226, 255, int(148 * cold_ratio)))
+            g.setColorAt(0.34, QColor(34, 138, 255, int(104 * cold_ratio)))
+            g.setColorAt(0.72, QColor(10, 54, 138, int(56 * cold_ratio)))
             g.setColorAt(1.0, QColor(0, 0, 0, 0))
             p.fillRect(r, g)
 
-            # A second lighter pass gives the cold state an icy, frosted look.
             frost = QLinearGradient(0, 0, r.width(), r.height())
             frost.setColorAt(0.0, QColor(128, 238, 255, int(52 * cold_ratio)))
             frost.setColorAt(0.50, QColor(36, 122, 255, int(24 * cold_ratio)))
             frost.setColorAt(1.0, QColor(0, 0, 0, 0))
             p.fillRect(r, frost)
+
+            ice_halo = QRadialGradient(QPointF(r.width() * 0.16, r.height() * 0.18), r.width() * 0.42)
+            ice_halo.setColorAt(0.0, QColor(214, 249, 255, int(64 * cold_ratio)))
+            ice_halo.setColorAt(0.34, QColor(98, 224, 255, int(34 * cold_ratio)))
+            ice_halo.setColorAt(1.0, QColor(0, 0, 0, 0))
+            p.fillRect(r, ice_halo)
+
+            p.setBrush(Qt.NoBrush)
+            p.setPen(QPen(QColor(176, 242, 255, int(28 + 48 * cold_ratio)), 1.9, Qt.SolidLine, Qt.RoundCap))
+            for band in range(3):
+                base_y = r.height() * (0.24 + band * 0.15)
+                path = QPainterPath(QPointF(-40, base_y))
+                path.cubicTo(
+                    QPointF(r.width() * 0.18, base_y - 28 - band * 4),
+                    QPointF(r.width() * 0.42, base_y + 38 + band * 6),
+                    QPointF(r.width() * 0.64, base_y - 8),
+                )
+                path.cubicTo(
+                    QPointF(r.width() * 0.82, base_y - 30),
+                    QPointF(r.width() * 0.92, base_y + 18),
+                    QPointF(r.width() + 36, base_y + 4),
+                )
+                p.drawPath(path)
+
+            p.setPen(Qt.NoPen)
+            for i in range(16):
+                x = 36 + ((i * 137 + self.fx_phase * 5) % max(220, r.width() - 72))
+                y = 82 + ((i * 83 + self.fx_phase * 9) % max(180, int(r.height() * 0.62)))
+                radius = 1.3 + (i % 3) * 0.9
+                alpha = int((24 + (i % 4) * 10) * cold_ratio)
+                p.setBrush(QColor(226, 250, 255, alpha))
+                p.drawEllipse(QPointF(x, y), radius, radius)
+
+            p.setPen(QPen(QColor(118, 235, 255, int(34 + 54 * cold_ratio)), 1.2, Qt.SolidLine, Qt.RoundCap))
+            for i in range(4):
+                x = r.width() * (0.12 + i * 0.18)
+                y = r.height() * (0.18 + (i % 2) * 0.12)
+                p.drawLine(QPointF(x, y), QPointF(x + 22, y))
+                p.drawLine(QPointF(x + 28, y), QPointF(x + 48, y))
+                p.drawLine(QPointF(x + 54, y), QPointF(x + 66, y))
 
             # Only light flakes at 67°. By 66° they become very obvious.
             flake_strength = clamp((cold_ratio - 0.22) / 0.78, 0.0, 1.0)
@@ -2200,12 +2304,11 @@ class ThermostatScreen(Page):
 
         if hot_ratio > 0 or heat_mode_visual:
             ratio = max(hot_ratio, 0.38 if heat_mode_visual else 0.0)
-            # Warm glassy wash that starts showing at 72°. The heat-mode-only
-            # fallback stays subtle and is disabled while cold effects are up.
+            # Warm state: futuristic plasma look with warmer neon energy.
             g = QRadialGradient(QPointF(r.width() * 0.76, r.height() * 0.42), r.width() * 0.88)
-            g.setColorAt(0.0, QColor(255, 96, 42, int(156 * ratio)))
-            g.setColorAt(0.42, QColor(218, 46, 42, int(118 * ratio)))
-            g.setColorAt(0.74, QColor(104, 18, 36, int(66 * ratio)))
+            g.setColorAt(0.0, QColor(255, 108, 74, int(156 * ratio)))
+            g.setColorAt(0.36, QColor(255, 70, 110, int(116 * ratio)))
+            g.setColorAt(0.74, QColor(112, 20, 74, int(64 * ratio)))
             g.setColorAt(1.0, QColor(0, 0, 0, 0))
             p.fillRect(r, g)
 
@@ -2214,6 +2317,30 @@ class ThermostatScreen(Page):
             amber.setColorAt(0.45, QColor(255, 76, 52, int(38 * ratio)))
             amber.setColorAt(1.0, QColor(0, 0, 0, 0))
             p.fillRect(r, amber)
+
+            ember = QRadialGradient(QPointF(r.width() * 0.88, r.height() * 0.26), r.width() * 0.30)
+            ember.setColorAt(0.0, QColor(255, 224, 154, int(78 * ratio)))
+            ember.setColorAt(0.32, QColor(255, 154, 72, int(46 * ratio)))
+            ember.setColorAt(1.0, QColor(0, 0, 0, 0))
+            p.fillRect(r, ember)
+
+            p.setBrush(Qt.NoBrush)
+            p.setPen(QPen(QColor(255, 178, 144, int(30 + 42 * ratio)), 1.8, Qt.SolidLine, Qt.RoundCap))
+            for band in range(3):
+                base_y = r.height() * (0.26 + band * 0.18)
+                start_x = r.width() * 0.42 - band * 8
+                path = QPainterPath(QPointF(start_x, base_y))
+                path.cubicTo(
+                    QPointF(r.width() * 0.56, base_y - 28),
+                    QPointF(r.width() * 0.72, base_y + 30),
+                    QPointF(r.width() * 0.90, base_y - 10),
+                )
+                path.cubicTo(
+                    QPointF(r.width() * 0.98, base_y - 26),
+                    QPointF(r.width() * 1.02, base_y + 20),
+                    QPointF(r.width() + 40, base_y + 2),
+                )
+                p.drawPath(path)
 
             # Modern heat shimmer: layered soft thermal waves instead of the
             # old cartoon sun/rays. Subtle at 72°, more visible as it gets hot.
@@ -2229,16 +2356,15 @@ class ThermostatScreen(Page):
                         path.lineTo(QPointF(x, yy))
                     p.drawPath(path)
 
-            # A polished heat halo in the upper-right replaces the gimmicky sun.
-            # It reads as "hot" without literal rotating rays.
+            # Replace the old sun idea with a futuristic energy core.
             cx = r.width() - 158
             cy = 118
             pulse = 1.0 + 0.08 * math.sin(self.fx_phase * 0.24)
             halo_r = (50 + 28 * ratio) * pulse
             halo = QRadialGradient(QPointF(cx, cy), halo_r)
-            halo.setColorAt(0.0, QColor(255, 226, 138, int(138 + 72 * ratio)))
-            halo.setColorAt(0.34, QColor(255, 146, 66, int(92 + 52 * ratio)))
-            halo.setColorAt(0.68, QColor(255, 58, 58, int(38 + 34 * ratio)))
+            halo.setColorAt(0.0, QColor(255, 232, 166, int(128 + 74 * ratio)))
+            halo.setColorAt(0.26, QColor(255, 148, 108, int(96 + 52 * ratio)))
+            halo.setColorAt(0.56, QColor(255, 72, 116, int(52 + 34 * ratio)))
             halo.setColorAt(1.0, QColor(0, 0, 0, 0))
             p.setPen(Qt.NoPen)
             p.setBrush(QBrush(halo))
@@ -2248,16 +2374,15 @@ class ThermostatScreen(Page):
             for ring in range(3):
                 ring_r = halo_r * (0.52 + ring * 0.23) + math.sin(self.fx_phase * 0.18 + ring) * 2.6
                 alpha = int((92 - ring * 22) * ratio)
-                p.setPen(QPen(QColor(255, 222, 156, alpha), 1.7, Qt.SolidLine, Qt.RoundCap))
+                p.setPen(QPen(QColor(255, 184, 164, alpha), 1.7, Qt.SolidLine, Qt.RoundCap))
                 p.drawEllipse(QPointF(cx, cy), ring_r, ring_r)
 
-            p.setPen(QPen(QColor(255, 240, 192, int(76 + 70 * ratio)), 2.2, Qt.SolidLine, Qt.RoundCap))
-            for i in range(3):
-                x = cx - 20 + i * 20
-                top = cy - 30 + 4 * math.sin(self.fx_phase * 0.20 + i)
-                path = QPainterPath(QPointF(x, top + 36))
-                path.cubicTo(QPointF(x - 13, top + 25), QPointF(x + 14, top + 14), QPointF(x, top))
-                p.drawPath(path)
+            p.setPen(QPen(QColor(255, 214, 190, int(70 + 74 * ratio)), 1.4, Qt.SolidLine, Qt.RoundCap))
+            p.drawLine(QPointF(cx - halo_r * 0.72, cy), QPointF(cx + halo_r * 0.72, cy))
+            p.drawLine(QPointF(cx, cy - halo_r * 0.72), QPointF(cx, cy + halo_r * 0.72))
+            p.setPen(QPen(QColor(255, 188, 164, int(62 + 56 * ratio)), 1.4, Qt.SolidLine, Qt.RoundCap))
+            p.drawLine(QPointF(cx - halo_r * 0.52, cy - halo_r * 0.52), QPointF(cx + halo_r * 0.52, cy + halo_r * 0.52))
+            p.drawLine(QPointF(cx - halo_r * 0.52, cy + halo_r * 0.52), QPointF(cx + halo_r * 0.52, cy - halo_r * 0.52))
         super().paintEvent(event)
 
     def format_remaining(self, seconds: float) -> str:
