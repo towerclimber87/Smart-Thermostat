@@ -1869,6 +1869,11 @@ class ThermostatScreen(Page):
         root.addLayout(title_row)
 
         mid = QGridLayout()
+        # Lift the whole thermostat control cluster so Doors, +/- buttons,
+        # the center dial, and Alarmo sit higher and feel vertically centered
+        # in the available page space instead of riding low near the bottom.
+        main_controls_lift_px = 34
+        mid.setContentsMargins(0, -main_controls_lift_px, 0, main_controls_lift_px + 10)
         mid.setHorizontalSpacing(20)
         mid.setVerticalSpacing(10)
         mid.setColumnStretch(0, 3)
@@ -1919,7 +1924,9 @@ class ThermostatScreen(Page):
         right_top = QWidget()
         right_top.setFixedHeight(side_top_h)
         right_top_lay = QVBoxLayout(right_top)
-        right_top_lay.setContentsMargins(0, -34, 0, 0)
+        # Keep the test/virtual output panel tucked higher, but pull it left
+        # slightly so it does not feel pinned to the screen edge.
+        right_top_lay.setContentsMargins(0, -34, 26, 0)
         right_top_lay.addWidget(self.virtual_panel, 0, Qt.AlignRight | Qt.AlignTop)
         right_top_lay.addStretch(1)
         right_col.addWidget(right_top)
