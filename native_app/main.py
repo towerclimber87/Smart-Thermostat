@@ -1878,16 +1878,10 @@ class ThermostatScreen(Page):
         mid.setColumnStretch(4, 3)
 
         # Side cards are intentionally aligned in matching vertical lanes.
-        # The original web UI keeps Inside Doors and Alarmo horizontally lined
-        # up even when the auto-switch notice is hidden. A normal vertical
-        # layout collapses hidden widgets and pushed the door tile too high,
-        # making the native UI look uneven. These fixed-height top lanes reserve
-        # the same visual space on both sides before the status cards.
-        # Lift the main thermostat band by changing the actual spacer lanes
-        # instead of offsetting the whole grid. This keeps Doors, the +/-
-        # buttons, the center dial, and Alarmo moving together on Qt layouts.
-        controls_lift_px = 34
-        side_top_h = 188 - controls_lift_px
+        # Keep the reserved top lane shorter so Doors and Alarmo sit closer to
+        # the visual centerline of the thermostat dial instead of riding low.
+        # The auto-switch notice still has room to appear above Doors.
+        side_top_h = 128
 
         left_col = QVBoxLayout()
         left_col.setSpacing(12)
@@ -1908,41 +1902,30 @@ class ThermostatScreen(Page):
         self.schedule_shortcuts_lay.setSpacing(6)
         left_col.addWidget(self.schedule_shortcuts, 0, Qt.AlignLeft)
         mid.addLayout(left_col, 0, 0, 2, 1)
-
-        minus_col = QVBoxLayout()
-        minus_col.setContentsMargins(0, 0, 0, 0)
-        minus_col.setSpacing(0)
-        minus_col.addStretch(1)
-        minus_col.addWidget(self.minus, 0, Qt.AlignCenter)
-        minus_col.addStretch(2)
-        mid.addLayout(minus_col, 0, 1, 2, 1)
+        mid.addWidget(self.minus, 0, 1, 2, 1, Qt.AlignCenter)
 
         center = QVBoxLayout()
         center.setSpacing(8)
-        center.addStretch(1)
+        # Pack the badge/dial/mode controls toward the top of the center lane.
+        # The +/- buttons already sit correctly; removing the dial's stretch
+        # allocation prevents the center dial from sagging lower than them.
+        center.addSpacing(4)
         center.addWidget(self.status_badge, 0, Qt.AlignCenter)
         center.addWidget(self.dial, 0, Qt.AlignCenter)
         center.addLayout(self._mode_bar())
-        center.addStretch(2)
+        center.addStretch(1)
         mid.addLayout(center, 0, 2, 2, 1)
-
-        plus_col = QVBoxLayout()
-        plus_col.setContentsMargins(0, 0, 0, 0)
-        plus_col.setSpacing(0)
-        plus_col.addStretch(1)
-        plus_col.addWidget(self.plus, 0, Qt.AlignCenter)
-        plus_col.addStretch(2)
-        mid.addLayout(plus_col, 0, 3, 2, 1)
+        mid.addWidget(self.plus, 0, 3, 2, 1, Qt.AlignCenter)
 
         right_col = QVBoxLayout()
         right_col.setSpacing(12)
         right_top = QWidget()
         right_top.setFixedHeight(side_top_h)
         right_top_lay = QVBoxLayout(right_top)
-        # Pull the virtual output / test temperature panel up and toward the
-        # dial, away from the hard top-right edge.
-        right_top_lay.setContentsMargins(0, -48, 44, 0)
-        right_top_lay.addWidget(self.virtual_panel, 0, Qt.AlignRight | Qt.AlignTop)
+        right_top_lay.setContentsMargins(0, 0, 0, 0)
+        # Virtual output testing controls are intentionally kept off-screen for
+        # the main thermostat view so Alarmo can move up and align with Doors.
+        self.virtual_panel.hide()
         right_top_lay.addStretch(1)
         right_col.addWidget(right_top)
         right_col.addWidget(self.alarm_card, 0, Qt.AlignCenter)
