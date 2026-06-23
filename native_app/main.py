@@ -1869,11 +1869,6 @@ class ThermostatScreen(Page):
         root.addLayout(title_row)
 
         mid = QGridLayout()
-        # Lift the whole thermostat control cluster so Doors, +/- buttons,
-        # the center dial, and Alarmo sit higher and feel vertically centered
-        # in the available page space instead of riding low near the bottom.
-        main_controls_lift_px = 34
-        mid.setContentsMargins(0, -main_controls_lift_px, 0, main_controls_lift_px + 10)
         mid.setHorizontalSpacing(20)
         mid.setVerticalSpacing(10)
         mid.setColumnStretch(0, 3)
@@ -1888,7 +1883,11 @@ class ThermostatScreen(Page):
         # layout collapses hidden widgets and pushed the door tile too high,
         # making the native UI look uneven. These fixed-height top lanes reserve
         # the same visual space on both sides before the status cards.
-        side_top_h = 188
+        # Lift the main thermostat band by changing the actual spacer lanes
+        # instead of offsetting the whole grid. This keeps Doors, the +/-
+        # buttons, the center dial, and Alarmo moving together on Qt layouts.
+        controls_lift_px = 34
+        side_top_h = 188 - controls_lift_px
 
         left_col = QVBoxLayout()
         left_col.setSpacing(12)
@@ -1909,24 +1908,40 @@ class ThermostatScreen(Page):
         self.schedule_shortcuts_lay.setSpacing(6)
         left_col.addWidget(self.schedule_shortcuts, 0, Qt.AlignLeft)
         mid.addLayout(left_col, 0, 0, 2, 1)
-        mid.addWidget(self.minus, 0, 1, 2, 1, Qt.AlignCenter)
+
+        minus_col = QVBoxLayout()
+        minus_col.setContentsMargins(0, 0, 0, 0)
+        minus_col.setSpacing(0)
+        minus_col.addStretch(1)
+        minus_col.addWidget(self.minus, 0, Qt.AlignCenter)
+        minus_col.addStretch(2)
+        mid.addLayout(minus_col, 0, 1, 2, 1)
 
         center = QVBoxLayout()
         center.setSpacing(8)
+        center.addStretch(1)
         center.addWidget(self.status_badge, 0, Qt.AlignCenter)
-        center.addWidget(self.dial, 1, Qt.AlignCenter)
+        center.addWidget(self.dial, 0, Qt.AlignCenter)
         center.addLayout(self._mode_bar())
+        center.addStretch(2)
         mid.addLayout(center, 0, 2, 2, 1)
-        mid.addWidget(self.plus, 0, 3, 2, 1, Qt.AlignCenter)
+
+        plus_col = QVBoxLayout()
+        plus_col.setContentsMargins(0, 0, 0, 0)
+        plus_col.setSpacing(0)
+        plus_col.addStretch(1)
+        plus_col.addWidget(self.plus, 0, Qt.AlignCenter)
+        plus_col.addStretch(2)
+        mid.addLayout(plus_col, 0, 3, 2, 1)
 
         right_col = QVBoxLayout()
         right_col.setSpacing(12)
         right_top = QWidget()
         right_top.setFixedHeight(side_top_h)
         right_top_lay = QVBoxLayout(right_top)
-        # Keep the test/virtual output panel tucked higher, but pull it left
-        # slightly so it does not feel pinned to the screen edge.
-        right_top_lay.setContentsMargins(0, -34, 26, 0)
+        # Pull the virtual output / test temperature panel up and toward the
+        # dial, away from the hard top-right edge.
+        right_top_lay.setContentsMargins(0, -48, 44, 0)
         right_top_lay.addWidget(self.virtual_panel, 0, Qt.AlignRight | Qt.AlignTop)
         right_top_lay.addStretch(1)
         right_col.addWidget(right_top)
