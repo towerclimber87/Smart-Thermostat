@@ -2115,17 +2115,21 @@ class ThermostatScreen(Page):
         # look: dark board, circuit traces, glowing nodes and temp-reactive color.
         cold_ratio = 0.0
         if (not neutral_off) and current <= 67.0:
-            cold_ratio = clamp((68.0 - current) / 2.4, 0.0, 1.0)
-            if current <= 66.0:
-                cold_ratio = max(cold_ratio, 0.84)
+            # Blue starts at 67° and reaches full dark-blue intensity by 64°.
+            cold_ratio = clamp((67.0 - current) / 3.0, 0.0, 1.0)
+            # Make the change visible right at 67°, then ramp darker as it drops.
+            cold_ratio = max(cold_ratio, 0.18)
+            if current <= 64.0:
+                cold_ratio = 1.0
 
         hot_ratio = 0.0
         if (not neutral_off) and current >= 72.0:
-            hot_ratio = clamp((current - 71.4) / 4.2, 0.0, 1.0)
-            if current >= 72.0:
-                hot_ratio = max(hot_ratio, 0.30)
+            # Red starts at 72° and reaches full dark-red intensity by 76°.
+            hot_ratio = clamp((current - 72.0) / 4.0, 0.0, 1.0)
+            # Make the change visible right at 72°, then ramp darker as it rises.
+            hot_ratio = max(hot_ratio, 0.18)
             if current >= 76.0:
-                hot_ratio = max(hot_ratio, 0.94)
+                hot_ratio = 1.0
 
         if current < low:
             cold_ratio = max(cold_ratio, 0.90)
@@ -2155,14 +2159,14 @@ class ThermostatScreen(Page):
             return int(clamp(value, 0, 255))
 
         board_a = QColor(
-            mix_channel(2, 4, 24),
-            mix_channel(15, 18, 8),
-            mix_channel(34, 38, 18),
+            mix_channel(0, 4, 32),
+            mix_channel(8, 18, 7),
+            mix_channel(42, 38, 16),
         )
         board_b = QColor(
-            mix_channel(2, 8, 54),
-            mix_channel(60, 46, 18),
-            mix_channel(94, 78, 42),
+            mix_channel(0, 8, 78),
+            mix_channel(34, 46, 14),
+            mix_channel(125, 78, 34),
         )
         trace = QColor(
             mix_channel(74, 54, 255),
@@ -2190,14 +2194,14 @@ class ThermostatScreen(Page):
         # Broad temperature glow behind the traces.
         if cold_weight > 0:
             cold_glow = QRadialGradient(QPointF(w * 0.28, h * 0.42), w * 0.78)
-            cold_glow.setColorAt(0.0, QColor(0, 218, 255, int(92 * cold_weight)))
-            cold_glow.setColorAt(0.46, QColor(0, 92, 255, int(44 * cold_weight)))
+            cold_glow.setColorAt(0.0, QColor(0, 192, 255, int(98 * cold_weight)))
+            cold_glow.setColorAt(0.46, QColor(0, 58, 210, int(62 * cold_weight)))
             cold_glow.setColorAt(1.0, QColor(0, 0, 0, 0))
             p.fillRect(r, cold_glow)
         if hot_weight > 0:
             hot_glow = QRadialGradient(QPointF(w * 0.74, h * 0.38), w * 0.78)
-            hot_glow.setColorAt(0.0, QColor(255, 96, 42, int(96 * hot_weight)))
-            hot_glow.setColorAt(0.42, QColor(255, 34, 102, int(42 * hot_weight)))
+            hot_glow.setColorAt(0.0, QColor(255, 62, 42, int(104 * hot_weight)))
+            hot_glow.setColorAt(0.42, QColor(170, 8, 42, int(62 * hot_weight)))
             hot_glow.setColorAt(1.0, QColor(0, 0, 0, 0))
             p.fillRect(r, hot_glow)
 
