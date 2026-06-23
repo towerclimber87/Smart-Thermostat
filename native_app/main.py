@@ -1869,30 +1869,31 @@ class ThermostatScreen(Page):
         root.addLayout(title_row)
 
         mid = QGridLayout()
-        mid.setHorizontalSpacing(20)
-        mid.setVerticalSpacing(10)
+        mid.setContentsMargins(0, 14, 0, 0)
+        mid.setHorizontalSpacing(22)
+        mid.setVerticalSpacing(8)
         mid.setColumnStretch(0, 3)
         mid.setColumnStretch(1, 1)
         mid.setColumnStretch(2, 5)
         mid.setColumnStretch(3, 1)
         mid.setColumnStretch(4, 3)
+        mid.setRowStretch(0, 1)
+        mid.setRowStretch(1, 0)
+        mid.setRowStretch(2, 1)
 
-        # Side cards are intentionally aligned in matching vertical lanes.
-        # Keep the reserved top lane shorter so Doors and Alarmo sit closer to
-        # the visual centerline of the thermostat dial instead of riding low.
-        # The auto-switch notice still has room to appear above Doors.
-        side_top_h = 128
+        # Keep the main thermostat widgets on one shared center line:
+        # Doors, minus, dial, plus, and Alarmo.  The earlier layout reserved
+        # tall top lanes for the notice/virtual-temp panel, which made the side
+        # cards sit lower than the dial and left a dark empty block after the
+        # virtual section was removed.
+        center_row = 1
 
         left_col = QVBoxLayout()
-        left_col.setSpacing(12)
-        left_top = QWidget()
-        left_top.setFixedHeight(side_top_h)
-        left_top_lay = QVBoxLayout(left_top)
-        left_top_lay.setContentsMargins(0, 0, 0, 0)
-        left_top_lay.addStretch(1)
-        left_top_lay.addWidget(self.bypass_pill, 0, Qt.AlignCenter)
-        left_top_lay.addWidget(self.notice, 0, Qt.AlignCenter)
-        left_col.addWidget(left_top)
+        left_col.setContentsMargins(0, 0, 0, 0)
+        left_col.setSpacing(10)
+        left_col.addStretch(1)
+        left_col.addWidget(self.bypass_pill, 0, Qt.AlignCenter)
+        left_col.addWidget(self.notice, 0, Qt.AlignCenter)
         left_col.addWidget(self.door_card, 0, Qt.AlignCenter)
         left_col.addStretch(1)
         self.schedule_shortcuts = QWidget()
@@ -1901,38 +1902,35 @@ class ThermostatScreen(Page):
         self.schedule_shortcuts_lay.setContentsMargins(0, 0, 0, 0)
         self.schedule_shortcuts_lay.setSpacing(6)
         left_col.addWidget(self.schedule_shortcuts, 0, Qt.AlignLeft)
-        mid.addLayout(left_col, 0, 0, 2, 1)
-        mid.addWidget(self.minus, 0, 1, 2, 1, Qt.AlignCenter)
+        mid.addLayout(left_col, center_row, 0, 1, 1, Qt.AlignVCenter)
+
+        mid.addWidget(self.minus, center_row, 1, 1, 1, Qt.AlignCenter)
 
         center = QVBoxLayout()
-        center.setSpacing(8)
-        # Pack the badge/dial/mode controls toward the top of the center lane.
-        # The +/- buttons already sit correctly; removing the dial's stretch
-        # allocation prevents the center dial from sagging lower than them.
-        center.addSpacing(4)
+        center.setContentsMargins(0, 0, 0, 0)
+        center.setSpacing(6)
         center.addWidget(self.status_badge, 0, Qt.AlignCenter)
         center.addWidget(self.dial, 0, Qt.AlignCenter)
         center.addLayout(self._mode_bar())
-        center.addStretch(1)
-        mid.addLayout(center, 0, 2, 2, 1)
-        mid.addWidget(self.plus, 0, 3, 2, 1, Qt.AlignCenter)
+        mid.addLayout(center, center_row, 2, 1, 1, Qt.AlignCenter)
+
+        mid.addWidget(self.plus, center_row, 3, 1, 1, Qt.AlignCenter)
 
         right_col = QVBoxLayout()
-        right_col.setSpacing(12)
-        right_top = QWidget()
-        right_top.setFixedHeight(side_top_h)
-        right_top_lay = QVBoxLayout(right_top)
-        right_top_lay.setContentsMargins(0, 0, 0, 0)
-        # Virtual output testing controls are intentionally kept off-screen for
-        # the main thermostat view so Alarmo can move up and align with Doors.
-        self.virtual_panel.hide()
-        right_top_lay.addStretch(1)
-        right_col.addWidget(right_top)
+        right_col.setContentsMargins(0, 0, 0, 0)
+        right_col.setSpacing(10)
+        right_col.addStretch(1)
         right_col.addWidget(self.alarm_card, 0, Qt.AlignCenter)
         right_col.addStretch(1)
         fan_bar = self._fan_bar()
         right_col.addLayout(fan_bar)
-        mid.addLayout(right_col, 0, 4, 2, 1)
+        mid.addLayout(right_col, center_row, 4, 1, 1, Qt.AlignVCenter)
+
+        # The virtual output / virtual temp test panel remains wired for future
+        # troubleshooting, but it is intentionally not mounted on the main
+        # thermostat screen.
+        self.virtual_panel.hide()
+
         root.addLayout(mid, 1)
 
         self.minus.clicked.connect(lambda: self.change_target(-1))
@@ -2303,7 +2301,8 @@ class ThermostatScreen(Page):
         # A few larger chip pads for a more intentional circuit-board style.
         chip_specs = (
             (0.43, 0.42, 0.18, 0.11),
-            (0.70, 0.18, 0.15, 0.10),
+            # Keep the upper-right circuit area open now that the virtual panel
+            # is removed; the old chip rectangle looked like a leftover widget.
             (0.14, 0.50, 0.14, 0.12),
         )
         for x_ratio, y_ratio, ww_ratio, hh_ratio in chip_specs:
