@@ -7982,10 +7982,16 @@ class AlarmCountdownRing(QWidget):
 
         p.setPen(QColor(255, 255, 255))
         p.setFont(font(max(44, int(side * 0.25)), QFont.Black))
-        p.drawText(rect.adjusted(0, -20, 0, 20), Qt.AlignCenter, str(self.remaining))
+        number_rect = rect.adjusted(0, -20, 0, 20)
+        p.drawText(number_rect, Qt.AlignCenter, str(self.remaining))
+
+        # Keep the unit label clearly below the countdown number instead of
+        # crowding the center of the dial on the Arm Away exit timer screen.
         p.setFont(font(max(11, int(side * 0.045)), QFont.Black))
         p.setPen(QColor(255, 210, 151))
-        p.drawText(rect.adjusted(0, int(side * 0.23), 0, 0), Qt.AlignCenter, "SECONDS")
+        label_top = rect.center().y() + side * 0.21
+        label_rect = QRectF(rect.left(), label_top, rect.width(), side * 0.16)
+        p.drawText(label_rect, Qt.AlignHCenter | Qt.AlignTop, "SECONDS")
 
 
 class AlarmModeCard(QAbstractButton):
