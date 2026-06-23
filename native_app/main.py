@@ -2109,31 +2109,16 @@ class ThermostatScreen(Page):
         neutral_off = str(t.get("mode") or "").lower() == "off" and safety not in {"heat", "cool"}
         heat_mode = self.active_visual_mode() == "heat"
 
-        # Complete redesign: liquid-glass ambience instead of grid/ring/line HUD.
-        # This paints layered "energy glass" blobs, translucent panels and soft
-        # particles so the thermostat feels modern/futuristic without looking
-        # like the prior line-based background.
-        base = QLinearGradient(0, 0, w, h)
-        if neutral_off:
-            base.setColorAt(0.0, QColor(4, 7, 15))
-            base.setColorAt(0.46, QColor(7, 11, 22))
-            base.setColorAt(1.0, QColor(2, 4, 10))
-        else:
-            base.setColorAt(0.0, QColor(2, 6, 18))
-            base.setColorAt(0.42, QColor(7, 10, 28))
-            base.setColorAt(0.70, QColor(8, 6, 23))
-            base.setColorAt(1.0, QColor(2, 3, 9))
-        p.fillRect(r, base)
-
-        phase = float(getattr(self, "fx_phase", 0) or 0)
-
-        # Temperature ambience. Keep the same thresholds, but render the result
-        # as abstract climate energy rather than snow/sun/rays.
+        # Circuit-board climate background. This is drawn procedurally, so it
+        # needs no image asset and can change color based on room temperature.
+        # It intentionally matches the direction of a modern PCB / smart-panel
+        # look: dark board, circuit traces, glowing nodes and temp-reactive color.
         cold_ratio = 0.0
         if (not neutral_off) and current <= 67.0:
             cold_ratio = clamp((68.0 - current) / 2.4, 0.0, 1.0)
             if current <= 66.0:
                 cold_ratio = max(cold_ratio, 0.84)
+
         hot_ratio = 0.0
         if (not neutral_off) and current >= 72.0:
             hot_ratio = clamp((current - 71.4) / 4.2, 0.0, 1.0)
@@ -2141,179 +2126,210 @@ class ThermostatScreen(Page):
                 hot_ratio = max(hot_ratio, 0.30)
             if current >= 76.0:
                 hot_ratio = max(hot_ratio, 0.94)
+
         if current < low:
             cold_ratio = max(cold_ratio, 0.90)
         if current > high:
             hot_ratio = max(hot_ratio, 0.90)
+
         if cold_ratio > 0 and hot_ratio > 0:
             midpoint = (low + high) / 2 if high > low else 69.5
             if current <= midpoint:
                 hot_ratio = 0.0
             else:
                 cold_ratio = 0.0
+
         heat_mode_visual = bool(heat_mode and cold_ratio <= 0 and hot_ratio <= 0)
-        heat_hint = 0.26 if heat_mode_visual and not neutral_off else 0.0
+        heat_hint = 0.30 if heat_mode_visual and not neutral_off else 0.0
 
-        # Neutral futuristic color field.
-        neutral_specs = (
-            (0.22, 0.20, 0.55, QColor(0, 208, 255, 24 if not neutral_off else 12), QColor(14, 68, 140, 8)),
-            (0.76, 0.30, 0.48, QColor(190, 80, 255, 22 if not neutral_off else 10), QColor(72, 22, 118, 7)),
-            (0.48, 0.88, 0.46, QColor(43, 255, 190, 16 if not neutral_off else 8), QColor(10, 80, 78, 5)),
-        )
-        for cx_ratio, cy_ratio, radius_ratio, inner, outer in neutral_specs:
-            glow = QRadialGradient(QPointF(w * cx_ratio, h * cy_ratio), w * radius_ratio)
-            glow.setColorAt(0.0, inner)
-            glow.setColorAt(0.50, outer)
-            glow.setColorAt(1.0, QColor(0, 0, 0, 0))
-            p.fillRect(r, glow)
+        climate_intensity = max(cold_ratio, hot_ratio, heat_hint)
+        cold_weight = cold_ratio
+        hot_weight = max(hot_ratio, heat_hint)
 
-        # Floating translucent glass slabs. They are polygonal/soft, not grid
-        # lines, and give the page a more custom futuristic identity.
-        p.setBrush(Qt.NoBrush)
-        glass_specs = (
-            (-0.08, 0.14, 0.42, 0.26, QColor(112, 242, 255, 18 if not neutral_off else 9), 16.0),
-            (0.62, 0.08, 0.52, 0.22, QColor(190, 112, 255, 16 if not neutral_off else 8), -12.0),
-            (0.58, 0.70, 0.46, 0.26, QColor(72, 255, 202, 13 if not neutral_off else 7), 10.0),
+        def mix_channel(cold_value: int, neutral_value: int, hot_value: int) -> int:
+            value = neutral_value
+            if cold_weight > 0:
+                value = int(value * (1.0 - cold_weight) + cold_value * cold_weight)
+            if hot_weight > 0:
+                value = int(value * (1.0 - hot_weight) + hot_value * hot_weight)
+            return int(clamp(value, 0, 255))
+
+        board_a = QColor(
+            mix_channel(2, 4, 24),
+            mix_channel(15, 18, 8),
+            mix_channel(34, 38, 18),
         )
-        for x_ratio, y_ratio, ww_ratio, hh_ratio, color, tilt in glass_specs:
-            x = w * x_ratio
-            y = h * y_ratio
-            ww = w * ww_ratio
-            hh = h * hh_ratio
-            path = QPainterPath()
-            path.moveTo(QPointF(x + ww * 0.12, y))
-            path.lineTo(QPointF(x + ww, y + hh * 0.10))
-            path.lineTo(QPointF(x + ww * 0.88, y + hh))
-            path.lineTo(QPointF(x, y + hh * 0.82))
-            path.closeSubpath()
-            fill = QColor(color.red(), color.green(), color.blue(), max(4, color.alpha()))
-            p.fillPath(path, QBrush(fill))
-            p.setPen(QPen(QColor(color.red(), color.green(), color.blue(), color.alpha() + 14), 1.1, Qt.SolidLine, Qt.RoundCap))
+        board_b = QColor(
+            mix_channel(2, 8, 54),
+            mix_channel(60, 46, 18),
+            mix_channel(94, 78, 42),
+        )
+        trace = QColor(
+            mix_channel(74, 54, 255),
+            mix_channel(210, 224, 130),
+            mix_channel(255, 116, 58),
+            78 if not neutral_off else 50,
+        )
+        trace_dim = QColor(trace.red(), trace.green(), trace.blue(), 34 if not neutral_off else 24)
+        trace_hot = QColor(
+            mix_channel(112, 90, 255),
+            mix_channel(238, 246, 172),
+            mix_channel(255, 196, 94),
+            132 if climate_intensity > 0.01 else 88,
+        )
+        node_col = QColor(trace_hot.red(), trace_hot.green(), trace_hot.blue(), 170 if not neutral_off else 110)
+        glow_col = QColor(trace_hot.red(), trace_hot.green(), trace_hot.blue(), int(64 + 80 * climate_intensity))
+
+        base = QLinearGradient(0, 0, w, h)
+        base.setColorAt(0.0, QColor(max(0, board_a.red() - 2), max(0, board_a.green() - 2), max(0, board_a.blue() - 4)))
+        base.setColorAt(0.46, board_a)
+        base.setColorAt(0.74, board_b)
+        base.setColorAt(1.0, QColor(2, 4, 10))
+        p.fillRect(r, base)
+
+        # Broad temperature glow behind the traces.
+        if cold_weight > 0:
+            cold_glow = QRadialGradient(QPointF(w * 0.28, h * 0.42), w * 0.78)
+            cold_glow.setColorAt(0.0, QColor(0, 218, 255, int(92 * cold_weight)))
+            cold_glow.setColorAt(0.46, QColor(0, 92, 255, int(44 * cold_weight)))
+            cold_glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+            p.fillRect(r, cold_glow)
+        if hot_weight > 0:
+            hot_glow = QRadialGradient(QPointF(w * 0.74, h * 0.38), w * 0.78)
+            hot_glow.setColorAt(0.0, QColor(255, 96, 42, int(96 * hot_weight)))
+            hot_glow.setColorAt(0.42, QColor(255, 34, 102, int(42 * hot_weight)))
+            hot_glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+            p.fillRect(r, hot_glow)
+
+        # Slight chip/board panels so the background has depth.
+        panel_fills = (
+            (0.08, 0.10, 0.30, 0.23, 10),
+            (0.42, 0.14, 0.30, 0.22, 12),
+            (0.72, 0.52, 0.22, 0.24, 9),
+            (0.16, 0.62, 0.32, 0.23, 8),
+        )
+        for x_ratio, y_ratio, ww_ratio, hh_ratio, alpha in panel_fills:
+            panel = QRectF(w * x_ratio, h * y_ratio, w * ww_ratio, h * hh_ratio)
+            p.setBrush(QColor(255, 255, 255, alpha))
+            p.setPen(QPen(QColor(trace.red(), trace.green(), trace.blue(), alpha + 20), 1))
+            p.drawRoundedRect(panel, 18, 18)
+
+        phase = int(getattr(self, "fx_phase", 0) or 0)
+
+        def board_point(col: int, row: int, cols: int = 12, rows: int = 8) -> QPointF:
+            return QPointF(w * (0.05 + col * (0.90 / (cols - 1))), h * (0.07 + row * (0.82 / (rows - 1))))
+
+        def draw_trace(points: list[QPointF], *, bright: bool = False, width_scale: float = 1.0):
+            if len(points) < 2:
+                return
+            pen_color = trace_hot if bright else trace
+            path = QPainterPath(points[0])
+            for pt in points[1:]:
+                path.lineTo(pt)
+            p.setBrush(Qt.NoBrush)
+            p.setPen(QPen(QColor(pen_color.red(), pen_color.green(), pen_color.blue(), max(18, int(pen_color.alpha() * 0.28))), 7.5 * width_scale, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            p.drawPath(path)
+            p.setPen(QPen(pen_color, 2.0 * width_scale, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
             p.drawPath(path)
 
-        # Liquid climate field. Cold uses cyan/blue "cryo plasma"; hot uses
-        # coral/magenta "thermal plasma"; heat mode gets a subtle warm hint.
-        climate_specs = []
-        if cold_ratio > 0:
-            climate_specs.extend((
-                (0.16, 0.36, 0.64, QColor(0, 235, 255, int(138 * cold_ratio)), QColor(0, 98, 255, int(48 * cold_ratio))),
-                (0.42, 0.18, 0.40, QColor(166, 252, 255, int(68 * cold_ratio)), QColor(28, 170, 255, int(28 * cold_ratio))),
-                (0.72, 0.82, 0.46, QColor(0, 150, 255, int(56 * cold_ratio)), QColor(0, 44, 118, int(24 * cold_ratio))),
-            ))
-        if hot_ratio > 0 or heat_hint > 0:
-            ratio = max(hot_ratio, heat_hint)
-            climate_specs.extend((
-                (0.82, 0.34, 0.66, QColor(255, 82, 58, int(142 * ratio)), QColor(150, 22, 82, int(52 * ratio))),
-                (0.62, 0.16, 0.40, QColor(255, 205, 94, int(76 * ratio)), QColor(255, 80, 64, int(28 * ratio))),
-                (0.20, 0.84, 0.48, QColor(255, 45, 142, int(44 * ratio)), QColor(90, 18, 104, int(22 * ratio))),
-            ))
-        for cx_ratio, cy_ratio, radius_ratio, inner, outer in climate_specs:
-            glow = QRadialGradient(QPointF(w * cx_ratio, h * cy_ratio), w * radius_ratio)
-            glow.setColorAt(0.0, inner)
-            glow.setColorAt(0.34, QColor(inner.red(), inner.green(), inner.blue(), int(inner.alpha() * 0.55)))
-            glow.setColorAt(0.70, outer)
-            glow.setColorAt(1.0, QColor(0, 0, 0, 0))
-            p.fillRect(r, glow)
+        # Fixed circuit routes. They are deterministic and lightweight, but
+        # look much closer to a PCB than the old generic grid/lines.
+        routes = [
+            [(0, 0), (2, 0), (2, 2), (4, 2), (4, 1), (7, 1), (7, 3), (10, 3), (10, 1), (11, 1)],
+            [(0, 2), (1, 2), (1, 4), (3, 4), (3, 5), (6, 5), (6, 3), (8, 3), (8, 2), (11, 2)],
+            [(0, 5), (2, 5), (2, 6), (5, 6), (5, 4), (7, 4), (7, 6), (10, 6), (10, 7), (11, 7)],
+            [(1, 7), (1, 6), (3, 6), (3, 3), (5, 3), (5, 2), (9, 2), (9, 0), (11, 0)],
+            [(0, 1), (3, 1), (3, 0), (6, 0), (6, 2), (8, 2), (8, 4), (11, 4)],
+            [(0, 6), (2, 6), (2, 4), (4, 4), (4, 6), (6, 6), (6, 7), (9, 7), (9, 5), (11, 5)],
+            [(5, 0), (5, 1), (4, 1), (4, 3), (2, 3), (2, 4), (0, 4)],
+            [(11, 6), (9, 6), (9, 4), (7, 4), (7, 5), (4, 5), (4, 7)],
+            [(6, 1), (6, 2), (5, 2), (5, 4), (3, 4), (3, 6), (1, 6)],
+            [(10, 0), (10, 2), (9, 2), (9, 3), (6, 3), (6, 5), (8, 5), (8, 7)],
+        ]
+        for idx, route in enumerate(routes):
+            bright = ((idx * 7 + phase // 2) % 11) < 2 or (climate_intensity > 0.85 and idx % 3 == 0)
+            pts = [board_point(c, rr) for c, rr in route]
+            draw_trace(pts, bright=bright, width_scale=1.0 if idx % 2 else 1.08)
 
-        # Soft "liquid lens" bubbles. These are the main creative layer and
-        # replace the previous obvious line/grid look.
-        bubble_seed = (
-            (0.18, 0.28, 0.18, QColor(94, 242, 255, 24)),
-            (0.36, 0.64, 0.12, QColor(126, 110, 255, 20)),
-            (0.66, 0.28, 0.15, QColor(226, 92, 255, 20)),
-            (0.84, 0.68, 0.19, QColor(54, 255, 206, 18)),
-            (0.10, 0.82, 0.13, QColor(66, 128, 255, 18)),
+        # Micro traces: shorter details and branching lines.
+        p.setBrush(Qt.NoBrush)
+        for i in range(34):
+            col = (i * 5 + 2) % 12
+            row = (i * 3 + 1) % 8
+            start_pt = board_point(col, row)
+            direction = -1 if i % 2 else 1
+            length = w * (0.045 + (i % 4) * 0.012)
+            vertical = i % 5 == 0
+            color = trace_dim if i % 6 else QColor(trace.red(), trace.green(), trace.blue(), trace.alpha())
+            p.setPen(QPen(color, 1.25, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            if vertical:
+                p.drawLine(start_pt, QPointF(start_pt.x(), start_pt.y() + direction * length))
+            else:
+                mid = QPointF(start_pt.x() + direction * length * 0.55, start_pt.y())
+                end = QPointF(mid.x(), mid.y() + direction * length * 0.36)
+                p.drawLine(start_pt, mid)
+                p.drawLine(mid, end)
+
+        # Nodes and glowing pads.
+        p.setPen(Qt.NoPen)
+        for row in range(8):
+            for col in range(12):
+                include = (col * 3 + row * 5) % 4 != 1
+                if not include:
+                    continue
+                pt = board_point(col, row)
+                pulse = 0.5 + 0.5 * math.sin((phase * 0.12) + col * 0.9 + row * 1.3)
+                strong = ((col + row * 2 + phase // 5) % 17) == 0
+                radius = 3.2 + ((col + row) % 3) * 0.8
+                if strong:
+                    halo = QRadialGradient(pt, 24 + 10 * pulse)
+                    halo.setColorAt(0.0, QColor(glow_col.red(), glow_col.green(), glow_col.blue(), int(90 + 70 * pulse)))
+                    halo.setColorAt(0.45, QColor(glow_col.red(), glow_col.green(), glow_col.blue(), int(30 + 34 * pulse)))
+                    halo.setColorAt(1.0, QColor(0, 0, 0, 0))
+                    p.setBrush(QBrush(halo))
+                    p.drawEllipse(pt, 24 + 10 * pulse, 24 + 10 * pulse)
+                p.setBrush(QColor(node_col.red(), node_col.green(), node_col.blue(), 88 + (42 if strong else 0)))
+                p.drawEllipse(pt, radius, radius)
+
+        # A few larger chip pads for a more intentional circuit-board style.
+        chip_specs = (
+            (0.43, 0.42, 0.18, 0.11),
+            (0.70, 0.18, 0.15, 0.10),
+            (0.14, 0.50, 0.14, 0.12),
         )
-        if cold_ratio > 0:
-            bubble_seed += (
-                (0.18, 0.46, 0.24, QColor(120, 246, 255, int(42 * cold_ratio))),
-                (0.62, 0.76, 0.16, QColor(0, 188, 255, int(34 * cold_ratio))),
-            )
-        if hot_ratio > 0 or heat_hint > 0:
-            ratio = max(hot_ratio, heat_hint)
-            bubble_seed += (
-                (0.78, 0.42, 0.25, QColor(255, 126, 86, int(42 * ratio))),
-                (0.56, 0.76, 0.14, QColor(255, 62, 156, int(30 * ratio))),
-            )
-        for i, (cx_ratio, cy_ratio, radius_ratio, color) in enumerate(bubble_seed):
-            drift_x = math.sin(phase * 0.045 + i * 1.7) * w * 0.012
-            drift_y = math.cos(phase * 0.038 + i * 1.1) * h * 0.010
-            cx = w * cx_ratio + drift_x
-            cy = h * cy_ratio + drift_y
-            br = min(w, h) * radius_ratio * (1.0 + 0.035 * math.sin(phase * 0.055 + i))
-            bubble = QRadialGradient(QPointF(cx, cy), br)
-            bubble.setColorAt(0.0, QColor(color.red(), color.green(), color.blue(), color.alpha() + 10))
-            bubble.setColorAt(0.55, QColor(color.red(), color.green(), color.blue(), max(3, int(color.alpha() * 0.35))))
-            bubble.setColorAt(1.0, QColor(0, 0, 0, 0))
-            p.setPen(Qt.NoPen)
-            p.setBrush(QBrush(bubble))
-            p.drawEllipse(QPointF(cx, cy), br, br)
-            p.setBrush(Qt.NoBrush)
-            p.setPen(QPen(QColor(color.red(), color.green(), color.blue(), max(10, color.alpha() + 12)), 1.15, Qt.SolidLine, Qt.RoundCap))
-            p.drawEllipse(QPointF(cx, cy), br * 0.74, br * 0.74)
+        for x_ratio, y_ratio, ww_ratio, hh_ratio in chip_specs:
+            chip = QRectF(w * x_ratio, h * y_ratio, w * ww_ratio, h * hh_ratio)
+            fill = QColor(2, 10, 22, 82)
+            border = QColor(trace_hot.red(), trace_hot.green(), trace_hot.blue(), 76)
+            p.setBrush(fill)
+            p.setPen(QPen(border, 1.35))
+            p.drawRoundedRect(chip, 10, 10)
+            pin_count = 6
+            p.setPen(QPen(QColor(trace.red(), trace.green(), trace.blue(), 66), 1.2, Qt.SolidLine, Qt.RoundCap))
+            for i in range(pin_count):
+                y = chip.top() + chip.height() * ((i + 1) / (pin_count + 1))
+                p.drawLine(QPointF(chip.left() - 14, y), QPointF(chip.left(), y))
+                p.drawLine(QPointF(chip.right(), y), QPointF(chip.right() + 14, y))
 
-        # Temperature-specific accents, abstract instead of literal.
-        if cold_ratio > 0:
-            p.setPen(Qt.NoPen)
-            for i in range(26):
-                x = 34 + ((i * 127 + int(phase * 5)) % max(180, w - 68))
-                y = 62 + ((i * 83 + int(phase * 7)) % max(160, int(h * 0.66)))
-                radius = 1.2 + (i % 4) * 0.9
-                alpha = int((20 + (i % 5) * 10) * cold_ratio)
-                p.setBrush(QColor(214, 250, 255, alpha))
-                p.drawEllipse(QPointF(x, y), radius, radius)
-
-            # A few frosted crystal shards, intentionally sparse.
-            p.setBrush(Qt.NoBrush)
-            for i in range(5):
-                x = w * (0.12 + i * 0.17) + math.sin(phase * 0.04 + i) * 8
-                y = h * (0.20 + (i % 2) * 0.18)
-                size = 20 + i * 3
-                p.setPen(QPen(QColor(190, 250, 255, int(48 + 64 * cold_ratio)), 1.5, Qt.SolidLine, Qt.RoundCap))
-                shard = QPainterPath(QPointF(x, y - size))
-                shard.lineTo(QPointF(x + size * 0.42, y))
-                shard.lineTo(QPointF(x, y + size))
-                shard.lineTo(QPointF(x - size * 0.42, y))
-                shard.closeSubpath()
-                p.drawPath(shard)
-
-        if hot_ratio > 0 or heat_hint > 0:
-            ratio = max(hot_ratio, heat_hint)
-            # Warm state gets abstract glowing ember cells and a plasma lens.
-            core_x = w * 0.82
-            core_y = h * 0.28
-            pulse = 1.0 + 0.06 * math.sin(phase * 0.16)
-            core_r = min(w, h) * (0.14 + 0.05 * ratio) * pulse
-            core = QRadialGradient(QPointF(core_x, core_y), core_r)
-            core.setColorAt(0.0, QColor(255, 232, 162, int(120 * ratio)))
-            core.setColorAt(0.40, QColor(255, 104, 68, int(74 * ratio)))
-            core.setColorAt(0.76, QColor(255, 42, 130, int(34 * ratio)))
-            core.setColorAt(1.0, QColor(0, 0, 0, 0))
-            p.setPen(Qt.NoPen)
-            p.setBrush(QBrush(core))
-            p.drawEllipse(QPointF(core_x, core_y), core_r, core_r)
-
-            for i in range(14):
-                x = 44 + ((i * 113 + int(phase * 6)) % max(180, w - 88))
-                y = 84 + ((i * 61 + int(phase * 8)) % max(160, int(h * 0.60)))
-                rr = 2.0 + (i % 4) * 1.2
-                alpha = int((18 + (i % 5) * 8) * ratio)
-                p.setBrush(QColor(255, 178, 112, alpha))
-                p.drawEllipse(QPointF(x, y), rr, rr)
-
-        # A final glass layer keeps controls readable and gives the full screen
-        # a finished appliance look.
+        # Final glass and vignette layer to keep labels/buttons readable.
         sheen = QLinearGradient(0, 0, 0, h)
-        sheen.setColorAt(0.0, QColor(255, 255, 255, 18 if not neutral_off else 12))
-        sheen.setColorAt(0.16, QColor(255, 255, 255, 4))
-        sheen.setColorAt(0.54, QColor(255, 255, 255, 0))
+        sheen.setColorAt(0.0, QColor(255, 255, 255, 14 if not neutral_off else 8))
+        sheen.setColorAt(0.18, QColor(255, 255, 255, 3))
+        sheen.setColorAt(0.52, QColor(255, 255, 255, 0))
         sheen.setColorAt(1.0, QColor(0, 0, 0, 0))
         p.fillRect(r, sheen)
 
-        vignette = QRadialGradient(QPointF(w * 0.50, h * 0.48), max(w, h) * 0.82)
+        # Subtle center darkening behind the dial/control area.
+        dial_shadow = QRadialGradient(QPointF(w * 0.50, h * 0.50), min(w, h) * 0.44)
+        dial_shadow.setColorAt(0.0, QColor(0, 0, 0, 44))
+        dial_shadow.setColorAt(0.46, QColor(0, 0, 0, 20))
+        dial_shadow.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.fillRect(r, dial_shadow)
+
+        vignette = QRadialGradient(QPointF(w * 0.50, h * 0.48), max(w, h) * 0.84)
         vignette.setColorAt(0.0, QColor(0, 0, 0, 0))
         vignette.setColorAt(0.56, QColor(0, 0, 0, 0))
-        vignette.setColorAt(1.0, QColor(0, 0, 0, 92 if not neutral_off else 74))
+        vignette.setColorAt(1.0, QColor(0, 0, 0, 88 if not neutral_off else 72))
         p.fillRect(r, vignette)
 
         super().paintEvent(event)
