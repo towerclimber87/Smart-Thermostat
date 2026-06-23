@@ -32,7 +32,7 @@ StandardOutput=journal
 StandardError=journal
 RuntimeDirectory=smart-thermostat-native
 RuntimeDirectoryMode=0700
-ExecStart=/usr/bin/xinit @APP_DIR@/scripts/native-xinit.sh -- /usr/bin/Xorg :0 vt1 -nolisten tcp -keeptty -nocursor -logfile /run/smart-thermostat-native/Xorg.0.log
+ExecStart=/usr/bin/xinit @APP_DIR@/scripts/native-xinit.sh -- /usr/bin/Xorg :0 vt1 -nolisten tcp -keeptty -nocursor
 Restart=always
 RestartSec=2
 
