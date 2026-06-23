@@ -1868,70 +1868,78 @@ class ThermostatScreen(Page):
         title_row.addWidget(self.schedule_button, 0, Qt.AlignRight | Qt.AlignTop)
         root.addLayout(title_row)
 
-        mid = QGridLayout()
-        mid.setContentsMargins(0, 14, 0, 0)
+        # Fixed-size side cards keep the Doors tile from drifting when the
+        # status changes between CLOSED/OPEN and keep it visually locked to
+        # Alarmo.
+        self.door_card.setFixedSize(226, 164)
+        self.alarm_card.setFixedSize(226, 164)
+
+        # Keep the title/weather row in the normal page layout, but place the
+        # thermostat controls in their own floating band.  The older VBox/Grid
+        # layout centered the dial only inside the space left below the title,
+        # which made the whole thermostat cluster sit too low on the colored
+        # background.  This band is positioned from resizeEvent so the main
+        # control centerline stays in the vertical middle of the page.
+        root.addStretch(1)
+
+        self.controls_band = QWidget(self)
+        self.controls_band.setObjectName("thermostatControlsBand")
+        self.controls_band.setStyleSheet("QWidget#thermostatControlsBand { background: transparent; border: 0; }")
+        self.controls_band.setAttribute(Qt.WA_StyledBackground, False)
+
+        mid = QGridLayout(self.controls_band)
+        mid.setContentsMargins(42, 0, 42, 0)
         mid.setHorizontalSpacing(22)
-        mid.setVerticalSpacing(8)
+        mid.setVerticalSpacing(4)
         mid.setColumnStretch(0, 3)
         mid.setColumnStretch(1, 1)
         mid.setColumnStretch(2, 5)
         mid.setColumnStretch(3, 1)
         mid.setColumnStretch(4, 3)
-        mid.setRowStretch(0, 1)
-        mid.setRowStretch(1, 0)
-        mid.setRowStretch(2, 1)
+        mid.setRowMinimumHeight(0, 48)
+        mid.setRowStretch(1, 1)
+        mid.setRowMinimumHeight(2, 48)
 
-        # Keep the main thermostat widgets on one shared center line:
-        # Doors, minus, dial, plus, and Alarmo.  The earlier layout reserved
-        # tall top lanes for the notice/virtual-temp panel, which made the side
-        # cards sit lower than the dial and left a dark empty block after the
-        # virtual section was removed.
-        center_row = 1
+        # Row 1 is the shared horizontal centerline:
+        # Doors | minus | dial | plus | Alarmo.
+        status_wrap = QWidget()
+        status_lay = QHBoxLayout(status_wrap)
+        status_lay.setContentsMargins(0, 0, 0, 0)
+        status_lay.addStretch(1)
+        status_lay.addWidget(self.status_badge, 0, Qt.AlignCenter)
+        status_lay.addStretch(1)
+        mid.addWidget(status_wrap, 0, 2, 1, 1, Qt.AlignCenter | Qt.AlignBottom)
 
-        left_col = QVBoxLayout()
-        left_col.setContentsMargins(0, 0, 0, 0)
-        left_col.setSpacing(10)
-        left_col.addStretch(1)
-        left_col.addWidget(self.bypass_pill, 0, Qt.AlignCenter)
-        left_col.addWidget(self.notice, 0, Qt.AlignCenter)
-        left_col.addWidget(self.door_card, 0, Qt.AlignCenter)
-        left_col.addStretch(1)
-        self.schedule_shortcuts = QWidget()
-        self.schedule_shortcuts.setMaximumWidth(238)
-        self.schedule_shortcuts_lay = QHBoxLayout(self.schedule_shortcuts)
-        self.schedule_shortcuts_lay.setContentsMargins(0, 0, 0, 0)
-        self.schedule_shortcuts_lay.setSpacing(6)
-        left_col.addWidget(self.schedule_shortcuts, 0, Qt.AlignLeft)
-        mid.addLayout(left_col, center_row, 0, 1, 1, Qt.AlignVCenter)
+        mid.addWidget(self.door_card, 1, 0, 1, 1, Qt.AlignCenter)
+        mid.addWidget(self.minus, 1, 1, 1, 1, Qt.AlignCenter)
+        mid.addWidget(self.dial, 1, 2, 1, 1, Qt.AlignCenter)
+        mid.addWidget(self.plus, 1, 3, 1, 1, Qt.AlignCenter)
+        mid.addWidget(self.alarm_card, 1, 4, 1, 1, Qt.AlignCenter)
 
-        mid.addWidget(self.minus, center_row, 1, 1, 1, Qt.AlignCenter)
+        mode_wrap = QWidget()
+        mode_lay = QHBoxLayout(mode_wrap)
+        mode_lay.setContentsMargins(0, 0, 0, 0)
+        mode_lay.addStretch(1)
+        mode_lay.addLayout(self._mode_bar())
+        mode_lay.addStretch(1)
+        mid.addWidget(mode_wrap, 2, 2, 1, 1, Qt.AlignCenter | Qt.AlignTop)
 
-        center = QVBoxLayout()
-        center.setContentsMargins(0, 0, 0, 0)
-        center.setSpacing(6)
-        center.addWidget(self.status_badge, 0, Qt.AlignCenter)
-        center.addWidget(self.dial, 0, Qt.AlignCenter)
-        center.addLayout(self._mode_bar())
-        mid.addLayout(center, center_row, 2, 1, 1, Qt.AlignCenter)
+        fan_wrap = QWidget()
+        fan_lay = QHBoxLayout(fan_wrap)
+        fan_lay.setContentsMargins(0, 0, 0, 0)
+        fan_lay.addStretch(1)
+        fan_lay.addLayout(self._fan_bar())
+        fan_lay.addStretch(1)
+        mid.addWidget(fan_wrap, 2, 4, 1, 1, Qt.AlignCenter | Qt.AlignTop)
 
-        mid.addWidget(self.plus, center_row, 3, 1, 1, Qt.AlignCenter)
-
-        right_col = QVBoxLayout()
-        right_col.setContentsMargins(0, 0, 0, 0)
-        right_col.setSpacing(10)
-        right_col.addStretch(1)
-        right_col.addWidget(self.alarm_card, 0, Qt.AlignCenter)
-        right_col.addStretch(1)
-        fan_bar = self._fan_bar()
-        right_col.addLayout(fan_bar)
-        mid.addLayout(right_col, center_row, 4, 1, 1, Qt.AlignVCenter)
-
-        # The virtual output / virtual temp test panel remains wired for future
-        # troubleshooting, but it is intentionally not mounted on the main
-        # thermostat screen.
+        # Keep these controls available for alerts, but do not let hidden/visible
+        # optional widgets change the vertical position of Doors.
+        self.bypass_pill.setParent(self)
+        self.notice.setParent(self)
         self.virtual_panel.hide()
+        self.virtual_panel.setParent(self)
 
-        root.addLayout(mid, 1)
+        self.position_main_controls()
 
         self.minus.clicked.connect(lambda: self.change_target(-1))
         self.plus.clicked.connect(lambda: self.change_target(1))
@@ -2060,8 +2068,37 @@ class ThermostatScreen(Page):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self.position_main_controls()
         self.position_alert_banner()
         self.position_away_overlay()
+
+    def position_main_controls(self):
+        """Center the five primary thermostat controls on one horizontal line."""
+        if not hasattr(self, "controls_band"):
+            return
+        w = max(1, self.width())
+        h = max(1, self.height())
+
+        # Use most of the colored background height, but keep clear of the
+        # weather/title area and bottom edge.  The dial itself sits in the
+        # center row, so its center lands at the vertical center of this band.
+        band_h = min(max(360, int(h * 0.78)), max(260, h - 112))
+        center_y = int(h * 0.51)
+        y = int(center_y - band_h / 2)
+        y = max(58, min(y, max(58, h - band_h - 18)))
+
+        self.controls_band.setGeometry(0, y, w, band_h)
+        self.controls_band.raise_()
+
+        # These are temporary alert controls; keep them above the main band
+        # without letting them reserve layout space beside the Doors card.
+        pill_x = 58
+        if self.bypass_pill.isVisible():
+            self.bypass_pill.move(pill_x, max(70, y + 16))
+            self.bypass_pill.raise_()
+        if self.notice.isVisible():
+            self.notice.move(pill_x, max(70, y + 66))
+            self.notice.raise_()
 
     def position_away_overlay(self):
         if not hasattr(self, "away_overlay"):
@@ -2208,18 +2245,8 @@ class ThermostatScreen(Page):
             hot_glow.setColorAt(1.0, QColor(0, 0, 0, 0))
             p.fillRect(r, hot_glow)
 
-        # Slight chip/board panels so the background has depth.
-        panel_fills = (
-            (0.08, 0.10, 0.30, 0.23, 10),
-            (0.42, 0.14, 0.30, 0.22, 12),
-            (0.72, 0.52, 0.22, 0.24, 9),
-            (0.16, 0.62, 0.32, 0.23, 8),
-        )
-        for x_ratio, y_ratio, ww_ratio, hh_ratio, alpha in panel_fills:
-            panel = QRectF(w * x_ratio, h * y_ratio, w * ww_ratio, h * hh_ratio)
-            p.setBrush(QColor(255, 255, 255, alpha))
-            p.setPen(QPen(QColor(trace.red(), trace.green(), trace.blue(), alpha + 20), 1))
-            p.drawRoundedRect(panel, 18, 18)
+        # Avoid large translucent rectangles in the PCB background; they looked
+        # like leftover UI panels behind the thermostat controls.
 
         phase = int(getattr(self, "fx_phase", 0) or 0)
 
@@ -2301,8 +2328,6 @@ class ThermostatScreen(Page):
         # A few larger chip pads for a more intentional circuit-board style.
         chip_specs = (
             (0.43, 0.42, 0.18, 0.11),
-            # Keep the upper-right circuit area open now that the virtual panel
-            # is removed; the old chip rectangle looked like a leftover widget.
             (0.14, 0.50, 0.14, 0.12),
         )
         for x_ratio, y_ratio, ww_ratio, hh_ratio in chip_specs:
