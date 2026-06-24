@@ -494,6 +494,8 @@ class ThermostatDial(QWidget):
             p.setBrush(T.TEXT)
             p.setPen(QPen(QColor(active_color.red(), active_color.green(), active_color.blue(), 170), 3))
             p.drawEllipse(knob, 12, 12)
+            if self.dragging:
+                self._draw_drag_bubble(p, c, rr, side, active_color)
 
     def mousePressEvent(self, event):
         if self.off_mode:
@@ -508,6 +510,57 @@ class ThermostatDial(QWidget):
         if self.dragging:
             self.target = self._temp_for_pos(event.pos())
             self.update()
+
+    def _draw_drag_bubble(self, p: QPainter, center: QPointF, arc_radius: float, side: float, active_color: QColor):
+        """Draw a large live setpoint badge just outside the dial while dragging.
+
+        The user's finger is usually on the arc/knob, so the center setpoint text
+        can be covered.  This badge rides the same temperature angle as the knob
+        but is pulled outward and clamped inside the widget so it remains visible
+        on the 10-inch touchscreen.
+        """
+        target_ang_rad = math.radians(self._angle_for_temp(self.target))
+        knob = QPointF(
+            center.x() + math.cos(target_ang_rad) * arc_radius,
+            center.y() - math.sin(target_ang_rad) * arc_radius,
+        )
+        bubble_w = max(92.0, side * 0.225)
+        bubble_h = max(54.0, side * 0.132)
+        lift = max(42.0, side * 0.105)
+        bubble_center = QPointF(
+            center.x() + math.cos(target_ang_rad) * (arc_radius + lift),
+            center.y() - math.sin(target_ang_rad) * (arc_radius + lift),
+        )
+
+        margin = 8.0
+        bubble_center.setX(max(margin + bubble_w / 2, min(self.width() - margin - bubble_w / 2, bubble_center.x())))
+        bubble_center.setY(max(margin + bubble_h / 2, min(self.height() - margin - bubble_h / 2, bubble_center.y())))
+        bubble = QRectF(
+            bubble_center.x() - bubble_w / 2,
+            bubble_center.y() - bubble_h / 2,
+            bubble_w,
+            bubble_h,
+        )
+
+        glow = QRadialGradient(bubble.center(), max(bubble_w, bubble_h) * 0.78)
+        glow.setColorAt(0.0, QColor(active_color.red(), active_color.green(), active_color.blue(), 115))
+        glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.fillRect(self.rect(), glow)
+
+        # Small connector makes it clear which point on the curve is being set.
+        p.setPen(QPen(QColor(active_color.red(), active_color.green(), active_color.blue(), 125), max(2, int(side * 0.008)), Qt.SolidLine, Qt.RoundCap))
+        p.drawLine(knob, bubble_center)
+
+        bg = QLinearGradient(bubble.topLeft(), bubble.bottomRight())
+        bg.setColorAt(0.0, QColor(255, 255, 255, 244))
+        bg.setColorAt(1.0, QColor(210, 232, 255, 232))
+        p.setBrush(bg)
+        p.setPen(QPen(QColor(active_color.red(), active_color.green(), active_color.blue(), 210), max(2, int(side * 0.007))))
+        p.drawRoundedRect(bubble, bubble_h / 2, bubble_h / 2)
+
+        p.setFont(font(max(24, int(side * 0.073)), QFont.Black))
+        p.setPen(QColor(8, 18, 32))
+        p.drawText(bubble, Qt.AlignCenter, fmt_temp(self.target))
 
     def mouseReleaseEvent(self, event):
         if self.off_mode:
