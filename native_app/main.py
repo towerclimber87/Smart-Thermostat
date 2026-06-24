@@ -7474,6 +7474,16 @@ class SettingsDialog(QDialog):
             b.clicked.connect(lambda checked=False, x=f: self.set_thermostat({"fan": x}))
             fan_row.addWidget(b)
 
+        minimum_runtime = self.add_section("Minimum Runtime", 3, 2, 1, 2)
+        runtime_grid = self.section_grid(minimum_runtime, 2)
+        self.add_section_value(runtime_grid, "heatMinimumRuntimeMinutes", "Heat", t.get("heatMinimumRuntimeMinutes", 2), 0, 0, 1, 30, " min")
+        self.add_section_value(runtime_grid, "coolMinimumRuntimeMinutes", "Cool", t.get("coolMinimumRuntimeMinutes", 2), 0, 1, 1, 30, " min")
+        runtime_note = QLabel("Same value is used for minimum ON time and minimum OFF time.")
+        runtime_note.setWordWrap(True)
+        runtime_note.setFont(font(7, QFont.Black))
+        runtime_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
+        minimum_runtime.layout().addWidget(runtime_note)
+
         air_control = self.add_section("Internal / External Air", 2, 0, 1, 2)
         self.air_mode_summary = QLabel(self.air_mode_summary_text())
         self.air_mode_summary.setWordWrap(True)
@@ -7551,7 +7561,7 @@ class SettingsDialog(QDialog):
         choose_door.clicked.connect(self.choose_inside_door_entry)
         door_grid.addWidget(choose_door, 0, 1)
 
-        codes = self.add_section("Security Codes", 3, 2, 1, 2)
+        codes = self.add_section("Security Codes", 4, 0, 1, 2)
         code_grid = QGridLayout()
         code_grid.setContentsMargins(0, 0, 0, 0)
         code_grid.setHorizontalSpacing(6)
@@ -7576,7 +7586,7 @@ class SettingsDialog(QDialog):
         code_grid.setColumnStretch(0, 1)
         code_grid.setColumnStretch(1, 1)
 
-        unit = self.add_section("Thermostat Unit", 4, 0, 1, 4)
+        unit = self.add_section("Thermostat Unit", 4, 2, 1, 2)
         unit_row = QHBoxLayout()
         unit_row.setSpacing(6)
         self.thermostat_name_label = QLabel(self.thermostat_name_summary_text())
@@ -7680,6 +7690,8 @@ class SettingsDialog(QDialog):
             "autoHeatOutdoorTarget": self.val_number("autoHeatOutdoorTarget"),
             "autoChangeoverLockoutMinutes": self.val_number("autoChangeoverLockoutMinutes") * 60,
             "manualChangeoverLockoutMinutes": self.val_number("manualChangeoverLockoutMinutes"),
+            "heatMinimumRuntimeMinutes": self.val_number("heatMinimumRuntimeMinutes"),
+            "coolMinimumRuntimeMinutes": self.val_number("coolMinimumRuntimeMinutes"),
             "coolFanRemainOnMinutes": self.val_number("coolFanRemainOnMinutes"),
             "heatLocked": bool((self.s.thermostat or {}).get("heatLocked")),
             "coolLocked": bool((self.s.thermostat or {}).get("coolLocked")),

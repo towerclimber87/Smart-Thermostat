@@ -168,6 +168,8 @@ DEFAULT_THERMOSTAT = {
     "autoHeatOutdoorTarget": 65,
     "autoChangeoverLockoutMinutes": 120,
     "manualChangeoverLockoutMinutes": MANUAL_CHANGEOVER_LOCKOUT_MINUTES,
+    "heatMinimumRuntimeMinutes": 2,
+    "coolMinimumRuntimeMinutes": 2,
     "coolFanRemainOnMinutes": 2,
     "airControlMode": "internal",
     "externalHeatEntity": None,
@@ -185,7 +187,12 @@ DEFAULT_THERMOSTAT = {
     "lastCoolRunAt": 0,
     "equipmentLastHeatRunAt": 0,
     "equipmentLastCoolRunAt": 0,
+    "heatRelayWasOn": False,
     "coolRelayWasOn": False,
+    "heatCycleStartedAt": 0,
+    "coolCycleStartedAt": 0,
+    "heatCycleStoppedAt": 0,
+    "coolCycleStoppedAt": 0,
     "coolFanHoldUntil": 0,
     "pauseFunction": {
         "durationMinutes": 5,
@@ -794,6 +801,8 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             ("autoHeatOutdoorTarget", base["autoHeatOutdoorTarget"], 40, 100),
             ("autoChangeoverLockoutMinutes", base["autoChangeoverLockoutMinutes"], 0, 720),
             ("manualChangeoverLockoutMinutes", base.get("manualChangeoverLockoutMinutes", MANUAL_CHANGEOVER_LOCKOUT_MINUTES), 0, 60),
+            ("heatMinimumRuntimeMinutes", base.get("heatMinimumRuntimeMinutes", 2), 1, 30),
+            ("coolMinimumRuntimeMinutes", base.get("coolMinimumRuntimeMinutes", 2), 1, 30),
             ("coolFanRemainOnMinutes", base["coolFanRemainOnMinutes"], 0, 15),
             ("autoLockoutUntil", base["autoLockoutUntil"], 0, None),
             ("manualLockoutUntil", base.get("manualLockoutUntil", 0), 0, None),
@@ -801,6 +810,10 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             ("lastCoolRunAt", base["lastCoolRunAt"], 0, None),
             ("equipmentLastHeatRunAt", base.get("equipmentLastHeatRunAt", 0), 0, None),
             ("equipmentLastCoolRunAt", base.get("equipmentLastCoolRunAt", 0), 0, None),
+            ("heatCycleStartedAt", base.get("heatCycleStartedAt", 0), 0, None),
+            ("coolCycleStartedAt", base.get("coolCycleStartedAt", 0), 0, None),
+            ("heatCycleStoppedAt", base.get("heatCycleStoppedAt", 0), 0, None),
+            ("coolCycleStoppedAt", base.get("coolCycleStoppedAt", 0), 0, None),
             ("coolFanHoldUntil", base["coolFanHoldUntil"], 0, None),
         ):
             if key in source:
@@ -829,6 +842,8 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
         if "manualPendingMode" in source:
             pending = str(source.get("manualPendingMode") or "").strip().lower()
             base["manualPendingMode"] = pending if pending in {"", "heat", "cool"} else ""
+        if "heatRelayWasOn" in source:
+            base["heatRelayWasOn"] = bool(source.get("heatRelayWasOn"))
         if "coolRelayWasOn" in source:
             base["coolRelayWasOn"] = bool(source.get("coolRelayWasOn"))
         if "autoSwitchNotice" in source:
@@ -926,6 +941,8 @@ THERMOSTAT_PERSIST_KEYS = (
     "autoHeatOutdoorTarget",
     "autoChangeoverLockoutMinutes",
     "manualChangeoverLockoutMinutes",
+    "heatMinimumRuntimeMinutes",
+    "coolMinimumRuntimeMinutes",
     "coolFanRemainOnMinutes",
     "airControlMode",
     "externalHeatEntity",
@@ -956,7 +973,12 @@ THERMOSTAT_RUNTIME_KEYS = (
     "lastCoolRunAt",
     "equipmentLastHeatRunAt",
     "equipmentLastCoolRunAt",
+    "heatRelayWasOn",
     "coolRelayWasOn",
+    "heatCycleStartedAt",
+    "coolCycleStartedAt",
+    "heatCycleStoppedAt",
+    "coolCycleStoppedAt",
     "coolFanHoldUntil",
     "autoSwitchNotice",
     "autoSwitchHold",
@@ -2953,21 +2975,36 @@ def _mark_thermostat_equipment_run(outputs: dict) -> None:
     try:
         current = _read_thermostat_record()["thermostat"]
         changes: dict[str, float | bool] = {}
+        was_heating = bool(current.get("heatRelayWasOn"))
+        is_heating = bool(outputs.get("heat"))
         was_cooling = bool(current.get("coolRelayWasOn"))
         is_cooling = bool(outputs.get("cool"))
 
-        if outputs.get("heat"):
+        if is_heating:
             changes["equipmentLastHeatRunAt"] = now_ms
             changes["lastHeatRunAt"] = now_ms
+            changes["heatRelayWasOn"] = True
+            if (not was_heating) or not _number(current.get("heatCycleStartedAt"), 0, 0):
+                changes["heatCycleStartedAt"] = now_ms
+                changes["heatCycleStoppedAt"] = 0
+        elif was_heating:
+            changes["heatRelayWasOn"] = False
+            changes["heatCycleStartedAt"] = 0
+            changes["heatCycleStoppedAt"] = now_ms
 
         if is_cooling:
             changes["equipmentLastCoolRunAt"] = now_ms
             changes["lastCoolRunAt"] = now_ms
             changes["coolRelayWasOn"] = True
             changes["coolFanHoldUntil"] = 0
+            if (not was_cooling) or not _number(current.get("coolCycleStartedAt"), 0, 0):
+                changes["coolCycleStartedAt"] = now_ms
+                changes["coolCycleStoppedAt"] = 0
         elif was_cooling:
             remain_minutes = _number(current.get("coolFanRemainOnMinutes"), 2, 0, 15)
             changes["coolRelayWasOn"] = False
+            changes["coolCycleStartedAt"] = 0
+            changes["coolCycleStoppedAt"] = now_ms
             changes["coolFanHoldUntil"] = int(now_ms + remain_minutes * 60000) if remain_minutes > 0 else 0
         elif _number(current.get("coolFanHoldUntil"), 0, 0) and _number(current.get("coolFanHoldUntil"), 0, 0) <= now_ms:
             changes["coolFanHoldUntil"] = 0
@@ -2978,6 +3015,63 @@ def _mark_thermostat_equipment_run(outputs: dict) -> None:
         _write_thermostat_record(updated, persist=False)
     except Exception as exc:
         print(f"Unable to mark HVAC equipment runtime: {exc}", flush=True)
+
+
+def _minimum_cycle_runtime_ms(thermostat: dict, kind: str) -> int:
+    key = "heatMinimumRuntimeMinutes" if kind == "heat" else "coolMinimumRuntimeMinutes"
+    minutes = _number(thermostat.get(key), 2, 1, 30)
+    return int(minutes * 60000)
+
+
+def _apply_minimum_cycle_protection(
+    thermostat: dict,
+    *,
+    kind: str,
+    requested_on: bool,
+    active_mode: str,
+    safety_mode: str,
+    now_ms: int,
+) -> tuple[bool, int, str]:
+    """Apply minimum-on and minimum-off protection for one HVAC side.
+
+    The configured value is intentionally used for both directions: once the
+    side starts, it stays on for that many minutes during normal thermostat
+    control; once it stops, it must remain off that many minutes before a
+    normal restart. Manual Off, lockout buttons, opposite-mode changeover
+    lockouts, and safety calls are allowed to shut equipment down.
+    """
+    kind = "heat" if kind == "heat" else "cool"
+    locked = bool(thermostat.get("heatLocked" if kind == "heat" else "coolLocked"))
+    relay_key = "heatRelayWasOn" if kind == "heat" else "coolRelayWasOn"
+    started_key = "heatCycleStartedAt" if kind == "heat" else "coolCycleStartedAt"
+    stopped_key = "heatCycleStoppedAt" if kind == "heat" else "coolCycleStoppedAt"
+    was_on = bool(thermostat.get(relay_key))
+    min_ms = _minimum_cycle_runtime_ms(thermostat, kind)
+
+    if locked or active_mode == "off":
+        return False, 0, ""
+
+    # Do not keep running a side just because it had been running if the user
+    # changed modes, a changeover lockout is active, or safety needs the other
+    # side. Minimum runtime only extends normal operation for the current side.
+    may_extend_current_run = active_mode == kind and (not safety_mode or safety_mode == kind)
+    if was_on and not requested_on and may_extend_current_run:
+        started_at = _number(thermostat.get(started_key), 0, 0)
+        if started_at > 0:
+            until = int(started_at + min_ms)
+            if until > now_ms:
+                return True, until, "minimum-runtime"
+
+    # Safety heat/cool must still be able to start immediately. Normal comfort
+    # calls wait until the side has been off for the same configured duration.
+    if (not was_on) and requested_on and not safety_mode:
+        stopped_at = _number(thermostat.get(stopped_key), 0, 0)
+        if stopped_at > 0:
+            until = int(stopped_at + min_ms)
+            if until > now_ms:
+                return False, until, "minimum-off"
+
+    return requested_on, 0, ""
 
 
 def _thermostat_outputs(thermostat: dict) -> dict:
@@ -3013,6 +3107,37 @@ def _thermostat_outputs(thermostat: dict) -> dict:
             cool = False
             active_mode = "lockout"
             manual_lockout_until = until
+    heat_cycle_until = 0
+    cool_cycle_until = 0
+    heat_cycle_reason = ""
+    cool_cycle_reason = ""
+    heat, heat_cycle_until, heat_cycle_reason = _apply_minimum_cycle_protection(
+        thermostat,
+        kind="heat",
+        requested_on=heat,
+        active_mode=active_mode,
+        safety_mode=safety_mode,
+        now_ms=now_ms,
+    )
+    cool, cool_cycle_until, cool_cycle_reason = _apply_minimum_cycle_protection(
+        thermostat,
+        kind="cool",
+        requested_on=cool,
+        active_mode=active_mode,
+        safety_mode=safety_mode,
+        now_ms=now_ms,
+    )
+    if heat and cool:
+        # Heat and cool must never be energized together. Favor the current
+        # active/safety mode, otherwise fail safe by dropping cooling.
+        if active_mode == "cool" or safety_mode == "cool":
+            heat = False
+        else:
+            cool = False
+    cycle_until = max(heat_cycle_until, cool_cycle_until)
+    cycle_mode = "heat" if heat_cycle_until >= cool_cycle_until and heat_cycle_until else "cool" if cool_cycle_until else ""
+    cycle_reason = heat_cycle_reason if cycle_mode == "heat" else cool_cycle_reason if cycle_mode == "cool" else ""
+
     active_hold_until = _number(thermostat.get("coolFanHoldUntil"), 0, 0)
     remain_minutes = _number(thermostat.get("coolFanRemainOnMinutes"), 2, 0, 15)
     # If cooling was on in the last control pass and this pass turns cooling
@@ -3033,6 +3158,9 @@ def _thermostat_outputs(thermostat: dict) -> dict:
         "safetyMode": safety_mode,
         "pendingMode": pending_mode,
         "manualLockoutUntil": manual_lockout_until,
+        "minimumCycleUntil": cycle_until,
+        "minimumCycleMode": cycle_mode,
+        "minimumCycleReason": cycle_reason,
     }
 
 def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware: bool = False) -> dict:
@@ -3076,6 +3204,9 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
         "outdoorWindUnit": thermostat.get("outdoorWindUnit", "mph"),
         "outdoor_wind_unit": thermostat.get("outdoorWindUnit", "mph"),
         "safetyMode": outputs.get("safetyMode", ""),
+        "minimumCycleUntil": outputs.get("minimumCycleUntil", 0),
+        "minimumCycleMode": outputs.get("minimumCycleMode", ""),
+        "minimumCycleReason": outputs.get("minimumCycleReason", ""),
         "coolingFanHold": outputs.get("coolingFanHold", False),
         "coolFanHoldUntil": thermostat.get("coolFanHoldUntil", 0),
         "schedules": thermostat.get("schedules") or [],
@@ -3138,6 +3269,9 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
         "outdoorWindUnit": thermostat.get("outdoorWindUnit", "mph"),
         "outdoor_wind_unit": thermostat.get("outdoorWindUnit", "mph"),
         "safetyMode": outputs.get("safetyMode", ""),
+        "minimumCycleUntil": outputs.get("minimumCycleUntil", 0),
+        "minimumCycleMode": outputs.get("minimumCycleMode", ""),
+        "minimumCycleReason": outputs.get("minimumCycleReason", ""),
         "coolingFanHold": outputs.get("coolingFanHold", False),
         "coolFanHoldUntil": thermostat.get("coolFanHoldUntil", 0),
         "schedules": thermostat.get("schedules") or [],
