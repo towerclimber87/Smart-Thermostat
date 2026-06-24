@@ -2556,6 +2556,35 @@ def _schedule_people_are_home(schedule: dict, thermostat: dict) -> bool:
     return all(states.get(entity_id) == "home" for entity_id in entity_ids)
 
 
+def _away_target_for_current_mode(thermostat: dict) -> int:
+    """Return the correct Away setpoint for the active heat/cool side."""
+    mode = str(thermostat.get("mode") or "cool").strip().lower()
+    active = str(thermostat.get("autoActiveMode") or "").strip().lower()
+    effective = active if mode == "auto" and active in {"heat", "cool"} else mode
+    if effective == "heat":
+        return _intish(thermostat.get("awayHeat"), DEFAULT_THERMOSTAT.get("awayHeat", 55), 40, 75)
+    return _intish(thermostat.get("awayCool"), DEFAULT_THERMOSTAT.get("awayCool", 85), 75, 100)
+
+
+def _apply_away_setpoint_logic(thermostat: dict, *, was_away: bool | None = None) -> dict:
+    """Keep Away mode tied to Heat Away / Cool Away without losing the Home target."""
+    t = dict(thermostat or {})
+    away = bool(t.get("away"))
+    previous_away = bool(was_away) if was_away is not None else away
+
+    if away:
+        away_target = _away_target_for_current_mode(t)
+        if not previous_away:
+            current_target = _number(t.get("targetTemp"), t.get("lastComfortTarget", 70), 45, 95)
+            if abs(float(current_target) - float(away_target)) > 0.01:
+                t["lastComfortTarget"] = current_target
+        t["targetTemp"] = away_target
+    elif was_away is True:
+        t["targetTemp"] = _number(t.get("lastComfortTarget"), t.get("targetTemp", 70), 45, 95)
+
+    return _merge_thermostat_state(t)
+
+
 def _schedule_target_for_current_mode(thermostat: dict, schedule: dict) -> int:
     mode = str(thermostat.get("mode") or "cool").strip().lower()
     active = str(thermostat.get("autoActiveMode") or "").strip().lower()
@@ -2617,6 +2646,7 @@ def _apply_presence_away_logic(thermostat: dict) -> dict:
     states = _person_states_for_schedule(entity_ids, thermostat)
     if not states:
         return thermostat
+    was_away = bool(thermostat.get("away"))
     home_entity_ids = [entity_id for entity_id in entity_ids if states.get(entity_id) == "home"]
     any_home = bool(home_entity_ids)
     updated = dict(thermostat)
@@ -2649,7 +2679,7 @@ def _apply_presence_away_logic(thermostat: dict) -> dict:
             updated["away"] = True
             updated["awaySource"] = "presence"
             updated["manualAwayPresenceLatch"] = None
-    return _merge_thermostat_state(updated)
+    return _apply_away_setpoint_logic(updated, was_away=was_away)
 
 def _pause_entry_open_state(entry: dict) -> bool:
     """Return True when a configured inside-door entry should pause comfort."""
@@ -2714,12 +2744,7 @@ def _refresh_pause_function_entry_states(entries: list[dict]) -> list[dict]:
 
 
 def _door_pause_away_target(thermostat: dict) -> int:
-    mode = str(thermostat.get("mode") or "cool").strip().lower()
-    active = str(thermostat.get("autoActiveMode") or "").strip().lower()
-    effective = active if mode == "auto" and active in {"heat", "cool"} else mode
-    if effective == "heat":
-        return _intish(thermostat.get("awayHeat"), 55, 45, 72)
-    return _intish(thermostat.get("awayCool"), 85, 72, 95)
+    return _away_target_for_current_mode(thermostat)
 
 
 def _restore_from_door_pause(thermostat: dict, pause: dict) -> dict:
@@ -2904,14 +2929,17 @@ def _apply_door_pause_snooze_request(existing: dict, minutes: object = 5) -> dic
 
 def _apply_runtime_thermostat_logic(record: dict, *, notify: bool = True) -> dict:
     thermostat = record.get("thermostat") or {}
+    was_away = bool(thermostat.get("away"))
     thermostat = _clear_expired_virtual_temp_override(thermostat)
     thermostat = _apply_selected_ha_temperature_sensor_if_needed(thermostat)
     thermostat = _apply_selected_ha_outdoor_temperature_sensor_if_needed(thermostat)
     thermostat = _apply_local_temperature_sensor_if_needed({"thermostat": thermostat})
     updated = _apply_presence_away_logic(thermostat)
     updated = _apply_door_pause_logic(updated)
+    updated = _apply_away_setpoint_logic(updated, was_away=was_away)
     updated = _apply_comfort_auto_switch_logic(updated, notify=notify)
     scheduled = _apply_thermostat_schedules(updated)
+    scheduled = _apply_away_setpoint_logic(scheduled, was_away=was_away)
     if scheduled != updated:
         _write_thermostat_record(scheduled, persist=True)
         updated = scheduled
@@ -3218,7 +3246,9 @@ def _handle_thermostat_update(payload: dict) -> dict:
         existing["autoLockoutUntil"] = 0
         incoming = {k: v for k, v in incoming.items() if k != "bypassChangeoverLockout"}
 
+    was_away = bool(existing.get("away"))
     merged = _merge_thermostat_state(existing, incoming)
+    merged = _apply_away_setpoint_logic(merged, was_away=was_away)
 
     if requested_mode in {"heat", "cool"}:
         # Manual / physical mode changes always win, whether they came from the
@@ -3250,6 +3280,7 @@ def _handle_thermostat_update(payload: dict) -> dict:
         merged["manualLockoutUntil"] = 0
 
     merged = _apply_comfort_auto_switch_logic(merged, notify=True)
+    merged = _apply_away_setpoint_logic(merged, was_away=was_away)
     _write_thermostat_record(merged)
     if incoming_has_schedules:
         saved_schedules = _normalize_schedule_entries(incoming.get("schedules"))
