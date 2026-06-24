@@ -3317,12 +3317,42 @@ def _schedule_thermostat_outputs_apply(thermostat: dict, *, reason: str = "contr
     threading.Thread(target=_worker, name=f"thermostat-output-{reason}", daemon=True).start()
 
 
+THERMOSTAT_COMFORT_TARGET_KEYS = ("targetTemp", "target_temperature", "temperature", "lastComfortTarget")
+
+
+def _incoming_explicitly_leaves_away(incoming: dict | None) -> bool:
+    if not isinstance(incoming, dict):
+        return False
+    if "away" in incoming and not _boolish(incoming.get("away")):
+        return True
+    preset = incoming.get("preset_mode", incoming.get("presetMode"))
+    return str(preset or "").strip().lower() == "home"
+
+
+def _incoming_has_comfort_target_change(incoming: dict | None) -> bool:
+    return isinstance(incoming, dict) and any(key in incoming for key in THERMOSTAT_COMFORT_TARGET_KEYS)
+
+
+def _strip_comfort_target_changes(incoming: dict) -> dict:
+    return {k: v for k, v in incoming.items() if k not in THERMOSTAT_COMFORT_TARGET_KEYS}
+
+
 def _handle_thermostat_update(payload: dict) -> dict:
     existing = _read_thermostat_record()["thermostat"]
     incoming = payload.get("thermostat", payload) if isinstance(payload, dict) else {}
     if not isinstance(incoming, dict):
         incoming = {}
     incoming_has_schedules = "schedules" in incoming
+
+    if (
+        bool(existing.get("away"))
+        and _incoming_has_comfort_target_change(incoming)
+        and not _incoming_explicitly_leaves_away(incoming)
+    ):
+        # Away mode owns the active target. HA cards/automations may still
+        # report the thermostat and may change fan/mode, but they must not
+        # drag the active Away setpoint back to the last Home comfort value.
+        incoming = _strip_comfort_target_changes(dict(incoming))
 
     pause_incoming = incoming.get("pauseFunction") if isinstance(incoming.get("pauseFunction"), dict) else {}
     if pause_incoming and str(pause_incoming.get("action") or "").strip().lower() == "snooze":
@@ -3351,20 +3381,19 @@ def _handle_thermostat_update(payload: dict) -> dict:
 
     requested_mode_raw = incoming.get("mode", incoming.get("hvac_mode", incoming.get("hvacMode")))
     requested_mode = _normalize_mode(requested_mode_raw, "") if requested_mode_raw is not None else ""
-    if requested_mode in {"off", "heat", "cool", "auto"} and "away" not in incoming and "preset_mode" not in incoming and "presetMode" not in incoming:
-        # A Home Assistant HVAC-mode change should behave like tapping the mode
-        # button on the thermostat page: leave Away and make this a manual mode
-        # command. Without this, HA could send heat/cool while the saved Away
-        # preset stayed active, making the HA card look like the command only
-        # partly applied or reverted.
+    if (
+        requested_mode in {"off", "heat", "cool", "auto"}
+        and not bool(existing.get("away"))
+        and "away" not in incoming
+        and "preset_mode" not in incoming
+        and "presetMode" not in incoming
+    ):
+        # Keep normal Home-mode HVAC commands explicit, but do not let a HA
+        # HVAC-mode command implicitly clear Away. The panel's Away preset must
+        # win until the user or an automation sends preset/home or away=false.
         incoming = dict(incoming)
         incoming["away"] = False
         incoming["awaySource"] = ""
-        if bool(existing.get("away")) and existing_away_source in {"presence", "auto"} and "presenceHomeOverride" not in incoming:
-            incoming["presenceHomeOverride"] = _presence_home_override_payload(
-                _thermostat_person_entity_ids(existing),
-                reason="manual-ha-mode-change",
-            )
 
     if bypass_mode in {"heat", "cool"}:
         existing = dict(existing)
