@@ -3711,6 +3711,32 @@ def _source_is_panel(source: str) -> bool:
     return str(source or "").strip().lower() in {"panel", "wall-panel", "wall_panel", "touchscreen", "native", "local"}
 
 
+def _source_is_explicit_home_assistant_command(source: str) -> bool:
+    """Return True when a /control write is a real HA user/service command.
+
+    Recent touchscreen commands are protected from stale Home Assistant echoes,
+    but HA climate-card, automation, and voice-assistant service calls still need
+    to be accepted immediately. The custom HA integration now tags writes with
+    these source values so the panel can tell an intentional command apart from
+    an untagged stale status echo.
+    """
+    normalized = str(source or "").strip().lower().replace("_", "-")
+    return normalized in {
+        "home-assistant",
+        "home-assistant-command",
+        "ha-command",
+        "hass-command",
+        "voice-assistant",
+        "voice-command",
+        "automation",
+        "external-command",
+    }
+
+
+def _source_is_panel_guard_exempt(source: str) -> bool:
+    return _source_is_panel(source) or _source_is_explicit_home_assistant_command(source)
+
+
 def _target_value_from_incoming(incoming: dict) -> float | None:
     for key in THERMOSTAT_COMFORT_TARGET_KEYS:
         if key in incoming:
@@ -3807,14 +3833,14 @@ def _handle_thermostat_update(payload: dict) -> dict:
     # echo old mode/setpoint values for a few seconds when it reconnects or when
     # its climate entity briefly goes unavailable. Those stale echoes used to
     # clear bypass countdowns or snap the set temperature backward, then forward.
-    if requested_mode in {"off", "heat", "cool"} and not _source_is_panel(mode_change_source):
+    if requested_mode in {"off", "heat", "cool"} and not _source_is_panel_guard_exempt(mode_change_source):
         panel_mode = str(existing.get("lastPanelModeRequestMode") or "").strip().lower()
         if panel_mode and requested_mode != panel_mode and _panel_command_guard_active(existing, "lastPanelModeRequestAt", now_ms=now_ms):
             incoming = _strip_mode_changes(dict(incoming))
             requested_mode = ""
 
     incoming_target = _target_value_from_incoming(incoming)
-    if incoming_target is not None and not _source_is_panel(target_change_source):
+    if incoming_target is not None and not _source_is_panel_guard_exempt(target_change_source):
         panel_target_at = _number(existing.get("lastPanelTargetRequestAt"), 0, 0, None)
         panel_target = _number(existing.get("lastPanelTargetTemp"), existing.get("targetTemp", 70), 0, 130)
         if panel_target_at > 0 and now_ms - panel_target_at <= PANEL_TARGET_COMMAND_GRACE_MS and abs(incoming_target - panel_target) >= 0.5:
@@ -3825,7 +3851,7 @@ def _handle_thermostat_update(payload: dict) -> dict:
         existing_manual_pending in {"heat", "cool"}
         and requested_mode in {"heat", "cool"}
         and requested_mode != existing_manual_pending
-        and not _source_is_panel(mode_change_source)
+        and not _source_is_panel_guard_exempt(mode_change_source)
         and bypass_mode not in {"heat", "cool"}
     ):
         # A just-tapped panel mode owns the compressor changeover window.
