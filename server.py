@@ -189,6 +189,8 @@ DEFAULT_THERMOSTAT = {
     "equipmentLastCoolRunAt": 0,
     "heatRelayWasOn": False,
     "coolRelayWasOn": False,
+    "lastManualChangeoverBypassMode": "",
+    "lastManualChangeoverBypassAt": 0,
     "heatCycleStartedAt": 0,
     "coolCycleStartedAt": 0,
     "heatCycleStoppedAt": 0,
@@ -835,6 +837,7 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             ("lastCoolRunAt", base["lastCoolRunAt"], 0, None),
             ("equipmentLastHeatRunAt", base.get("equipmentLastHeatRunAt", 0), 0, None),
             ("equipmentLastCoolRunAt", base.get("equipmentLastCoolRunAt", 0), 0, None),
+            ("lastManualChangeoverBypassAt", base.get("lastManualChangeoverBypassAt", 0), 0, None),
             ("heatCycleStartedAt", base.get("heatCycleStartedAt", 0), 0, None),
             ("coolCycleStartedAt", base.get("coolCycleStartedAt", 0), 0, None),
             ("heatCycleStoppedAt", base.get("heatCycleStoppedAt", 0), 0, None),
@@ -871,6 +874,9 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             base["heatRelayWasOn"] = bool(source.get("heatRelayWasOn"))
         if "coolRelayWasOn" in source:
             base["coolRelayWasOn"] = bool(source.get("coolRelayWasOn"))
+        if "lastManualChangeoverBypassMode" in source:
+            bypass_mode = str(source.get("lastManualChangeoverBypassMode") or "").strip().lower()
+            base["lastManualChangeoverBypassMode"] = bypass_mode if bypass_mode in {"", "heat", "cool"} else ""
         if "autoSwitchNotice" in source:
             base["autoSwitchNotice"] = _normalize_auto_switch_notice(source.get("autoSwitchNotice"))
         if "autoSwitchNoticeDismissed" in source:
@@ -1001,6 +1007,8 @@ THERMOSTAT_RUNTIME_KEYS = (
     "lastCoolRunAt",
     "equipmentLastHeatRunAt",
     "equipmentLastCoolRunAt",
+    "lastManualChangeoverBypassMode",
+    "lastManualChangeoverBypassAt",
     "heatRelayWasOn",
     "coolRelayWasOn",
     "heatCycleStartedAt",
@@ -2462,7 +2470,39 @@ def _last_opposite_equipment_run_at(thermostat: dict, requested_mode: str, *, no
     legacy_key = "lastHeatRunAt" if opposite == "heat" else "lastCoolRunAt"
     if bool(thermostat.get(relay_key)):
         return now
-    return max(_number(thermostat.get(equipment_key), 0, 0), _number(thermostat.get(legacy_key), 0, 0))
+    return max(
+        _number(thermostat.get(equipment_key), 0, 0),
+        _number(thermostat.get(legacy_key), 0, 0),
+        _last_manual_bypass_run_at(thermostat, requested_mode, now_ms=now),
+    )
+
+
+def _last_manual_bypass_run_at(thermostat: dict, requested_mode: str, *, now_ms: int | None = None) -> float:
+    """Return a temporary runtime marker after a user bypasses into a mode.
+
+    The relay/runtime marker is written by the output worker after the API
+    response. If the user immediately switches back before that worker or an
+    external Home Assistant switch confirms, the next transition used to miss
+    the manual delay about one poll out of a few. A bypass means the selected
+    side is allowed to energize now, so keep a short-lived software marker for
+    that side and use it only while it is still inside the configured manual
+    lockout window.
+    """
+    requested_mode = str(requested_mode or "").strip().lower()
+    opposite = _opposite_hvac_mode(requested_mode)
+    if opposite not in {"heat", "cool"}:
+        return 0
+    bypass_mode = str(thermostat.get("lastManualChangeoverBypassMode") or "").strip().lower()
+    if bypass_mode != opposite:
+        return 0
+    bypass_at = _number(thermostat.get("lastManualChangeoverBypassAt"), 0, 0, None)
+    if bypass_at <= 0:
+        return 0
+    now = int(now_ms if now_ms is not None else time.time() * 1000)
+    lockout_minutes = _number(thermostat.get("manualChangeoverLockoutMinutes"), MANUAL_CHANGEOVER_LOCKOUT_MINUTES, 0, 60)
+    if lockout_minutes <= 0 or bypass_at + lockout_minutes * 60000 <= now:
+        return 0
+    return bypass_at
 
 
 def _manual_changeover_lockout_until(thermostat: dict, requested_mode: str, *, now_ms: int | None = None) -> int:
@@ -3621,16 +3661,35 @@ def _handle_thermostat_update(payload: dict) -> dict:
 
     if bypass_mode in {"heat", "cool"}:
         existing = dict(existing)
+        now_ms = int(time.time() * 1000)
         if bypass_mode == "heat":
             existing["equipmentLastCoolRunAt"] = 0
             existing["lastCoolRunAt"] = 0
+            existing["coolCycleStartedAt"] = 0
+            existing["coolCycleStoppedAt"] = 0
         else:
             existing["equipmentLastHeatRunAt"] = 0
             existing["lastHeatRunAt"] = 0
+            existing["heatCycleStartedAt"] = 0
+            existing["heatCycleStoppedAt"] = 0
         existing["manualPendingMode"] = ""
         existing["manualLockoutUntil"] = 0
         existing["autoPendingMode"] = ""
         existing["autoLockoutUntil"] = 0
+
+        # Remember the bypassed-into side long enough for a fast reverse tap to
+        # still get compressor protection, even if the external relay marker has
+        # not been written yet. Only arm this marker when the bypassed side is
+        # actually calling based on the current selected mode/temperature.
+        try:
+            probe = _merge_thermostat_state(existing, {"mode": bypass_mode})
+            out = _thermostat_outputs({**probe, "manualPendingMode": "", "manualLockoutUntil": 0})
+            if bool(out.get(bypass_mode)):
+                existing["lastManualChangeoverBypassMode"] = bypass_mode
+                existing["lastManualChangeoverBypassAt"] = now_ms
+        except Exception:
+            existing["lastManualChangeoverBypassMode"] = bypass_mode
+            existing["lastManualChangeoverBypassAt"] = now_ms
         incoming = {k: v for k, v in incoming.items() if k != "bypassChangeoverLockout"}
 
     was_away = bool(existing.get("away"))

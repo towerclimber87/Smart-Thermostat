@@ -310,11 +310,28 @@ class ThermostatDial(QWidget):
         pct = (t - self.min_temp) / max(1, self.max_temp - self.min_temp)
         return 225 - (270 * pct)
 
-    def _temp_for_pos(self, pos) -> float:
+    def _raw_angle_for_pos(self, pos) -> float:
         c = QPointF(self.width() / 2, self.height() / 2)
         dx = pos.x() - c.x()
         dy = pos.y() - c.y()
-        ang = math.degrees(math.atan2(-dy, dx))
+        return math.degrees(math.atan2(-dy, dx))
+
+    def _is_lower_dead_gap_pos(self, pos) -> bool:
+        # The visible temperature arc intentionally leaves a black inactive gap
+        # between the low/high labels at the bottom of the dial. Earlier builds
+        # still mapped touches in that gap to the minimum/maximum setpoint, so a
+        # casual tap between the two labels would shove the setpoint to the
+        # bottom of the scale. Treat that lower 90-degree gap as non-interactive.
+        ang = self._raw_angle_for_pos(pos)
+        return -135.0 < ang < -45.0
+
+    def _can_adjust_from_pos(self, pos) -> bool:
+        if self.off_mode:
+            return False
+        return not self._is_lower_dead_gap_pos(pos)
+
+    def _temp_for_pos(self, pos) -> float:
+        ang = self._raw_angle_for_pos(pos)
         # map 225 -> min, -45/315 -> max around the lower gap
         if ang < -45:
             ang += 360
@@ -498,7 +515,9 @@ class ThermostatDial(QWidget):
                 self._draw_drag_bubble(p, c, rr, side, active_color)
 
     def mousePressEvent(self, event):
-        if self.off_mode:
+        if not self._can_adjust_from_pos(event.pos()):
+            self.dragging = False
+            event.accept()
             return
         self.dragging = True
         self.target = self._temp_for_pos(event.pos())
@@ -507,7 +526,7 @@ class ThermostatDial(QWidget):
     def mouseMoveEvent(self, event):
         if self.off_mode:
             return
-        if self.dragging:
+        if self.dragging and self._can_adjust_from_pos(event.pos()):
             self.target = self._temp_for_pos(event.pos())
             self.update()
 
@@ -567,7 +586,8 @@ class ThermostatDial(QWidget):
             return
         if self.dragging:
             self.dragging = False
-            self.target = self._temp_for_pos(event.pos())
+            if self._can_adjust_from_pos(event.pos()):
+                self.target = self._temp_for_pos(event.pos())
             self.targetChanged.emit(self.target)
             self.update()
 

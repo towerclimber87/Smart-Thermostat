@@ -2465,7 +2465,9 @@ class ThermostatScreen(Page):
 
         mode_wrap = QWidget()
         mode_lay = QHBoxLayout(mode_wrap)
-        mode_lay.setContentsMargins(0, 0, 0, 0)
+        # Nudge the mode buttons lower into the unused bottom safe area and
+        # give touch users a slightly larger target without disturbing the dial.
+        mode_lay.setContentsMargins(0, 34, 0, 0)
         mode_lay.addStretch(1)
         mode_lay.addLayout(self._mode_bar())
         mode_lay.addStretch(1)
@@ -2473,7 +2475,8 @@ class ThermostatScreen(Page):
 
         fan_wrap = QWidget()
         fan_lay = QHBoxLayout(fan_wrap)
-        fan_lay.setContentsMargins(0, 0, 0, 0)
+        # Match the lower position of the Heat/Cool/Away buttons.
+        fan_lay.setContentsMargins(0, 34, 0, 0)
         fan_lay.addStretch(1)
         fan_lay.addLayout(self._fan_bar())
         fan_lay.addStretch(1)
@@ -3210,17 +3213,22 @@ class ThermostatScreen(Page):
             self.requestToast.emit("No changeover delay active")
             return
         try:
+            now_ms = int(time.time() * 1000)
             changes = {
                 "manualPendingMode": "",
                 "manualLockoutUntil": 0,
                 "autoPendingMode": "",
                 "autoLockoutUntil": 0,
                 "bypassChangeoverLockout": pending,
+                "lastManualChangeoverBypassMode": pending,
+                "lastManualChangeoverBypassAt": now_ms,
             }
             if str(t.get("mode") or "").lower() == "auto":
                 changes["autoActiveMode"] = pending
             else:
                 changes["mode"] = pending
+            self.s.thermostat.update(changes)
+            self.bypass_pill.hide()
             self.s.update_thermostat(changes)
             self.sync(self.s.config, self.s.thermostat)
         except Exception as exc:
@@ -3423,11 +3431,11 @@ class ThermostatScreen(Page):
         # fully rounded pill style so they do not look squared-off or overlap.
         lay = QHBoxLayout()
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(16)
+        lay.setSpacing(18)
         lay.addStretch(1)
         for mode in ["off", "cool", "heat", "away"]:
-            b = RoundButton(mode.capitalize(), active=False, min_h=38)
-            b.setFixedSize(82, 38)
+            b = RoundButton(mode.capitalize(), active=False, min_h=44)
+            b.setFixedSize(94, 44)
             b.clicked.connect(lambda checked=False, m=mode: self.set_mode(m))
             self.mode_buttons[mode] = b
             lay.addWidget(b)
@@ -3442,8 +3450,8 @@ class ThermostatScreen(Page):
         label = QLabel("FAN")
         label.setFont(font(8, QFont.Black, 15))
         label.setStyleSheet("color:#9ca6bb; background:transparent; border:0;")
-        self.fan_status_button = RoundButton("Auto", active=False, min_h=38)
-        self.fan_status_button.setFixedSize(86, 38)
+        self.fan_status_button = RoundButton("Auto", active=False, min_h=44)
+        self.fan_status_button.setFixedSize(100, 44)
         self.fan_status_button.clicked.connect(self.show_fan_menu)
         lay.addStretch(1)
         lay.addWidget(label)
@@ -3495,6 +3503,13 @@ class ThermostatScreen(Page):
         legacy_key = "lastCoolRunAt" if opposite == "cool" else "lastHeatRunAt"
         outputs = t.get("outputs") if isinstance(t.get("outputs"), dict) else {}
         last_run = max(self.safe_float(t.get(last_key), 0.0), self.safe_float(t.get(legacy_key), 0.0))
+        bypass_mode = str(t.get("lastManualChangeoverBypassMode") or "").lower()
+        bypass_at = self.safe_float(t.get("lastManualChangeoverBypassAt"), 0.0)
+        if bypass_mode == opposite and bypass_at > 0:
+            # If the user bypassed into the opposite side and immediately
+            # changes back before the relay-runtime marker catches up, still
+            # show the same compressor-protection countdown locally.
+            last_run = max(last_run, bypass_at)
         if bool(t.get(relay_key)) or bool(outputs.get(opposite)):
             last_run = now_ms
         if not last_run:
@@ -3740,7 +3755,7 @@ class ThermostatScreen(Page):
                 background:{bg};
                 color:{color};
                 border:1px solid {border};
-                border-radius:19px;
+                border-radius:22px;
                 padding:0;
                 font-family:Arial;
                 font-weight:900;
