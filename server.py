@@ -2476,6 +2476,60 @@ def _manual_changeover_lockout_until(thermostat: dict, requested_mode: str, *, n
     return until if until > now else 0
 
 
+def _manual_changeover_lockout_until_for_transition(existing: dict, requested_mode: str, *, now_ms: int | None = None) -> int:
+    """Return the manual Heat/Cool delay for a user-requested transition.
+
+    The normal timestamp path only works after the equipment runtime marker has
+    already written `coolRelayWasOn`/`equipmentLastCoolRunAt` or the heat
+    equivalents. On the touchscreen, a mode tap can arrive between control-loop
+    passes, especially with external Home Assistant outputs. In that race the
+    room is visibly/actively cooling or heating, but the persisted relay marker
+    can still be false, so the old logic returned no 10-minute countdown and
+    comfort auto-switch immediately grabbed the mode back.
+
+    For a manual tap, use the actual current state we are transitioning from:
+    if the opposite side is currently requested/running from the existing
+    thermostat state, start a full manual lockout right now.
+    """
+    requested_mode = str(requested_mode or "").strip().lower()
+    if requested_mode not in {"heat", "cool"}:
+        return 0
+    now = int(now_ms if now_ms is not None else time.time() * 1000)
+    lockout_minutes = _number(existing.get("manualChangeoverLockoutMinutes"), MANUAL_CHANGEOVER_LOCKOUT_MINUTES, 0, 60)
+    if lockout_minutes <= 0:
+        return 0
+
+    # First honor the recorded runtime timestamps/relay flags.
+    until = _manual_changeover_lockout_until(existing, requested_mode, now_ms=now)
+    if until > now:
+        return until
+
+    opposite = _opposite_hvac_mode(requested_mode)
+    if opposite not in {"heat", "cool"}:
+        return 0
+
+    relay_key = "heatRelayWasOn" if opposite == "heat" else "coolRelayWasOn"
+    if bool(existing.get(relay_key)):
+        return int(now + lockout_minutes * 60000)
+
+    try:
+        outputs = _thermostat_outputs(existing)
+    except Exception:
+        outputs = {}
+    if bool(outputs.get(opposite)):
+        return int(now + lockout_minutes * 60000)
+
+    mode = _normalize_mode(existing.get("mode"), "")
+    active_mode = str(existing.get("autoActiveMode") or "").strip().lower() if mode == "auto" else mode
+    if active_mode == opposite:
+        current = _number(existing.get("currentTemp"), 70, -40, 130)
+        target = _number(existing.get("targetTemp"), 70, 45, 95)
+        if (opposite == "cool" and current > target) or (opposite == "heat" and current < target):
+            return int(now + lockout_minutes * 60000)
+
+    return 0
+
+
 def _active_manual_changeover_pending(thermostat: dict, *, now_ms: int | None = None) -> tuple[str, int]:
     pending = _normalize_pending_mode(thermostat.get("manualPendingMode"))
     until = int(_number(thermostat.get("manualLockoutUntil"), 0, 0, None))
@@ -2619,14 +2673,35 @@ def _apply_comfort_auto_switch_logic(thermostat: dict, *, notify: bool = True) -
         return t
 
     current_mode = mode if mode in {"heat", "cool"} else ""
-    if signal and current_mode and signal != current_mode and _mode_available_for_auto_switch(t, signal):
-        previous = current_mode
-        t["mode"] = signal
-        t["manualPendingMode"] = ""
-        t["manualLockoutUntil"] = 0
-        _clamp_comfort_target_to_mode(t)
-        if notify:
-            _record_auto_switch_notice(t, "manual", previous, signal)
+    if current_mode:
+        # Manual Heat/Cool button presses must be sticky. Room-temperature
+        # comfort auto-switch can still suggest the opposite side, but it must
+        # never rewrite a manually selected mode or clear its changeover timer.
+        # Auto mode above remains the only place where the controller actually
+        # changes active heat/cool side automatically.
+        if signal and signal != current_mode and _mode_available_for_auto_switch(t, signal):
+            hold = t.get("autoSwitchHold") if isinstance(t.get("autoSwitchHold"), dict) else {}
+            if not (
+                bool(hold.get("active"))
+                and str(hold.get("source") or "").lower() == "manual"
+                and str(hold.get("mode") or "").lower() == current_mode
+                and str(hold.get("suggestedMode") or "").lower() == signal
+            ):
+                t["autoSwitchHold"] = {
+                    "active": True,
+                    "source": "manual",
+                    "mode": current_mode,
+                    "suggestedMode": signal,
+                    "reason": "manual-override",
+                    "dismissed": False,
+                    "createdAt": now_ms,
+                }
+            t["autoSwitchNotice"] = _empty_auto_switch_notice()
+            return t
+        if isinstance(t.get("autoSwitchHold"), dict) and str(t["autoSwitchHold"].get("source") or "").lower() == "manual":
+            t["autoSwitchHold"] = _empty_auto_switch_hold()
+        if isinstance(t.get("autoSwitchNotice"), dict) and str(t["autoSwitchNotice"].get("source") or "").lower() == "manual":
+            t["autoSwitchNotice"] = _empty_auto_switch_notice()
     return t
 
 
@@ -3544,7 +3619,9 @@ def _handle_thermostat_update(payload: dict) -> dict:
         merged["autoPendingMode"] = ""
         merged["autoLockoutUntil"] = 0
         now_ms = int(time.time() * 1000)
-        manual_until = _manual_changeover_lockout_until(merged, requested_mode, now_ms=now_ms)
+        manual_until = _manual_changeover_lockout_until_for_transition(existing, requested_mode, now_ms=now_ms)
+        if manual_until <= now_ms:
+            manual_until = _manual_changeover_lockout_until(merged, requested_mode, now_ms=now_ms)
         if manual_until > now_ms:
             merged["manualPendingMode"] = requested_mode
             merged["manualLockoutUntil"] = manual_until

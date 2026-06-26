@@ -3362,6 +3362,35 @@ class ThermostatScreen(Page):
             action.triggered.connect(lambda checked=False, f=fan: self.set_fan(f))
         menu.exec_(self.fan_status_button.mapToGlobal(self.fan_status_button.rect().topLeft()))
 
+    def predicted_manual_lockout_until(self, mode: str) -> int:
+        mode = str(mode or "").strip().lower()
+        if mode not in {"heat", "cool"}:
+            return 0
+        t = self.thermostat_view()
+        opposite = "cool" if mode == "heat" else "heat"
+        delay_minutes = self.safe_float(t.get("manualChangeoverLockoutMinutes"), 10.0)
+        if delay_minutes <= 0:
+            return 0
+        now_ms = int(time.time() * 1000)
+        relay_key = "coolRelayWasOn" if opposite == "cool" else "heatRelayWasOn"
+        last_key = "equipmentLastCoolRunAt" if opposite == "cool" else "equipmentLastHeatRunAt"
+        legacy_key = "lastCoolRunAt" if opposite == "cool" else "lastHeatRunAt"
+        outputs = t.get("outputs") if isinstance(t.get("outputs"), dict) else {}
+        last_run = max(self.safe_float(t.get(last_key), 0.0), self.safe_float(t.get(legacy_key), 0.0))
+        if bool(t.get(relay_key)) or bool(outputs.get(opposite)):
+            last_run = now_ms
+        if not last_run:
+            current_mode = str(t.get("mode") or "").lower()
+            active_mode = str(t.get("autoActiveMode") or "").lower() if current_mode == "auto" else current_mode
+            current = self.safe_float(t.get("currentTemp"), 70.0)
+            target = self.safe_float(t.get("targetTemp"), 70.0)
+            if active_mode == opposite and ((opposite == "cool" and current > target) or (opposite == "heat" and current < target)):
+                last_run = now_ms
+        if not last_run:
+            return 0
+        until = int(last_run + delay_minutes * 60000)
+        return until if until > now_ms else 0
+
     def set_mode(self, mode: str):
         if mode == "away":
             going_away = not bool(self.thermostat.get("away"))
@@ -3376,6 +3405,21 @@ class ThermostatScreen(Page):
             self.s.thermostat["mode"] = mode
             self.s.thermostat["away"] = False
             self.s.thermostat["awaySource"] = ""
+            if mode in {"heat", "cool"}:
+                # Show the bypassable delay immediately instead of waiting for
+                # the API round trip. The backend repeats the same calculation
+                # from the authoritative runtime state and corrects this local
+                # prediction on the next response.
+                until = self.predicted_manual_lockout_until(mode)
+                self.s.thermostat["autoSwitchNotice"] = {"active": False, "source": "", "fromMode": "", "toMode": "", "switchTemp": 0, "outdoorTemp": 0, "coolTarget": 0, "heatTarget": 0, "createdAt": 0}
+                if until > int(time.time() * 1000):
+                    self.s.thermostat["manualPendingMode"] = mode
+                    self.s.thermostat["manualLockoutUntil"] = until
+                    self.s.thermostat["autoPendingMode"] = ""
+                    self.s.thermostat["autoLockoutUntil"] = 0
+                else:
+                    self.s.thermostat["manualPendingMode"] = ""
+                    self.s.thermostat["manualLockoutUntil"] = 0
         self.sync(self.s.config, self.s.thermostat)
 
         def done(result):
