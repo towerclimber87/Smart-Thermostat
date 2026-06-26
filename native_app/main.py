@@ -2463,9 +2463,14 @@ class ThermostatScreen(Page):
         mid.addWidget(self.plus, 1, 3, 1, 1, Qt.AlignCenter)
         mid.addWidget(self.alarm_card, 1, 4, 1, 1, Qt.AlignCenter)
 
+        # Keep the primary thermostat controls centered, but lower the mode and
+        # fan actions a touch so they sit farther away from the dial row. On
+        # the 10.1" Pi panel this is roughly a half-inch visual shift.
+        lower_action_row_px = 48
+
         mode_wrap = QWidget()
         mode_lay = QHBoxLayout(mode_wrap)
-        mode_lay.setContentsMargins(0, 0, 0, 0)
+        mode_lay.setContentsMargins(0, lower_action_row_px, 0, 0)
         mode_lay.addStretch(1)
         mode_lay.addLayout(self._mode_bar())
         mode_lay.addStretch(1)
@@ -2473,7 +2478,7 @@ class ThermostatScreen(Page):
 
         fan_wrap = QWidget()
         fan_lay = QHBoxLayout(fan_wrap)
-        fan_lay.setContentsMargins(0, 0, 0, 0)
+        fan_lay.setContentsMargins(0, lower_action_row_px, 0, 0)
         fan_lay.addStretch(1)
         fan_lay.addLayout(self._fan_bar())
         fan_lay.addStretch(1)
