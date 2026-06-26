@@ -2614,6 +2614,7 @@ class ThermostatScreen(Page):
             self.fx_phase = 0
         self.update_door_pause_ui()
         self.update_alert_banner()
+        self.update_status_badge()
         if animated:
             self.update()
         self.retune_fx_timer()
@@ -2992,6 +2993,61 @@ class ThermostatScreen(Page):
             h, m = divmod(minutes, 60)
             return f"{h}h {m:02d}m"
         return f"{minutes}m {sec:02d}s"
+
+    def format_status_remaining(self, seconds: float) -> str:
+        """Compact clock text for the small center HVAC status badge."""
+        seconds = max(0, int(seconds + 0.999))
+        minutes, sec = divmod(seconds, 60)
+        if minutes >= 60:
+            hours, minutes = divmod(minutes, 60)
+            return f"{hours}:{minutes:02d}:{sec:02d}"
+        return f"{minutes}:{sec:02d}"
+
+    def minimum_runtime_status_suffix(self, t: dict | None = None, relays: dict | None = None) -> str:
+        """Show remaining minimum-on time only while it is holding heat/cool on.
+
+        When the setpoint is changed so the active side would normally shut off,
+        the backend keeps the relay running until the configured minimum runtime
+        expires and reports that as minimumCycleReason=minimum-runtime.  The
+        center badge should make that visible without adding another popup.
+        """
+        t = t or self.thermostat_view()
+        relays = relays if isinstance(relays, dict) else (t.get("relays") if isinstance(t.get("relays"), dict) else {})
+        reason = str(t.get("minimumCycleReason") or "").strip().lower()
+        mode = str(t.get("minimumCycleMode") or "").strip().lower()
+        until = self.safe_float(t.get("minimumCycleUntil"), 0.0)
+        now_ms = time.time() * 1000
+        if reason != "minimum-runtime" or mode not in {"heat", "cool"} or until <= now_ms:
+            return ""
+        if mode == "heat" and not bool(relays.get("heat")):
+            return ""
+        if mode == "cool" and not bool(relays.get("cool")):
+            return ""
+        return f" ({self.format_status_remaining((until - now_ms) / 1000)})"
+
+    def update_status_badge(self):
+        if not hasattr(self, "status_badge"):
+            return
+        t = self.thermostat_view()
+        mode = str(t.get("mode") or "cool").lower()
+        away = bool(t.get("away"))
+        if mode == "auto":
+            active = str(t.get("autoActiveMode") or t.get("activeMode") or "cool").lower()
+            mode = active if active in {"heat", "cool"} else "cool"
+        relays = t.get("relays") if isinstance(t.get("relays"), dict) else {}
+        equipment = "Idle"
+        if relays.get("cool"):
+            equipment = "Cooling" + self.minimum_runtime_status_suffix(t, relays)
+        elif relays.get("heat"):
+            equipment = "Heating" + self.minimum_runtime_status_suffix(t, relays)
+        elif t.get("coolingFanHold") or t.get("coolFanHoldUntil"):
+            equipment = "Idle • Fan Hold"
+        elif relays.get("fan"):
+            equipment = "Fan"
+        mode_label = "Away" if away else mode.capitalize()
+        text = f"• {mode_label} • {equipment}"
+        if self.status_badge.text() != text:
+            self.status_badge.setText(text)
 
     def pause_entry_name(self, entry: dict | None, fallback: str = "Door") -> str:
         if not isinstance(entry, dict):
@@ -3806,18 +3862,7 @@ class ThermostatScreen(Page):
         wind = t.get("outdoorWindSpeed") or t.get("outdoor_wind_speed") or 0
         unit = t.get("outdoorWindUnit") or t.get("outdoor_wind_unit") or "mph"
         self.outdoor.setText(f"OUTDOOR  {fmt_temp(out)}   WIND  {wind} {unit}".upper())
-        relays = t.get("relays") or {}
-        equipment = "Idle"
-        if relays.get("cool"):
-            equipment = "Cooling"
-        elif relays.get("heat"):
-            equipment = "Heating"
-        elif t.get("coolingFanHold") or t.get("coolFanHoldUntil"):
-            equipment = "Idle • Fan Hold"
-        elif relays.get("fan"):
-            equipment = "Fan"
-        mode_label = "Away" if away else mode.capitalize()
-        self.status_badge.setText(f"• {mode_label} • {equipment}")
+        self.update_status_badge()
         self.notice.hide()
         self.refresh_schedule_shortcuts()
         if away:
