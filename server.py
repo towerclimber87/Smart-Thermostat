@@ -197,6 +197,7 @@ DEFAULT_THERMOSTAT = {
     "heatLocked": False,
     "coolLocked": False,
     "people": [],
+    "autoAwayPeople": [],
     "schedules": [],
     "autoActiveMode": "cool",
     "autoPendingMode": "",
@@ -449,6 +450,20 @@ def _normalize_person_entries(value: object) -> list[dict]:
             "lastUpdated": item.get("lastUpdated") or item.get("last_updated") or "",
         })
     return people
+
+AUTO_AWAY_PEOPLE_KEYS = ("autoAwayPeople", "awayPeople", "autoAwayPersonEntities", "presenceAwayPeople")
+
+
+def _auto_away_people_from_source(source: dict) -> object:
+    for key in AUTO_AWAY_PEOPLE_KEYS:
+        if key in source:
+            return source.get(key)
+    return None
+
+
+def _source_has_auto_away_people(source: dict) -> bool:
+    return any(key in source for key in AUTO_AWAY_PEOPLE_KEYS)
+
 
 def _normalize_schedule_time(value: object, fallback: str = "20:00") -> str:
     text = str(value or "").strip()
@@ -766,7 +781,8 @@ def _normalize_auto_switch_hold(value: object) -> dict:
 
 def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None = None) -> dict:
     base = _deepcopy_json(DEFAULT_THERMOSTAT)
-    for source in (existing or {}, incoming or {}):
+    auto_away_people_explicit = False
+    for source_index, source in enumerate((existing or {}, incoming or {})):
         if not isinstance(source, dict):
             continue
         if isinstance(source.get("thermostat"), dict):
@@ -820,8 +836,18 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
                 if alias in source:
                     base[dst_key] = _normalize_external_air_entity(source.get(alias))
                     break
+        source_has_auto_away_people = _source_has_auto_away_people(source)
         if "people" in source:
             base["people"] = _normalize_person_entries(source.get("people"))
+            # Migration only: older builds used `people` for both the home-screen
+            # presence strip and Auto Away/Home. Copy the saved list into the new
+            # Auto Away list when reading old state, but do not let future person
+            # tracking edits keep changing the Auto Away users.
+            if source_index == 0 and not auto_away_people_explicit and not base.get("autoAwayPeople"):
+                base["autoAwayPeople"] = _normalize_person_entries(source.get("people"))
+        if source_has_auto_away_people:
+            auto_away_people_explicit = True
+            base["autoAwayPeople"] = _normalize_person_entries(_auto_away_people_from_source(source))
         if "schedules" in source:
             base["schedules"] = _normalize_schedule_entries(source.get("schedules"))
         if "pauseFunction" in source:
@@ -971,9 +997,9 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
         base["manualAwayPresenceLatch"] = None
     elif base["awaySource"] != "manual":
         base["manualAwayPresenceLatch"] = None
-    if base["away"] or not base.get("people"):
+    if base["away"] or not base.get("autoAwayPeople"):
         # A manual Home override only makes sense while the thermostat is in
-        # Home mode and person tracking is configured.
+        # Home mode and Auto Away/Home has configured people to evaluate.
         base["presenceHomeOverride"] = None
     mode_limits = base["limits"].get(base["mode"], {"min": 45, "max": 95})
     if not base["away"] and not base.get("pauseFunction", {}).get("active"):
@@ -1012,6 +1038,7 @@ THERMOSTAT_PERSIST_KEYS = (
     "heatLocked",
     "coolLocked",
     "people",
+    "autoAwayPeople",
     "schedules",
     "autoActiveMode",
     "limits",
@@ -2835,12 +2862,13 @@ def _person_states_for_schedule(entity_ids: list[str], thermostat: dict) -> dict
     if not wanted:
         return {}
     states: dict[str, str] = {}
-    for person in thermostat.get("people") or []:
-        if not isinstance(person, dict):
-            continue
-        entity_id = str(person.get("entityId") or person.get("entity_id") or "").strip()
-        if entity_id in wanted:
-            states[entity_id] = str(person.get("state") or "unknown").strip().lower()
+    for group_key in ("people", "autoAwayPeople"):
+        for person in thermostat.get(group_key) or []:
+            if not isinstance(person, dict):
+                continue
+            entity_id = str(person.get("entityId") or person.get("entity_id") or "").strip()
+            if entity_id in wanted:
+                states[entity_id] = str(person.get("state") or "unknown").strip().lower()
 
     ha_url, token = _ha_credentials_from_panel_config()
     if ha_url and token:
@@ -2855,46 +2883,47 @@ def _person_states_for_schedule(entity_ids: list[str], thermostat: dict) -> dict
 
 
 
-def _refresh_person_tracking_states(thermostat: dict) -> dict:
-    """Refresh configured person states from Home Assistant for UI/status payloads.
-
-    This uses the existing HA all-states cache, so frequent panel status polls do
-    not hammer Home Assistant. Persist=false keeps this runtime-only presence
-    refresh from creating extra SD card writes.
-    """
-    people = thermostat.get("people") if isinstance(thermostat, dict) else []
-    if not isinstance(people, list) or not people:
-        return thermostat
-    wanted = []
-    seen = set()
-    for person in people:
-        if not isinstance(person, dict):
-            continue
-        entity_id = str(person.get("entityId") or person.get("entity_id") or "").strip()
-        if entity_id and entity_id not in seen:
-            seen.add(entity_id)
-            wanted.append(entity_id)
-    if not wanted:
-        return thermostat
-    states = _person_states_for_schedule(wanted, thermostat)
-    if not states:
-        return thermostat
-    changed = False
-    refreshed = []
+def _refresh_people_entry_states(people: list[dict], states: dict[str, str]) -> list[dict]:
+    refreshed: list[dict] = []
     for person in people:
         if not isinstance(person, dict):
             continue
         item = dict(person)
         entity_id = str(item.get("entityId") or item.get("entity_id") or "").strip()
-        state = states.get(entity_id)
-        if state and str(item.get("state") or "unknown").strip().lower() != state:
-            item["state"] = state
-            changed = True
+        if entity_id and entity_id in states:
+            item["state"] = states.get(entity_id) or item.get("state") or "unknown"
+            item["lastUpdated"] = datetime.now(timezone.utc).isoformat()
         refreshed.append(item)
-    if not changed:
+    return _normalize_person_entries(refreshed)
+
+
+def _refresh_person_tracking_states(thermostat: dict) -> dict:
+    """Refresh configured person states from Home Assistant for UI/status payloads.
+
+    `people` controls the main-screen person tracking strip. `autoAwayPeople`
+    controls Auto Away/Home. They intentionally share only HA state refreshes;
+    edits to either list remain independent.
+    """
+    tracking_people = thermostat.get("people") if isinstance(thermostat.get("people"), list) else []
+    away_people = thermostat.get("autoAwayPeople") if isinstance(thermostat.get("autoAwayPeople"), list) else []
+    wanted: list[str] = []
+    seen: set[str] = set()
+    for group in (tracking_people, away_people):
+        for person in group or []:
+            if not isinstance(person, dict):
+                continue
+            entity_id = str(person.get("entityId") or person.get("entity_id") or "").strip()
+            if entity_id and entity_id not in seen:
+                seen.add(entity_id)
+                wanted.append(entity_id)
+    if not wanted:
+        return thermostat
+    states = _person_states_for_schedule(wanted, thermostat)
+    if not states:
         return thermostat
     updated = dict(thermostat)
-    updated["people"] = _normalize_person_entries(refreshed)
+    updated["people"] = _refresh_people_entry_states(tracking_people, states)
+    updated["autoAwayPeople"] = _refresh_people_entry_states(away_people, states)
     try:
         _write_thermostat_record(updated, persist=False)
     except Exception as exc:
@@ -2985,10 +3014,10 @@ def _apply_thermostat_schedules(thermostat: dict) -> dict:
 
 
 
-def _thermostat_person_entity_ids(thermostat: dict) -> list[str]:
+def _person_entity_ids_from_entries(entries: object) -> list[str]:
     ids: list[str] = []
     seen: set[str] = set()
-    for person in thermostat.get("people") or []:
+    for person in entries or []:
         if not isinstance(person, dict):
             continue
         entity_id = str(person.get("entityId") or person.get("entity_id") or "").strip()
@@ -2998,8 +3027,16 @@ def _thermostat_person_entity_ids(thermostat: dict) -> list[str]:
     return ids
 
 
+def _thermostat_person_entity_ids(thermostat: dict) -> list[str]:
+    return _person_entity_ids_from_entries(thermostat.get("people") or [])
+
+
+def _thermostat_auto_away_entity_ids(thermostat: dict) -> list[str]:
+    return _person_entity_ids_from_entries(thermostat.get("autoAwayPeople") or [])
+
+
 def _apply_presence_away_logic(thermostat: dict) -> dict:
-    entity_ids = _thermostat_person_entity_ids(thermostat)
+    entity_ids = _thermostat_auto_away_entity_ids(thermostat)
     if not entity_ids:
         return thermostat
     states = _person_states_for_schedule(entity_ids, thermostat)
@@ -3588,6 +3625,7 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
         "heatLocked": bool(thermostat.get("heatLocked")),
         "coolLocked": bool(thermostat.get("coolLocked")),
         "people": thermostat.get("people") or [],
+        "autoAwayPeople": thermostat.get("autoAwayPeople") or [],
         "hvac_modes": _available_hvac_modes(thermostat),
         "hvacModes": _available_hvac_modes(thermostat),
         "outdoor_temperature": thermostat["outdoorTemp"],
@@ -3658,6 +3696,7 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
         "heatLocked": bool(thermostat.get("heatLocked")),
         "coolLocked": bool(thermostat.get("coolLocked")),
         "people": thermostat.get("people") or [],
+        "autoAwayPeople": thermostat.get("autoAwayPeople") or [],
         "hvac_modes": _available_hvac_modes(thermostat),
         "hvacModes": _available_hvac_modes(thermostat),
         "humidity": thermostat["humidity"],
@@ -3845,7 +3884,7 @@ def _handle_thermostat_update(payload: dict) -> dict:
     if incoming_requests_home and not _normalize_presence_home_override(incoming.get("presenceHomeOverride")):
         incoming = dict(incoming)
         incoming["presenceHomeOverride"] = _presence_home_override_payload(
-            _thermostat_person_entity_ids(existing),
+            _thermostat_auto_away_entity_ids(existing),
             reason="manual-return-home",
         )
 

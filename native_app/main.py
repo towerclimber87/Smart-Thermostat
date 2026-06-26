@@ -2035,10 +2035,15 @@ class ScheduleEditDialog(QDialog):
         self.build()
 
     def load_people(self):
-        saved_people = self.s.thermostat.get("people") if isinstance(self.s.thermostat, dict) else []
-        if isinstance(saved_people, list):
+        saved_groups = []
+        if isinstance(self.s.thermostat, dict):
+            for key in ("people", "autoAwayPeople"):
+                value = self.s.thermostat.get(key)
+                if isinstance(value, list):
+                    saved_groups.append(value)
+        for saved_people in saved_groups:
             for p in saved_people:
-                if isinstance(p, dict) and p.get("entityId"):
+                if isinstance(p, dict) and p.get("entityId") and all(str(x.get("entityId")) != str(p.get("entityId")) for x in self.available_people):
                     self.available_people.append(p)
         try:
             data = self.s.api.post("/api/ha/entities", self.s.ha_payload({"domains": ["person"]}))
@@ -4147,7 +4152,7 @@ class ThermostatScreen(Page):
         self.s.clear_mode_override()
         self.s.status_refresh_paused_until = max(getattr(self.s, "status_refresh_paused_until", 0.0), time.monotonic() + 2.5)
         changes = {"away": False, "awaySource": "", "manualAwayPresenceLatch": None}
-        people = self.thermostat.get("people") or self.s.thermostat.get("people") or []
+        people = self.thermostat.get("autoAwayPeople") or self.s.thermostat.get("autoAwayPeople") or []
         entity_ids = []
         for person in people:
             if not isinstance(person, dict):
@@ -4156,9 +4161,9 @@ class ThermostatScreen(Page):
             if entity_id and entity_id not in entity_ids:
                 entity_ids.append(entity_id)
         if entity_ids:
-            # Return Home should mean "stay Home now" even if the phone/person
-            # trackers still say everyone is away. The backend releases this
-            # override automatically once any configured person reports Home.
+            # Return Home should mean "stay Home now" even if the Auto Away
+            # person trackers still say everyone is away. The backend releases
+            # this override automatically once any configured Auto Away user reports Home.
             changes["presenceHomeOverride"] = {
                 "active": True,
                 "startedAt": int(time.time() * 1000),
@@ -4168,8 +4173,8 @@ class ThermostatScreen(Page):
             self.s.thermostat["presenceHomeOverride"] = copy.deepcopy(changes["presenceHomeOverride"])
         else:
             # Do not send an explicit null override. The backend has the saved
-            # people list and will create the Home hold when stale HA/person
-            # states would otherwise put the panel straight back into Away.
+            # Auto Away people list and will create the Home hold when stale
+            # HA/person states would otherwise put the panel straight back into Away.
             self.s.thermostat["presenceHomeOverride"] = None
         self.s.thermostat["away"] = False
         self.s.thermostat["awaySource"] = ""
@@ -4432,7 +4437,7 @@ class ThermostatScreen(Page):
         if away:
             source = str(t.get("awaySource") or "").lower()
             if source == "presence":
-                self.away_body.setText("No assigned people are home. Tap Return Home to hold Home until one assigned person reports Home again.")
+                self.away_body.setText("No assigned Auto Away users are home. Tap Return Home to hold Home until one assigned Auto Away user reports Home again.")
             else:
                 self.away_body.setText("Tap to return Home and resume normal comfort.")
             self.position_away_overlay()
@@ -6888,14 +6893,16 @@ class CodeKeypadDialog(QDialog):
 class PeopleSelectionDialog(QDialog):
     saved = pyqtSignal(list)
 
-    def __init__(self, state: AppState, selected_people: list[dict] | None = None, parent=None):
+    def __init__(self, state: AppState, selected_people: list[dict] | None = None, parent=None, *, title: str = "Auto Away / Home", note: str | None = None):
         super().__init__(parent)
         self.s = state
         self.selected_people = copy.deepcopy(selected_people or [])
+        self.dialog_title = str(title or "People")
+        self.note_text = str(note or "Select the Home Assistant person entries to use for this feature.")
         self.available_people: list[dict] = []
         self.buttons: dict[str, RoundButton] = {}
         self.setModal(True)
-        self.setWindowTitle("Auto Away / Home")
+        self.setWindowTitle(self.dialog_title)
         self.setWindowFlag(Qt.FramelessWindowHint, True)
         self.setMinimumSize(720, 520)
         self.resize(1280, 800)
@@ -6939,7 +6946,7 @@ class PeopleSelectionDialog(QDialog):
         root.setContentsMargins(12, 10, 12, 10)
         root.setSpacing(8)
         header = QHBoxLayout()
-        title = QLabel("AUTO AWAY / HOME")
+        title = QLabel(self.dialog_title.upper())
         title.setFont(font(22, QFont.Black))
         title.setStyleSheet("color:#55f0ff; letter-spacing:3px;")
         select_all = RoundButton("Select All", active=True, min_h=40)
@@ -6950,7 +6957,7 @@ class PeopleSelectionDialog(QDialog):
         header.addWidget(clear)
         root.addLayout(header)
 
-        note = QLabel("Select the Home Assistant person entries that keep the room in Home mode. If none of them are home, the thermostat enters Away. When any selected person comes home, it returns to Home automatically.")
+        note = QLabel(self.note_text)
         note.setWordWrap(True)
         note.setFont(font(10, QFont.Black))
         note.setStyleSheet("color:#cdd8ee; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.10); border-radius:12px; padding:8px;")
@@ -8528,8 +8535,7 @@ class SettingsDialog(QDialog):
         self.saved.emit()
 
 
-    def people_summary_text(self) -> str:
-        people = self.s.thermostat.get("people") if isinstance(self.s.thermostat, dict) else []
+    def person_names_summary(self, people: object, *, empty: str, prefix: str) -> str:
         names = []
         if isinstance(people, list):
             for person in people:
@@ -8537,31 +8543,76 @@ class SettingsDialog(QDialog):
                     names.append(str(person.get("name") or person.get("entityId") or "").strip())
         names = [x for x in names if x]
         if not names:
-            return "No people assigned. Tap Choose People to add."
+            return empty
         shown = ", ".join(names[:3])
         if len(names) > 3:
             shown += f" +{len(names)-3} more"
-        return f"Auto away uses: {shown}"
+        return f"{prefix}: {shown}"
+
+    def auto_away_people_summary_text(self) -> str:
+        people = self.s.thermostat.get("autoAwayPeople") if isinstance(self.s.thermostat, dict) else []
+        return self.person_names_summary(
+            people,
+            empty="No Auto Away people assigned. Tap Choose Away Users to add.",
+            prefix="Auto Away uses",
+        )
+
+    def people_summary_text(self) -> str:
+        people = self.s.thermostat.get("people") if isinstance(self.s.thermostat, dict) else []
+        return self.person_names_summary(
+            people,
+            empty="No home-screen people assigned. Tap Choose Tracking to add.",
+            prefix="Home screen shows",
+        )
 
     def choose_auto_away_people(self):
-        current = self.s.thermostat.get("people") if isinstance(self.s.thermostat, dict) else []
-        dlg = PeopleSelectionDialog(self.s, current if isinstance(current, list) else [], self)
+        current = self.s.thermostat.get("autoAwayPeople") if isinstance(self.s.thermostat, dict) else []
+        dlg = PeopleSelectionDialog(
+            self.s,
+            current if isinstance(current, list) else [],
+            self,
+            title="Auto Away Users",
+            note="Select the Home Assistant person entries that control Auto Away/Home. If none of these selected people are home, the thermostat can enter Away. When any selected Auto Away user comes home, it returns to Home automatically.",
+        )
         def apply(people):
             try:
-                self.s.update_thermostat({"people": people})
-                summary = self.people_summary_text()
+                self.s.update_thermostat({"autoAwayPeople": people})
+                summary = self.auto_away_people_summary_text()
                 if hasattr(self, "people_summary"):
                     self.people_summary.setText(summary)
                     self.people_summary.repaint()
-                if hasattr(self, "person_tracking_summary"):
-                    self.person_tracking_summary.setText(summary)
-                    self.person_tracking_summary.repaint()
                 self.saved.emit()
             except Exception as exc:
                 QMessageBox.warning(self, "Auto Away / Home", str(exc))
         dlg.saved.connect(apply)
         dlg.exec_()
 
+    def choose_person_tracking_people(self):
+        current = self.s.thermostat.get("people") if isinstance(self.s.thermostat, dict) else []
+        dlg = PeopleSelectionDialog(
+            self.s,
+            current if isinstance(current, list) else [],
+            self,
+            title="Person Tracking",
+            note="Select the Home Assistant person entries that appear on the main thermostat screen. This list is display-only and does not control Auto Away/Home.",
+        )
+        def apply(people):
+            try:
+                self.s.update_thermostat({"people": people})
+                summary = self.people_summary_text()
+                if hasattr(self, "person_tracking_summary"):
+                    self.person_tracking_summary.setText(summary)
+                    self.person_tracking_summary.repaint()
+                top = self.window()
+                thermo_page = getattr(top, "thermostat", None)
+                strip = getattr(thermo_page, "person_presence_strip", None)
+                if strip is not None:
+                    strip.update_people(self.s.thermostat.get("people") or [])
+                self.saved.emit()
+            except Exception as exc:
+                QMessageBox.warning(self, "Person Tracking", str(exc))
+        dlg.saved.connect(apply)
+        dlg.exec_()
 
     def current_inside_door_entry(self) -> dict | None:
         pause = self.s.thermostat.get("pauseFunction") if isinstance(self.s.thermostat, dict) else {}
@@ -8918,12 +8969,12 @@ class SettingsDialog(QDialog):
         self.add_section_value(auto_grid, "awayCool", "Cool Away", t.get("awayCool", 85), 0, 1, 75, 100)
         people_head = QHBoxLayout()
         people_head.setSpacing(6)
-        self.people_summary = QLabel(self.people_summary_text())
+        self.people_summary = QLabel(self.auto_away_people_summary_text())
         self.people_summary.setWordWrap(True)
         self.people_summary.setFont(font(7, QFont.Black))
         self.people_summary.setStyleSheet("color:#c4d0e5; background:rgba(5,10,20,0.42); border:1px dashed rgba(160,180,210,0.26); border-radius:8px; padding:4px;")
-        add_people = RoundButton("+ Person", active=True, min_h=28)
-        add_people.setMinimumWidth(96)
+        add_people = RoundButton("Choose Away Users", active=True, min_h=28)
+        add_people.setMinimumWidth(156)
         add_people.clicked.connect(self.choose_auto_away_people)
         people_head.addWidget(self.people_summary, 1)
         people_head.addWidget(add_people)
@@ -9050,15 +9101,15 @@ class SettingsDialog(QDialog):
         self.person_tracking_summary.setWordWrap(True)
         self.person_tracking_summary.setFont(font(7, QFont.Black))
         self.person_tracking_summary.setStyleSheet("color:#c4d0e5; background:rgba(5,10,20,0.42); border:1px dashed rgba(160,180,210,0.26); border-radius:8px; padding:4px;")
-        pick_people = RoundButton("Choose People", active=True, min_h=28)
-        pick_people.setMinimumWidth(132)
-        pick_people.clicked.connect(self.choose_auto_away_people)
+        pick_people = RoundButton("Choose Tracking", active=True, min_h=28)
+        pick_people.setMinimumWidth(148)
+        pick_people.clicked.connect(self.choose_person_tracking_people)
         person_row = QHBoxLayout()
         person_row.setSpacing(6)
         person_row.addWidget(self.person_tracking_summary, 1)
         person_row.addWidget(pick_people)
         person_tracking.layout().addLayout(person_row)
-        person_note = QLabel("Home Assistant person entries appear on the main thermostat screen: green when home, red when away.")
+        person_note = QLabel("These entries only decide what appears on the main thermostat screen. They do not control Auto Away/Home.")
         person_note.setWordWrap(True)
         person_note.setFont(font(7, QFont.Black))
         person_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
