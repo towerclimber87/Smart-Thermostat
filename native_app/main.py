@@ -325,6 +325,37 @@ def audio_preset_definition(config: dict | None, preset: str) -> dict:
     return result
 
 
+def thermostat_is_actively_cooling(state: dict | None) -> bool:
+    """Return True while the cooling output is actively energized/calling.
+
+    The fan relay is already forced on by the backend while cooling is active.
+    This UI helper keeps the displayed fan mode/control from offering Off in
+    that same condition, even if an older saved state or HA echo still says
+    fan=off.
+    """
+    if not isinstance(state, dict):
+        return False
+    outputs = state.get("outputs") if isinstance(state.get("outputs"), dict) else {}
+    relays = state.get("relays") if isinstance(state.get("relays"), dict) else {}
+    if bool(outputs.get("cool")) or bool(relays.get("cool")) or bool(state.get("relayCool")):
+        return True
+    if str(state.get("hvacAction") or state.get("hvac_action") or outputs.get("hvacAction") or outputs.get("hvac_action") or "").strip().lower() == "cooling":
+        return True
+
+    # Local optimistic UI states may not have a fresh outputs block yet.  In
+    # that case, infer only an actual cooling call from mode/temperature.
+    mode = str(state.get("mode") or state.get("hvacMode") or state.get("hvac_mode") or "").strip().lower()
+    active = str(state.get("autoActiveMode") or state.get("activeMode") or "").strip().lower() if mode == "auto" else mode
+    if active != "cool" or bool(state.get("coolLocked")):
+        return False
+    try:
+        current = float(state.get("currentTemp", state.get("current_temperature")))
+        target = float(state.get("targetTemp", state.get("target_temperature", state.get("temperature"))))
+    except Exception:
+        return False
+    return current > target
+
+
 def thermostat_detail_payload(payload: dict | None) -> dict:
     """Return the actual thermostat state from the local API response.
 
@@ -3653,7 +3684,11 @@ class ThermostatScreen(Page):
     def show_fan_menu(self):
         if not self.fan_status_button:
             return
-        current = str(self.thermostat.get("fan") or "auto").lower()
+        t = self.thermostat_view()
+        cooling_active = thermostat_is_actively_cooling(t)
+        current = str(t.get("fan") or "auto").lower()
+        if cooling_active and current == "off":
+            current = "auto"
         menu = QMenu(self)
         menu.setStyleSheet("""
             QMenu {
@@ -3674,7 +3709,8 @@ class ThermostatScreen(Page):
                 color:#06101f;
             }
         """)
-        for fan in ["off", "on", "auto"]:
+        fan_options = ["auto", "on"] if cooling_active else ["off", "on", "auto"]
+        for fan in fan_options:
             action = menu.addAction(("✓  " if fan == current else "   ") + fan.capitalize())
             action.triggered.connect(lambda checked=False, f=fan: self.set_fan(f))
         menu.exec_(self.fan_status_button.mapToGlobal(self.fan_status_button.rect().topLeft()))
@@ -3816,6 +3852,12 @@ class ThermostatScreen(Page):
         )
 
     def set_fan(self, fan: str):
+        fan = str(fan or "auto").strip().lower()
+        if fan not in {"off", "on", "auto"}:
+            fan = "auto"
+        if fan == "off" and thermostat_is_actively_cooling(self.thermostat_view()):
+            fan = "auto"
+            self.requestToast.emit("Fan cannot be Off while cooling")
         self.s.thermostat["fan"] = fan
         self.sync(self.s.config, self.s.thermostat)
 
@@ -3985,6 +4027,8 @@ class ThermostatScreen(Page):
             selected = (m == mode and not away) or (m == "away" and away)
             b.setStyleSheet(self._floating_button_style(selected))
         fan = str(t.get("fan") or "auto").lower()
+        if thermostat_is_actively_cooling(t) and fan == "off":
+            fan = "auto"
         if self.fan_status_button:
             self.fan_status_button.setText(fan.capitalize())
             self.fan_status_button.setStyleSheet(self._floating_button_style(False))
@@ -8424,8 +8468,12 @@ class SettingsDialog(QDialog):
         fan_row = QHBoxLayout()
         fan_row.setSpacing(6)
         changeover.layout().addLayout(fan_row)
-        for f in ["off", "on", "auto"]:
-            b = RoundButton(f.capitalize(), active=(t.get("fan") or "auto") == f, min_h=28)
+        settings_fan = str(t.get("fan") or "auto").lower()
+        settings_cooling_active = thermostat_is_actively_cooling(t)
+        if settings_cooling_active and settings_fan == "off":
+            settings_fan = "auto"
+        for f in (["auto", "on"] if settings_cooling_active else ["off", "on", "auto"]):
+            b = RoundButton(f.capitalize(), active=settings_fan == f, min_h=28)
             b.clicked.connect(lambda checked=False, x=f: self.set_thermostat({"fan": x}))
             fan_row.addWidget(b)
 
@@ -8704,6 +8752,9 @@ class SettingsDialog(QDialog):
     def set_thermostat(self, changes, quiet=False, debounce=False, push=False):
         if not isinstance(changes, dict) or not changes:
             return
+        changes = copy.deepcopy(changes)
+        if str(changes.get("fan") or "").strip().lower() == "off" and thermostat_is_actively_cooling(self.s.thermostat):
+            changes["fan"] = "auto"
         self.apply_thermostat_changes_locally(changes)
         # Do not emit saved/reload on every plus/minus tap. That used to force a
         # synchronous full reload while the finger was still tapping, causing the
