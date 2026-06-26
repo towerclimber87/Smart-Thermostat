@@ -207,6 +207,7 @@ DEFAULT_THERMOSTAT = {
         "countdownReason": "",
     },
     "autoSwitchNotice": {"active": False, "source": "", "fromMode": "", "toMode": "", "switchTemp": 0, "outdoorTemp": 0, "coolTarget": 0, "heatTarget": 0, "createdAt": 0},
+    "autoSwitchNoticeDismissed": {"active": False, "source": "", "fromMode": "", "toMode": "", "coolTarget": 0, "heatTarget": 0, "dismissedAt": 0},
     "autoSwitchHold": {"active": False, "source": "", "mode": "", "suggestedMode": "", "reason": "", "dismissed": False, "createdAt": 0},
     "limits": {
         "cool": {"min": 65, "max": 80},
@@ -696,6 +697,26 @@ def _normalize_auto_switch_notice(value: object) -> dict:
     }
 
 
+def _normalize_auto_switch_notice_dismissed(value: object) -> dict:
+    if not isinstance(value, dict):
+        return _deepcopy_json(DEFAULT_THERMOSTAT["autoSwitchNoticeDismissed"])
+    source = str(value.get("source") or "").strip().lower()
+    from_mode = _normalize_pending_mode(value.get("fromMode"))
+    to_mode = _normalize_pending_mode(value.get("toMode"))
+    active = bool(value.get("active")) and source in {"auto", "manual"} and from_mode and to_mode and from_mode != to_mode
+    if not active:
+        return _deepcopy_json(DEFAULT_THERMOSTAT["autoSwitchNoticeDismissed"])
+    return {
+        "active": True,
+        "source": source,
+        "fromMode": from_mode,
+        "toMode": to_mode,
+        "coolTarget": _number(value.get("coolTarget"), 0, 0, 130),
+        "heatTarget": _number(value.get("heatTarget"), 0, 0, 130),
+        "dismissedAt": _number(value.get("dismissedAt"), int(time.time() * 1000), 0, None),
+    }
+
+
 def _normalize_auto_switch_hold(value: object) -> dict:
     if not isinstance(value, dict):
         return _deepcopy_json(DEFAULT_THERMOSTAT["autoSwitchHold"])
@@ -848,6 +869,8 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             base["coolRelayWasOn"] = bool(source.get("coolRelayWasOn"))
         if "autoSwitchNotice" in source:
             base["autoSwitchNotice"] = _normalize_auto_switch_notice(source.get("autoSwitchNotice"))
+        if "autoSwitchNoticeDismissed" in source:
+            base["autoSwitchNoticeDismissed"] = _normalize_auto_switch_notice_dismissed(source.get("autoSwitchNoticeDismissed"))
         if "autoSwitchHold" in source:
             base["autoSwitchHold"] = _normalize_auto_switch_hold(source.get("autoSwitchHold"))
 
@@ -887,6 +910,7 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
         base["manualPendingMode"] = ""
         base["manualLockoutUntil"] = 0
         base["autoSwitchNotice"] = _deepcopy_json(DEFAULT_THERMOSTAT["autoSwitchNotice"])
+        base["autoSwitchNoticeDismissed"] = _deepcopy_json(DEFAULT_THERMOSTAT["autoSwitchNoticeDismissed"])
         base["autoSwitchHold"] = _deepcopy_json(DEFAULT_THERMOSTAT["autoSwitchHold"])
         base["coolFanHoldUntil"] = 0
         base["coolRelayWasOn"] = False
@@ -981,6 +1005,7 @@ THERMOSTAT_RUNTIME_KEYS = (
     "coolCycleStoppedAt",
     "coolFanHoldUntil",
     "autoSwitchNotice",
+    "autoSwitchNoticeDismissed",
     "autoSwitchHold",
     "relays",
     "relayFan",
@@ -2392,20 +2417,43 @@ def _empty_auto_switch_notice() -> dict:
     return _deepcopy_json(DEFAULT_THERMOSTAT["autoSwitchNotice"])
 
 
+def _empty_auto_switch_notice_dismissed() -> dict:
+    return _deepcopy_json(DEFAULT_THERMOSTAT["autoSwitchNoticeDismissed"])
+
+
 def _empty_auto_switch_hold() -> dict:
     return _deepcopy_json(DEFAULT_THERMOSTAT["autoSwitchHold"])
+
+
+def _auto_switch_notice_was_dismissed(thermostat: dict, source: str, from_mode: str, to_mode: str, cool_target: float, heat_target: float) -> bool:
+    dismissed = _normalize_auto_switch_notice_dismissed(thermostat.get("autoSwitchNoticeDismissed"))
+    if not dismissed.get("active"):
+        return False
+    return (
+        str(dismissed.get("source") or "") == source
+        and str(dismissed.get("fromMode") or "") == from_mode
+        and str(dismissed.get("toMode") or "") == to_mode
+        and abs(float(dismissed.get("coolTarget") or 0) - float(cool_target or 0)) < 0.01
+        and abs(float(dismissed.get("heatTarget") or 0) - float(heat_target or 0)) < 0.01
+    )
 
 
 def _record_auto_switch_notice(thermostat: dict, source: str, from_mode: str, to_mode: str) -> None:
     from_mode = str(from_mode or "").strip().lower()
     to_mode = str(to_mode or "").strip().lower()
+    source = str(source or "manual").strip().lower() if str(source or "").strip().lower() in {"auto", "manual"} else "manual"
     if from_mode not in {"heat", "cool"} or to_mode not in {"heat", "cool"} or from_mode == to_mode:
         return
     cool_target, heat_target = _auto_switch_targets(thermostat)
     current = _number(thermostat.get("currentTemp"), 70, -40, 130)
+    if _auto_switch_notice_was_dismissed(thermostat, source, from_mode, to_mode, cool_target, heat_target):
+        thermostat["autoSwitchNotice"] = _empty_auto_switch_notice()
+        thermostat["autoSwitchHold"] = _empty_auto_switch_hold()
+        return
+    thermostat["autoSwitchNoticeDismissed"] = _empty_auto_switch_notice_dismissed()
     thermostat["autoSwitchNotice"] = {
         "active": True,
-        "source": str(source or "manual").strip().lower() if str(source or "").strip().lower() in {"auto", "manual"} else "manual",
+        "source": source,
         "fromMode": from_mode,
         "toMode": to_mode,
         "switchTemp": current,
@@ -3419,6 +3467,7 @@ def _handle_thermostat_update(payload: dict) -> dict:
         # would have chosen the other side, hold the requested manual mode and
         # let the UI show the same notice it shows for a front-panel tap.
         merged["autoSwitchNotice"] = _empty_auto_switch_notice()
+        merged["autoSwitchNoticeDismissed"] = _empty_auto_switch_notice_dismissed()
         merged["autoPendingMode"] = ""
         merged["autoLockoutUntil"] = 0
         signal = _auto_switch_signal(merged)
@@ -3436,6 +3485,7 @@ def _handle_thermostat_update(payload: dict) -> dict:
             merged["autoSwitchHold"] = _empty_auto_switch_hold()
     elif requested_mode in {"auto", "off"}:
         merged["autoSwitchNotice"] = _empty_auto_switch_notice()
+        merged["autoSwitchNoticeDismissed"] = _empty_auto_switch_notice_dismissed()
         merged["autoSwitchHold"] = _empty_auto_switch_hold()
         merged["autoPendingMode"] = ""
         merged["autoLockoutUntil"] = 0

@@ -2972,8 +2972,33 @@ class ThermostatScreen(Page):
 
     def dismiss_auto_switch(self):
         self.hide_notice_action_popup()
+        t = self.thermostat_view()
+        notice = t.get("autoSwitchNotice") if isinstance(t.get("autoSwitchNotice"), dict) else {}
+        dismissed = {}
+        if notice.get("active"):
+            dismissed = {
+                "active": True,
+                "source": str(notice.get("source") or "").lower(),
+                "fromMode": str(notice.get("fromMode") or "").lower(),
+                "toMode": str(notice.get("toMode") or "").lower(),
+                "coolTarget": notice.get("coolTarget") or 0,
+                "heatTarget": notice.get("heatTarget") or 0,
+                "dismissedAt": int(time.time() * 1000),
+            }
+        cleared_notice = {"active": False, "source": "", "fromMode": "", "toMode": "", "switchTemp": 0, "outdoorTemp": 0, "coolTarget": 0, "heatTarget": 0, "createdAt": 0}
         try:
-            self.s.update_thermostat({"autoSwitchNotice": {"active": False, "source": "", "fromMode": "", "toMode": "", "switchTemp": 0, "outdoorTemp": 0, "coolTarget": 0, "heatTarget": 0, "createdAt": 0}})
+            # Update the local copy first so the card does not reappear during
+            # the round trip to the backend or the next status poll.
+            self.s.thermostat["autoSwitchNotice"] = copy.deepcopy(cleared_notice)
+            if dismissed:
+                self.s.thermostat["autoSwitchNoticeDismissed"] = copy.deepcopy(dismissed)
+            self.s.status_refresh_paused_until = max(getattr(self.s, "status_refresh_paused_until", 0.0), time.monotonic() + 2.5)
+            self.sync(self.s.config, self.s.thermostat)
+
+            changes = {"autoSwitchNotice": cleared_notice}
+            if dismissed:
+                changes["autoSwitchNoticeDismissed"] = dismissed
+            self.s.update_thermostat(changes)
             self.sync(self.s.config, self.s.thermostat)
         except Exception as exc:
             self.requestToast.emit(f"Dismiss failed: {exc}")
@@ -3314,17 +3339,29 @@ class ThermostatScreen(Page):
         )
 
     def return_home_from_away(self):
-        source = str(self.thermostat.get("awaySource") or self.s.thermostat.get("awaySource") or "").lower()
+        now = time.monotonic()
+        if now - getattr(self, "_return_home_requested_at", 0.0) < 0.75:
+            return
+        self._return_home_requested_at = now
+        # A tap on Away creates a short local mode hold so stale status reads do
+        # not make the button feel broken. When Return Home is tapped, that hold
+        # must be cleared immediately or the local UI can repaint Away several
+        # more times before the backend response arrives.
+        self.s.clear_mode_override()
+        self.s.status_refresh_paused_until = max(getattr(self.s, "status_refresh_paused_until", 0.0), time.monotonic() + 2.5)
         changes = {"away": False, "awaySource": "", "manualAwayPresenceLatch": None}
-        if source in {"presence", "auto"}:
-            people = self.thermostat.get("people") or self.s.thermostat.get("people") or []
-            entity_ids = []
-            for person in people:
-                if not isinstance(person, dict):
-                    continue
-                entity_id = str(person.get("entityId") or person.get("entity_id") or "").strip()
-                if entity_id and entity_id not in entity_ids:
-                    entity_ids.append(entity_id)
+        people = self.thermostat.get("people") or self.s.thermostat.get("people") or []
+        entity_ids = []
+        for person in people:
+            if not isinstance(person, dict):
+                continue
+            entity_id = str(person.get("entityId") or person.get("entity_id") or "").strip()
+            if entity_id and entity_id not in entity_ids:
+                entity_ids.append(entity_id)
+        if entity_ids:
+            # Return Home should mean "stay Home now" even if the phone/person
+            # trackers still say everyone is away. The backend releases this
+            # override automatically once any configured person reports Home.
             changes["presenceHomeOverride"] = {
                 "active": True,
                 "startedAt": int(time.time() * 1000),
@@ -3333,6 +3370,7 @@ class ThermostatScreen(Page):
             }
             self.s.thermostat["presenceHomeOverride"] = copy.deepcopy(changes["presenceHomeOverride"])
         else:
+            changes["presenceHomeOverride"] = None
             self.s.thermostat["presenceHomeOverride"] = None
         self.s.thermostat["away"] = False
         self.s.thermostat["awaySource"] = ""
