@@ -3010,8 +3010,14 @@ class ThermostatScreen(Page):
         if not hold.get("active"):
             return
         try:
+            # Mark it dismissed locally before the API round trip so the small
+            # card does not pop back up on the next refresh. The backend still
+            # keeps the manual hold active; dismiss only hides the notice.
             next_hold = dict(hold)
             next_hold["dismissed"] = True
+            self.s.thermostat["autoSwitchHold"] = copy.deepcopy(next_hold)
+            self.s.status_refresh_paused_until = max(getattr(self.s, "status_refresh_paused_until", 0.0), time.monotonic() + 2.5)
+            self.sync(self.s.config, self.s.thermostat)
             self.s.update_thermostat({"autoSwitchHold": next_hold})
             self.sync(self.s.config, self.s.thermostat)
         except Exception as exc:
