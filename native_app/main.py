@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import math
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -200,6 +201,23 @@ def room_control_next_action(ctl: dict) -> str:
         return "return_to_base" if active else "start"
     return "off" if active else "on"
 
+
+
+def normalize_screen_orientation(value: Any) -> str:
+    text = str(value or "upright").strip().lower().replace("-", "_").replace(" ", "_")
+    if text in {"upside_down", "upsidedown", "flipped", "inverted", "left"}:
+        return "upside_down"
+    return "upright"
+
+
+def screen_orientation_label(value: Any) -> str:
+    return "Upside Down" if normalize_screen_orientation(value) == "upside_down" else "Upright"
+
+
+def screen_orientation_to_xrandr(value: Any) -> str:
+    # The DSI panel is portrait at the hardware level.  The native UI is
+    # landscape, so the two safe 180-degree choices are xrandr right and left.
+    return "left" if normalize_screen_orientation(value) == "upside_down" else "right"
 
 def nested_get(data: dict, *keys, default=None):
     cur = data
@@ -1114,7 +1132,7 @@ class AppState:
     def set_mode_override(self, mode: str, *, away: bool = False, hold_seconds: float = 8.0):
         """Hold a just-requested local mode against one stale status refresh."""
         mode = str(mode or "").strip().lower()
-        if mode not in {"off", "heat", "cool", "auto", "away"}:
+        if mode not in {"off", "heat", "cool", "away"}:
             return
         self._mode_override = {
             "mode": "cool" if mode == "away" else mode,
@@ -2189,7 +2207,7 @@ class ThermostatScreen(Page):
         self.mode_buttons: dict[str, RoundButton] = {}
         self.fan_buttons: dict[str, RoundButton] = {}
         self.fan_status_button: RoundButton | None = None
-        self.status_badge = QLabel("●  Auto • Cool • Idle")
+        self.status_badge = QLabel("●  Cool • Idle")
         self.status_badge.setAlignment(Qt.AlignCenter)
         self.status_badge.setFont(font(11, QFont.Black))
         self.status_badge.setStyleSheet("color:#f6f8ff; background:transparent; border:0; padding:0;")
@@ -3307,7 +3325,7 @@ class ThermostatScreen(Page):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(16)
         lay.addStretch(1)
-        for mode in ["off", "cool", "heat", "auto", "away"]:
+        for mode in ["off", "cool", "heat", "away"]:
             b = RoundButton(mode.capitalize(), active=False, min_h=38)
             b.setFixedSize(82, 38)
             b.clicked.connect(lambda checked=False, m=mode: self.set_mode(m))
@@ -3395,7 +3413,12 @@ class ThermostatScreen(Page):
         if mode == "away":
             going_away = not bool(self.thermostat.get("away"))
             changes = {"away": going_away, "awaySource": "manual" if going_away else ""}
-            self.s.set_mode_override("away" if going_away else str(self.thermostat_view().get("mode") or "cool"), away=going_away)
+            resume_mode = str(self.thermostat_view().get("mode") or "cool").lower()
+            if resume_mode == "auto":
+                resume_mode = str(self.thermostat_view().get("autoActiveMode") or self.thermostat_view().get("activeMode") or "cool").lower()
+            if resume_mode not in {"heat", "cool", "off"}:
+                resume_mode = "cool"
+            self.s.set_mode_override("away" if going_away else resume_mode, away=going_away)
             self.s.thermostat["away"] = going_away
             self.s.thermostat["awaySource"] = changes["awaySource"]
         else:
@@ -3519,7 +3542,9 @@ class ThermostatScreen(Page):
         try:
             t = self.thermostat_view()
             limits = t.get("limits") or {}
-            mode = str(t.get("mode") or "auto").lower()
+            mode = str(t.get("mode") or "cool").lower()
+            if mode == "auto":
+                mode = str(t.get("autoActiveMode") or t.get("activeMode") or "cool").lower()
             if mode == "off" and not bool(t.get("away")):
                 self.requestToast.emit("Thermostat is Off")
                 return
@@ -3628,10 +3653,14 @@ class ThermostatScreen(Page):
     def sync(self, config: dict, thermostat: dict):
         super().sync(config, thermostat)
         t = self.thermostat_view()
-        mode = str(t.get("mode") or "auto").lower()
+        mode = str(t.get("mode") or "cool").lower()
         away = bool(t.get("away"))
         if mode == "auto":
             active = str(t.get("autoActiveMode") or t.get("activeMode") or "cool").lower()
+            # Auto mode is no longer exposed on the wall panel.  If an older
+            # saved state or Home Assistant still reports auto, render the
+            # active heat/cool side so the UI never shows an orphaned Auto mode.
+            mode = active if active in {"heat", "cool"} else "cool"
         else:
             active = mode
         if hasattr(self, "title_label"):
@@ -7979,6 +8008,78 @@ class SettingsDialog(QDialog):
         dlg.exec_()
 
 
+
+    def current_screen_orientation(self) -> str:
+        display = self.s.config.setdefault("display", {}) if isinstance(self.s.config, dict) else {}
+        if not isinstance(display, dict):
+            display = {}
+            self.s.config["display"] = display
+        return normalize_screen_orientation(display.get("screenOrientation"))
+
+    def screen_orientation_summary_text(self) -> str:
+        return f"Current: {screen_orientation_label(self.current_screen_orientation())}"
+
+    def refresh_screen_orientation_buttons(self):
+        current = self.current_screen_orientation()
+        label = getattr(self, "screen_orientation_label", None)
+        if label is not None:
+            label.setText(self.screen_orientation_summary_text())
+            label.repaint()
+        for orientation, attr in (("upright", "screen_upright_button"), ("upside_down", "screen_upside_button")):
+            button = getattr(self, attr, None)
+            if not button:
+                continue
+            active = current == orientation
+            if hasattr(button, "setActive"):
+                button.setActive(active)
+            else:
+                button.setStyleSheet(button_style(active))
+
+    def apply_screen_orientation_now(self, orientation: str) -> tuple[bool, str]:
+        orientation = normalize_screen_orientation(orientation)
+        script = ROOT_DIR / "scripts" / "apply-screen-orientation.sh"
+        display_output = os.environ.get("SMART_THERMOSTAT_DISPLAY_OUTPUT", "DSI-1")
+        if script.exists():
+            cmd = [str(script), orientation]
+        else:
+            cmd = ["xrandr", "--output", display_output, "--rotate", screen_orientation_to_xrandr(orientation)]
+        env = os.environ.copy()
+        env.setdefault("SMART_THERMOSTAT_DISPLAY_OUTPUT", display_output)
+        try:
+            result = subprocess.run(cmd, cwd=str(ROOT_DIR), env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=8)
+        except Exception as exc:
+            return False, str(exc)
+        output = (result.stdout or "").strip()
+        if result.returncode != 0:
+            return False, output or f"rotation command exited {result.returncode}"
+        return True, output
+
+    def set_screen_orientation(self, orientation: str):
+        orientation = normalize_screen_orientation(orientation)
+        display = self.s.config.setdefault("display", {})
+        if not isinstance(display, dict):
+            display = {}
+            self.s.config["display"] = display
+        display["screenOrientation"] = orientation
+        display["xrandrRotation"] = screen_orientation_to_xrandr(orientation)
+        self.refresh_screen_orientation_buttons()
+        try:
+            self.s.save_config()
+        except Exception as exc:
+            QMessageBox.warning(self, "Screen Rotation", f"Saved locally, but config save failed:\n{exc}")
+            return
+        ok, detail = self.apply_screen_orientation_now(orientation)
+        top = self.window()
+        if hasattr(top, "force_panel_geometry"):
+            QTimer.singleShot(150, top.force_panel_geometry)
+            QTimer.singleShot(550, top.force_panel_geometry)
+            QTimer.singleShot(1100, top.force_panel_geometry)
+        self.saved.emit()
+        if ok:
+            self.refresh_screen_orientation_buttons()
+        else:
+            QMessageBox.warning(self, "Screen Rotation", "The setting was saved, but the live rotation command failed. Rebooting or restarting the native service should apply it.\n\n" + str(detail))
+
     def build(self):
         t = self.s.thermostat or {}
 
@@ -8158,7 +8259,30 @@ class SettingsDialog(QDialog):
         unit_row.addWidget(edit_name)
         unit.layout().addLayout(unit_row)
 
-        self.grid.setRowStretch(5, 1)
+        display = self.add_section("Screen Rotation", 5, 0, 1, 4)
+        display_row = QHBoxLayout()
+        display_row.setSpacing(8)
+        self.screen_orientation_label = QLabel(self.screen_orientation_summary_text())
+        self.screen_orientation_label.setWordWrap(True)
+        self.screen_orientation_label.setFont(font(8, QFont.Black))
+        self.screen_orientation_label.setStyleSheet("color:#dfe9ff; background:rgba(5,10,20,0.42); border:1px dashed rgba(160,180,210,0.26); border-radius:8px; padding:5px;")
+        self.screen_upright_button = RoundButton("Upright", active=(self.current_screen_orientation() == "upright"), min_h=30)
+        self.screen_upside_button = RoundButton("Upside Down", active=(self.current_screen_orientation() == "upside_down"), min_h=30)
+        self.screen_upright_button.setMinimumWidth(132)
+        self.screen_upside_button.setMinimumWidth(156)
+        self.screen_upright_button.clicked.connect(lambda checked=False: self.set_screen_orientation("upright"))
+        self.screen_upside_button.clicked.connect(lambda checked=False: self.set_screen_orientation("upside_down"))
+        display_row.addWidget(self.screen_orientation_label, 1)
+        display_row.addWidget(self.screen_upright_button)
+        display_row.addWidget(self.screen_upside_button)
+        display.layout().addLayout(display_row)
+        note = QLabel("Uses the two landscape orientations only. Touch is remapped after the screen rotates.")
+        note.setWordWrap(True)
+        note.setFont(font(7, QFont.Black))
+        note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
+        display.layout().addWidget(note)
+
+        self.grid.setRowStretch(6, 1)
 
     def val_number(self, key):
         text = self.controls[key].text().split()[0].replace("°", "")

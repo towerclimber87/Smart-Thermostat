@@ -345,13 +345,17 @@ def _normalize_mode(value: object, fallback: str = "cool") -> str:
     mode = str(value or fallback).strip().lower()
     if mode.startswith("hvacmode."):
         mode = mode.split(".", 1)[1]
+    # Auto / heat_cool is intentionally no longer exposed as an HVAC mode.
+    # The controller still performs safety and comfort-switch suggestions while
+    # in Heat or Cool, so an incoming legacy Auto value is treated as the
+    # provided fallback instead of preserving a separate Auto state.
     if mode in {"heat_cool", "auto"}:
-        return "auto"
+        return "" if fallback == "" else (fallback if fallback in {"off", "heat", "cool"} else "cool")
     if mode in {"off", "heat", "cool"}:
         return mode
     if fallback == "":
         return ""
-    return fallback if fallback in {"off", "heat", "cool", "auto"} else "cool"
+    return fallback if fallback in {"off", "heat", "cool"} else "cool"
 
 
 def _normalize_fan(value: object, fallback: str = "auto") -> str:
@@ -663,7 +667,7 @@ def _allowed_mode_for_locks(mode: str, thermostat: dict, fallback: str = "cool")
 
 
 def _available_hvac_modes(thermostat: dict) -> list[str]:
-    return ["off", "cool", "heat", "heat_cool"]
+    return ["off", "cool", "heat"]
 
 def _deepcopy_json(value: object) -> object:
     return json.loads(json.dumps(value))
@@ -3365,7 +3369,7 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
     outputs = _thermostat_outputs(thermostat)
     if apply_hardware:
         _apply_thermostat_outputs_to_hardware(outputs, thermostat)
-    hvac_mode = "heat_cool" if thermostat["mode"] == "auto" else thermostat["mode"]
+    hvac_mode = thermostat["mode"] if thermostat["mode"] in {"off", "heat", "cool"} else str(thermostat.get("autoActiveMode") or "cool")
     preset_mode = "away" if thermostat.get("away") else "home"
     thermostat_detail = {
         **thermostat,
@@ -3577,7 +3581,7 @@ def _handle_thermostat_update(payload: dict) -> dict:
     requested_mode_raw = incoming.get("mode", incoming.get("hvac_mode", incoming.get("hvacMode")))
     requested_mode = _normalize_mode(requested_mode_raw, "") if requested_mode_raw is not None else ""
     if (
-        requested_mode in {"off", "heat", "cool", "auto"}
+        requested_mode in {"off", "heat", "cool"}
         and not bool(existing.get("away"))
         and "away" not in incoming
         and "preset_mode" not in incoming
@@ -3641,7 +3645,7 @@ def _handle_thermostat_update(payload: dict) -> dict:
             }
         else:
             merged["autoSwitchHold"] = _empty_auto_switch_hold()
-    elif requested_mode in {"auto", "off"}:
+    elif requested_mode == "off":
         merged["autoSwitchNotice"] = _empty_auto_switch_notice()
         merged["autoSwitchNoticeDismissed"] = _empty_auto_switch_notice_dismissed()
         merged["autoSwitchHold"] = _empty_auto_switch_hold()
