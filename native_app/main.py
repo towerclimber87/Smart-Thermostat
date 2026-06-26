@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import faulthandler
 import math
 import html
 import os
@@ -9,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from datetime import datetime
 from urllib import request as urlrequest
 from pathlib import Path
@@ -18,6 +20,81 @@ from typing import Any, Callable
 APP_DIR = Path(__file__).resolve().parent
 ROOT_DIR = APP_DIR.parent
 sys.path.insert(0, str(APP_DIR))
+
+_RUNTIME_CRASH_LOG_HANDLE = None
+
+
+def runtime_log_dir() -> Path:
+    configured = str(os.environ.get("SMART_THERMOSTAT_LOG_DIR") or "").strip()
+    if configured:
+        return Path(configured)
+    shm = Path("/dev/shm")
+    try:
+        if shm.exists() and os.access(str(shm), os.W_OK):
+            return shm / "smart-thermostat-native" / "logs"
+    except Exception:
+        pass
+    return Path(os.environ.get("SMART_THERMOSTAT_RUNTIME_DIR", "/tmp/smart-thermostat-native")) / "logs"
+
+
+def runtime_log_path(name: str) -> Path:
+    directory = runtime_log_dir()
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        directory = Path("/tmp")
+    return directory / name
+
+
+def trace_runtime(message: str):
+    try:
+        stamp = datetime.now().isoformat(timespec="seconds")
+        print(f"[{stamp}] {message}", flush=True)
+    except Exception:
+        pass
+
+
+def install_crash_logging():
+    """Keep a tiny RAM-backed crash log so restart loops do not erase clues."""
+    global _RUNTIME_CRASH_LOG_HANDLE
+    if _RUNTIME_CRASH_LOG_HANDLE is not None:
+        return
+    try:
+        path = runtime_log_path("native-crash.log")
+        _RUNTIME_CRASH_LOG_HANDLE = open(path, "a", buffering=1)
+        _RUNTIME_CRASH_LOG_HANDLE.write(f"\n===== native ui process start {datetime.now().isoformat(timespec='seconds')} =====\n")
+        faulthandler.enable(file=_RUNTIME_CRASH_LOG_HANDLE, all_threads=True)
+
+        original_excepthook = sys.excepthook
+
+        def excepthook(exc_type, exc_value, exc_tb):
+            try:
+                _RUNTIME_CRASH_LOG_HANDLE.write(f"\n===== unhandled exception {datetime.now().isoformat(timespec='seconds')} =====\n")
+                traceback.print_exception(exc_type, exc_value, exc_tb, file=_RUNTIME_CRASH_LOG_HANDLE)
+                _RUNTIME_CRASH_LOG_HANDLE.flush()
+            except Exception:
+                pass
+            original_excepthook(exc_type, exc_value, exc_tb)
+
+        sys.excepthook = excepthook
+
+        if hasattr(threading, "excepthook"):
+            original_threading_excepthook = threading.excepthook
+
+            def thread_excepthook(args):
+                try:
+                    _RUNTIME_CRASH_LOG_HANDLE.write(f"\n===== unhandled thread exception {datetime.now().isoformat(timespec='seconds')} thread={getattr(args, 'thread', None)} =====\n")
+                    traceback.print_exception(args.exc_type, args.exc_value, args.exc_traceback, file=_RUNTIME_CRASH_LOG_HANDLE)
+                    _RUNTIME_CRASH_LOG_HANDLE.flush()
+                except Exception:
+                    pass
+                original_threading_excepthook(args)
+
+            threading.excepthook = thread_excepthook
+        trace_runtime(f"Crash logging enabled at {path}")
+    except Exception as exc:
+        trace_runtime(f"Crash logging unavailable: {exc}")
+
 
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QCursor, QFont, QIcon, QImage, QPainter, QPen, QBrush, QLinearGradient, QPainterPath, QRadialGradient, QPixmap
@@ -4142,6 +4219,11 @@ class ThermostatScreen(Page):
             self.requestToast.emit(f"Virtual temp failed: {exc}")
 
     def show_alarm_dialog(self):
+        now = time.monotonic()
+        if getattr(self, "_alarm_dialog_open", False):
+            return
+        if now < getattr(self, "_alarm_reopen_block_until", 0.0):
+            return
         ha = self.s.ha()
         entity = ha.get("alarmEntity") or {}
         eid = entity.get("entityId") or ""
@@ -4150,18 +4232,28 @@ class ThermostatScreen(Page):
             return
         # Open the alarm panel immediately. A Home Assistant state refresh can
         # take long enough to make the touch feel dead, so refresh it in the
-        # background and re-render the panel if the fresh state arrives while
-        # the dialog is still open.
+        # background and re-render the panel only if the dialog is still alive.
+        # This avoids touching a modal dialog after Cancel/close on the Pi X11
+        # touchscreen, which can otherwise drop the full native UI to black.
+        self._alarm_dialog_open = True
         dlg = AlarmControlDialog(self.s, entity, self)
+        trace_runtime(f"alarm dialog opened entity={eid} state={dlg.current_state()}")
 
         def refresh_done(fresh):
-            if fresh:
+            if not fresh:
+                return
+            try:
                 entity.update(fresh)
-                dlg.entity.update(fresh)
-                if dlg.isVisible() and not getattr(dlg, "_alarm_action_running", False):
-                    dlg.render()
+                if dlg.can_update_ui():
+                    dlg.apply_fresh_alarm_state(fresh)
+                else:
+                    trace_runtime("alarm open refresh skipped because dialog already closed")
+            except RuntimeError as exc:
+                trace_runtime(f"alarm open refresh skipped after Qt object cleanup: {exc}")
+            except Exception as exc:
+                trace_runtime(f"alarm open refresh failed: {exc}")
 
-        self.run_async("alarm-state-open", self.s.refresh_alarm_state, refresh_done, None)
+        self.run_async("alarm-state-open", self.s.refresh_alarm_state, refresh_done, lambda err: trace_runtime(f"alarm open refresh failed: {err}"))
 
         def applied(alarm, action):
             if alarm:
@@ -4173,8 +4265,19 @@ class ThermostatScreen(Page):
         try:
             dlg.exec_()
         finally:
+            try:
+                dlg.prepare_for_close("show_alarm_dialog finally")
+            except Exception:
+                pass
             if getattr(self, "_alarm_dialog", None) is dlg:
                 self._alarm_dialog = None
+            self._alarm_dialog_open = False
+            # Touchscreens can emit a final release after the modal has closed.
+            # Swallow it briefly so it cannot hit Sleep, Info, Settings, or Alarmo
+            # underneath and make the panel look like it crashed.
+            self._alarm_reopen_block_until = time.monotonic() + 1.2
+            self._modal_touch_block_until = time.monotonic() + 0.55
+            trace_runtime("alarm dialog closed")
 
     def apply_alarm_state_refresh(self, fresh: dict | None):
         """Apply a Home Assistant-initiated alarm state change to visible controls."""
@@ -4190,9 +4293,12 @@ class ThermostatScreen(Page):
         self.alarm_card.setValue(state.upper())
         self.alarm_card.setAlarmState(state)
         dlg = getattr(self, "_alarm_dialog", None)
-        if dlg is not None and dlg.isVisible() and not getattr(dlg, "_alarm_action_running", False):
-            dlg.entity.update(entity)
-            dlg.render()
+        if dlg is not None:
+            try:
+                if dlg.can_update_ui():
+                    dlg.apply_fresh_alarm_state(entity)
+            except Exception as exc:
+                trace_runtime(f"visible alarm refresh skipped: {exc}")
 
     def _floating_button_style(self, active: bool = False) -> str:
         if active:
@@ -9548,6 +9654,9 @@ class AlarmControlDialog(QDialog):
         self.countdown_timer = QTimer(self)
         self.countdown_timer.timeout.connect(self.countdown_tick)
         self._alarm_action_running = False
+        self._closing = False
+        self._destroyed = False
+        self.destroyed.connect(lambda *_args: setattr(self, "_destroyed", True))
         self.alarmActionCompleted.connect(self.handle_alarm_action_completed)
 
         self.setModal(True)
@@ -9623,6 +9732,32 @@ class AlarmControlDialog(QDialog):
     def clear_body(self):
         self._clear_layout(self.body)
 
+    def prepare_for_close(self, reason: str = ""):
+        if getattr(self, "_closing", False):
+            return
+        self._closing = True
+        try:
+            if self.countdown_timer.isActive():
+                self.countdown_timer.stop()
+        except Exception:
+            pass
+        if reason:
+            trace_runtime(f"alarm dialog preparing to close: {reason}")
+
+    def can_update_ui(self) -> bool:
+        if getattr(self, "_closing", False) or getattr(self, "_destroyed", False):
+            return False
+        try:
+            return bool(self.isVisible()) and not getattr(self, "_alarm_action_running", False)
+        except RuntimeError:
+            return False
+
+    def apply_fresh_alarm_state(self, fresh: dict | None):
+        if not isinstance(fresh, dict) or not self.can_update_ui():
+            return
+        self.entity.update(fresh)
+        self.render()
+
     def current_state(self) -> str:
         return str(self.entity.get("state") or "disarmed").lower()
 
@@ -9637,6 +9772,8 @@ class AlarmControlDialog(QDialog):
         return state.startswith("armed") or state in {"arming", "pending", "triggered"}
 
     def render(self):
+        if getattr(self, "_closing", False):
+            return
         self.clear_body()
         if self.is_armed():
             self.render_keypad()
@@ -9644,7 +9781,7 @@ class AlarmControlDialog(QDialog):
             self.render_arm_options()
 
     def header_html(self, eyebrow: str, title: str, accent: str = "#55f0ff") -> str:
-        safe_name = self.alarm_name()
+        safe_name = html.escape(self.alarm_name())
         return (
             f"<span style='color:{accent}; letter-spacing:4px; font-size:12px; font-weight:1000'>{eyebrow}</span>"
             f"<br><span style='font-size:36px; font-weight:1000; color:#ffffff'>{title}</span>"
@@ -9848,6 +9985,9 @@ class AlarmControlDialog(QDialog):
         self.update_code_display()
 
     def begin_arm_away_countdown(self):
+        if getattr(self, "_closing", False):
+            return
+        trace_runtime("alarm arm away countdown started")
         self.clear_body()
         self.countdown_total = 60
         self.remaining = self.countdown_total
@@ -9888,6 +10028,12 @@ class AlarmControlDialog(QDialog):
         self.countdown_tick(first=True)
 
     def countdown_tick(self, first: bool = False):
+        if getattr(self, "_closing", False) or not self.isVisible():
+            try:
+                self.countdown_timer.stop()
+            except Exception:
+                pass
+            return
         if not first:
             self.remaining -= 1
         if self.remaining <= 0:
@@ -9898,19 +10044,31 @@ class AlarmControlDialog(QDialog):
             self.countdown_ring.setRemaining(self.remaining)
 
     def reject(self):
-        if self.countdown_timer.isActive():
-            self.countdown_timer.stop()
+        trace_runtime(f"alarm dialog cancel pressed state={self.current_state()} remaining={getattr(self, 'remaining', 0)}")
+        self.prepare_for_close("reject")
         super().reject()
+
+    def done(self, result: int):
+        self.prepare_for_close(f"done result={result}")
+        super().done(result)
+
+    def closeEvent(self, event):
+        self.prepare_for_close("closeEvent")
+        super().closeEvent(event)
 
     def set_busy(self, busy: bool):
         for btn in self.findChildren(QAbstractButton):
             btn.setEnabled(not busy)
 
     def send_action(self, action: str, code: str = ""):
+        if getattr(self, "_closing", False):
+            trace_runtime(f"alarm action ignored after close action={action}")
+            return
         if self._alarm_action_running:
             return
         if self.countdown_timer.isActive():
             self.countdown_timer.stop()
+        trace_runtime(f"alarm action sending action={action}")
         self._alarm_action_running = True
         self.set_busy(True)
         payload = self.s.ha_payload({
@@ -9933,6 +10091,10 @@ class AlarmControlDialog(QDialog):
         data = info if isinstance(info, dict) else {}
         action = str(data.get("action") or "")
         error = str(data.get("error") or "")
+        if getattr(self, "_closing", False) and not self.isVisible():
+            trace_runtime(f"alarm action completion ignored after close action={action} error={bool(error)}")
+            return
+        trace_runtime(f"alarm action completed action={action} error={bool(error)}")
         if error:
             self.set_busy(False)
             if action == "disarm" and hasattr(self, "code_display"):
@@ -10024,6 +10186,9 @@ class MainWindow(Background):
         self._auto_nav_audio_state_at = 0.0
         self._last_audio_manual_leave_at = -AUDIO_IDLE_SECONDS
         self._ignore_info_until = 0.0
+        self._modal_touch_block_until = 0.0
+        self._alarm_dialog_open = False
+        self._alarm_reopen_block_until = 0.0
         self._status_refresh_running = False
         self._alarm_refresh_running = False
         self._main_async_jobs: dict[str, tuple[Callable | None, Callable | None]] = {}
@@ -10214,6 +10379,8 @@ class MainWindow(Background):
                     self.wake_display_screen()
                     return True
                 if now < getattr(self, "_display_wake_block_until", 0.0):
+                    return True
+                if now < getattr(self, "_modal_touch_block_until", 0.0):
                     return True
                 if event_type in self.display_activity_event_types():
                     self._last_user_activity_at = now
@@ -11151,6 +11318,8 @@ class MainWindow(Background):
 
 
 def main():
+    install_crash_logging()
+    trace_runtime("Native UI main starting")
     # The appliance display is a fixed touchscreen. Disable Qt auto scaling so
     # physical pixels map directly to the X screen size reported after rotation.
     os.environ.setdefault("QT_AUTO_SCREEN_SCALE_FACTOR", "0")

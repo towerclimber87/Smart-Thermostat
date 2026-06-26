@@ -56,8 +56,10 @@ If auto-discovery does not appear in Home Assistant, add the custom `iha` integr
 ```bash
 systemctl status smart-thermostat-backend.service smart-thermostat-native.service --no-pager -l
 pgrep -a -f 'Xorg|xinit|native_app/main.py'
-tail -120 ~/Smart-Thermostat-Development/data/logs/native-ui.log
-journalctl -u smart-thermostat-native.service -n 120 --no-pager
+tail -200 /dev/shm/smart-thermostat-native/logs/native-ui.log
+tail -200 /dev/shm/smart-thermostat-native/logs/native-ui.previous.log
+tail -200 /dev/shm/smart-thermostat-native/logs/native-crash.log
+journalctl -u smart-thermostat-native.service -b -n 120 --no-pager
 ```
 
 ## Manual test without installing services
