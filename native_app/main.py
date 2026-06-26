@@ -1129,26 +1129,16 @@ class AppState:
         self._target_override_value = None
         self._target_override_until = 0.0
 
-    def set_mode_override(self, mode: str, *, away: bool = False, hold_seconds: float = 8.0, extra: dict | None = None):
-        """Hold a just-requested local mode against stale status refreshes.
-
-        Mode changes are visible before the backend round trip completes.  When
-        the change also creates compressor/changeover protection, keep the
-        pending mode and countdown pinned locally too; otherwise the next HA/API
-        status payload can briefly wipe the bypass card even though the backend
-        is still settling the requested transition.
-        """
+    def set_mode_override(self, mode: str, *, away: bool = False, hold_seconds: float = 8.0):
+        """Hold a just-requested local mode against one stale status refresh."""
         mode = str(mode or "").strip().lower()
         if mode not in {"off", "heat", "cool", "away"}:
             return
-        override = {
+        self._mode_override = {
             "mode": "cool" if mode == "away" else mode,
             "away": bool(away or mode == "away"),
             "awaySource": "manual" if (away or mode == "away") else "",
         }
-        if isinstance(extra, dict):
-            override.update(copy.deepcopy(extra))
-        self._mode_override = override
         self._mode_override_until = time.monotonic() + max(1.0, float(hold_seconds))
 
     def clear_mode_override(self):
@@ -1162,18 +1152,7 @@ class AppState:
         if not self._mode_override or now >= self._mode_override_until:
             self.clear_mode_override()
             return thermostat
-        override = dict(self._mode_override)
-        # Do not let a stale local prediction hide a newer authoritative
-        # backend lockout.  If the backend has a longer countdown, keep it.
-        try:
-            local_until = float(override.get("manualLockoutUntil") or 0)
-            remote_until = float(thermostat.get("manualLockoutUntil") or 0)
-            if remote_until > local_until:
-                override.pop("manualPendingMode", None)
-                override.pop("manualLockoutUntil", None)
-        except Exception:
-            pass
-        thermostat.update(override)
+        thermostat.update(self._mode_override)
         return thermostat
 
     def apply_target_override(self, thermostat: dict) -> dict:
@@ -1323,6 +1302,112 @@ class ThermostatNoticeCard(QWidget):
             p.drawRoundedRect(badge_r, 11, 11)
             p.setPen(QColor(232, 252, 255))
             p.drawText(badge_r, Qt.AlignCenter, self.badge.upper())
+
+
+class ThermostatBypassBubble(QWidget):
+    """Compact left-side bypass bubble for changeover delays.
+
+    This intentionally matches the small thermostat notice-card language instead
+    of using the generic pill button.  It stays parked under the Inside Doors
+    card, so the user always knows where the bypass action will appear.
+    """
+
+    clicked = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.kind = "cool"
+        self.label = "BYPASS"
+        self._pressed = False
+        self.setFixedSize(226, 70)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+
+    def set_kind(self, kind: str):
+        self.kind = str(kind or "cool").lower()
+        self.update()
+
+    def setText(self, value: str):
+        self.label = str(value or "BYPASS").strip().upper() or "BYPASS"
+        self.update()
+
+    def text(self) -> str:
+        return self.label
+
+    def _palette(self) -> tuple[QColor, QColor, QColor, QColor, QColor]:
+        if self.kind == "heat":
+            return (
+                QColor(124, 22, 42, 218),
+                QColor(35, 14, 30, 232),
+                QColor(255, 87, 121, 176),
+                QColor(255, 82, 115, 64),
+                QColor(255, 232, 238),
+            )
+        if self.kind in {"purple", "manual", "cooldown", "lockout"}:
+            return (
+                QColor(74, 54, 130, 218),
+                QColor(25, 17, 45, 232),
+                QColor(194, 155, 255, 176),
+                QColor(194, 155, 255, 58),
+                QColor(248, 244, 255),
+            )
+        return (
+            QColor(16, 84, 118, 216),
+            QColor(9, 34, 58, 232),
+            QColor(71, 224, 255, 164),
+            QColor(71, 224, 255, 62),
+            QColor(246, 252, 255),
+        )
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._pressed = True
+            self.update()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        was_pressed = self._pressed
+        self._pressed = False
+        self.update()
+        if was_pressed and event.button() == Qt.LeftButton and self.rect().contains(event.pos()):
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
+        r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        bg1, bg2, border, glow_color, text_col = self._palette()
+        if self._pressed:
+            bg1 = QColor(max(0, bg1.red() - 14), max(0, bg1.green() - 14), max(0, bg1.blue() - 14), bg1.alpha())
+            bg2 = QColor(max(0, bg2.red() - 10), max(0, bg2.green() - 10), max(0, bg2.blue() - 10), bg2.alpha())
+
+        glow = QRadialGradient(QPointF(r.center().x(), r.center().y()), max(r.width(), r.height()) * 0.76)
+        glow.setColorAt(0.0, glow_color)
+        glow.setColorAt(0.70, QColor(glow_color.red(), glow_color.green(), glow_color.blue(), max(10, glow_color.alpha() // 4)))
+        glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.fillRect(r, glow)
+
+        grad = QLinearGradient(r.topLeft(), r.bottomRight())
+        grad.setColorAt(0.0, bg1)
+        grad.setColorAt(1.0, bg2)
+        p.setBrush(QBrush(grad))
+        p.setPen(QPen(border, 1.55))
+        p.drawRoundedRect(r, 22, 22)
+
+        p.setFont(font(13, QFont.Black, 18))
+        badge_w = min(r.width() - 46, max(102, p.fontMetrics().horizontalAdvance(self.label) + 38))
+        badge_r = QRectF(r.center().x() - badge_w / 2, r.center().y() - 15, badge_w, 30)
+        p.setBrush(QColor(border.red(), border.green(), border.blue(), 86))
+        p.setPen(Qt.NoPen)
+        p.drawRoundedRect(badge_r, 15, 15)
+
+        p.setPen(text_col)
+        p.drawText(r, Qt.AlignCenter, self.label)
 
 
 class ThermostatActionBanner(GlassPanel):
@@ -2258,8 +2343,7 @@ class ThermostatScreen(Page):
         self.door_countdown.hide()
         self.notice = ThermostatNoticeCard(self)
         self.notice.mousePressEvent = lambda event: self.show_auto_switch_menu()
-        self.bypass_pill = RoundButton("Bypass", active=True, kind="purple", min_h=42)
-        self.bypass_pill.setFixedWidth(180)
+        self.bypass_pill = ThermostatBypassBubble(self)
         self.bypass_pill.clicked.connect(self.bypass_changeover_lockout)
         self.bypass_pill.hide()
         self.away_overlay = QWidget(self)
@@ -2587,12 +2671,20 @@ class ThermostatScreen(Page):
             self.notice.move(notice_x, notice_y)
             self.notice.raise_()
         if self.bypass_pill.isVisible():
-            if self.notice.isVisible():
-                bx = max(18, min(self.notice.x() + (self.notice.width() - self.bypass_pill.width()) // 2, max(18, w - self.bypass_pill.width() - 18)))
-                by = max(70, self.notice.y() - self.bypass_pill.height() - 10)
-                self.bypass_pill.move(bx, by)
+            if hasattr(self, "door_card"):
+                try:
+                    door_pos = self.door_card.mapTo(self, QPoint(0, 0))
+                    bx = door_pos.x() + (self.door_card.width() - self.bypass_pill.width()) // 2
+                    by = door_pos.y() + self.door_card.height() + 12
+                except Exception:
+                    bx = pill_x
+                    by = y + 230
             else:
-                self.bypass_pill.move(pill_x, max(70, y + 16))
+                bx = pill_x
+                by = y + 230
+            bx = max(18, min(bx, max(18, w - self.bypass_pill.width() - 18)))
+            by = max(70, min(by, max(70, h - self.bypass_pill.height() - 18)))
+            self.bypass_pill.move(bx, by)
             self.bypass_pill.raise_()
         if hasattr(self, "notice_action_popup") and self.notice_action_popup.isVisible():
             self.notice_action_popup.raise_()
@@ -2618,20 +2710,11 @@ class ThermostatScreen(Page):
             return
         kind = getattr(self.alert_banner, "kind", "")
         if kind == "lockout":
-            # Keep the bypass/countdown in the left thermostat cluster, under
-            # the Doors tile, instead of flashing in the middle of the page.
-            w = min(430, max(360, self.width() // 3))
+            w = min(470, max(390, self.width() - 160))
             self.alert_banner.setFixedWidth(w)
             self.alert_banner.adjustSize()
-            try:
-                door_pos = self.door_card.mapTo(self, QPoint(0, 0))
-                x = door_pos.x() + (self.door_card.width() - self.alert_banner.width()) // 2
-                y = door_pos.y() + self.door_card.height() + 14
-            except Exception:
-                x = 42
-                y = 318
-            x = max(18, min(x, max(18, self.width() - self.alert_banner.width() - 18)))
-            y = max(96, min(y, max(96, self.height() - self.alert_banner.height() - 24)))
+            x = min(max(280, self.width() // 4), max(12, self.width() - self.alert_banner.width() - 26))
+            y = 104
         elif kind == "door-pause":
             w = min(660, max(540, self.width() - 96))
             self.alert_banner.setFixedWidth(w)
@@ -2973,38 +3056,25 @@ class ThermostatScreen(Page):
         auto_until = self.safe_float(t.get("autoLockoutUntil"), 0.0)
         if pending in {"heat", "cool"} and until > now_ms:
             self.hide_notice_action_popup()
+            self.alert_banner.hide()
             remaining = self.format_remaining((until - now_ms) / 1000)
-            opposite = "cooling" if pending == "heat" else "heating"
             selected = pending.capitalize()
-            self.notice.hide()
-            self.bypass_pill.hide()
-            self.alert_banner.set_alert(
-                "lockout",
-                f"{selected} Selected",
-                f"{selected} is selected, but {opposite} was just active.\nThe equipment will stay off for {remaining} unless you bypass the delay.",
-                dismiss=False,
-                revert=False,
-                bypass=True,
-                bypass_text="Bypass",
-            )
-            self.position_alert_banner()
+            self.show_notice_card("purple", "CHANGEOVER DELAY", f"To {selected}", remaining, height=118)
+            self.bypass_pill.set_kind("purple")
+            self.bypass_pill.setText("Bypass")
+            self.bypass_pill.show()
+            self.position_main_controls()
             return
         if auto_pending in {"heat", "cool"} and auto_until > now_ms:
             self.hide_notice_action_popup()
+            self.alert_banner.hide()
             remaining = self.format_remaining((auto_until - now_ms) / 1000)
             selected = auto_pending.capitalize()
-            self.notice.hide()
-            self.bypass_pill.hide()
-            self.alert_banner.set_alert(
-                "lockout",
-                "Auto Cooldown",
-                f"Auto is waiting to switch to {selected}.\nThe equipment will stay off for {remaining} unless you bypass the delay.",
-                dismiss=False,
-                revert=False,
-                bypass=True,
-                bypass_text="Bypass",
-            )
-            self.position_alert_banner()
+            self.show_notice_card("heat" if auto_pending == "heat" else "cool", "AUTO DELAY", f"To {selected}", remaining, height=118)
+            self.bypass_pill.set_kind("heat" if auto_pending == "heat" else "cool")
+            self.bypass_pill.setText("Bypass")
+            self.bypass_pill.show()
+            self.position_main_controls()
             return
 
         hold = t.get("autoSwitchHold") if isinstance(t.get("autoSwitchHold"), dict) else {}
@@ -3453,24 +3523,19 @@ class ThermostatScreen(Page):
             self.s.thermostat["awaySource"] = changes["awaySource"]
         else:
             # Physical/manual button taps should visibly win immediately.
-            changes = {"mode": mode, "away": False, "awaySource": "", "modeChangeSource": "panel"}
-            local_extra = {}
+            changes = {"mode": mode, "away": False, "awaySource": ""}
+            self.s.set_mode_override(mode, away=False)
+            self.s.thermostat["mode"] = mode
+            self.s.thermostat["away"] = False
+            self.s.thermostat["awaySource"] = ""
             if mode in {"heat", "cool"}:
                 # Show the bypassable delay immediately instead of waiting for
                 # the API round trip. The backend repeats the same calculation
                 # from the authoritative runtime state and corrects this local
                 # prediction on the next response.
                 until = self.predicted_manual_lockout_until(mode)
-                cleared_notice = {"active": False, "source": "", "fromMode": "", "toMode": "", "switchTemp": 0, "outdoorTemp": 0, "coolTarget": 0, "heatTarget": 0, "createdAt": 0}
-                self.s.thermostat["autoSwitchNotice"] = cleared_notice
-                local_extra["autoSwitchNotice"] = cleared_notice
+                self.s.thermostat["autoSwitchNotice"] = {"active": False, "source": "", "fromMode": "", "toMode": "", "switchTemp": 0, "outdoorTemp": 0, "coolTarget": 0, "heatTarget": 0, "createdAt": 0}
                 if until > int(time.time() * 1000):
-                    local_extra.update({
-                        "manualPendingMode": mode,
-                        "manualLockoutUntil": until,
-                        "autoPendingMode": "",
-                        "autoLockoutUntil": 0,
-                    })
                     self.s.thermostat["manualPendingMode"] = mode
                     self.s.thermostat["manualLockoutUntil"] = until
                     self.s.thermostat["autoPendingMode"] = ""
@@ -3478,11 +3543,6 @@ class ThermostatScreen(Page):
                 else:
                     self.s.thermostat["manualPendingMode"] = ""
                     self.s.thermostat["manualLockoutUntil"] = 0
-            hold_seconds = 14.0 if local_extra.get("manualLockoutUntil") else 8.0
-            self.s.set_mode_override(mode, away=False, hold_seconds=hold_seconds, extra=local_extra)
-            self.s.thermostat["mode"] = mode
-            self.s.thermostat["away"] = False
-            self.s.thermostat["awaySource"] = ""
         self.sync(self.s.config, self.s.thermostat)
 
         def done(result):
