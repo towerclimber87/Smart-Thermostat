@@ -2851,6 +2851,54 @@ def _person_states_for_schedule(entity_ids: list[str], thermostat: dict) -> dict
     return states
 
 
+
+def _refresh_person_tracking_states(thermostat: dict) -> dict:
+    """Refresh configured person states from Home Assistant for UI/status payloads.
+
+    This uses the existing HA all-states cache, so frequent panel status polls do
+    not hammer Home Assistant. Persist=false keeps this runtime-only presence
+    refresh from creating extra SD card writes.
+    """
+    people = thermostat.get("people") if isinstance(thermostat, dict) else []
+    if not isinstance(people, list) or not people:
+        return thermostat
+    wanted = []
+    seen = set()
+    for person in people:
+        if not isinstance(person, dict):
+            continue
+        entity_id = str(person.get("entityId") or person.get("entity_id") or "").strip()
+        if entity_id and entity_id not in seen:
+            seen.add(entity_id)
+            wanted.append(entity_id)
+    if not wanted:
+        return thermostat
+    states = _person_states_for_schedule(wanted, thermostat)
+    if not states:
+        return thermostat
+    changed = False
+    refreshed = []
+    for person in people:
+        if not isinstance(person, dict):
+            continue
+        item = dict(person)
+        entity_id = str(item.get("entityId") or item.get("entity_id") or "").strip()
+        state = states.get(entity_id)
+        if state and str(item.get("state") or "unknown").strip().lower() != state:
+            item["state"] = state
+            changed = True
+        refreshed.append(item)
+    if not changed:
+        return thermostat
+    updated = dict(thermostat)
+    updated["people"] = _normalize_person_entries(refreshed)
+    try:
+        _write_thermostat_record(updated, persist=False)
+    except Exception as exc:
+        print(f"Person tracking refresh could not update runtime state: {exc}", flush=True)
+    return updated
+
+
 def _schedule_people_are_home(schedule: dict, thermostat: dict) -> bool:
     entity_ids = _normalize_schedule_person_ids(schedule.get("personEntityIds") or [])
     if not entity_ids:
@@ -3487,6 +3535,7 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
         record["thermostat"] = thermostat
     else:
         thermostat = record["thermostat"]
+    thermostat = _refresh_person_tracking_states(thermostat)
     outputs = _thermostat_outputs(thermostat)
     if (bool(outputs.get("cool")) or str(outputs.get("hvacAction") or "").lower() == "cooling") and str(thermostat.get("fan") or "auto").lower() == "off":
         thermostat = dict(thermostat)

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import math
+import html
 import os
 import subprocess
 import sys
@@ -2405,6 +2406,85 @@ class ThermostatNoticeActionPopup(QWidget):
             self.revertClicked.emit()
 
 
+class PersonPresenceStrip(QWidget):
+    """Compact main-screen Home Assistant person tracker.
+
+    Shows each configured person as a small pill. Home is green, anything else
+    (away/not_home/unknown/unavailable) is red so stale or missing presence is
+    obvious on the wall panel.
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("personPresenceStrip")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setMaximumHeight(62)
+        self.setStyleSheet("QWidget#personPresenceStrip { background:transparent; border:0; }")
+        self._layout = QHBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(7)
+        self._people_signature = ""
+
+    def update_people(self, people: list[dict] | None):
+        clean: list[dict] = []
+        for person in people or []:
+            if not isinstance(person, dict):
+                continue
+            entity_id = str(person.get("entityId") or person.get("entity_id") or "").strip()
+            name = str(person.get("name") or person.get("friendly_name") or entity_id or "Person").strip()
+            state = str(person.get("state") or "unknown").strip().lower()
+            if entity_id or name:
+                clean.append({"entityId": entity_id, "name": name, "state": state})
+        # Keep the strip touch-friendly and visually stable on the 10-inch screen.
+        clean = clean[:4]
+        signature = "|".join(f"{p['entityId']}:{p['name']}:{p['state']}" for p in clean)
+        if signature == self._people_signature:
+            self.setVisible(bool(clean))
+            return
+        self._people_signature = signature
+        while self._layout.count():
+            item = self._layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        if not clean:
+            self.hide()
+            return
+        for person in clean:
+            state = person["state"]
+            home = state == "home"
+            name = compact_name(person["name"], 15)
+            sub = "HOME" if home else "AWAY"
+            icon = "●"
+            if home:
+                bg = "qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 rgba(33,220,122,0.92), stop:1 rgba(13,94,58,0.92))"
+                border = "rgba(148,255,197,0.72)"
+                text = "#eafff2"
+            else:
+                bg = "qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 rgba(232,62,72,0.94), stop:1 rgba(99,23,32,0.94))"
+                border = "rgba(255,158,162,0.72)"
+                text = "#fff0f1"
+            label = QLabel(f"<span style='font-size:15px'>{icon}</span>&nbsp; <b>{html.escape(name)}</b><br><span style='font-size:8px; letter-spacing:1.5px'>{sub}</span>")
+            label.setTextFormat(Qt.RichText)
+            label.setAlignment(Qt.AlignCenter)
+            label.setMinimumWidth(124)
+            label.setMaximumWidth(154)
+            label.setMinimumHeight(48)
+            label.setFont(font(9, QFont.Black))
+            label.setStyleSheet(f"""
+                QLabel {{
+                    color:{text};
+                    background:{bg};
+                    border:1px solid {border};
+                    border-radius:15px;
+                    padding:5px 10px;
+                }}
+            """)
+            self._layout.addWidget(label)
+        self._layout.addStretch(1)
+        self.show()
+
+
+
 class ThermostatScreen(Page):
     def __init__(self, app_state: AppState, parent=None):
         super().__init__(app_state, parent)
@@ -2441,6 +2521,8 @@ class ThermostatScreen(Page):
             letter-spacing:1px;
         """)
         self.door_countdown.hide()
+        self.person_presence_strip = PersonPresenceStrip(self)
+        self.person_presence_strip.hide()
         self.notice = ThermostatNoticeCard(self)
         self.notice.mousePressEvent = lambda event: self.show_auto_switch_menu()
         self.bypass_pill = ThermostatBypassBubble(self)
@@ -2511,7 +2593,12 @@ class ThermostatScreen(Page):
         left_title.addWidget(self.title_label)
         title_row.addLayout(left_title)
         title_row.addStretch(1)
-        title_row.addWidget(self.door_countdown, 0, Qt.AlignRight | Qt.AlignTop)
+        right_status = QVBoxLayout()
+        right_status.setContentsMargins(0, 0, 0, 0)
+        right_status.setSpacing(8)
+        right_status.addWidget(self.door_countdown, 0, Qt.AlignRight | Qt.AlignTop)
+        right_status.addWidget(self.person_presence_strip, 0, Qt.AlignRight | Qt.AlignTop)
+        title_row.addLayout(right_status)
         title_row.addWidget(self.schedule_button, 0, Qt.AlignRight | Qt.AlignTop)
         root.addLayout(title_row)
 
@@ -4150,6 +4237,8 @@ class ThermostatScreen(Page):
         unit = t.get("outdoorWindUnit") or t.get("outdoor_wind_unit") or "mph"
         self.outdoor.setText(f"OUTDOOR  {fmt_temp(out)}   WIND  {wind} {unit}".upper())
         self.update_status_badge()
+        if hasattr(self, "person_presence_strip"):
+            self.person_presence_strip.update_people(t.get("people") or [])
         self.notice.hide()
         self.refresh_schedule_shortcuts()
         if away:
@@ -8254,7 +8343,7 @@ class SettingsDialog(QDialog):
                     names.append(str(person.get("name") or person.get("entityId") or "").strip())
         names = [x for x in names if x]
         if not names:
-            return "No people assigned. Tap + Person to add."
+            return "No people assigned. Tap Choose People to add."
         shown = ", ".join(names[:3])
         if len(names) > 3:
             shown += f" +{len(names)-3} more"
@@ -8266,8 +8355,13 @@ class SettingsDialog(QDialog):
         def apply(people):
             try:
                 self.s.update_thermostat({"people": people})
+                summary = self.people_summary_text()
                 if hasattr(self, "people_summary"):
-                    self.people_summary.setText(self.people_summary_text())
+                    self.people_summary.setText(summary)
+                    self.people_summary.repaint()
+                if hasattr(self, "person_tracking_summary"):
+                    self.person_tracking_summary.setText(summary)
+                    self.person_tracking_summary.repaint()
                 self.saved.emit()
             except Exception as exc:
                 QMessageBox.warning(self, "Auto Away / Home", str(exc))
@@ -8674,7 +8768,7 @@ class SettingsDialog(QDialog):
             b.clicked.connect(lambda checked=False, x=f: self.set_thermostat({"fan": x}))
             fan_row.addWidget(b)
 
-        minimum_runtime = self.add_section("Minimum Runtime", 3, 2, 1, 2)
+        minimum_runtime = self.add_section("Minimum Runtime", 4, 2, 1, 2)
         runtime_grid = self.section_grid(minimum_runtime, 2)
         self.add_section_value(runtime_grid, "heatMinimumRuntimeMinutes", "Heat", t.get("heatMinimumRuntimeMinutes", 2), 0, 0, 1, 30, " min")
         self.add_section_value(runtime_grid, "coolMinimumRuntimeMinutes", "Cool", t.get("coolMinimumRuntimeMinutes", 2), 0, 1, 1, 30, " min")
@@ -8748,6 +8842,25 @@ class SettingsDialog(QDialog):
         choose_outdoor.clicked.connect(self.choose_outdoor_temp_sensor)
         outdoor_source.layout().addWidget(choose_outdoor, 0, Qt.AlignRight)
 
+        person_tracking = self.add_section("Person Tracking", 3, 2, 1, 2)
+        self.person_tracking_summary = QLabel(self.people_summary_text())
+        self.person_tracking_summary.setWordWrap(True)
+        self.person_tracking_summary.setFont(font(7, QFont.Black))
+        self.person_tracking_summary.setStyleSheet("color:#c4d0e5; background:rgba(5,10,20,0.42); border:1px dashed rgba(160,180,210,0.26); border-radius:8px; padding:4px;")
+        pick_people = RoundButton("Choose People", active=True, min_h=28)
+        pick_people.setMinimumWidth(132)
+        pick_people.clicked.connect(self.choose_auto_away_people)
+        person_row = QHBoxLayout()
+        person_row.setSpacing(6)
+        person_row.addWidget(self.person_tracking_summary, 1)
+        person_row.addWidget(pick_people)
+        person_tracking.layout().addLayout(person_row)
+        person_note = QLabel("Home Assistant person entries appear on the main thermostat screen: green when home, red when away.")
+        person_note.setWordWrap(True)
+        person_note.setFont(font(7, QFont.Black))
+        person_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
+        person_tracking.layout().addWidget(person_note)
+
         door_source = self.add_section("Doors / Comfort Pause", 3, 0, 1, 2)
         self.inside_door_label = QLabel(self.inside_door_summary_text())
         self.inside_door_label.setWordWrap(True)
@@ -8761,7 +8874,7 @@ class SettingsDialog(QDialog):
         choose_door.clicked.connect(self.choose_inside_door_entry)
         door_grid.addWidget(choose_door, 0, 1)
 
-        codes = self.add_section("Security Codes", 4, 0, 1, 2)
+        codes = self.add_section("Security Codes", 5, 0, 1, 2)
         code_grid = QGridLayout()
         code_grid.setContentsMargins(0, 0, 0, 0)
         code_grid.setHorizontalSpacing(6)
@@ -8786,7 +8899,7 @@ class SettingsDialog(QDialog):
         code_grid.setColumnStretch(0, 1)
         code_grid.setColumnStretch(1, 1)
 
-        unit = self.add_section("Thermostat Unit", 4, 2, 1, 2)
+        unit = self.add_section("Thermostat Unit", 5, 2, 1, 2)
         unit_row = QHBoxLayout()
         unit_row.setSpacing(6)
         self.thermostat_name_label = QLabel(self.thermostat_name_summary_text())
@@ -8800,7 +8913,7 @@ class SettingsDialog(QDialog):
         unit_row.addWidget(edit_name)
         unit.layout().addLayout(unit_row)
 
-        display = self.add_section("Screen Rotation", 5, 0, 1, 4)
+        display = self.add_section("Screen Rotation", 6, 0, 1, 4)
         display_row = QHBoxLayout()
         display_row.setSpacing(8)
         self.screen_orientation_label = QLabel(self.screen_orientation_summary_text())
@@ -8823,7 +8936,7 @@ class SettingsDialog(QDialog):
         note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
         display.layout().addWidget(note)
 
-        self.grid.setRowStretch(6, 1)
+        self.grid.setRowStretch(7, 1)
 
     def val_number(self, key):
         text = self.controls[key].text().split()[0].replace("°", "")
