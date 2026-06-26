@@ -20,7 +20,7 @@ import shlex
 import subprocess
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib import request, error
@@ -3598,7 +3598,14 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
         record["thermostat"] = thermostat
     else:
         thermostat = record["thermostat"]
-    thermostat = _refresh_person_tracking_states(thermostat)
+    try:
+        thermostat = _refresh_person_tracking_states(thermostat)
+    except Exception as exc:
+        # Person state refresh is helpful for the UI, but it must never make the
+        # thermostat status endpoint fail or make the native app boot with blank
+        # information. Keep the last saved thermostat record if HA/person refresh
+        # has a bad value or an unexpected schema issue.
+        print(f"Person tracking refresh skipped: {exc}", flush=True)
     outputs = _thermostat_outputs(thermostat)
     if (bool(outputs.get("cool")) or str(outputs.get("hvacAction") or "").lower() == "cooling") and str(thermostat.get("fan") or "auto").lower() == "off":
         thermostat = dict(thermostat)
