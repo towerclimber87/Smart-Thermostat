@@ -578,6 +578,69 @@ class HoldLabel(QLabel):
         super().mouseReleaseEvent(event)
 
 
+class TouchFriendlySlider(QSlider):
+    """Slider that treats the whole widget as the touch target.
+
+    QSlider is precise with a mouse, but on the Raspberry Pi touchscreen the
+    effective grab area is too skinny. This subclass lets the user press or
+    drag anywhere inside the larger slider widget and maps that point directly
+    to the slider value.
+    """
+
+    def __init__(self, orientation, parent=None):
+        super().__init__(orientation, parent)
+        self._touch_drag_active = False
+        self.setMouseTracking(True)
+        self.setAttribute(Qt.WA_AcceptTouchEvents, True)
+
+    def _value_from_pos(self, pos) -> int:
+        try:
+            minimum = int(self.minimum())
+            maximum = int(self.maximum())
+            span = max(1, maximum - minimum)
+            if self.orientation() == Qt.Horizontal:
+                width = max(1, self.width() - 1)
+                ratio = clamp(float(pos.x()) / float(width), 0.0, 1.0)
+            else:
+                height = max(1, self.height() - 1)
+                ratio = 1.0 - clamp(float(pos.y()) / float(height), 0.0, 1.0)
+            if self.invertedAppearance():
+                ratio = 1.0 - ratio
+            return int(clamp(round(minimum + ratio * span), minimum, maximum))
+        except Exception:
+            return int(self.value())
+
+    def _set_from_pos(self, pos):
+        self.setValue(self._value_from_pos(pos))
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._touch_drag_active = True
+            self.setSliderDown(True)
+            self.sliderPressed.emit()
+            self._set_from_pos(event.pos())
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._touch_drag_active and (event.buttons() & Qt.LeftButton):
+            self._set_from_pos(event.pos())
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._touch_drag_active and event.button() == Qt.LeftButton:
+            self._set_from_pos(event.pos())
+            self._touch_drag_active = False
+            self.setSliderDown(False)
+            self.sliderReleased.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
 class CoverArtLabel(QLabel):
     """Rounded album-art card with a clean fallback when no artwork is available."""
 
@@ -5931,10 +5994,15 @@ class AudioScreen(Page):
         vol_row.addWidget(vol_name)
         vol_row.addStretch(1)
         vol_row.addWidget(self.vol_value)
-        self.volume = QSlider(Qt.Horizontal)
+        self.volume = TouchFriendlySlider(Qt.Horizontal)
         self.volume.setRange(0, 100)
-        self.volume.setMinimumHeight(42)
-        self.volume.setStyleSheet(SLIDER_H)
+        self.volume.setMinimumHeight(58)
+        self.volume.setStyleSheet("""
+            QSlider::groove:horizontal { height:18px; border-radius:9px; background:rgba(160,170,190,0.23); }
+            QSlider::sub-page:horizontal { height:18px; border-radius:9px; background:#49e6ff; }
+            QSlider::add-page:horizontal { height:18px; border-radius:9px; background:rgba(110,92,180,0.42); }
+            QSlider::handle:horizontal { width:46px; height:46px; margin:-14px 0; border-radius:23px; background:#f8f5ff; border:1px solid rgba(255,255,255,0.42); }
+        """)
         self.projector = ModernAudioButton("projector", "Projector", min_h=64, holdable=True)
         self.projector.setMinimumWidth(126)
         self.switch_buttons["projector"] = self.projector
@@ -5960,15 +6028,16 @@ class AudioScreen(Page):
             label.setAlignment(Qt.AlignCenter)
             label.setFont(font(9 if key == "music_surround" else 10, QFont.Black))
             label.setStyleSheet("color:#dbe3f4;")
-            sl = QSlider(Qt.Vertical)
+            sl = TouchFriendlySlider(Qt.Vertical)
             sl.setRange(0, 100)
             sl.setValue(50)
-            sl.setMinimumHeight(156)
+            sl.setMinimumWidth(68)
+            sl.setMinimumHeight(168)
             sl.setStyleSheet("""
-                QSlider::groove:vertical { width:12px; border-radius:6px; background:rgba(160,170,190,0.23); }
-                QSlider::add-page:vertical { width:12px; border-radius:6px; background:#49e6ff; }
-                QSlider::sub-page:vertical { width:12px; border-radius:6px; background:rgba(110,92,180,0.42); }
-                QSlider::handle:vertical { height:36px; width:36px; margin:0 -12px; border-radius:18px; background:#f8f5ff; border:1px solid rgba(255,255,255,0.42); }
+                QSlider::groove:vertical { width:18px; border-radius:9px; background:rgba(160,170,190,0.23); }
+                QSlider::add-page:vertical { width:18px; border-radius:9px; background:#49e6ff; }
+                QSlider::sub-page:vertical { width:18px; border-radius:9px; background:rgba(110,92,180,0.42); }
+                QSlider::handle:vertical { height:46px; width:46px; margin:0 -14px; border-radius:23px; background:#f8f5ff; border:1px solid rgba(255,255,255,0.42); }
             """)
             v.addWidget(label)
             v.addWidget(sl, 1, Qt.AlignHCenter)
