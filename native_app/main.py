@@ -1375,6 +1375,150 @@ class ThermostatActionBanner(GlassPanel):
         self.raise_()
 
 
+class ThermostatNoticeActionDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.choice = None
+        self.kind = "cool"
+        self.setModal(True)
+        self.setWindowFlag(Qt.FramelessWindowHint, True)
+        self.setWindowTitle("Notice")
+        self.setFixedSize(760, 336)
+        self.setStyleSheet("""
+            QDialog { background:#09111f; color:#f7fbff; }
+            QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
+        """)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 18, 18, 18)
+        root.setSpacing(0)
+
+        self.card = QFrame(self)
+        self.card.setObjectName("noticeDialogCard")
+        root.addWidget(self.card, 1)
+
+        card_lay = QVBoxLayout(self.card)
+        card_lay.setContentsMargins(26, 22, 26, 22)
+        card_lay.setSpacing(12)
+
+        self.kicker = QLabel("AUTO NOTICE")
+        self.kicker.setAlignment(Qt.AlignCenter)
+        self.kicker.setFont(font(10, QFont.Black, 18))
+        card_lay.addWidget(self.kicker)
+
+        self.title_label = QLabel("Auto-Switched")
+        self.title_label.setAlignment(Qt.AlignCenter)
+        self.title_label.setWordWrap(True)
+        self.title_label.setFont(font(26, QFont.Black))
+        card_lay.addWidget(self.title_label)
+
+        self.body_label = QLabel("")
+        self.body_label.setAlignment(Qt.AlignCenter)
+        self.body_label.setWordWrap(True)
+        self.body_label.setFont(font(12, QFont.Black))
+        self.body_label.setStyleSheet("color:#dfe8ff; background:transparent; border:0;")
+        card_lay.addWidget(self.body_label)
+
+        self.status_pill = QLabel("")
+        self.status_pill.setAlignment(Qt.AlignCenter)
+        self.status_pill.setFont(font(10, QFont.Black, 18))
+        self.status_pill.setMinimumHeight(34)
+        self.status_pill.setMaximumHeight(34)
+        card_lay.addWidget(self.status_pill, 0, Qt.AlignCenter)
+
+        card_lay.addStretch(1)
+
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 4, 0, 0)
+        btn_row.setSpacing(12)
+        btn_row.addStretch(1)
+        self.secondary_btn = RoundButton("Dismiss", active=False, min_h=48)
+        self.secondary_btn.setMinimumWidth(170)
+        self.primary_btn = RoundButton("Revert", active=True, min_h=48)
+        self.primary_btn.setMinimumWidth(240)
+        btn_row.addWidget(self.secondary_btn)
+        btn_row.addWidget(self.primary_btn)
+        btn_row.addStretch(1)
+        card_lay.addLayout(btn_row)
+
+        self.secondary_btn.clicked.connect(lambda: self.finish("secondary"))
+        self.primary_btn.clicked.connect(lambda: self.finish("primary"))
+
+        self.apply_kind("cool")
+
+    def apply_kind(self, kind: str):
+        self.kind = str(kind or "cool").lower()
+        if self.kind == "heat":
+            accent = "#ff8468"
+            soft = "rgba(255,96,80,0.30)"
+            pill_bg = "rgba(255,110,88,0.18)"
+            pill_border = "rgba(255,145,126,0.42)"
+        elif self.kind == "purple":
+            accent = "#bd98ff"
+            soft = "rgba(151,101,255,0.28)"
+            pill_bg = "rgba(162,112,255,0.18)"
+            pill_border = "rgba(196,167,255,0.42)"
+        else:
+            accent = "#46e8ff"
+            soft = "rgba(72,214,255,0.26)"
+            pill_bg = "rgba(72,214,255,0.16)"
+            pill_border = "rgba(104,222,255,0.42)"
+        self.kicker.setStyleSheet(f"color:{accent}; background:transparent; border:0; letter-spacing:3px;")
+        self.card.setStyleSheet(f"""
+            QFrame#noticeDialogCard {{
+                background:qlineargradient(x1:0,y1:0,x2:1,y2:1,
+                    stop:0 {soft},
+                    stop:1 rgba(9,17,31,0.97));
+                border:1px solid rgba(255,255,255,0.18);
+                border-radius:28px;
+            }}
+        """)
+        self.status_pill.setStyleSheet(
+            f"background:{pill_bg}; border:1px solid {pill_border}; border-radius:17px; color:#f5fbff; padding:0 16px;"
+        )
+
+    def configure(self, *, kind: str = "cool", kicker: str = "AUTO NOTICE", title: str = "", body: str = "", status_text: str = "", primary_text: str = "OK", secondary_text: str = "Dismiss"):
+        self.apply_kind(kind)
+        self.kicker.setText((kicker or "NOTICE").upper())
+        self.title_label.setText(title or "Notice")
+        self.body_label.setText(body or "")
+        self.status_pill.setVisible(bool(status_text))
+        self.status_pill.setText((status_text or "").upper())
+        self.primary_btn.setText(primary_text or "OK")
+        self.secondary_btn.setText(secondary_text or "Dismiss")
+        self.primary_btn.setVisible(bool(primary_text))
+        self.secondary_btn.setVisible(bool(secondary_text))
+        self.adjustSize()
+
+    def finish(self, choice: str):
+        self.choice = choice
+        self.accept()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        parent = self.parentWidget()
+        if parent is not None:
+            geo = parent.frameGeometry()
+            x = geo.x() + (geo.width() - self.width()) // 2
+            y = geo.y() + (geo.height() - self.height()) // 2
+            self.move(x, y)
+            return
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen:
+            geo = screen.availableGeometry()
+            x = geo.x() + (geo.width() - self.width()) // 2
+            y = geo.y() + (geo.height() - self.height()) // 2
+            self.move(x, y)
+
+    @staticmethod
+    def ask(parent, **kwargs) -> str | None:
+        dlg = ThermostatNoticeActionDialog(parent)
+        dlg.configure(**kwargs)
+        if dlg.exec_() == QDialog.Accepted:
+            return dlg.choice
+        return None
+
+
 class TextKeyboardDialog(QDialog):
     def __init__(self, title: str, value: str = "", parent=None):
         super().__init__(parent)
@@ -1863,6 +2007,161 @@ class ScheduleManagerDialog(QDialog):
 
 
 
+class ThermostatNoticeActionPopup(QWidget):
+    revertClicked = pyqtSignal()
+    dismissAutoClicked = pyqtSignal()
+    dismissManualClicked = pyqtSignal()
+    followClicked = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.action_kind = "auto"
+        self.follow_mode = ""
+        self.setObjectName("thermostatNoticeActionPopup")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setStyleSheet("""
+            QWidget#thermostatNoticeActionPopup {
+                background:rgba(3, 8, 18, 166);
+                border:0;
+            }
+        """)
+
+        self.card = GlassPanel(self, radius=30, strong=True)
+        self.card.setFixedWidth(540)
+        self.card.setMinimumHeight(238)
+        self.card.setMaximumHeight(318)
+
+        self.kicker = QLabel("THERMOSTAT NOTICE")
+        self.kicker.setAlignment(Qt.AlignCenter)
+        self.kicker.setFont(font(8, QFont.Black, 22))
+        self.kicker.setStyleSheet("color:rgba(208,224,255,0.76); background:transparent; border:0; letter-spacing:3px;")
+
+        self.title = QLabel("Auto-Switched")
+        self.title.setAlignment(Qt.AlignCenter)
+        self.title.setFont(font(28, QFont.Black))
+        self.title.setStyleSheet("color:#ffffff; background:transparent; border:0;")
+
+        self.body = QLabel("")
+        self.body.setAlignment(Qt.AlignCenter)
+        self.body.setWordWrap(True)
+        self.body.setFont(font(13, QFont.Black))
+        self.body.setStyleSheet("color:#dfe9ff; background:transparent; border:0;")
+
+        self.hint = QLabel("Tap outside to close")
+        self.hint.setAlignment(Qt.AlignCenter)
+        self.hint.setFont(font(8, QFont.Black, 18))
+        self.hint.setStyleSheet("color:rgba(214,225,245,0.48); background:transparent; border:0; letter-spacing:1px;")
+
+        self.dismiss_button = RoundButton("Dismiss", active=False, min_h=48)
+        self.primary_button = RoundButton("Revert", active=True, min_h=48)
+        self.dismiss_button.setMinimumWidth(148)
+        self.primary_button.setMinimumWidth(196)
+
+        buttons = QHBoxLayout()
+        buttons.setContentsMargins(0, 0, 0, 0)
+        buttons.setSpacing(14)
+        buttons.addStretch(1)
+        buttons.addWidget(self.dismiss_button)
+        buttons.addWidget(self.primary_button)
+        buttons.addStretch(1)
+
+        layout = QVBoxLayout(self.card)
+        layout.setContentsMargins(30, 24, 30, 22)
+        layout.setSpacing(10)
+        layout.addWidget(self.kicker)
+        layout.addSpacing(2)
+        layout.addWidget(self.title)
+        layout.addWidget(self.body)
+        layout.addSpacing(8)
+        layout.addLayout(buttons)
+        layout.addWidget(self.hint)
+
+        self.dismiss_button.clicked.connect(self._dismiss)
+        self.primary_button.clicked.connect(self._primary)
+        self.hide()
+
+    def show_auto_switch(self, from_mode: str, to_mode: str, switch_temp: float | int | str | None = None):
+        self.action_kind = "auto"
+        self.follow_mode = ""
+        from_mode = str(from_mode or "").lower()
+        to_mode = str(to_mode or "").lower()
+        from_label = from_mode.capitalize() if from_mode in {"heat", "cool"} else "Previous Mode"
+        to_label = to_mode.capitalize() if to_mode in {"heat", "cool"} else "Auto"
+        self.kicker.setText("AUTO SWITCHED")
+        self.title.setText(f"Switched to {to_label}")
+        temp_text = f" at {fmt_temp(switch_temp)}" if switch_temp not in (None, "") else ""
+        self.body.setText(f"The thermostat automatically changed to {to_label}{temp_text}.\nChoose whether to revert back or dismiss this notice.")
+        self.dismiss_button.setText("Dismiss")
+        self.primary_button.setText(f"Revert to {from_label}")
+        self.primary_button.setVisible(from_mode in {"heat", "cool"})
+        self._show_centered()
+
+    def show_manual_override(self, manual_mode: str, suggested_mode: str):
+        self.action_kind = "manual"
+        self.follow_mode = str(suggested_mode or "").lower()
+        manual_label = str(manual_mode or "").capitalize() if str(manual_mode or "").lower() in {"heat", "cool"} else "Manual"
+        suggested_label = self.follow_mode.capitalize() if self.follow_mode in {"heat", "cool"} else "Auto"
+        self.kicker.setText("MANUAL OVERRIDE")
+        self.title.setText(f"{manual_label} is staying on")
+        self.body.setText(f"Auto would switch to {suggested_label}, but the manual override is still active.\nChoose whether to follow Auto or dismiss this notice.")
+        self.dismiss_button.setText("Dismiss Notice")
+        self.primary_button.setText(f"Follow Auto {suggested_label}")
+        self.primary_button.setVisible(self.follow_mode in {"heat", "cool"})
+        self._show_centered()
+
+    def _show_centered(self):
+        parent = self.parentWidget()
+        if parent is not None:
+            self.setGeometry(parent.rect())
+        self.show()
+        self.raise_()
+        self.card.raise_()
+        self.setFocus(Qt.PopupFocusReason)
+        self.position_card()
+
+    def position_card(self):
+        card_w = min(540, max(430, self.width() - 80))
+        self.card.setFixedWidth(card_w)
+        self.card.adjustSize()
+        self.card.move(max(12, (self.width() - self.card.width()) // 2), max(18, (self.height() - self.card.height()) // 2))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.position_card()
+
+    def mousePressEvent(self, event):
+        if not self.card.geometry().contains(event.pos()):
+            self.hide()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape:
+            self.hide()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def _dismiss(self):
+        action_kind = self.action_kind
+        self.hide()
+        if action_kind == "manual":
+            self.dismissManualClicked.emit()
+        else:
+            self.dismissAutoClicked.emit()
+
+    def _primary(self):
+        action_kind = self.action_kind
+        follow_mode = self.follow_mode
+        self.hide()
+        if action_kind == "manual" and follow_mode in {"heat", "cool"}:
+            self.followClicked.emit(follow_mode)
+        else:
+            self.revertClicked.emit()
+
+
 class ThermostatScreen(Page):
     def __init__(self, app_state: AppState, parent=None):
         super().__init__(app_state, parent)
@@ -2058,6 +2357,11 @@ class ThermostatScreen(Page):
         self.alert_banner.dismissClicked.connect(self.dismiss_auto_switch)
         self.alert_banner.revertClicked.connect(self.revert_auto_switch)
         self.alert_banner.bypassClicked.connect(self.bypass_changeover_lockout)
+        self.notice_action_popup = ThermostatNoticeActionPopup(self)
+        self.notice_action_popup.revertClicked.connect(self.revert_auto_switch)
+        self.notice_action_popup.dismissAutoClicked.connect(self.dismiss_auto_switch)
+        self.notice_action_popup.dismissManualClicked.connect(self.dismiss_manual_override_notice)
+        self.notice_action_popup.followClicked.connect(self.follow_manual_override)
         self.fx_timer = QTimer(self)
         self.fx_timer.timeout.connect(self.animate_environment)
         # Adaptive: idle thermostat screen should not repaint the whole page
@@ -2151,6 +2455,8 @@ class ThermostatScreen(Page):
         self.retune_fx_timer()
         if self.alert_banner.isVisible():
             self.alert_banner.raise_()
+        if hasattr(self, "notice_action_popup") and self.notice_action_popup.isVisible():
+            self.notice_action_popup.raise_()
 
     def safe_float(self, value, default=0.0):
         try:
@@ -2163,6 +2469,8 @@ class ThermostatScreen(Page):
         self.notice.show()
         self.position_main_controls()
         self.notice.raise_()
+        if hasattr(self, "notice_action_popup") and self.notice_action_popup.isVisible():
+            self.notice_action_popup.raise_()
 
     def active_visual_mode(self) -> str:
         t = self.thermostat_view()
@@ -2183,6 +2491,7 @@ class ThermostatScreen(Page):
         self.position_main_controls()
         self.position_alert_banner()
         self.position_away_overlay()
+        self.position_notice_action_popup()
 
     def position_main_controls(self):
         """Center the five primary thermostat controls on one horizontal line."""
@@ -2226,6 +2535,8 @@ class ThermostatScreen(Page):
             else:
                 self.bypass_pill.move(pill_x, max(70, y + 16))
             self.bypass_pill.raise_()
+        if hasattr(self, "notice_action_popup") and self.notice_action_popup.isVisible():
+            self.notice_action_popup.raise_()
 
     def position_away_overlay(self):
         if not hasattr(self, "away_overlay"):
@@ -2234,6 +2545,14 @@ class ThermostatScreen(Page):
         self.away_overlay.setGeometry(margin, margin, max(10, self.width() - margin * 2), max(10, self.height() - margin * 2))
         if self.away_overlay.isVisible():
             self.away_overlay.raise_()
+
+    def position_notice_action_popup(self):
+        if not hasattr(self, "notice_action_popup"):
+            return
+        self.notice_action_popup.setGeometry(self.rect())
+        if self.notice_action_popup.isVisible():
+            self.notice_action_popup.raise_()
+            self.notice_action_popup.position_card()
 
     def position_alert_banner(self):
         if not hasattr(self, "alert_banner"):
@@ -2546,6 +2865,7 @@ class ThermostatScreen(Page):
             elif current > high and not bool(t.get("coolLocked")):
                 safety_mode = "cool"
         if safety_mode in {"heat", "cool"}:
+            self.hide_notice_action_popup()
             self.bypass_pill.hide()
             if safety_mode == "heat":
                 title = "Safety Heat Engaged"
@@ -2560,6 +2880,7 @@ class ThermostatScreen(Page):
 
         pause = t.get("pauseFunction") if isinstance(t.get("pauseFunction"), dict) else {}
         if pause.get("active"):
+            self.hide_notice_action_popup()
             self.bypass_pill.hide()
             self.notice.hide()
             entries = pause.get("entries") if isinstance(pause.get("entries"), list) else []
@@ -2583,6 +2904,7 @@ class ThermostatScreen(Page):
         auto_pending = str(t.get("autoPendingMode") or "").lower()
         auto_until = self.safe_float(t.get("autoLockoutUntil"), 0.0)
         if pending in {"heat", "cool"} and until > now_ms:
+            self.hide_notice_action_popup()
             remaining = self.format_remaining((until - now_ms) / 1000)
             self.alert_banner.hide()
             self.bypass_pill.show()
@@ -2590,6 +2912,7 @@ class ThermostatScreen(Page):
             self.bypass_pill.raise_()
             return
         if auto_pending in {"heat", "cool"} and auto_until > now_ms:
+            self.hide_notice_action_popup()
             remaining = self.format_remaining((auto_until - now_ms) / 1000)
             self.alert_banner.hide()
             self.bypass_pill.show()
@@ -2616,9 +2939,14 @@ class ThermostatScreen(Page):
             mode_label = to_mode.capitalize() if to_mode in {"heat", "cool"} else "Auto"
             self.show_notice_card("heat" if to_mode == "heat" else "cool", "AUTO-SWITCHED", f"To {mode_label}", f"INSIDE {fmt_temp(switch_temp)}", height=118)
             return
+        self.hide_notice_action_popup()
         self.bypass_pill.hide()
         self.notice.hide()
         self.alert_banner.hide()
+
+    def hide_notice_action_popup(self):
+        if hasattr(self, "notice_action_popup") and self.notice_action_popup.isVisible():
+            self.notice_action_popup.hide()
 
     def show_auto_switch_menu(self):
         t = self.thermostat_view()
@@ -2626,44 +2954,24 @@ class ThermostatScreen(Page):
         hold = t.get("autoSwitchHold") if isinstance(t.get("autoSwitchHold"), dict) else {}
         if not notice.get("active") and not (hold.get("active") and str(hold.get("source") or "").lower() == "manual"):
             return
-        menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu {
-                background:rgba(18,27,45,245);
-                color:#f6f8ff;
-                border:1px solid rgba(104,222,255,0.45);
-                border-radius:14px;
-                padding:8px;
-                font-weight:900;
-                font-size:15px;
-            }
-            QMenu::item {
-                padding:11px 48px 11px 18px;
-                border-radius:10px;
-            }
-            QMenu::item:selected {
-                background:rgba(72,214,255,210);
-                color:#06101f;
-            }
-        """)
+        if not hasattr(self, "notice_action_popup"):
+            return
         if notice.get("active"):
             from_mode = str(notice.get("fromMode") or "").lower()
-            if from_mode in {"heat", "cool"}:
-                revert = menu.addAction(f"Revert to {from_mode.capitalize()}")
-                revert.triggered.connect(self.revert_auto_switch)
-            dismiss = menu.addAction("Dismiss")
-            dismiss.triggered.connect(self.dismiss_auto_switch)
+            to_mode = str(notice.get("toMode") or self.active_visual_mode()).lower()
+            switch_temp = notice.get("switchTemp") or self.safe_float(t.get("currentTemp"), 70.0)
+            self.notice_action_popup.show_auto_switch(from_mode, to_mode, switch_temp)
         else:
             manual_mode = str(hold.get("mode") or "").lower()
             suggested = str(hold.get("suggestedMode") or "").lower()
-            if suggested in {"heat", "cool"}:
-                follow = menu.addAction(f"Follow Auto {suggested.capitalize()}")
-                follow.triggered.connect(lambda checked=False, m=suggested: self.set_mode(m))
-            dismiss = menu.addAction("Dismiss Notice")
-            dismiss.triggered.connect(self.dismiss_manual_override_notice)
-        menu.exec_(self.notice.mapToGlobal(self.notice.rect().bottomLeft()))
+            self.notice_action_popup.show_manual_override(manual_mode, suggested)
+
+    def follow_manual_override(self, mode: str):
+        if mode in {"heat", "cool"}:
+            self.set_mode(mode)
 
     def dismiss_auto_switch(self):
+        self.hide_notice_action_popup()
         try:
             self.s.update_thermostat({"autoSwitchNotice": {"active": False, "source": "", "fromMode": "", "toMode": "", "switchTemp": 0, "outdoorTemp": 0, "coolTarget": 0, "heatTarget": 0, "createdAt": 0}})
             self.sync(self.s.config, self.s.thermostat)
@@ -2671,6 +2979,7 @@ class ThermostatScreen(Page):
             self.requestToast.emit(f"Dismiss failed: {exc}")
 
     def dismiss_manual_override_notice(self):
+        self.hide_notice_action_popup()
         t = self.thermostat_view()
         hold = t.get("autoSwitchHold") if isinstance(t.get("autoSwitchHold"), dict) else {}
         if not hold.get("active"):
@@ -2684,6 +2993,7 @@ class ThermostatScreen(Page):
             self.requestToast.emit(f"Dismiss failed: {exc}")
 
     def revert_auto_switch(self):
+        self.hide_notice_action_popup()
         t = self.thermostat_view()
         notice = t.get("autoSwitchNotice") if isinstance(t.get("autoSwitchNotice"), dict) else {}
         from_mode = str(notice.get("fromMode") or "").lower()
