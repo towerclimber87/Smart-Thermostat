@@ -2406,22 +2406,69 @@ class ThermostatNoticeActionPopup(QWidget):
             self.revertClicked.emit()
 
 
+class PersonPresenceBadge(QWidget):
+    """Tiny no-box person presence indicator for the main thermostat page."""
+    def __init__(self, name: str, home: bool, parent=None):
+        super().__init__(parent)
+        self.name = compact_name(name, 12)
+        self.home = bool(home)
+        self.setFixedSize(68, 58)
+        self.setAttribute(Qt.WA_StyledBackground, False)
+        self.setToolTip(f"{name}: {'Home' if home else 'Away'}")
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+
+        icon_color = QColor(40, 235, 130) if self.home else QColor(235, 55, 68)
+        glow_color = QColor(icon_color)
+        glow_color.setAlpha(82)
+
+        cx = self.width() / 2.0
+        # Glow only, no card/pill box.
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(glow_color))
+        painter.drawEllipse(QPointF(cx, 19), 22, 22)
+
+        # Person silhouette: head + shoulders/body.
+        painter.setBrush(QBrush(icon_color))
+        painter.drawEllipse(QPointF(cx, 13), 7.2, 7.2)
+
+        body = QPainterPath()
+        body.moveTo(cx - 17, 36)
+        body.cubicTo(cx - 15, 26, cx - 8, 22, cx, 22)
+        body.cubicTo(cx + 8, 22, cx + 15, 26, cx + 17, 36)
+        body.cubicTo(cx + 13, 39, cx - 13, 39, cx - 17, 36)
+        painter.drawPath(body)
+
+        # Small base shadow keeps it readable on the animated background.
+        shadow = QColor(0, 0, 0, 95)
+        painter.setPen(QPen(shadow, 2))
+        painter.drawLine(int(cx - 14), 40, int(cx + 14), 40)
+
+        painter.setPen(QColor("#edf6ff"))
+        painter.setFont(font(7, QFont.Black))
+        name_rect = self.rect().adjusted(0, 41, 0, 0)
+        painter.drawText(name_rect, Qt.AlignHCenter | Qt.AlignTop, self.name)
+
+
 class PersonPresenceStrip(QWidget):
     """Compact main-screen Home Assistant person tracker.
 
-    Shows each configured person as a small pill. Home is green, anything else
-    (away/not_home/unknown/unavailable) is red so stale or missing presence is
-    obvious on the wall panel.
+    Shows each configured person as only a silhouette and name. Home is green;
+    anything else (away/not_home/unknown/unavailable) is red so stale or missing
+    presence is obvious without taking much screen space.
     """
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("personPresenceStrip")
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setMaximumHeight(62)
+        self.setAttribute(Qt.WA_StyledBackground, False)
+        self.setMaximumHeight(60)
         self.setStyleSheet("QWidget#personPresenceStrip { background:transparent; border:0; }")
         self._layout = QHBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
-        self._layout.setSpacing(7)
+        self._layout.setSpacing(10)
         self._people_signature = ""
 
     def update_people(self, people: list[dict] | None):
@@ -2434,7 +2481,7 @@ class PersonPresenceStrip(QWidget):
             state = str(person.get("state") or "unknown").strip().lower()
             if entity_id or name:
                 clean.append({"entityId": entity_id, "name": name, "state": state})
-        # Keep the strip touch-friendly and visually stable on the 10-inch screen.
+        # Keep the strip visually stable on the 10-inch screen.
         clean = clean[:4]
         signature = "|".join(f"{p['entityId']}:{p['name']}:{p['state']}" for p in clean)
         if signature == self._people_signature:
@@ -2450,36 +2497,8 @@ class PersonPresenceStrip(QWidget):
             self.hide()
             return
         for person in clean:
-            state = person["state"]
-            home = state == "home"
-            name = compact_name(person["name"], 15)
-            sub = "HOME" if home else "AWAY"
-            icon = "●"
-            if home:
-                bg = "qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 rgba(33,220,122,0.92), stop:1 rgba(13,94,58,0.92))"
-                border = "rgba(148,255,197,0.72)"
-                text = "#eafff2"
-            else:
-                bg = "qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 rgba(232,62,72,0.94), stop:1 rgba(99,23,32,0.94))"
-                border = "rgba(255,158,162,0.72)"
-                text = "#fff0f1"
-            label = QLabel(f"<span style='font-size:15px'>{icon}</span>&nbsp; <b>{html.escape(name)}</b><br><span style='font-size:8px; letter-spacing:1.5px'>{sub}</span>")
-            label.setTextFormat(Qt.RichText)
-            label.setAlignment(Qt.AlignCenter)
-            label.setMinimumWidth(124)
-            label.setMaximumWidth(154)
-            label.setMinimumHeight(48)
-            label.setFont(font(9, QFont.Black))
-            label.setStyleSheet(f"""
-                QLabel {{
-                    color:{text};
-                    background:{bg};
-                    border:1px solid {border};
-                    border-radius:15px;
-                    padding:5px 10px;
-                }}
-            """)
-            self._layout.addWidget(label)
+            home = person["state"] == "home"
+            self._layout.addWidget(PersonPresenceBadge(person["name"], home, self))
         self._layout.addStretch(1)
         self.show()
 
