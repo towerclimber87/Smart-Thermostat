@@ -35,6 +35,7 @@ The native UI service launches X directly with `xinit` on `tty1`. This avoids th
 - `smart-thermostat-backend.service` runs `server.py` on `0.0.0.0:8080` so Home Assistant can reach it from the LAN.
 - `smart-thermostat-native.service` launches the Qt full-screen UI through X on `tty1`.
 - `avahi-daemon.service` advertises `_iha-thermostat._tcp.local` for Home Assistant discovery.
+- Discovery IDs now prefer the physical Raspberry Pi serial or a non-loopback MAC address before `/etc/machine-id`, so cloned SD cards do not show up as the same Home Assistant device.
 
 ## Home Assistant discovery/control
 

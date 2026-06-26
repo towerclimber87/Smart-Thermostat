@@ -188,7 +188,59 @@ app_dir = Path(${APP_DIR@Q})
 service_path = Path('/etc/avahi/services/iha-thermostat.service')
 
 def safe_slug(value: str) -> str:
-    return ''.join(ch.lower() if ch.isalnum() else '-' for ch in value).strip('-')
+    return ''.join(ch.lower() if ch.isalnum() else '-' for ch in str(value or '')).strip('-')
+
+def raspberry_pi_serial() -> str:
+    for candidate in (Path('/sys/firmware/devicetree/base/serial-number'), Path('/proc/device-tree/serial-number')):
+        try:
+            value = candidate.read_bytes().decode('utf-8', errors='ignore').replace('\x00', '').strip()
+        except OSError:
+            value = ''
+        if value:
+            slug = safe_slug(value)
+            if slug:
+                return slug
+    try:
+        for line in Path('/proc/cpuinfo').read_text(encoding='utf-8', errors='ignore').splitlines():
+            if line.lower().startswith('serial') and ':' in line:
+                slug = safe_slug(line.split(':', 1)[1].strip())
+                if slug:
+                    return slug
+    except OSError:
+        pass
+    return ''
+
+def primary_mac_address() -> str:
+    candidates = []
+    try:
+        interfaces = list(Path('/sys/class/net').iterdir())
+    except OSError:
+        interfaces = []
+    for interface in interfaces:
+        name = interface.name
+        if name == 'lo':
+            continue
+        try:
+            raw_mac = (interface / 'address').read_text(encoding='utf-8').strip().lower()
+        except OSError:
+            continue
+        compact = ''.join(ch for ch in raw_mac if ch in '0123456789abcdef')
+        if len(compact) != 12 or compact in {'000000000000', 'ffffffffffff'}:
+            continue
+        priority = 50
+        if name.startswith('eth'):
+            priority = 0
+        elif name.startswith('en'):
+            priority = 5
+        elif name.startswith('wlan'):
+            priority = 10
+        elif name.startswith('wl'):
+            priority = 15
+        candidates.append((priority, name, compact))
+    if candidates:
+        candidates.sort()
+        return candidates[0][2]
+    return ''
 
 def read_name() -> str:
     for candidate in (app_dir / 'data' / 'thermostat-state.json', app_dir / 'data' / 'panel-config.json'):
@@ -208,18 +260,25 @@ def stable_serial() -> str:
     configured = os.environ.get('SMART_THERMOSTAT_SERIAL', '').strip()
     if configured:
         return configured
+    board_serial = raspberry_pi_serial()
+    if board_serial:
+        return f'iha-smart-thermostat-pi-{board_serial}'
+    mac_address = primary_mac_address()
+    if mac_address:
+        return f'iha-smart-thermostat-mac-{mac_address}'
     for machine_path in (Path('/etc/machine-id'), Path('/var/lib/dbus/machine-id')):
         try:
             machine_id = machine_path.read_text(encoding='utf-8').strip()
         except OSError:
             machine_id = ''
         if machine_id:
-            return f'iha-smart-thermostat-{machine_id[:12]}'
+            return f'iha-smart-thermostat-machine-{machine_id[:12]}'
     hostname = safe_slug(socket.gethostname() or 'local')
-    return f'iha-smart-thermostat-{hostname or "local"}'
+    return f'iha-smart-thermostat-host-{hostname or "local"}'
 
 name = read_name()
 serial = stable_serial()
+mac_address = primary_mac_address()
 xml = f"""<?xml version="1.0" standalone='no'?><!--*-nxml-*-->
 <!DOCTYPE service-group SYSTEM "avahi-service.dtd">
 <service-group>
@@ -230,6 +289,9 @@ xml = f"""<?xml version="1.0" standalone='no'?><!--*-nxml-*-->
     <txt-record>path=/api/discovery</txt-record>
     <txt-record>api_path=/api</txt-record>
     <txt-record>serial={html.escape(serial)}</txt-record>
+    <txt-record>unique_id={html.escape(serial)}</txt-record>
+    <txt-record>id={html.escape(serial)}</txt-record>
+    <txt-record>mac_address={html.escape(mac_address)}</txt-record>
     <txt-record>name={html.escape(name)}</txt-record>
   </service>
 </service-group>

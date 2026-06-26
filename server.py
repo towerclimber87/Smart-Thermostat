@@ -3264,6 +3264,9 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
         "relays": {"fan": outputs["fan"], "heat": outputs["heat"], "cool": outputs["cool"]},
         "serial": serial,
         "unique_id": serial,
+        "id": serial,
+        "hardware_id": serial,
+        "mac_address": _primary_mac_address(),
         "manufacturer": "IHA",
         "model": "Smart Thermostat Wall Panel",
         "sw_version": sw_version,
@@ -3276,6 +3279,9 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
         "name": thermostat.get("name") or "IHA Thermostat",
         "serial": serial,
         "unique_id": serial,
+        "id": serial,
+        "hardware_id": serial,
+        "mac_address": _primary_mac_address(),
         "manufacturer": "IHA",
         "model": "Smart Thermostat Wall Panel",
         "sw_version": sw_version,
@@ -4906,11 +4912,95 @@ echo "===== Smart Thermostat self-update finished: $(date) ====="
     }
 
 
+def _safe_identifier_slug(value: object) -> str:
+    """Return a lowercase id-safe slug that is stable for HA unique ids."""
+    return "".join(ch.lower() if ch.isalnum() else "-" for ch in str(value or "")).strip("-")
+
+
+def _raspberry_pi_serial() -> str:
+    """Read the physical Raspberry Pi board serial when the OS exposes it."""
+    candidates = (
+        Path("/sys/firmware/devicetree/base/serial-number"),
+        Path("/proc/device-tree/serial-number"),
+    )
+    for candidate in candidates:
+        try:
+            value = candidate.read_bytes().decode("utf-8", errors="ignore").replace("\x00", "").strip()
+        except OSError:
+            value = ""
+        if value:
+            slug = _safe_identifier_slug(value)
+            if slug:
+                return slug
+
+    try:
+        for line in Path("/proc/cpuinfo").read_text(encoding="utf-8", errors="ignore").splitlines():
+            if line.lower().startswith("serial") and ":" in line:
+                slug = _safe_identifier_slug(line.split(":", 1)[1].strip())
+                if slug:
+                    return slug
+    except OSError:
+        pass
+    return ""
+
+
+def _primary_mac_address() -> str:
+    """Return a stable non-loopback MAC address, preferring onboard adapters.
+
+    SD-card clones can share /etc/machine-id. The NIC MAC and Pi board serial
+    are hardware-specific, so they keep Home Assistant from merging multiple
+    wall panels into one discovered device.
+    """
+    sysfs = Path("/sys/class/net")
+    candidates: list[tuple[int, str, str]] = []
+    try:
+        interfaces = list(sysfs.iterdir())
+    except OSError:
+        interfaces = []
+
+    for interface in interfaces:
+        name = interface.name
+        if name == "lo":
+            continue
+        try:
+            raw_mac = (interface / "address").read_text(encoding="utf-8").strip().lower()
+        except OSError:
+            continue
+        compact = "".join(ch for ch in raw_mac if ch in "0123456789abcdef")
+        if len(compact) != 12 or compact in {"000000000000", "ffffffffffff"}:
+            continue
+        # Prefer predictable physical adapters, but keep all usable adapters as
+        # fallbacks so Wi-Fi-only panels still get unique discovery ids.
+        priority = 50
+        if name.startswith("eth"):
+            priority = 0
+        elif name.startswith("en"):
+            priority = 5
+        elif name.startswith("wlan"):
+            priority = 10
+        elif name.startswith("wl"):
+            priority = 15
+        candidates.append((priority, name, compact))
+
+    if candidates:
+        candidates.sort()
+        return candidates[0][2]
+    return ""
+
+
 def _stable_panel_serial() -> str:
     """Return a stable Home Assistant unique id for this wall panel."""
     configured = os.environ.get("SMART_THERMOSTAT_SERIAL", "").strip()
     if configured:
         return configured
+
+    board_serial = _raspberry_pi_serial()
+    if board_serial:
+        return f"iha-smart-thermostat-pi-{board_serial}"
+
+    mac_address = _primary_mac_address()
+    if mac_address:
+        return f"iha-smart-thermostat-mac-{mac_address}"
 
     for machine_id_path in (Path("/etc/machine-id"), Path("/var/lib/dbus/machine-id")):
         try:
@@ -4918,13 +5008,12 @@ def _stable_panel_serial() -> str:
         except OSError:
             machine_id = ""
         if machine_id:
-            return f"iha-smart-thermostat-{machine_id[:12]}"
+            return f"iha-smart-thermostat-machine-{machine_id[:12]}"
 
     hostname = _local_host_name().strip() or socket.gethostname().strip()
-    if hostname:
-        safe_hostname = "".join(ch.lower() if ch.isalnum() else "-" for ch in hostname).strip("-")
-        if safe_hostname:
-            return f"iha-smart-thermostat-{safe_hostname}"
+    safe_hostname = _safe_identifier_slug(hostname)
+    if safe_hostname:
+        return f"iha-smart-thermostat-host-{safe_hostname}"
 
     return "iha-smart-thermostat-local"
 
@@ -4940,6 +5029,9 @@ def _discovery_payload() -> dict:
         "friendly_name": thermostat_name,
         "serial": serial,
         "unique_id": serial,
+        "id": serial,
+        "hardware_id": serial,
+        "mac_address": _primary_mac_address(),
         "manufacturer": "IHA",
         "model": "Smart Thermostat Wall Panel",
         "sw_version": _read_version_value(),
