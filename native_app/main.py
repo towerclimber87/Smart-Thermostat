@@ -7278,7 +7278,11 @@ class RoomManagerSettingsDialog(QDialog):
         try:
             self.s.save_config()
             self.saved.emit()
-            self.rebuild_code_entries()
+            # The tapped checkbox already shows the new state. Rebuilding the whole
+            # scroll list from inside that checkbox signal can briefly tear down the
+            # active widget and make the settings modal appear to disappear/flicker
+            # on the Pi touchscreen. The list will be rebuilt when the user changes
+            # tabs, sets/clears a code, or closes and reopens settings.
         except Exception as exc:
             QMessageBox.warning(self, "Save failed", str(exc))
 
@@ -10725,7 +10729,12 @@ class MainWindow(Background):
                 dlg.saved.connect(self.reload_all)
             elif self.current_name in {"Blinds", "Lights", "Room"}:
                 dlg = RoomManagerSettingsDialog(self.s, self.current_name, self)
-                dlg.saved.connect(self.reload_all)
+                # Room/Lights/Blinds settings already save their edits directly and
+                # the full panel reload below runs after the dialog closes. Do not
+                # reload the whole app from inside the still-open modal: that blocks
+                # the touchscreen UI, can expose a black frame, and can snap the
+                # panel back underneath the settings page while code checkboxes are
+                # being edited.
             else:
                 dlg = SimplePageSettingsDialog(self.current_name, self)
             dlg.exec_()
