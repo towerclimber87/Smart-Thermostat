@@ -2445,7 +2445,13 @@ class ThermostatScreen(Page):
         mid.setColumnStretch(4, 3)
         mid.setRowMinimumHeight(0, 48)
         mid.setRowStretch(1, 1)
-        mid.setRowMinimumHeight(2, 48)
+        # Actual spacer row below the dial row. This is intentionally a real
+        # grid row instead of padding inside the button wrappers; Qt can collapse
+        # or clip wrapper padding on the Pi touchscreen layout, making the move
+        # look unchanged.
+        self.thermostat_action_row_offset_px = 54
+        mid.setRowMinimumHeight(2, self.thermostat_action_row_offset_px)
+        mid.setRowMinimumHeight(3, 48)
 
         # Row 1 is the shared horizontal centerline:
         # Doors | minus | dial | plus | Alarmo.
@@ -2463,26 +2469,21 @@ class ThermostatScreen(Page):
         mid.addWidget(self.plus, 1, 3, 1, 1, Qt.AlignCenter)
         mid.addWidget(self.alarm_card, 1, 4, 1, 1, Qt.AlignCenter)
 
-        # Keep the primary thermostat controls centered, but lower the mode and
-        # fan actions a touch so they sit farther away from the dial row. On
-        # the 10.1" Pi panel this is roughly a half-inch visual shift.
-        lower_action_row_px = 48
-
         mode_wrap = QWidget()
         mode_lay = QHBoxLayout(mode_wrap)
-        mode_lay.setContentsMargins(0, lower_action_row_px, 0, 0)
+        mode_lay.setContentsMargins(0, 0, 0, 0)
         mode_lay.addStretch(1)
         mode_lay.addLayout(self._mode_bar())
         mode_lay.addStretch(1)
-        mid.addWidget(mode_wrap, 2, 2, 1, 1, Qt.AlignCenter | Qt.AlignTop)
+        mid.addWidget(mode_wrap, 3, 2, 1, 1, Qt.AlignCenter | Qt.AlignTop)
 
         fan_wrap = QWidget()
         fan_lay = QHBoxLayout(fan_wrap)
-        fan_lay.setContentsMargins(0, lower_action_row_px, 0, 0)
+        fan_lay.setContentsMargins(0, 0, 0, 0)
         fan_lay.addStretch(1)
         fan_lay.addLayout(self._fan_bar())
         fan_lay.addStretch(1)
-        mid.addWidget(fan_wrap, 2, 4, 1, 1, Qt.AlignCenter | Qt.AlignTop)
+        mid.addWidget(fan_wrap, 3, 4, 1, 1, Qt.AlignCenter | Qt.AlignTop)
 
         # Keep these controls available for alerts, but do not let hidden/visible
         # optional widgets change the vertical position of Doors.
@@ -2673,10 +2674,12 @@ class ThermostatScreen(Page):
         # Use most of the colored background height, but keep clear of the
         # weather/title area and bottom edge.  The dial itself sits in the
         # center row, so its center lands at the vertical center of this band.
-        band_h = min(max(360, int(h * 0.78)), max(260, h - 112))
-        center_y = int(h * 0.51)
+        action_offset = int(getattr(self, "thermostat_action_row_offset_px", 0) or 0)
+        base_band_h = min(max(360, int(h * 0.78)), max(260, h - 112))
+        band_h = min(max(260, base_band_h + action_offset), max(260, h - 70))
+        center_y = int(h * 0.51 + action_offset / 2)
         y = int(center_y - band_h / 2)
-        y = max(58, min(y, max(58, h - band_h - 18)))
+        y = max(58, min(y, max(58, h - band_h - 8)))
 
         self.controls_band.setGeometry(0, y, w, band_h)
         self.controls_band.raise_()
