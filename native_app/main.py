@@ -2469,6 +2469,31 @@ class ThermostatScreen(Page):
         mid.addWidget(self.plus, 1, 3, 1, 1, Qt.AlignCenter)
         mid.addWidget(self.alarm_card, 1, 4, 1, 1, Qt.AlignCenter)
 
+        self.schedule_shortcuts = QScrollArea()
+        self.schedule_shortcuts.setObjectName("thermostatScheduleShortcuts")
+        self.schedule_shortcuts.setFixedHeight(44)
+        self.schedule_shortcuts.setFrameShape(QFrame.NoFrame)
+        self.schedule_shortcuts.setWidgetResizable(True)
+        self.schedule_shortcuts.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.schedule_shortcuts.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.schedule_shortcuts.setStyleSheet("""
+            QScrollArea#thermostatScheduleShortcuts {
+                background:transparent;
+                border:0;
+            }
+        """)
+        self.schedule_shortcuts_content = QWidget()
+        self.schedule_shortcuts_content.setStyleSheet("background:transparent; border:0;")
+        self.schedule_shortcuts_lay = QHBoxLayout(self.schedule_shortcuts_content)
+        self.schedule_shortcuts_lay.setContentsMargins(0, 2, 0, 2)
+        self.schedule_shortcuts_lay.setSpacing(9)
+        self.schedule_shortcuts.setWidget(self.schedule_shortcuts_content)
+        self.schedule_shortcuts.hide()
+        # Schedule hotkeys live in the spacer band directly above Off/Cool/Heat/Away.
+        # The scroll area spans the full row, while its internal layout starts
+        # at the left edge so each saved schedule becomes the next bubble.
+        mid.addWidget(self.schedule_shortcuts, 2, 0, 1, 5, Qt.AlignBottom)
+
         mode_wrap = QWidget()
         mode_lay = QHBoxLayout(mode_wrap)
         mode_lay.setContentsMargins(0, 0, 0, 0)
@@ -3513,30 +3538,37 @@ class ThermostatScreen(Page):
                 item.widget().deleteLater()
         schedules = self.s.thermostat_schedules()
         self.schedule_shortcuts.setVisible(bool(schedules))
-        for sched in schedules[:3]:
-            name = str(sched.get("name") or "Schedule").strip()[:18] or "Schedule"
-            b = RoundButton(name, active=False, min_h=32)
-            b.setFixedHeight(32)
-            # Side-by-side, but hard-capped so three shortcuts cannot widen the
-            # left column and push the dial into the + / − buttons.
-            b.setFixedWidth(max(58, min(76, 28 + len(name) * 7)))
+        if not schedules:
+            return
+        for sched in schedules:
+            full_name = str(sched.get("name") or "Schedule").strip() or "Schedule"
+            display_name = full_name[:20] + ("…" if len(full_name) > 20 else "")
+            b = RoundButton(display_name, active=False, min_h=34)
+            b.setToolTip(full_name)
+            b.setFixedHeight(34)
+            b.setFixedWidth(max(82, min(166, 38 + len(display_name) * 8)))
             b.setStyleSheet("""
                 QPushButton {
-                    background:rgba(255,255,255,0.075);
-                    color:#eaf3ff;
-                    border:1px solid rgba(130,229,255,0.28);
-                    border-radius:16px;
-                    padding:0 8px;
+                    background:qlineargradient(x1:0,y1:0,x2:1,y2:1,
+                        stop:0 rgba(255,255,255,0.12),
+                        stop:1 rgba(49,63,88,0.76));
+                    color:#eef8ff;
+                    border:1px solid rgba(130,229,255,0.42);
+                    border-radius:17px;
+                    padding:0 10px;
+                    font-family:Arial;
                     font-weight:900;
-                    font-size:10px;
+                    font-size:11px;
                 }
                 QPushButton:pressed {
-                    background:rgba(71,224,255,0.30);
-                    border-color:rgba(71,224,255,0.72);
+                    background:rgba(71,224,255,0.34);
+                    border-color:rgba(71,224,255,0.82);
+                    color:#ffffff;
                 }
             """)
             b.clicked.connect(lambda checked=False, s=copy.deepcopy(sched): self.apply_schedule_now(s))
             self.schedule_shortcuts_lay.addWidget(b)
+        self.schedule_shortcuts_lay.addStretch(1)
 
     def open_schedule_manager(self):
         if getattr(self, "_schedule_dialog_open", False):
