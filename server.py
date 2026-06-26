@@ -61,6 +61,11 @@ USB_MOUNT_ROOTS = tuple(
 )
 MANUAL_CHANGEOVER_LOCKOUT_MINUTES = 10
 PANEL_COMMAND_GRACE_MS = int(float(os.environ.get("SMART_THERMOSTAT_PANEL_COMMAND_GRACE_SECONDS", "18") or "18") * 1000)
+# Target/setpoint echoes from Home Assistant can arrive much later than mode
+# echoes after a reconnect/unavailable cycle. Keep a longer panel-owned window
+# for setpoint changes so the wall thermostat does not snap back to an old HA
+# value 30-60 seconds after the user tapped the touchscreen.
+PANEL_TARGET_COMMAND_GRACE_MS = int(float(os.environ.get("SMART_THERMOSTAT_PANEL_TARGET_GRACE_SECONDS", "300") or "300") * 1000)
 CONFIG_WEB_PORTAL_TIMEOUT_SECONDS = max(60.0, float(os.environ.get("SMART_THERMOSTAT_CONFIG_PORTAL_TIMEOUT_SECONDS", "900") or "900"))
 _CONFIG_WEB_PORTAL_LOCK = threading.RLock()
 _CONFIG_WEB_PORTAL_ENABLED_UNTIL = 0.0
@@ -2872,6 +2877,11 @@ def _apply_thermostat_schedules(thermostat: dict) -> dict:
     schedules = _normalize_schedule_entries(thermostat.get("schedules") or [])
     if not schedules:
         return thermostat
+    if _panel_target_guard_active(thermostat):
+        # A schedule due in the same minute as a wall-panel setpoint tap should
+        # not immediately undo the user. The schedule will naturally be skipped
+        # once the minute rolls over, leaving the manual panel target in charge.
+        return thermostat
     now = datetime.now()
     time_key = now.strftime("%H:%M")
     date_key = now.strftime("%Y-%m-%d")
@@ -3308,11 +3318,17 @@ def _apply_minimum_cycle_protection(
     # side. Minimum runtime only extends normal operation for the current side.
     may_extend_current_run = active_mode == kind and (not safety_mode or safety_mode == kind)
     if was_on and not requested_on and may_extend_current_run:
+        # Older runtime records, external-output races, or a service restart can
+        # leave relayWasOn=true without a cycle start marker. Still protect the
+        # compressor and show the countdown immediately instead of silently
+        # dropping the minimum-runtime hold. The async/control-loop marker will
+        # write the synthesized start on its next pass.
         started_at = _number(thermostat.get(started_key), 0, 0)
-        if started_at > 0:
-            until = int(started_at + min_ms)
-            if until > now_ms:
-                return True, until, "minimum-runtime"
+        if started_at <= 0:
+            started_at = now_ms
+        until = int(started_at + min_ms)
+        if until > now_ms:
+            return True, until, "minimum-runtime"
 
     # Safety heat/cool must still be able to start immediately. Normal comfort
     # calls wait until the side has been off for the same configured duration.
@@ -3609,10 +3625,20 @@ def _strip_mode_changes(incoming: dict) -> dict:
     return {k: v for k, v in incoming.items() if k not in {"mode", "hvac_mode", "hvacMode"}}
 
 
-def _panel_command_guard_active(existing: dict, at_key: str, *, now_ms: int | None = None) -> bool:
+def _panel_command_guard_active(existing: dict, at_key: str, *, now_ms: int | None = None, grace_ms: int | None = None) -> bool:
     now = int(now_ms if now_ms is not None else time.time() * 1000)
     at = _number(existing.get(at_key), 0, 0, None)
-    return at > 0 and now - at <= PANEL_COMMAND_GRACE_MS
+    window = PANEL_COMMAND_GRACE_MS if grace_ms is None else max(0, int(grace_ms))
+    return at > 0 and now - at <= window
+
+
+def _panel_target_guard_active(thermostat: dict, *, now_ms: int | None = None) -> bool:
+    return _panel_command_guard_active(
+        thermostat,
+        "lastPanelTargetRequestAt",
+        now_ms=now_ms,
+        grace_ms=PANEL_TARGET_COMMAND_GRACE_MS,
+    )
 
 
 def _incoming_explicitly_leaves_away(incoming: dict | None) -> bool:
@@ -3694,7 +3720,7 @@ def _handle_thermostat_update(payload: dict) -> dict:
     if incoming_target is not None and not _source_is_panel(target_change_source):
         panel_target_at = _number(existing.get("lastPanelTargetRequestAt"), 0, 0, None)
         panel_target = _number(existing.get("lastPanelTargetTemp"), existing.get("targetTemp", 70), 0, 130)
-        if panel_target_at > 0 and now_ms - panel_target_at <= PANEL_COMMAND_GRACE_MS and abs(incoming_target - panel_target) >= 0.5:
+        if panel_target_at > 0 and now_ms - panel_target_at <= PANEL_TARGET_COMMAND_GRACE_MS and abs(incoming_target - panel_target) >= 0.5:
             incoming = _strip_comfort_target_changes(dict(incoming))
 
     existing_manual_pending, existing_manual_until = _active_manual_changeover_pending(existing, now_ms=now_ms)

@@ -1112,7 +1112,7 @@ class AppState:
         self.config = record.get("config") or self.config
         return record
 
-    def set_target_override(self, value: float, hold_seconds: float = 14.0):
+    def set_target_override(self, value: float, hold_seconds: float = 60.0):
         """Hold a locally selected setpoint against stale status refreshes."""
         try:
             val = int(round(float(value)))
@@ -3025,6 +3025,62 @@ class ThermostatScreen(Page):
             return ""
         return f" ({self.format_status_remaining((until - now_ms) / 1000)})"
 
+    def predict_minimum_runtime_hold_for_target(self, snapshot: dict | None, new_target: float) -> dict:
+        """Predict the center-badge minimum-runtime countdown immediately after a tap."""
+        t = copy.deepcopy(snapshot) if isinstance(snapshot, dict) else self.thermostat_view()
+        now_ms = time.time() * 1000
+        try:
+            current = self.safe_float(t.get("currentTemp"), 70.0)
+            target = self.safe_float(new_target, self.safe_float(t.get("targetTemp"), 70.0))
+            mode = str(t.get("mode") or "cool").strip().lower()
+            active = str(t.get("autoActiveMode") or t.get("activeMode") or "").strip().lower() if mode == "auto" else mode
+            relays = t.get("relays") if isinstance(t.get("relays"), dict) else {}
+            outputs = t.get("outputs") if isinstance(t.get("outputs"), dict) else {}
+
+            hold_mode = ""
+            if active == "cool" and current <= target and (bool(relays.get("cool")) or bool(outputs.get("cool")) or bool(t.get("coolRelayWasOn"))):
+                hold_mode = "cool"
+            elif active == "heat" and current >= target and (bool(relays.get("heat")) or bool(outputs.get("heat")) or bool(t.get("heatRelayWasOn"))):
+                hold_mode = "heat"
+            if hold_mode not in {"heat", "cool"}:
+                return {"until": 0, "mode": "", "reason": ""}
+
+            started_key = "coolCycleStartedAt" if hold_mode == "cool" else "heatCycleStartedAt"
+            minutes_key = "coolMinimumRuntimeMinutes" if hold_mode == "cool" else "heatMinimumRuntimeMinutes"
+            started_at = self.safe_float(t.get(started_key), 0.0)
+            if started_at <= 0:
+                started_at = now_ms
+            minutes = max(1.0, self.safe_float(t.get(minutes_key), 2.0))
+            until = started_at + minutes * 60000
+            if until <= now_ms:
+                return {"until": 0, "mode": "", "reason": ""}
+            return {"until": until, "mode": hold_mode, "reason": "minimum-runtime"}
+        except Exception:
+            return {"until": 0, "mode": "", "reason": ""}
+
+    def apply_local_minimum_runtime_prediction(self, snapshot: dict | None, new_target: float) -> None:
+        prediction = self.predict_minimum_runtime_hold_for_target(snapshot, new_target)
+        if not isinstance(self.s.thermostat, dict):
+            return
+        if prediction.get("until"):
+            self.s.thermostat["minimumCycleUntil"] = prediction["until"]
+            self.s.thermostat["minimumCycleMode"] = prediction["mode"]
+            self.s.thermostat["minimumCycleReason"] = prediction["reason"]
+            outputs = self.s.thermostat.setdefault("outputs", {})
+            if isinstance(outputs, dict):
+                outputs["minimumCycleUntil"] = prediction["until"]
+                outputs["minimumCycleMode"] = prediction["mode"]
+                outputs["minimumCycleReason"] = prediction["reason"]
+        else:
+            self.s.thermostat["minimumCycleUntil"] = 0
+            self.s.thermostat["minimumCycleMode"] = ""
+            self.s.thermostat["minimumCycleReason"] = ""
+            outputs = self.s.thermostat.get("outputs") if isinstance(self.s.thermostat.get("outputs"), dict) else None
+            if isinstance(outputs, dict):
+                outputs["minimumCycleUntil"] = 0
+                outputs["minimumCycleMode"] = ""
+                outputs["minimumCycleReason"] = ""
+
     def pending_equipment_status_text(self, t: dict | None = None, relays: dict | None = None) -> str:
         """Return visible Heat/Cool wait text when equipment is intentionally held off."""
         t = t or self.thermostat_view()
@@ -3503,7 +3559,9 @@ class ThermostatScreen(Page):
         except Exception:
             self.requestToast.emit("Schedule target is invalid")
             return
+        before_tap = copy.deepcopy(self.thermostat_view())
         self.s.set_target_override(val)
+        self.apply_local_minimum_runtime_prediction(before_tap, val)
         self.sync(self.s.config, self.s.thermostat)
 
         def done(result):
@@ -3748,6 +3806,7 @@ class ThermostatScreen(Page):
     def set_target(self, value: float):
         try:
             t = self.thermostat_view()
+            before_tap = copy.deepcopy(t)
             limits = t.get("limits") or {}
             mode = str(t.get("mode") or "cool").lower()
             if mode == "auto":
@@ -3763,6 +3822,7 @@ class ThermostatScreen(Page):
             self.requestToast.emit(f"Set temp failed: {exc}")
             return
         self.s.set_target_override(val)
+        self.apply_local_minimum_runtime_prediction(before_tap, val)
         self.sync(self.s.config, self.s.thermostat)
 
         def done(result):
