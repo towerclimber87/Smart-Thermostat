@@ -3489,10 +3489,10 @@ def _handle_thermostat_update(payload: dict) -> dict:
     incoming_requests_home = (
         "away" in incoming
         and bool(existing.get("away"))
-        and existing_away_source in {"presence", "auto"}
+        and existing_away_source in {"", "manual", "presence", "auto"}
         and not bool(incoming.get("away"))
     )
-    if incoming_requests_home and "presenceHomeOverride" not in incoming:
+    if incoming_requests_home and not _normalize_presence_home_override(incoming.get("presenceHomeOverride")):
         incoming = dict(incoming)
         incoming["presenceHomeOverride"] = _presence_home_override_payload(
             _thermostat_person_entity_ids(existing),

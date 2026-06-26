@@ -1311,12 +1311,9 @@ class ThermostatActionBanner(GlassPanel):
         self.revert.setFixedWidth(120)
         self.bypass.setFixedWidth(180)
         buttons = QHBoxLayout()
+        self.buttons_layout = buttons
         buttons.setContentsMargins(0, 0, 0, 0)
         buttons.setSpacing(10)
-        buttons.addStretch(1)
-        buttons.addWidget(self.dismiss)
-        buttons.addWidget(self.revert)
-        buttons.addWidget(self.bypass)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 14, 18, 14)
         layout.setSpacing(7)
@@ -1326,7 +1323,22 @@ class ThermostatActionBanner(GlassPanel):
         self.dismiss.clicked.connect(self.dismissClicked.emit)
         self.revert.clicked.connect(self.revertClicked.emit)
         self.bypass.clicked.connect(self.bypassClicked.emit)
+        self._layout_buttons(False)
         self.hide()
+
+    def _layout_buttons(self, bypass_left: bool = False):
+        while self.buttons_layout.count():
+            self.buttons_layout.takeAt(0)
+        if bypass_left:
+            self.buttons_layout.addWidget(self.bypass)
+            self.buttons_layout.addStretch(1)
+            self.buttons_layout.addWidget(self.dismiss)
+            self.buttons_layout.addWidget(self.revert)
+        else:
+            self.buttons_layout.addStretch(1)
+            self.buttons_layout.addWidget(self.dismiss)
+            self.buttons_layout.addWidget(self.revert)
+            self.buttons_layout.addWidget(self.bypass)
 
     def set_alert(self, kind: str, title: str, body: str, *, dismiss=False, revert=False, bypass=False, dismiss_text="Dismiss", revert_text="Revert", bypass_text="Bypass"):
         self.kind = kind or "info"
@@ -1336,6 +1348,12 @@ class ThermostatActionBanner(GlassPanel):
             self.title.setFont(font(22, QFont.Black))
             self.body.setFont(font(13, QFont.Black))
             self.bypass.setFixedWidth(190)
+        elif self.kind == "lockout":
+            self.setMinimumHeight(154)
+            self.setMaximumHeight(210)
+            self.title.setFont(font(22, QFont.Black))
+            self.body.setFont(font(14, QFont.Black))
+            self.bypass.setFixedWidth(170)
         else:
             self.setMinimumHeight(134)
             self.setMaximumHeight(190)
@@ -1350,6 +1368,7 @@ class ThermostatActionBanner(GlassPanel):
         self.dismiss.setVisible(bool(dismiss))
         self.revert.setVisible(bool(revert))
         self.bypass.setVisible(bool(bypass))
+        self._layout_buttons(bypass_left=self.kind in {"lockout", "door-pause"} and bool(bypass))
         color = {
             "heat": "rgba(255,72,83,0.58)",
             "cool": "rgba(65,225,255,0.48)",
@@ -2450,6 +2469,7 @@ class ThermostatScreen(Page):
         if animated:
             self.fx_phase = (self.fx_phase + 1) % 10000
         self.update_door_pause_ui()
+        self.update_alert_banner()
         if animated:
             self.update()
         self.retune_fx_timer()
@@ -2906,18 +2926,37 @@ class ThermostatScreen(Page):
         if pending in {"heat", "cool"} and until > now_ms:
             self.hide_notice_action_popup()
             remaining = self.format_remaining((until - now_ms) / 1000)
-            self.alert_banner.hide()
-            self.bypass_pill.show()
-            self.show_notice_card("purple", "COOLDOWN", f"{pending.capitalize()} in {remaining}", height=104)
-            self.bypass_pill.raise_()
+            opposite = "cooling" if pending == "heat" else "heating"
+            selected = pending.capitalize()
+            self.notice.hide()
+            self.bypass_pill.hide()
+            self.alert_banner.set_alert(
+                "lockout",
+                f"{selected} Selected",
+                f"{selected} is selected, but {opposite} was just active.\nThe equipment will stay off for {remaining} unless you bypass the delay.",
+                dismiss=False,
+                revert=False,
+                bypass=True,
+                bypass_text="Bypass",
+            )
+            self.position_alert_banner()
             return
         if auto_pending in {"heat", "cool"} and auto_until > now_ms:
             self.hide_notice_action_popup()
             remaining = self.format_remaining((auto_until - now_ms) / 1000)
-            self.alert_banner.hide()
-            self.bypass_pill.show()
-            self.show_notice_card("purple", "AUTO COOLDOWN", f"{auto_pending.capitalize()} in {remaining}", height=104)
-            self.bypass_pill.raise_()
+            selected = auto_pending.capitalize()
+            self.notice.hide()
+            self.bypass_pill.hide()
+            self.alert_banner.set_alert(
+                "lockout",
+                "Auto Cooldown",
+                f"Auto is waiting to switch to {selected}.\nThe equipment will stay off for {remaining} unless you bypass the delay.",
+                dismiss=False,
+                revert=False,
+                bypass=True,
+                bypass_text="Bypass",
+            )
+            self.position_alert_banner()
             return
 
         hold = t.get("autoSwitchHold") if isinstance(t.get("autoSwitchHold"), dict) else {}
@@ -3159,6 +3198,13 @@ class ThermostatScreen(Page):
         if isinstance(pause, dict):
             pause["snoozeUntil"] = int(time.time() * 1000) + 300000
             pause["active"] = False
+            pause["pausedAt"] = 0
+            pause["previousTargetTemp"] = None
+            pause["previousLastComfortTarget"] = None
+            pause["activeEntityIds"] = []
+            pause["countdownAllowed"] = False
+            pause["countdownReason"] = "snoozed"
+        self.s.status_refresh_paused_until = max(getattr(self.s, "status_refresh_paused_until", 0.0), time.monotonic() + 2.5)
         self.sync(self.s.config, self.s.thermostat)
         self.requestToast.emit("Door pause snoozed for 5 minutes")
 
@@ -3376,7 +3422,9 @@ class ThermostatScreen(Page):
             }
             self.s.thermostat["presenceHomeOverride"] = copy.deepcopy(changes["presenceHomeOverride"])
         else:
-            changes["presenceHomeOverride"] = None
+            # Do not send an explicit null override. The backend has the saved
+            # people list and will create the Home hold when stale HA/person
+            # states would otherwise put the panel straight back into Away.
             self.s.thermostat["presenceHomeOverride"] = None
         self.s.thermostat["away"] = False
         self.s.thermostat["awaySource"] = ""
