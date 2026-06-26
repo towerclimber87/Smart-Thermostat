@@ -3224,7 +3224,6 @@ def _apply_runtime_thermostat_logic(record: dict, *, notify: bool = True) -> dic
     updated = _apply_comfort_auto_switch_logic(updated, notify=notify)
     scheduled = _apply_thermostat_schedules(updated)
     scheduled = _apply_away_setpoint_logic(scheduled, was_away=was_away)
-    scheduled = _enforce_no_fan_off_during_cooling(scheduled)
     if scheduled != updated:
         _write_thermostat_record(scheduled, persist=True)
         updated = scheduled
@@ -3343,34 +3342,24 @@ def _apply_minimum_cycle_protection(
     return requested_on, 0, ""
 
 
-def _cooling_output_active_for_fan_guard(thermostat: dict, outputs: dict | None = None) -> bool:
-    try:
-        out = outputs if isinstance(outputs, dict) else _thermostat_outputs(thermostat)
-    except Exception:
-        out = {}
-    if bool(out.get("cool")):
-        return True
-    if str(out.get("hvacAction") or out.get("hvac_action") or "").strip().lower() == "cooling":
-        return True
-    relays = thermostat.get("relays") if isinstance(thermostat, dict) and isinstance(thermostat.get("relays"), dict) else {}
-    return bool(relays.get("cool") or thermostat.get("relayCool")) if isinstance(thermostat, dict) else False
 
 
-def _enforce_no_fan_off_during_cooling(thermostat: dict, outputs: dict | None = None) -> dict:
-    """Fan mode Off is not valid while the cooling output is active.
-
-    The relay logic already energizes the fan whenever cooling is on.  This keeps
-    the persisted/user-facing fan mode aligned with that safety requirement so
-    the UI and Home Assistant never show an impossible Off option while cooling.
-    """
+def _normalize_fan_for_active_cooling(thermostat: dict) -> dict:
+    """Cooling must always keep fan mode at Auto or On; Off is not valid."""
     if not isinstance(thermostat, dict):
         return thermostat
-    if _normalize_fan(thermostat.get("fan"), "auto") == "off" and _cooling_output_active_for_fan_guard(thermostat, outputs):
-        updated = dict(thermostat)
-        updated["fan"] = "auto"
-        return updated
+    if str(thermostat.get("fan") or "auto").strip().lower() != "off":
+        return thermostat
+    probe = dict(thermostat)
+    probe["fan"] = "auto"
+    try:
+        outputs = _thermostat_outputs(probe)
+    except Exception:
+        outputs = {}
+    if bool(outputs.get("cool")) or str(outputs.get("hvacAction") or "").lower() == "cooling":
+        thermostat = dict(thermostat)
+        thermostat["fan"] = "auto"
     return thermostat
-
 
 def _thermostat_outputs(thermostat: dict) -> dict:
     mode = _allowed_mode_for_locks(_normalize_mode(thermostat.get("mode"), "cool"), thermostat, "cool")
@@ -3475,10 +3464,9 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
     else:
         thermostat = record["thermostat"]
     outputs = _thermostat_outputs(thermostat)
-    enforced_thermostat = _enforce_no_fan_off_during_cooling(thermostat, outputs)
-    if enforced_thermostat != thermostat:
-        thermostat = enforced_thermostat
-        outputs = _thermostat_outputs(thermostat)
+    if (bool(outputs.get("cool")) or str(outputs.get("hvacAction") or "").lower() == "cooling") and str(thermostat.get("fan") or "auto").lower() == "off":
+        thermostat = dict(thermostat)
+        thermostat["fan"] = "auto"
     if apply_hardware:
         _apply_thermostat_outputs_to_hardware(outputs, thermostat)
     hvac_mode = thermostat["mode"] if thermostat["mode"] in {"off", "heat", "cool"} else str(thermostat.get("autoActiveMode") or "cool")
@@ -3878,7 +3866,7 @@ def _handle_thermostat_update(payload: dict) -> dict:
 
     merged = _apply_comfort_auto_switch_logic(merged, notify=True)
     merged = _apply_away_setpoint_logic(merged, was_away=was_away)
-    merged = _enforce_no_fan_off_during_cooling(merged)
+    merged = _normalize_fan_for_active_cooling(merged)
     _write_thermostat_record(merged)
     if incoming_has_schedules:
         saved_schedules = _normalize_schedule_entries(incoming.get("schedules"))

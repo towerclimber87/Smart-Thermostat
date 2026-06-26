@@ -325,37 +325,6 @@ def audio_preset_definition(config: dict | None, preset: str) -> dict:
     return result
 
 
-def thermostat_is_actively_cooling(state: dict | None) -> bool:
-    """Return True while the cooling output is actively energized/calling.
-
-    The fan relay is already forced on by the backend while cooling is active.
-    This UI helper keeps the displayed fan mode/control from offering Off in
-    that same condition, even if an older saved state or HA echo still says
-    fan=off.
-    """
-    if not isinstance(state, dict):
-        return False
-    outputs = state.get("outputs") if isinstance(state.get("outputs"), dict) else {}
-    relays = state.get("relays") if isinstance(state.get("relays"), dict) else {}
-    if bool(outputs.get("cool")) or bool(relays.get("cool")) or bool(state.get("relayCool")):
-        return True
-    if str(state.get("hvacAction") or state.get("hvac_action") or outputs.get("hvacAction") or outputs.get("hvac_action") or "").strip().lower() == "cooling":
-        return True
-
-    # Local optimistic UI states may not have a fresh outputs block yet.  In
-    # that case, infer only an actual cooling call from mode/temperature.
-    mode = str(state.get("mode") or state.get("hvacMode") or state.get("hvac_mode") or "").strip().lower()
-    active = str(state.get("autoActiveMode") or state.get("activeMode") or "").strip().lower() if mode == "auto" else mode
-    if active != "cool" or bool(state.get("coolLocked")):
-        return False
-    try:
-        current = float(state.get("currentTemp", state.get("current_temperature")))
-        target = float(state.get("targetTemp", state.get("target_temperature", state.get("temperature"))))
-    except Exception:
-        return False
-    return current > target
-
-
 def thermostat_detail_payload(payload: dict | None) -> dict:
     """Return the actual thermostat state from the local API response.
 
@@ -2553,7 +2522,7 @@ class ThermostatScreen(Page):
         self.minus.clicked.connect(lambda: self.change_target(-1))
         self.plus.clicked.connect(lambda: self.change_target(1))
         self.dial.targetChanged.connect(lambda v: self.set_target(v))
-        self.door_card.clicked.connect(lambda: self.requestToast.emit("Door status is synced from Home Assistant."))
+        # Doors already show their live state on the tile; no extra source toast is needed.
         self.alarm_card.clicked.connect(self.show_alarm_dialog)
 
         self.fx_phase = 0
@@ -3077,17 +3046,20 @@ class ThermostatScreen(Page):
         """
         t = t or self.thermostat_view()
         relays = relays if isinstance(relays, dict) else (t.get("relays") if isinstance(t.get("relays"), dict) else {})
-        reason = str(t.get("minimumCycleReason") or "").strip().lower()
-        mode = str(t.get("minimumCycleMode") or "").strip().lower()
-        until = self.safe_float(t.get("minimumCycleUntil"), 0.0)
+        outputs = t.get("outputs") if isinstance(t.get("outputs"), dict) else {}
+        reason = str(t.get("minimumCycleReason") or outputs.get("minimumCycleReason") or "").strip().lower()
+        mode = str(t.get("minimumCycleMode") or outputs.get("minimumCycleMode") or "").strip().lower()
+        until = self.safe_float(t.get("minimumCycleUntil") or outputs.get("minimumCycleUntil"), 0.0)
         now_ms = time.time() * 1000
-        if reason != "minimum-runtime" or mode not in {"heat", "cool"} or until <= now_ms:
+        if mode not in {"heat", "cool"} or until <= now_ms:
             return ""
-        if mode == "heat" and not bool(relays.get("heat")):
+        if reason and reason != "minimum-runtime":
             return ""
-        if mode == "cool" and not bool(relays.get("cool")):
+        if mode == "heat" and not (bool(relays.get("heat")) or bool(outputs.get("heat")) or bool(t.get("heatRelayWasOn"))):
             return ""
-        return f" ({self.format_status_remaining((until - now_ms) / 1000)})"
+        if mode == "cool" and not (bool(relays.get("cool")) or bool(outputs.get("cool")) or bool(t.get("coolRelayWasOn"))):
+            return ""
+        return f" {self.format_status_remaining((until - now_ms) / 1000)}"
 
     def predict_minimum_runtime_hold_for_target(self, snapshot: dict | None, new_target: float) -> dict:
         """Predict the center-badge minimum-runtime countdown immediately after a tap."""
@@ -3173,10 +3145,11 @@ class ThermostatScreen(Page):
             active = str(t.get("autoActiveMode") or t.get("activeMode") or "cool").lower()
             mode = active if active in {"heat", "cool"} else "cool"
         relays = t.get("relays") if isinstance(t.get("relays"), dict) else {}
+        outputs = t.get("outputs") if isinstance(t.get("outputs"), dict) else {}
         equipment = "Idle"
-        if relays.get("cool"):
+        if relays.get("cool") or outputs.get("cool"):
             equipment = "Cooling" + self.minimum_runtime_status_suffix(t, relays)
-        elif relays.get("heat"):
+        elif relays.get("heat") or outputs.get("heat"):
             equipment = "Heating" + self.minimum_runtime_status_suffix(t, relays)
         else:
             pending_text = self.pending_equipment_status_text(t, relays)
@@ -3665,7 +3638,7 @@ class ThermostatScreen(Page):
         return lay
 
     def _fan_bar(self):
-        # Compact floating fan status pill. Tap it for Off / On / Auto.
+        # Compact floating fan status pill. Tap it for available fan modes.
         lay = QHBoxLayout()
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
@@ -3681,11 +3654,29 @@ class ThermostatScreen(Page):
         lay.addStretch(1)
         return lay
 
+    def cooling_is_active(self, t: dict | None = None) -> bool:
+        """True when cooling is actually running, including minimum-runtime holds."""
+        t = t if isinstance(t, dict) else self.thermostat_view()
+        relays = t.get("relays") if isinstance(t.get("relays"), dict) else {}
+        outputs = t.get("outputs") if isinstance(t.get("outputs"), dict) else {}
+        hvac_action = str(
+            t.get("hvacAction")
+            or t.get("hvac_action")
+            or outputs.get("hvacAction")
+            or outputs.get("hvac_action")
+            or ""
+        ).strip().lower()
+        reason = str(t.get("minimumCycleReason") or outputs.get("minimumCycleReason") or "").strip().lower()
+        cycle_mode = str(t.get("minimumCycleMode") or outputs.get("minimumCycleMode") or "").strip().lower()
+        until = self.safe_float(t.get("minimumCycleUntil") or outputs.get("minimumCycleUntil"), 0.0)
+        minimum_runtime_cooling = reason == "minimum-runtime" and cycle_mode == "cool" and until > time.time() * 1000
+        return bool(relays.get("cool") or outputs.get("cool") or hvac_action == "cooling" or minimum_runtime_cooling)
+
     def show_fan_menu(self):
         if not self.fan_status_button:
             return
         t = self.thermostat_view()
-        cooling_active = thermostat_is_actively_cooling(t)
+        cooling_active = self.cooling_is_active(t)
         current = str(t.get("fan") or "auto").lower()
         if cooling_active and current == "off":
             current = "auto"
@@ -3709,7 +3700,7 @@ class ThermostatScreen(Page):
                 color:#06101f;
             }
         """)
-        fan_options = ["auto", "on"] if cooling_active else ["off", "on", "auto"]
+        fan_options = ["on", "auto"] if cooling_active else ["off", "on", "auto"]
         for fan in fan_options:
             action = menu.addAction(("✓  " if fan == current else "   ") + fan.capitalize())
             action.triggered.connect(lambda checked=False, f=fan: self.set_fan(f))
@@ -3855,9 +3846,9 @@ class ThermostatScreen(Page):
         fan = str(fan or "auto").strip().lower()
         if fan not in {"off", "on", "auto"}:
             fan = "auto"
-        if fan == "off" and thermostat_is_actively_cooling(self.thermostat_view()):
+        if fan == "off" and self.cooling_is_active():
             fan = "auto"
-            self.requestToast.emit("Fan cannot be Off while cooling")
+            self.requestToast.emit("Cooling requires fan Auto or On")
         self.s.thermostat["fan"] = fan
         self.sync(self.s.config, self.s.thermostat)
 
@@ -4027,7 +4018,7 @@ class ThermostatScreen(Page):
             selected = (m == mode and not away) or (m == "away" and away)
             b.setStyleSheet(self._floating_button_style(selected))
         fan = str(t.get("fan") or "auto").lower()
-        if thermostat_is_actively_cooling(t) and fan == "off":
+        if self.cooling_is_active(t) and fan == "off":
             fan = "auto"
         if self.fan_status_button:
             self.fan_status_button.setText(fan.capitalize())
@@ -8468,12 +8459,8 @@ class SettingsDialog(QDialog):
         fan_row = QHBoxLayout()
         fan_row.setSpacing(6)
         changeover.layout().addLayout(fan_row)
-        settings_fan = str(t.get("fan") or "auto").lower()
-        settings_cooling_active = thermostat_is_actively_cooling(t)
-        if settings_cooling_active and settings_fan == "off":
-            settings_fan = "auto"
-        for f in (["auto", "on"] if settings_cooling_active else ["off", "on", "auto"]):
-            b = RoundButton(f.capitalize(), active=settings_fan == f, min_h=28)
+        for f in ["off", "on", "auto"]:
+            b = RoundButton(f.capitalize(), active=(t.get("fan") or "auto") == f, min_h=28)
             b.clicked.connect(lambda checked=False, x=f: self.set_thermostat({"fan": x}))
             fan_row.addWidget(b)
 
@@ -8752,9 +8739,6 @@ class SettingsDialog(QDialog):
     def set_thermostat(self, changes, quiet=False, debounce=False, push=False):
         if not isinstance(changes, dict) or not changes:
             return
-        changes = copy.deepcopy(changes)
-        if str(changes.get("fan") or "").strip().lower() == "off" and thermostat_is_actively_cooling(self.s.thermostat):
-            changes["fan"] = "auto"
         self.apply_thermostat_changes_locally(changes)
         # Do not emit saved/reload on every plus/minus tap. That used to force a
         # synchronous full reload while the finger was still tapping, causing the
@@ -9547,12 +9531,6 @@ class AlarmControlDialog(QDialog):
         status.setFont(font(14, QFont.Black))
         status.setStyleSheet("color:#ffcf95; letter-spacing:3px;")
         info.addWidget(status)
-        detail = QLabel("The system is waiting for the exit delay to finish before sending Arm Away to Home Assistant.")
-        detail.setAlignment(Qt.AlignCenter)
-        detail.setWordWrap(True)
-        detail.setFont(font(12, QFont.Bold))
-        detail.setStyleSheet("color:#c4d0e5;")
-        info.addWidget(detail)
         arm_now = RoundButton("Arm Now", active=True, kind="purple", min_h=62)
         arm_now.clicked.connect(lambda: self.send_action("arm_away"))
         info.addWidget(arm_now)
