@@ -1129,16 +1129,26 @@ class AppState:
         self._target_override_value = None
         self._target_override_until = 0.0
 
-    def set_mode_override(self, mode: str, *, away: bool = False, hold_seconds: float = 8.0):
-        """Hold a just-requested local mode against one stale status refresh."""
+    def set_mode_override(self, mode: str, *, away: bool = False, hold_seconds: float = 8.0, extra: dict | None = None):
+        """Hold a just-requested local mode against stale status refreshes.
+
+        Mode changes are visible before the backend round trip completes.  When
+        the change also creates compressor/changeover protection, keep the
+        pending mode and countdown pinned locally too; otherwise the next HA/API
+        status payload can briefly wipe the bypass card even though the backend
+        is still settling the requested transition.
+        """
         mode = str(mode or "").strip().lower()
         if mode not in {"off", "heat", "cool", "away"}:
             return
-        self._mode_override = {
+        override = {
             "mode": "cool" if mode == "away" else mode,
             "away": bool(away or mode == "away"),
             "awaySource": "manual" if (away or mode == "away") else "",
         }
+        if isinstance(extra, dict):
+            override.update(copy.deepcopy(extra))
+        self._mode_override = override
         self._mode_override_until = time.monotonic() + max(1.0, float(hold_seconds))
 
     def clear_mode_override(self):
@@ -1152,7 +1162,18 @@ class AppState:
         if not self._mode_override or now >= self._mode_override_until:
             self.clear_mode_override()
             return thermostat
-        thermostat.update(self._mode_override)
+        override = dict(self._mode_override)
+        # Do not let a stale local prediction hide a newer authoritative
+        # backend lockout.  If the backend has a longer countdown, keep it.
+        try:
+            local_until = float(override.get("manualLockoutUntil") or 0)
+            remote_until = float(thermostat.get("manualLockoutUntil") or 0)
+            if remote_until > local_until:
+                override.pop("manualPendingMode", None)
+                override.pop("manualLockoutUntil", None)
+        except Exception:
+            pass
+        thermostat.update(override)
         return thermostat
 
     def apply_target_override(self, thermostat: dict) -> dict:
@@ -2597,11 +2618,20 @@ class ThermostatScreen(Page):
             return
         kind = getattr(self.alert_banner, "kind", "")
         if kind == "lockout":
-            w = min(470, max(390, self.width() - 160))
+            # Keep the bypass/countdown in the left thermostat cluster, under
+            # the Doors tile, instead of flashing in the middle of the page.
+            w = min(430, max(360, self.width() // 3))
             self.alert_banner.setFixedWidth(w)
             self.alert_banner.adjustSize()
-            x = min(max(280, self.width() // 4), max(12, self.width() - self.alert_banner.width() - 26))
-            y = 104
+            try:
+                door_pos = self.door_card.mapTo(self, QPoint(0, 0))
+                x = door_pos.x() + (self.door_card.width() - self.alert_banner.width()) // 2
+                y = door_pos.y() + self.door_card.height() + 14
+            except Exception:
+                x = 42
+                y = 318
+            x = max(18, min(x, max(18, self.width() - self.alert_banner.width() - 18)))
+            y = max(96, min(y, max(96, self.height() - self.alert_banner.height() - 24)))
         elif kind == "door-pause":
             w = min(660, max(540, self.width() - 96))
             self.alert_banner.setFixedWidth(w)
@@ -3423,19 +3453,24 @@ class ThermostatScreen(Page):
             self.s.thermostat["awaySource"] = changes["awaySource"]
         else:
             # Physical/manual button taps should visibly win immediately.
-            changes = {"mode": mode, "away": False, "awaySource": ""}
-            self.s.set_mode_override(mode, away=False)
-            self.s.thermostat["mode"] = mode
-            self.s.thermostat["away"] = False
-            self.s.thermostat["awaySource"] = ""
+            changes = {"mode": mode, "away": False, "awaySource": "", "modeChangeSource": "panel"}
+            local_extra = {}
             if mode in {"heat", "cool"}:
                 # Show the bypassable delay immediately instead of waiting for
                 # the API round trip. The backend repeats the same calculation
                 # from the authoritative runtime state and corrects this local
                 # prediction on the next response.
                 until = self.predicted_manual_lockout_until(mode)
-                self.s.thermostat["autoSwitchNotice"] = {"active": False, "source": "", "fromMode": "", "toMode": "", "switchTemp": 0, "outdoorTemp": 0, "coolTarget": 0, "heatTarget": 0, "createdAt": 0}
+                cleared_notice = {"active": False, "source": "", "fromMode": "", "toMode": "", "switchTemp": 0, "outdoorTemp": 0, "coolTarget": 0, "heatTarget": 0, "createdAt": 0}
+                self.s.thermostat["autoSwitchNotice"] = cleared_notice
+                local_extra["autoSwitchNotice"] = cleared_notice
                 if until > int(time.time() * 1000):
+                    local_extra.update({
+                        "manualPendingMode": mode,
+                        "manualLockoutUntil": until,
+                        "autoPendingMode": "",
+                        "autoLockoutUntil": 0,
+                    })
                     self.s.thermostat["manualPendingMode"] = mode
                     self.s.thermostat["manualLockoutUntil"] = until
                     self.s.thermostat["autoPendingMode"] = ""
@@ -3443,6 +3478,11 @@ class ThermostatScreen(Page):
                 else:
                     self.s.thermostat["manualPendingMode"] = ""
                     self.s.thermostat["manualLockoutUntil"] = 0
+            hold_seconds = 14.0 if local_extra.get("manualLockoutUntil") else 8.0
+            self.s.set_mode_override(mode, away=False, hold_seconds=hold_seconds, extra=local_extra)
+            self.s.thermostat["mode"] = mode
+            self.s.thermostat["away"] = False
+            self.s.thermostat["awaySource"] = ""
         self.sync(self.s.config, self.s.thermostat)
 
         def done(result):

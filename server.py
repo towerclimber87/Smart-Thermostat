@@ -2678,29 +2678,36 @@ def _apply_comfort_auto_switch_logic(thermostat: dict, *, notify: bool = True) -
 
     current_mode = mode if mode in {"heat", "cool"} else ""
     if current_mode:
-        # Manual Heat/Cool button presses must be sticky. Room-temperature
-        # comfort auto-switch can still suggest the opposite side, but it must
-        # never rewrite a manually selected mode or clear its changeover timer.
-        # Auto mode above remains the only place where the controller actually
-        # changes active heat/cool side automatically.
         if signal and signal != current_mode and _mode_available_for_auto_switch(t, signal):
             hold = t.get("autoSwitchHold") if isinstance(t.get("autoSwitchHold"), dict) else {}
-            if not (
+            hold_active = (
                 bool(hold.get("active"))
                 and str(hold.get("source") or "").lower() == "manual"
                 and str(hold.get("mode") or "").lower() == current_mode
                 and str(hold.get("suggestedMode") or "").lower() == signal
-            ):
-                t["autoSwitchHold"] = {
-                    "active": True,
-                    "source": "manual",
-                    "mode": current_mode,
-                    "suggestedMode": signal,
-                    "reason": "manual-override",
-                    "dismissed": False,
-                    "createdAt": now_ms,
-                }
-            t["autoSwitchNotice"] = _empty_auto_switch_notice()
+            )
+            if hold_active:
+                # Revert/manual override wins.  Keep the selected mode and show
+                # the small left-side override notice until the user dismisses
+                # it or the room no longer calls for the opposite mode.
+                t["mode"] = current_mode
+                t["autoSwitchNotice"] = _empty_auto_switch_notice()
+                return t
+
+            # With the Auto button removed, Heat and Cool still have the same
+            # comfort auto-switch safety behavior.  Once any manual changeover
+            # delay is no longer active, flip to the recommended side and leave
+            # a persistent notice for the front end.
+            previous = current_mode
+            t["mode"] = signal
+            t["autoActiveMode"] = signal
+            t["manualPendingMode"] = ""
+            t["manualLockoutUntil"] = 0
+            t["autoPendingMode"] = ""
+            t["autoLockoutUntil"] = 0
+            _clamp_comfort_target_to_mode(t)
+            if notify and previous != signal:
+                _record_auto_switch_notice(t, "manual", previous, signal)
             return t
         if isinstance(t.get("autoSwitchHold"), dict) and str(t["autoSwitchHold"].get("source") or "").lower() == "manual":
             t["autoSwitchHold"] = _empty_auto_switch_hold()
@@ -3580,6 +3587,24 @@ def _handle_thermostat_update(payload: dict) -> dict:
 
     requested_mode_raw = incoming.get("mode", incoming.get("hvac_mode", incoming.get("hvacMode")))
     requested_mode = _normalize_mode(requested_mode_raw, "") if requested_mode_raw is not None else ""
+    mode_change_source = str(incoming.get("modeChangeSource") or incoming.get("mode_change_source") or "").strip().lower()
+    existing_manual_pending, existing_manual_until = _active_manual_changeover_pending(existing)
+    if (
+        existing_manual_pending in {"heat", "cool"}
+        and requested_mode in {"heat", "cool"}
+        and requested_mode != existing_manual_pending
+        and mode_change_source != "panel"
+        and bypass_mode not in {"heat", "cool"}
+    ):
+        # A just-tapped panel mode owns the compressor changeover window.
+        # Home Assistant can briefly echo the previous HVAC mode while its
+        # entity refresh catches up; accepting that stale opposite mode clears
+        # the countdown and makes the bypass banner flash for only one cycle.
+        incoming = dict(incoming)
+        for key in ("mode", "hvac_mode", "hvacMode"):
+            incoming.pop(key, None)
+        requested_mode = ""
+
     if (
         requested_mode in {"off", "heat", "cool"}
         and not bool(existing.get("away"))
