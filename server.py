@@ -165,6 +165,7 @@ DEFAULT_THERMOSTAT = {
     "virtualTempOverrideUntil": 0,
     "targetTemp": 70,
     "lastComfortTarget": 70,
+    "temperatureDifferential": 0,
     "lastPanelTargetTemp": 0,
     "lastPanelTargetRequestAt": 0,
     "lastPanelModeRequestMode": "",
@@ -850,6 +851,7 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             ("autoHeatOutdoorTarget", base["autoHeatOutdoorTarget"], 40, 100),
             ("autoChangeoverLockoutMinutes", base["autoChangeoverLockoutMinutes"], 0, 720),
             ("manualChangeoverLockoutMinutes", base.get("manualChangeoverLockoutMinutes", MANUAL_CHANGEOVER_LOCKOUT_MINUTES), 0, 60),
+            ("temperatureDifferential", base.get("temperatureDifferential", 0), 0, 5),
             ("heatMinimumRuntimeMinutes", base.get("heatMinimumRuntimeMinutes", 2), 1, 30),
             ("coolMinimumRuntimeMinutes", base.get("coolMinimumRuntimeMinutes", 2), 1, 30),
             ("coolFanRemainOnMinutes", base["coolFanRemainOnMinutes"], 0, 15),
@@ -1000,6 +1002,7 @@ THERMOSTAT_PERSIST_KEYS = (
     "autoHeatOutdoorTarget",
     "autoChangeoverLockoutMinutes",
     "manualChangeoverLockoutMinutes",
+    "temperatureDifferential",
     "heatMinimumRuntimeMinutes",
     "coolMinimumRuntimeMinutes",
     "coolFanRemainOnMinutes",
@@ -3449,8 +3452,31 @@ def _thermostat_outputs(thermostat: dict) -> dict:
     if safety_mode:
         active_mode = safety_mode
         target = safety_low if safety_mode == "heat" else safety_high
-    heat = (not thermostat.get("heatLocked")) and active_mode == "heat" and current < target
-    cool = (not thermostat.get("coolLocked")) and active_mode == "cool" and current > target
+    differential = 0 if safety_mode else _number(thermostat.get("temperatureDifferential"), 0, 0, 5)
+    heat_was_on = bool(thermostat.get("heatRelayWasOn"))
+    cool_was_on = bool(thermostat.get("coolRelayWasOn"))
+
+    # Temperature differential is a start threshold, not an early shutoff.
+    # Example with target 70 and differential 1:
+    # - Cooling that is already running keeps cooling until the room reaches 70,
+    #   then waits until the room rises to 71 before starting again.
+    # - Heating that is already running keeps heating until the room reaches 70,
+    #   then waits until the room falls to 69 before starting again.
+    # A value of 0 preserves the original exact-setpoint behavior.
+    heat_start_threshold = target - differential
+    cool_start_threshold = target + differential
+    starting_heat_call = current <= heat_start_threshold if differential > 0 else current < target
+    starting_cool_call = current >= cool_start_threshold if differential > 0 else current > target
+    heat = (
+        (not thermostat.get("heatLocked"))
+        and active_mode == "heat"
+        and (current < target if heat_was_on else starting_heat_call)
+    )
+    cool = (
+        (not thermostat.get("coolLocked"))
+        and active_mode == "cool"
+        and (current > target if cool_was_on else starting_cool_call)
+    )
     pending_mode = ""
     manual_lockout_until = 0
     now_ms = int(time.time() * 1000)

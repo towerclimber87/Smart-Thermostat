@@ -8962,6 +8962,15 @@ class SettingsDialog(QDialog):
             b.clicked.connect(lambda checked=False, x=f: self.set_thermostat({"fan": x}))
             fan_row.addWidget(b)
 
+        differential = self.add_section("Temperature Differential", 4, 0, 1, 2)
+        differential_grid = self.section_grid(differential, 1)
+        self.add_section_value(differential_grid, "temperatureDifferential", "Differential", int(float(t.get("temperatureDifferential", 0) or 0)), 0, 0, 0, 5, "°")
+        differential_note = QLabel("Cooling restarts at setpoint + differential. Heating restarts at setpoint - differential. 0 keeps exact setpoint behavior.")
+        differential_note.setWordWrap(True)
+        differential_note.setFont(font(7, QFont.Black))
+        differential_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
+        differential.layout().addWidget(differential_note)
+
         minimum_runtime = self.add_section("Minimum Runtime", 4, 2, 1, 2)
         runtime_grid = self.section_grid(minimum_runtime, 2)
         self.add_section_value(runtime_grid, "heatMinimumRuntimeMinutes", "Heat", t.get("heatMinimumRuntimeMinutes", 2), 0, 0, 1, 30, " min")
@@ -9220,6 +9229,7 @@ class SettingsDialog(QDialog):
             "autoHeatOutdoorTarget": self.val_number("autoHeatOutdoorTarget"),
             "autoChangeoverLockoutMinutes": self.val_number("autoChangeoverLockoutMinutes") * 60,
             "manualChangeoverLockoutMinutes": self.val_number("manualChangeoverLockoutMinutes"),
+            "temperatureDifferential": self.val_number("temperatureDifferential"),
             "heatMinimumRuntimeMinutes": self.val_number("heatMinimumRuntimeMinutes"),
             "coolMinimumRuntimeMinutes": self.val_number("coolMinimumRuntimeMinutes"),
             "coolFanRemainOnMinutes": self.val_number("coolFanRemainOnMinutes"),
