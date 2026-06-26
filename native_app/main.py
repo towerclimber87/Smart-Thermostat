@@ -1173,6 +1173,119 @@ class AppState:
         return self.ingest_thermostat(self.api.thermostat_update(changes))
 
 
+class ThermostatNoticeCard(QWidget):
+    """Small fixed-size thermostat notice card.
+
+    The auto switch notice used to be a plain QLabel, which could grow much
+    taller on the Raspberry Pi touchscreen when Qt recalculated its wrapped
+    text. Keeping this as a painted, fixed-size card makes it match the compact
+    left-side tile design and prevents it from covering the Doors tile.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.kind = "cool"
+        self.heading = ""
+        self.primary = ""
+        self.badge = ""
+        self.setFixedSize(226, 118)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+
+    def set_notice(self, kind: str, heading: str, primary: str = "", badge: str = "", *, height: int = 118):
+        self.kind = str(kind or "cool").lower()
+        self.heading = str(heading or "")
+        self.primary = str(primary or "")
+        self.badge = str(badge or "")
+        self.setFixedSize(226, int(clamp(height, 96, 136)))
+        self.update()
+
+    # Compatibility for older call sites.  Keep it fixed-size even if someone
+    # later sets multiline text directly.
+    def setText(self, value: str):
+        parts = [line.strip() for line in str(value or "").splitlines() if line.strip()]
+        heading = parts[0] if parts else ""
+        primary = parts[1] if len(parts) > 1 else ""
+        badge = parts[2] if len(parts) > 2 else ""
+        inferred = self.kind
+        lower = " ".join(parts).lower()
+        if "cooldown" in lower or "manual" in lower:
+            inferred = "purple"
+        elif "heat" in lower and "cool" not in lower:
+            inferred = "heat"
+        elif "cool" in lower:
+            inferred = "cool"
+        self.set_notice(inferred, heading, primary, badge)
+
+    def text(self) -> str:
+        return "\n".join([part for part in (self.heading, self.primary, self.badge) if part])
+
+    def _palette(self) -> tuple[QColor, QColor, QColor, QColor, QColor]:
+        if self.kind == "heat":
+            return (
+                QColor(124, 22, 42, 218),
+                QColor(35, 14, 30, 232),
+                QColor(255, 87, 121, 176),
+                QColor(255, 82, 115, 76),
+                QColor(255, 232, 238),
+            )
+        if self.kind in {"purple", "manual", "cooldown"}:
+            return (
+                QColor(74, 54, 130, 218),
+                QColor(25, 17, 45, 232),
+                QColor(194, 155, 255, 176),
+                QColor(194, 155, 255, 58),
+                QColor(248, 244, 255),
+            )
+        return (
+            QColor(16, 84, 118, 216),
+            QColor(9, 34, 58, 232),
+            QColor(71, 224, 255, 164),
+            QColor(71, 224, 255, 64),
+            QColor(246, 252, 255),
+        )
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
+        r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        bg1, bg2, border, glow_color, text_col = self._palette()
+
+        glow = QRadialGradient(QPointF(r.center().x(), r.top() + 30), max(r.width(), r.height()) * 0.78)
+        glow.setColorAt(0.0, glow_color)
+        glow.setColorAt(0.68, QColor(glow_color.red(), glow_color.green(), glow_color.blue(), max(12, glow_color.alpha() // 4)))
+        glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.fillRect(r, glow)
+
+        grad = QLinearGradient(r.topLeft(), r.bottomRight())
+        grad.setColorAt(0.0, bg1)
+        grad.setColorAt(1.0, bg2)
+        p.setBrush(QBrush(grad))
+        p.setPen(QPen(border, 1.55))
+        p.drawRoundedRect(r, 22, 22)
+
+        p.setPen(QColor(224, 240, 255, 222))
+        p.setFont(font(8, QFont.Black, 18))
+        p.drawText(QRectF(14, 14, r.width() - 28, 18), Qt.AlignCenter, self.heading.upper())
+
+        p.setPen(text_col)
+        p.setFont(font(18, QFont.Black))
+        primary_rect = QRectF(12, 35, r.width() - 24, 34)
+        p.drawText(primary_rect, Qt.AlignCenter, self.primary)
+
+        if self.badge:
+            p.setFont(font(8, QFont.Black, 18))
+            fm = p.fontMetrics()
+            badge_w = max(86, min(r.width() - 42, fm.horizontalAdvance(self.badge.upper()) + 26))
+            badge_r = QRectF(r.center().x() - badge_w / 2, r.bottom() - 36, badge_w, 22)
+            badge_base = QColor(border.red(), border.green(), border.blue(), 92)
+            p.setBrush(badge_base)
+            p.setPen(Qt.NoPen)
+            p.drawRoundedRect(badge_r, 11, 11)
+            p.setPen(QColor(232, 252, 255))
+            p.drawText(badge_r, Qt.AlignCenter, self.badge.upper())
+
+
 class ThermostatActionBanner(GlassPanel):
     dismissClicked = pyqtSignal()
     revertClicked = pyqtSignal()
@@ -1786,14 +1899,7 @@ class ThermostatScreen(Page):
             letter-spacing:1px;
         """)
         self.door_countdown.hide()
-        self.notice = QLabel("")
-        self.notice.setAlignment(Qt.AlignCenter)
-        self.notice.setFont(font(12, QFont.Black))
-        self.notice.setCursor(Qt.PointingHandCursor)
-        self.notice.setMinimumSize(220, 96)
-        self.notice.setMaximumWidth(260)
-        self.notice.setWordWrap(True)
-        self.notice.setStyleSheet("background:rgba(2,78,130,0.65); color:#f6f8ff; border:1px solid rgba(71,224,255,0.45); border-radius:22px; padding:12px 18px;")
+        self.notice = ThermostatNoticeCard(self)
         self.notice.mousePressEvent = lambda event: self.show_auto_switch_menu()
         self.bypass_pill = RoundButton("Bypass", active=True, kind="purple", min_h=42)
         self.bypass_pill.setFixedWidth(180)
@@ -2052,6 +2158,12 @@ class ThermostatScreen(Page):
         except Exception:
             return default
 
+    def show_notice_card(self, kind: str, heading: str, primary: str = "", badge: str = "", *, height: int = 118):
+        self.notice.set_notice(kind, heading, primary, badge, height=height)
+        self.notice.show()
+        self.position_main_controls()
+        self.notice.raise_()
+
     def active_visual_mode(self) -> str:
         t = self.thermostat_view()
         outputs = t.get("outputs") if isinstance(t.get("outputs"), dict) else {}
@@ -2090,15 +2202,30 @@ class ThermostatScreen(Page):
         self.controls_band.setGeometry(0, y, w, band_h)
         self.controls_band.raise_()
 
-        # These are temporary alert controls; keep them above the main band
-        # without letting them reserve layout space beside the Doors card.
+        # Temporary alert controls stay outside the grid so they do not push
+        # the Doors card around.  The compact notice is explicitly positioned
+        # above the Doors card, matching the clean left-side tile layout.
         pill_x = 58
-        if self.bypass_pill.isVisible():
-            self.bypass_pill.move(pill_x, max(70, y + 16))
-            self.bypass_pill.raise_()
-        if self.notice.isVisible():
-            self.notice.move(pill_x, max(70, y + 66))
+        if self.notice.isVisible() and hasattr(self, "door_card"):
+            try:
+                door_pos = self.door_card.mapTo(self, QPoint(0, 0))
+                notice_x = door_pos.x() + (self.door_card.width() - self.notice.width()) // 2
+                notice_y = door_pos.y() - self.notice.height() - 12
+            except Exception:
+                notice_x = pill_x
+                notice_y = y + 66
+            notice_x = max(18, min(notice_x, max(18, w - self.notice.width() - 18)))
+            notice_y = max(78, min(notice_y, max(78, h - self.notice.height() - 24)))
+            self.notice.move(notice_x, notice_y)
             self.notice.raise_()
+        if self.bypass_pill.isVisible():
+            if self.notice.isVisible():
+                bx = max(18, min(self.notice.x() + (self.notice.width() - self.bypass_pill.width()) // 2, max(18, w - self.bypass_pill.width() - 18)))
+                by = max(70, self.notice.y() - self.bypass_pill.height() - 10)
+                self.bypass_pill.move(bx, by)
+            else:
+                self.bypass_pill.move(pill_x, max(70, y + 16))
+            self.bypass_pill.raise_()
 
     def position_away_overlay(self):
         if not hasattr(self, "away_overlay"):
@@ -2459,21 +2586,15 @@ class ThermostatScreen(Page):
             remaining = self.format_remaining((until - now_ms) / 1000)
             self.alert_banner.hide()
             self.bypass_pill.show()
-            self.notice.setText(f"COOLDOWN\n{pending.capitalize()} in {remaining}")
-            self.notice.setStyleSheet("background:qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 rgba(91,48,170,0.90), stop:1 rgba(20,14,42,0.90)); color:#ffffff; border:1px solid rgba(194,155,255,0.72); border-radius:22px; padding:12px 18px;")
-            self.notice.show()
+            self.show_notice_card("purple", "COOLDOWN", f"{pending.capitalize()} in {remaining}", height=104)
             self.bypass_pill.raise_()
-            self.notice.raise_()
             return
         if auto_pending in {"heat", "cool"} and auto_until > now_ms:
             remaining = self.format_remaining((auto_until - now_ms) / 1000)
             self.alert_banner.hide()
             self.bypass_pill.show()
-            self.notice.setText(f"AUTO COOLDOWN\n{auto_pending.capitalize()} in {remaining}")
-            self.notice.setStyleSheet("background:qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 rgba(91,48,170,0.90), stop:1 rgba(20,14,42,0.90)); color:#ffffff; border:1px solid rgba(194,155,255,0.72); border-radius:22px; padding:12px 18px;")
-            self.notice.show()
+            self.show_notice_card("purple", "AUTO COOLDOWN", f"{auto_pending.capitalize()} in {remaining}", height=104)
             self.bypass_pill.raise_()
-            self.notice.raise_()
             return
 
         hold = t.get("autoSwitchHold") if isinstance(t.get("autoSwitchHold"), dict) else {}
@@ -2483,10 +2604,7 @@ class ThermostatScreen(Page):
             if manual_mode in {"heat", "cool"} and suggested in {"heat", "cool"} and manual_mode != suggested:
                 self.bypass_pill.hide()
                 self.alert_banner.hide()
-                self.notice.setText(f"MANUAL OVERRIDE\n{manual_mode.capitalize()} allowed\nAUTO WOULD {suggested.upper()}")
-                self.notice.setStyleSheet("background:qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 rgba(91,48,170,0.92), stop:1 rgba(18,13,40,0.92)); color:#ffffff; border:1px solid rgba(194,155,255,0.78); border-radius:22px; padding:12px 18px;")
-                self.notice.show()
-                self.notice.raise_()
+                self.show_notice_card("purple", "MANUAL OVERRIDE", f"{manual_mode.capitalize()} allowed", f"AUTO WOULD {suggested.upper()}", height=118)
                 return
 
         notice = t.get("autoSwitchNotice") if isinstance(t.get("autoSwitchNotice"), dict) else {}
@@ -2496,13 +2614,7 @@ class ThermostatScreen(Page):
             to_mode = str(notice.get("toMode") or self.active_visual_mode()).lower()
             switch_temp = notice.get("switchTemp") or current
             mode_label = to_mode.capitalize() if to_mode in {"heat", "cool"} else "Auto"
-            self.notice.setText(f"AUTO-SWITCHED\nTo {mode_label}\nINSIDE {fmt_temp(switch_temp)}")
-            if to_mode == "heat":
-                self.notice.setStyleSheet("background:qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 rgba(120,16,38,0.88), stop:1 rgba(28,12,28,0.88)); color:#ffffff; border:1px solid rgba(255,74,111,0.72); border-radius:22px; padding:12px 18px;")
-            else:
-                self.notice.setStyleSheet("background:qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 rgba(2,78,130,0.88), stop:1 rgba(10,28,55,0.88)); color:#f6f8ff; border:1px solid rgba(71,224,255,0.62); border-radius:22px; padding:12px 18px;")
-            self.notice.show()
-            self.notice.raise_()
+            self.show_notice_card("heat" if to_mode == "heat" else "cool", "AUTO-SWITCHED", f"To {mode_label}", f"INSIDE {fmt_temp(switch_temp)}", height=118)
             return
         self.bypass_pill.hide()
         self.notice.hide()
