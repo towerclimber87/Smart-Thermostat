@@ -253,6 +253,13 @@ AUDIO_PRESET_ORDER: list[tuple[str, str, str, str]] = [
 AUDIO_IDLE_SECONDS = 120.0
 AUDIO_FAST_NAV_POLL_SECONDS = 2.0
 
+# Display sleep is handled only by the native UI layer. Backend polling, HVAC
+# runtime protection, Home Assistant sync, and alarm logic continue normally.
+SCREEN_SLEEP_IDLE_SECONDS = float(os.environ.get("SMART_THERMOSTAT_SCREEN_SLEEP_SECONDS", "10800"))
+SCREEN_WAKE_INPUT_BLOCK_SECONDS = float(os.environ.get("SMART_THERMOSTAT_SCREEN_WAKE_BLOCK_SECONDS", "1.0"))
+SCREEN_SLEEP_OFF_COMMAND = os.environ.get("SMART_THERMOSTAT_SCREEN_OFF_COMMAND", "xset dpms force off")
+SCREEN_SLEEP_ON_COMMAND = os.environ.get("SMART_THERMOSTAT_SCREEN_ON_COMMAND", "xset dpms force on")
+
 
 def audio_ui_config(config: dict | None) -> dict:
     cfg = config if isinstance(config, dict) else {}
@@ -936,6 +943,73 @@ class ScreenLockButton(QAbstractButton):
         p.setFont(self.font())
         p.setPen(txt)
         p.drawText(QRectF(48, 0, r.width() - 54, r.height()), Qt.AlignVCenter | Qt.AlignLeft, label)
+
+
+class SleepButton(QAbstractButton):
+    """Floating bottom-right display sleep control."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedSize(58, 58)
+        self.setToolTip("Sleep display")
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self.rect().contains(event.pos()):
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
+        r = QRectF(self.rect()).adjusted(1.5, 1.5, -1.5, -1.5)
+
+        g = QLinearGradient(r.topLeft(), r.bottomRight())
+        g.setColorAt(0.0, QColor(38, 58, 91, 235))
+        g.setColorAt(0.54, QColor(20, 31, 55, 230))
+        g.setColorAt(1.0, QColor(9, 14, 27, 238))
+        p.setBrush(QBrush(g))
+        p.setPen(QPen(QColor(126, 171, 255, 118), 1.35))
+        p.drawRoundedRect(r, 20, 20)
+
+        glow = QRadialGradient(r.center(), 34)
+        glow.setColorAt(0.0, QColor(120, 170, 255, 72))
+        glow.setColorAt(0.68, QColor(80, 140, 255, 18))
+        glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.fillRect(self.rect(), glow)
+
+        # Sleek crescent-moon icon. Draw a light circle, then cut it with the
+        # button background so it reads as sleep without using a plain letter.
+        cx = r.center().x() - 1
+        cy = r.center().y() - 1
+        moon_color = QColor(235, 244, 255, 232)
+        cut_color = QColor(18, 29, 52, 255)
+        p.setPen(Qt.NoPen)
+        p.setBrush(moon_color)
+        p.drawEllipse(QRectF(cx - 12, cy - 14, 28, 28))
+        p.setBrush(cut_color)
+        p.drawEllipse(QRectF(cx - 3, cy - 17, 28, 31))
+
+        p.setBrush(QColor(114, 170, 255, 190))
+        p.drawEllipse(QRectF(cx + 13, cy - 16, 3.6, 3.6))
+        p.drawEllipse(QRectF(cx + 18, cy + 1, 2.8, 2.8))
+
+
+class ScreenSleepOverlay(QWidget):
+    """Black touch shield shown while the appliance display is asleep/waking."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setAttribute(Qt.WA_AcceptTouchEvents, True)
+        self.setMouseTracking(True)
+        self.setStyleSheet("background:#000000;")
+        self.hide()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.fillRect(self.rect(), QColor(0, 0, 0))
+
 
 
 class Header(QWidget):
@@ -9617,6 +9691,12 @@ class MainWindow(Background):
         self.setMinimumSize(1000, 620)
         self.toast = StatusToast(self)
         self.navigation_locked = False
+        self._display_sleeping = False
+        self._display_wake_block_until = 0.0
+        self._last_user_activity_at = time.monotonic()
+        self.sleep_overlay = ScreenSleepOverlay(self)
+        self.sleep_button = SleepButton(self)
+        self.sleep_button.clicked.connect(lambda: self.enter_display_sleep(manual=True))
         self.header = Header()
         self.stack = QStackedWidget()
         self.pages: dict[str, Page] = {
@@ -9652,7 +9732,6 @@ class MainWindow(Background):
         self._last_poll_by_page: dict[str, float] = {}
         self._poll_busy = False
         self._last_page_change_at = time.monotonic()
-        self._last_user_activity_at = time.monotonic()
         self._last_auto_nav_at = 0.0
         self._last_auto_nav_audio_poll_at = 0.0
         self._auto_nav_audio_poll_running = False
@@ -9669,6 +9748,9 @@ class MainWindow(Background):
         self.auto_nav_timer = QTimer(self)
         self.auto_nav_timer.timeout.connect(self.check_auto_navigation)
         self.auto_nav_timer.start(1000)
+        self.screen_sleep_timer = QTimer(self)
+        self.screen_sleep_timer.timeout.connect(self.check_display_sleep_idle)
+        self.screen_sleep_timer.start(30000)
         app = QApplication.instance()
         if app is not None:
             app.installEventFilter(self)
@@ -9686,6 +9768,7 @@ class MainWindow(Background):
                 pass
             self.sync_runtime_only()
             self.sync_visible_page(self.current_name)
+            self.position_sleep_controls()
             self.toast.show_message("Native panel ready")
         except Exception as exc:
             self.toast.show_message(f"Startup problem: {exc}", 6000)
@@ -9694,22 +9777,118 @@ class MainWindow(Background):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self.position_sleep_controls()
         if self.toast.isVisible():
             self.toast.move((self.width() - self.toast.width()) // 2, self.height() - self.toast.height() - 28)
 
+    def position_sleep_controls(self):
+        try:
+            if hasattr(self, "sleep_overlay"):
+                self.sleep_overlay.setGeometry(self.rect())
+                if self.sleep_overlay.isVisible():
+                    self.sleep_overlay.raise_()
+            if hasattr(self, "sleep_button"):
+                margin = 22
+                self.sleep_button.move(max(0, self.width() - self.sleep_button.width() - margin), max(0, self.height() - self.sleep_button.height() - margin))
+                if not getattr(self, "_display_sleeping", False):
+                    self.sleep_button.raise_()
+        except Exception:
+            pass
+
+    def display_input_event_types(self) -> set:
+        return {
+            QEvent.MouseButtonPress,
+            QEvent.MouseButtonRelease,
+            QEvent.MouseButtonDblClick,
+            QEvent.TouchBegin,
+            QEvent.TouchUpdate,
+            QEvent.TouchEnd,
+            QEvent.KeyPress,
+            QEvent.Wheel,
+        }
+
+    def display_activity_event_types(self) -> set:
+        return {
+            QEvent.MouseButtonPress,
+            QEvent.MouseButtonDblClick,
+            QEvent.TouchBegin,
+            QEvent.KeyPress,
+            QEvent.Wheel,
+        }
+
     def eventFilter(self, obj, event):
         try:
-            if event.type() in {
-                QEvent.MouseButtonPress,
-                QEvent.MouseButtonDblClick,
-                QEvent.TouchBegin,
-                QEvent.KeyPress,
-                QEvent.Wheel,
-            }:
-                self._last_user_activity_at = time.monotonic()
+            event_type = event.type()
+            now = time.monotonic()
+            if event_type in self.display_input_event_types():
+                if getattr(self, "_display_sleeping", False):
+                    self.wake_display_screen()
+                    return True
+                if now < getattr(self, "_display_wake_block_until", 0.0):
+                    return True
+                if event_type in self.display_activity_event_types():
+                    self._last_user_activity_at = now
         except Exception:
             pass
         return super().eventFilter(obj, event)
+
+    def _run_display_power_command(self, command: str):
+        command = str(command or "").strip()
+        if not command:
+            return
+
+        def worker():
+            try:
+                subprocess.run(command, shell=True, check=False, timeout=2)
+            except Exception as exc:
+                try:
+                    print(f"Display power command failed: {exc}", flush=True)
+                except Exception:
+                    pass
+
+        threading.Thread(target=worker, name="screen-power-command", daemon=True).start()
+
+    def enter_display_sleep(self, manual: bool = False):
+        if getattr(self, "_display_sleeping", False):
+            return
+        self._display_sleeping = True
+        self._display_wake_block_until = 0.0
+        self.position_sleep_controls()
+        self.sleep_overlay.show()
+        self.sleep_overlay.raise_()
+        # Give Qt one paint cycle to place the black shield before DPMS turns the
+        # panel off. If DPMS is unsupported, the black shield still prevents burn-in
+        # and blocks accidental touches.
+        QTimer.singleShot(120, lambda: self._run_display_power_command(SCREEN_SLEEP_OFF_COMMAND))
+
+    def wake_display_screen(self):
+        if not getattr(self, "_display_sleeping", False):
+            return
+        self._display_sleeping = False
+        self._display_wake_block_until = time.monotonic() + SCREEN_WAKE_INPUT_BLOCK_SECONDS
+        self._last_user_activity_at = time.monotonic()
+        self._run_display_power_command(SCREEN_SLEEP_ON_COMMAND)
+        self.sleep_overlay.hide()
+        self.position_sleep_controls()
+        QTimer.singleShot(int(SCREEN_WAKE_INPUT_BLOCK_SECONDS * 1000), self.finish_display_wake)
+
+    def finish_display_wake(self):
+        self._display_wake_block_until = 0.0
+        self._last_user_activity_at = time.monotonic()
+        self.position_sleep_controls()
+
+    def check_display_sleep_idle(self):
+        try:
+            if getattr(self, "_display_sleeping", False):
+                return
+            if SCREEN_SLEEP_IDLE_SECONDS <= 0:
+                return
+            if QApplication.activeModalWidget() is not None:
+                return
+            if time.monotonic() - getattr(self, "_last_user_activity_at", time.monotonic()) >= SCREEN_SLEEP_IDLE_SECONDS:
+                self.enter_display_sleep(manual=False)
+        except Exception:
+            pass
 
     def audio_page_is_music_playing(self) -> bool:
         page = self.pages.get("Audio")
@@ -10329,6 +10508,7 @@ class MainWindow(Background):
         self.setGeometry(geo)
         self.move(geo.topLeft())
         self.resize(geo.size())
+        self.position_sleep_controls()
         try:
             print(f"Native UI geometry forced to {geo.width()}x{geo.height()} at {geo.x()},{geo.y()}", flush=True)
         except Exception:

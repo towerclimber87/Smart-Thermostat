@@ -25,10 +25,13 @@ export XDG_CACHE_HOME="$CACHE_DIR"
 export PYTHONPYCACHEPREFIX="$PYCACHE_DIR"
 export QT_LOGGING_RULES="${QT_LOGGING_RULES:-*.debug=false;qt.qpa.*=false}"
 
-# Keep appliance display awake.
+# Keep X from blanking the appliance display on its own, but leave DPMS
+# available so the native app can intentionally put the panel to sleep after
+# inactivity or from the on-screen sleep button.
 xset s off || true
-xset -dpms || true
 xset s noblank || true
+xset +dpms || true
+xset dpms 0 0 0 || true
 
 # Hide cursor. Touch still works.
 if command -v unclutter >/dev/null 2>&1; then
