@@ -259,6 +259,7 @@ SCREEN_SLEEP_IDLE_SECONDS = float(os.environ.get("SMART_THERMOSTAT_SCREEN_SLEEP_
 SCREEN_WAKE_INPUT_BLOCK_SECONDS = float(os.environ.get("SMART_THERMOSTAT_SCREEN_WAKE_BLOCK_SECONDS", "1.0"))
 SCREEN_SLEEP_OFF_COMMAND = os.environ.get("SMART_THERMOSTAT_SCREEN_OFF_COMMAND", "xset dpms force off")
 SCREEN_SLEEP_ON_COMMAND = os.environ.get("SMART_THERMOSTAT_SCREEN_ON_COMMAND", "xset dpms force on")
+ALARM_STATE_POLL_SECONDS = float(os.environ.get("SMART_THERMOSTAT_ALARM_POLL_SECONDS", "30"))
 
 
 def audio_ui_config(config: dict | None) -> dict:
@@ -1163,8 +1164,8 @@ class AppState:
         if isinstance(thermo, dict):
             thermo["schedules"] = copy.deepcopy(schedules)
 
-    def refresh_alarm_state(self):
-        """Read the current Alarmo/HA alarm state instead of trusting saved config."""
+    def fetch_alarm_state(self):
+        """Fetch the current Alarmo/HA alarm state without touching widgets."""
         ha = self.ha()
         entity = ha.get("alarmEntity") or {}
         if not isinstance(entity, dict):
@@ -1176,9 +1177,24 @@ class AppState:
         alarms = data.get("alarms") or []
         if not alarms:
             return None
-        fresh = alarms[0]
+        return alarms[0]
+
+    def apply_alarm_state(self, fresh: dict | None):
+        """Store a freshly fetched alarm state back into panel config."""
+        if not isinstance(fresh, dict) or not fresh:
+            return None
+        ha = self.ha()
+        entity = ha.get("alarmEntity") or {}
+        if not isinstance(entity, dict):
+            entity = {}
         entity.update(fresh)
         ha["alarmEntity"] = entity
+        return entity
+
+    def refresh_alarm_state(self):
+        """Read the current Alarmo/HA alarm state instead of trusting saved config."""
+        fresh = self.fetch_alarm_state()
+        self.apply_alarm_state(fresh)
         return fresh
 
     def save_config(self):
@@ -4037,8 +4053,30 @@ class ThermostatScreen(Page):
             self.requestToast.emit(f"Alarm {action.replace('_', ' ')} sent")
             self.sync(self.s.config, self.s.thermostat)
         dlg.actionDone.connect(applied)
-        dlg.exec_()
+        self._alarm_dialog = dlg
+        try:
+            dlg.exec_()
+        finally:
+            if getattr(self, "_alarm_dialog", None) is dlg:
+                self._alarm_dialog = None
 
+    def apply_alarm_state_refresh(self, fresh: dict | None):
+        """Apply a Home Assistant-initiated alarm state change to visible controls."""
+        if not isinstance(fresh, dict) or not fresh:
+            return
+        ha = self.s.ha()
+        entity = ha.get("alarmEntity") or {}
+        if not isinstance(entity, dict):
+            entity = {}
+        entity.update(fresh)
+        ha["alarmEntity"] = entity
+        state = str(entity.get("state") or "disarmed")
+        self.alarm_card.setValue(state.upper())
+        self.alarm_card.setAlarmState(state)
+        dlg = getattr(self, "_alarm_dialog", None)
+        if dlg is not None and dlg.isVisible() and not getattr(dlg, "_alarm_action_running", False):
+            dlg.entity.update(entity)
+            dlg.render()
 
     def _floating_button_style(self, active: bool = False) -> str:
         if active:
@@ -9682,6 +9720,7 @@ class AlarmControlDialog(QDialog):
 
 class MainWindow(Background):
     statusRefreshCompleted = pyqtSignal(object)
+    alarmRefreshCompleted = pyqtSignal(object)
 
     def __init__(self):
         super().__init__()
@@ -9741,10 +9780,15 @@ class MainWindow(Background):
         self._last_audio_manual_leave_at = -AUDIO_IDLE_SECONDS
         self._ignore_info_until = 0.0
         self._status_refresh_running = False
+        self._alarm_refresh_running = False
         self.statusRefreshCompleted.connect(self._handle_status_refresh_completed)
+        self.alarmRefreshCompleted.connect(self._handle_alarm_refresh_completed)
         self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self.refresh_status)
         self.status_timer.start(4000)
+        self.alarm_timer = QTimer(self)
+        self.alarm_timer.timeout.connect(self.refresh_alarm_state)
+        self.alarm_timer.start(int(max(5.0, ALARM_STATE_POLL_SECONDS) * 1000))
         self.auto_nav_timer = QTimer(self)
         self.auto_nav_timer.timeout.connect(self.check_auto_navigation)
         self.auto_nav_timer.start(1000)
@@ -10073,6 +10117,46 @@ class MainWindow(Background):
                 page.sync(self.s.config, self.s.thermostat)
         except Exception:
             pass
+
+    def configured_alarm_entity_id(self) -> str:
+        try:
+            ha = self.s.ha()
+            entity = ha.get("alarmEntity") or {}
+            if not isinstance(entity, dict):
+                return ""
+            return str(entity.get("entityId") or entity.get("entity_id") or "").strip()
+        except Exception:
+            return ""
+
+    def refresh_alarm_state(self):
+        """Background poll for Home Assistant-initiated Alarmo state changes."""
+        if getattr(self, "_alarm_refresh_running", False):
+            return
+        if not self.configured_alarm_entity_id():
+            return
+        self._alarm_refresh_running = True
+
+        def worker():
+            try:
+                fresh = self.s.fetch_alarm_state()
+                self.alarmRefreshCompleted.emit({"alarm": fresh, "error": None})
+            except Exception as exc:
+                self.alarmRefreshCompleted.emit({"alarm": None, "error": str(exc)})
+
+        threading.Thread(target=worker, name="alarm-state-refresh", daemon=True).start()
+
+    def _handle_alarm_refresh_completed(self, info: object):
+        self._alarm_refresh_running = False
+        data = info if isinstance(info, dict) else {}
+        fresh = data.get("alarm")
+        if not isinstance(fresh, dict) or not fresh:
+            return
+        self.s.apply_alarm_state(fresh)
+        page = self.pages.get("Thermostat")
+        if isinstance(page, ThermostatScreen):
+            page.apply_alarm_state_refresh(fresh)
+        if self.current_name == "Thermostat":
+            self.sync_visible_page("Thermostat")
 
     def refresh_status(self):
         if getattr(self, "_status_refresh_running", False):
