@@ -60,6 +60,7 @@ USB_MOUNT_ROOTS = tuple(
     if x.strip()
 )
 MANUAL_CHANGEOVER_LOCKOUT_MINUTES = 10
+PANEL_COMMAND_GRACE_MS = int(float(os.environ.get("SMART_THERMOSTAT_PANEL_COMMAND_GRACE_SECONDS", "18") or "18") * 1000)
 CONFIG_WEB_PORTAL_TIMEOUT_SECONDS = max(60.0, float(os.environ.get("SMART_THERMOSTAT_CONFIG_PORTAL_TIMEOUT_SECONDS", "900") or "900"))
 _CONFIG_WEB_PORTAL_LOCK = threading.RLock()
 _CONFIG_WEB_PORTAL_ENABLED_UNTIL = 0.0
@@ -150,6 +151,10 @@ DEFAULT_THERMOSTAT = {
     "virtualTempOverrideUntil": 0,
     "targetTemp": 70,
     "lastComfortTarget": 70,
+    "lastPanelTargetTemp": 0,
+    "lastPanelTargetRequestAt": 0,
+    "lastPanelModeRequestMode": "",
+    "lastPanelModeRequestAt": 0,
     "mode": "cool",
     "fan": "auto",
     "away": False,
@@ -813,6 +818,9 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             ("virtualTempOverrideUntil", base.get("virtualTempOverrideUntil", 0), 0, None),
             ("targetTemp", base["targetTemp"], 40, 100),
             ("lastComfortTarget", base["lastComfortTarget"], 40, 100),
+            ("lastPanelTargetTemp", base.get("lastPanelTargetTemp", 0), 0, 130),
+            ("lastPanelTargetRequestAt", base.get("lastPanelTargetRequestAt", 0), 0, None),
+            ("lastPanelModeRequestAt", base.get("lastPanelModeRequestAt", 0), 0, None),
             # Match the values the native settings screen actually offers.
             # Otherwise the UI can show “saved” while the backend silently
             # clamps values like Heat Away 40 or Cool Away 100 back to older
@@ -877,6 +885,9 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
         if "lastManualChangeoverBypassMode" in source:
             bypass_mode = str(source.get("lastManualChangeoverBypassMode") or "").strip().lower()
             base["lastManualChangeoverBypassMode"] = bypass_mode if bypass_mode in {"", "heat", "cool"} else ""
+        if "lastPanelModeRequestMode" in source:
+            panel_mode = str(source.get("lastPanelModeRequestMode") or "").strip().lower()
+            base["lastPanelModeRequestMode"] = panel_mode if panel_mode in {"", "off", "heat", "cool"} else ""
         if "autoSwitchNotice" in source:
             base["autoSwitchNotice"] = _normalize_auto_switch_notice(source.get("autoSwitchNotice"))
         if "autoSwitchNoticeDismissed" in source:
@@ -1003,6 +1014,10 @@ THERMOSTAT_RUNTIME_KEYS = (
     "autoLockoutUntil",
     "manualPendingMode",
     "manualLockoutUntil",
+    "lastPanelTargetTemp",
+    "lastPanelTargetRequestAt",
+    "lastPanelModeRequestMode",
+    "lastPanelModeRequestAt",
     "lastHeatRunAt",
     "lastCoolRunAt",
     "equipmentLastHeatRunAt",
@@ -3454,6 +3469,7 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
         "externalHeatEntity": _normalize_external_air_entity(thermostat.get("externalHeatEntity")),
         "externalCoolEntity": _normalize_external_air_entity(thermostat.get("externalCoolEntity")),
         "relays": {"fan": outputs["fan"], "heat": outputs["heat"], "cool": outputs["cool"]},
+        "outputs": outputs,
         "serial": serial,
         "unique_id": serial,
         "id": serial,
@@ -3566,6 +3582,39 @@ def _schedule_thermostat_outputs_apply(thermostat: dict, *, reason: str = "contr
 THERMOSTAT_COMFORT_TARGET_KEYS = ("targetTemp", "target_temperature", "temperature", "lastComfortTarget")
 
 
+def _incoming_source(incoming: dict | None, *keys: str) -> str:
+    if not isinstance(incoming, dict):
+        return ""
+    candidates = list(keys) or ["source"]
+    candidates.extend(["source", "commandSource", "command_source", "clientSource", "client_source"])
+    for key in candidates:
+        value = str(incoming.get(key) or "").strip().lower()
+        if value:
+            return value
+    return ""
+
+
+def _source_is_panel(source: str) -> bool:
+    return str(source or "").strip().lower() in {"panel", "wall-panel", "wall_panel", "touchscreen", "native", "local"}
+
+
+def _target_value_from_incoming(incoming: dict) -> float | None:
+    for key in THERMOSTAT_COMFORT_TARGET_KEYS:
+        if key in incoming:
+            return _number(incoming.get(key), 0, 0, 130)
+    return None
+
+
+def _strip_mode_changes(incoming: dict) -> dict:
+    return {k: v for k, v in incoming.items() if k not in {"mode", "hvac_mode", "hvacMode"}}
+
+
+def _panel_command_guard_active(existing: dict, at_key: str, *, now_ms: int | None = None) -> bool:
+    now = int(now_ms if now_ms is not None else time.time() * 1000)
+    at = _number(existing.get(at_key), 0, 0, None)
+    return at > 0 and now - at <= PANEL_COMMAND_GRACE_MS
+
+
 def _incoming_explicitly_leaves_away(incoming: dict | None) -> bool:
     if not isinstance(incoming, dict):
         return False
@@ -3627,13 +3676,33 @@ def _handle_thermostat_update(payload: dict) -> dict:
 
     requested_mode_raw = incoming.get("mode", incoming.get("hvac_mode", incoming.get("hvacMode")))
     requested_mode = _normalize_mode(requested_mode_raw, "") if requested_mode_raw is not None else ""
-    mode_change_source = str(incoming.get("modeChangeSource") or incoming.get("mode_change_source") or "").strip().lower()
-    existing_manual_pending, existing_manual_until = _active_manual_changeover_pending(existing)
+    mode_change_source = _incoming_source(incoming, "modeChangeSource", "mode_change_source", "hvacModeChangeSource", "hvac_mode_change_source")
+    target_change_source = _incoming_source(incoming, "targetChangeSource", "target_change_source", "temperatureChangeSource", "temperature_change_source")
+    now_ms = int(time.time() * 1000)
+
+    # The wall panel is the authority for very recent touches. Home Assistant can
+    # echo old mode/setpoint values for a few seconds when it reconnects or when
+    # its climate entity briefly goes unavailable. Those stale echoes used to
+    # clear bypass countdowns or snap the set temperature backward, then forward.
+    if requested_mode in {"off", "heat", "cool"} and not _source_is_panel(mode_change_source):
+        panel_mode = str(existing.get("lastPanelModeRequestMode") or "").strip().lower()
+        if panel_mode and requested_mode != panel_mode and _panel_command_guard_active(existing, "lastPanelModeRequestAt", now_ms=now_ms):
+            incoming = _strip_mode_changes(dict(incoming))
+            requested_mode = ""
+
+    incoming_target = _target_value_from_incoming(incoming)
+    if incoming_target is not None and not _source_is_panel(target_change_source):
+        panel_target_at = _number(existing.get("lastPanelTargetRequestAt"), 0, 0, None)
+        panel_target = _number(existing.get("lastPanelTargetTemp"), existing.get("targetTemp", 70), 0, 130)
+        if panel_target_at > 0 and now_ms - panel_target_at <= PANEL_COMMAND_GRACE_MS and abs(incoming_target - panel_target) >= 0.5:
+            incoming = _strip_comfort_target_changes(dict(incoming))
+
+    existing_manual_pending, existing_manual_until = _active_manual_changeover_pending(existing, now_ms=now_ms)
     if (
         existing_manual_pending in {"heat", "cool"}
         and requested_mode in {"heat", "cool"}
         and requested_mode != existing_manual_pending
-        and mode_change_source != "panel"
+        and not _source_is_panel(mode_change_source)
         and bypass_mode not in {"heat", "cool"}
     ):
         # A just-tapped panel mode owns the compressor changeover window.
@@ -3695,6 +3764,15 @@ def _handle_thermostat_update(payload: dict) -> dict:
     was_away = bool(existing.get("away"))
     merged = _merge_thermostat_state(existing, incoming)
     merged = _apply_away_setpoint_logic(merged, was_away=was_away)
+
+    if _source_is_panel(mode_change_source) and requested_mode in {"off", "heat", "cool"}:
+        merged["lastPanelModeRequestMode"] = requested_mode
+        merged["lastPanelModeRequestAt"] = now_ms
+    if _source_is_panel(target_change_source):
+        panel_target = _target_value_from_incoming(incoming)
+        if panel_target is not None:
+            merged["lastPanelTargetTemp"] = panel_target
+            merged["lastPanelTargetRequestAt"] = now_ms
 
     if requested_mode in {"heat", "cool"}:
         # Manual / physical mode changes always win, whether they came from the

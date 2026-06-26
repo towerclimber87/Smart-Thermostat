@@ -1112,7 +1112,7 @@ class AppState:
         self.config = record.get("config") or self.config
         return record
 
-    def set_target_override(self, value: float, hold_seconds: float = 8.0):
+    def set_target_override(self, value: float, hold_seconds: float = 14.0):
         """Hold a locally selected setpoint against stale status refreshes."""
         try:
             val = int(round(float(value)))
@@ -1129,7 +1129,7 @@ class AppState:
         self._target_override_value = None
         self._target_override_until = 0.0
 
-    def set_mode_override(self, mode: str, *, away: bool = False, hold_seconds: float = 8.0):
+    def set_mode_override(self, mode: str, *, away: bool = False, hold_seconds: float = 14.0):
         """Hold a just-requested local mode against one stale status refresh."""
         mode = str(mode or "").strip().lower()
         if mode not in {"off", "heat", "cool", "away"}:
@@ -2142,7 +2142,7 @@ class ScheduleManagerDialog(QDialog):
         try:
             val = int(float(target))
             self.s.set_target_override(val)
-            self.s.update_thermostat({"targetTemp": val, "lastComfortTarget": val})
+            self.s.update_thermostat({"targetTemp": val, "lastComfortTarget": val, "targetChangeSource": "panel"})
             self.changed.emit()
         except Exception as exc:
             self.s.clear_target_override()
@@ -3025,6 +3025,24 @@ class ThermostatScreen(Page):
             return ""
         return f" ({self.format_status_remaining((until - now_ms) / 1000)})"
 
+    def pending_equipment_status_text(self, t: dict | None = None, relays: dict | None = None) -> str:
+        """Return visible Heat/Cool wait text when equipment is intentionally held off."""
+        t = t or self.thermostat_view()
+        outputs = t.get("outputs") if isinstance(t.get("outputs"), dict) else {}
+        now_ms = time.time() * 1000
+
+        pending = str(t.get("manualPendingMode") or outputs.get("pendingMode") or "").strip().lower()
+        until = self.safe_float(t.get("manualLockoutUntil") or outputs.get("manualLockoutUntil"), 0.0)
+        if pending in {"heat", "cool"} and until > now_ms:
+            return f"{pending.capitalize()} Delay ({self.format_status_remaining((until - now_ms) / 1000)})"
+
+        reason = str(t.get("minimumCycleReason") or outputs.get("minimumCycleReason") or "").strip().lower()
+        mode = str(t.get("minimumCycleMode") or outputs.get("minimumCycleMode") or "").strip().lower()
+        until = self.safe_float(t.get("minimumCycleUntil") or outputs.get("minimumCycleUntil"), 0.0)
+        if reason == "minimum-off" and mode in {"heat", "cool"} and until > now_ms:
+            return f"{mode.capitalize()} Wait ({self.format_status_remaining((until - now_ms) / 1000)})"
+        return ""
+
     def update_status_badge(self):
         if not hasattr(self, "status_badge"):
             return
@@ -3040,10 +3058,14 @@ class ThermostatScreen(Page):
             equipment = "Cooling" + self.minimum_runtime_status_suffix(t, relays)
         elif relays.get("heat"):
             equipment = "Heating" + self.minimum_runtime_status_suffix(t, relays)
-        elif t.get("coolingFanHold") or t.get("coolFanHoldUntil"):
-            equipment = "Idle • Fan Hold"
-        elif relays.get("fan"):
-            equipment = "Fan"
+        else:
+            pending_text = self.pending_equipment_status_text(t, relays)
+            if pending_text:
+                equipment = pending_text
+            elif t.get("coolingFanHold") or t.get("coolFanHoldUntil"):
+                equipment = "Idle • Fan Hold"
+            elif relays.get("fan"):
+                equipment = "Fan"
         mode_label = "Away" if away else mode.capitalize()
         text = f"• {mode_label} • {equipment}"
         if self.status_badge.text() != text:
@@ -3268,6 +3290,7 @@ class ThermostatScreen(Page):
         try:
             self.s.update_thermostat({
                 "mode": from_mode,
+                "modeChangeSource": "panel",
                 "away": False,
                 "autoSwitchNotice": {"active": False, "source": "", "fromMode": "", "toMode": "", "switchTemp": 0, "outdoorTemp": 0, "coolTarget": 0, "heatTarget": 0, "createdAt": 0},
                 "autoSwitchHold": {"active": True, "source": "manual", "mode": from_mode, "until": int(time.time() * 1000) + 600000, "reason": "revert"},
@@ -3298,6 +3321,7 @@ class ThermostatScreen(Page):
                 changes["autoActiveMode"] = pending
             else:
                 changes["mode"] = pending
+                changes["modeChangeSource"] = "panel"
             self.s.update_thermostat(changes)
             self.sync(self.s.config, self.s.thermostat)
         except Exception as exc:
@@ -3489,7 +3513,7 @@ class ThermostatScreen(Page):
 
         self.run_async(
             "schedule-run",
-            lambda: self.s.api.thermostat_update({"targetTemp": val, "lastComfortTarget": val}),
+            lambda: self.s.api.thermostat_update({"targetTemp": val, "lastComfortTarget": val, "targetChangeSource": "panel"}),
             done,
             lambda err: (self.s.clear_target_override(), self.requestToast.emit(f"Schedule failed: {err}")),
         )
@@ -3557,11 +3581,15 @@ class ThermostatScreen(Page):
             action.triggered.connect(lambda checked=False, f=fan: self.set_fan(f))
         menu.exec_(self.fan_status_button.mapToGlobal(self.fan_status_button.rect().topLeft()))
 
-    def predicted_manual_lockout_until(self, mode: str) -> int:
+    def predicted_manual_lockout_until(self, mode: str, snapshot: dict | None = None) -> int:
         mode = str(mode or "").strip().lower()
         if mode not in {"heat", "cool"}:
             return 0
-        t = self.thermostat_view()
+        # Use the pre-tap thermostat snapshot.  The button handler updates the
+        # local selected mode immediately for responsiveness; if prediction reads
+        # after that mutation, it can no longer see that the opposite side was
+        # active/calling and the bypass countdown is skipped intermittently.
+        t = copy.deepcopy(snapshot) if isinstance(snapshot, dict) else self.thermostat_view()
         opposite = "cool" if mode == "heat" else "heat"
         delay_minutes = self.safe_float(t.get("manualChangeoverLockoutMinutes"), 10.0)
         if delay_minutes <= 0:
@@ -3587,12 +3615,14 @@ class ThermostatScreen(Page):
         return until if until > now_ms else 0
 
     def set_mode(self, mode: str):
+        mode = str(mode or "").strip().lower()
+        before_tap = copy.deepcopy(self.thermostat_view())
         if mode == "away":
-            going_away = not bool(self.thermostat.get("away"))
+            going_away = not bool(before_tap.get("away"))
             changes = {"away": going_away, "awaySource": "manual" if going_away else ""}
-            resume_mode = str(self.thermostat_view().get("mode") or "cool").lower()
+            resume_mode = str(before_tap.get("mode") or "cool").lower()
             if resume_mode == "auto":
-                resume_mode = str(self.thermostat_view().get("autoActiveMode") or self.thermostat_view().get("activeMode") or "cool").lower()
+                resume_mode = str(before_tap.get("autoActiveMode") or before_tap.get("activeMode") or "cool").lower()
             if resume_mode not in {"heat", "cool", "off"}:
                 resume_mode = "cool"
             self.s.set_mode_override("away" if going_away else resume_mode, away=going_away)
@@ -3600,7 +3630,7 @@ class ThermostatScreen(Page):
             self.s.thermostat["awaySource"] = changes["awaySource"]
         else:
             # Physical/manual button taps should visibly win immediately.
-            changes = {"mode": mode, "away": False, "awaySource": ""}
+            changes = {"mode": mode, "away": False, "awaySource": "", "modeChangeSource": "panel"}
             self.s.set_mode_override(mode, away=False)
             self.s.thermostat["mode"] = mode
             self.s.thermostat["away"] = False
@@ -3610,7 +3640,7 @@ class ThermostatScreen(Page):
                 # the API round trip. The backend repeats the same calculation
                 # from the authoritative runtime state and corrects this local
                 # prediction on the next response.
-                until = self.predicted_manual_lockout_until(mode)
+                until = self.predicted_manual_lockout_until(mode, before_tap)
                 self.s.thermostat["autoSwitchNotice"] = {"active": False, "source": "", "fromMode": "", "toMode": "", "switchTemp": 0, "outdoorTemp": 0, "coolTarget": 0, "heatTarget": 0, "createdAt": 0}
                 if until > int(time.time() * 1000):
                     self.s.thermostat["manualPendingMode"] = mode
@@ -3742,7 +3772,7 @@ class ThermostatScreen(Page):
 
         self.run_async(
             "thermostat-target",
-            lambda: self.s.api.thermostat_update({"targetTemp": val, "lastComfortTarget": val}),
+            lambda: self.s.api.thermostat_update({"targetTemp": val, "lastComfortTarget": val, "targetChangeSource": "panel"}),
             done,
             lambda err: (self.s.clear_target_override(), self.requestToast.emit(f"Set temp failed: {err}")),
         )
