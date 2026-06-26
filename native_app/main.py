@@ -259,6 +259,16 @@ SCREEN_SLEEP_IDLE_SECONDS = float(os.environ.get("SMART_THERMOSTAT_SCREEN_SLEEP_
 SCREEN_WAKE_INPUT_BLOCK_SECONDS = float(os.environ.get("SMART_THERMOSTAT_SCREEN_WAKE_BLOCK_SECONDS", "1.0"))
 SCREEN_SLEEP_OFF_COMMAND = os.environ.get("SMART_THERMOSTAT_SCREEN_OFF_COMMAND", "xset dpms force off")
 SCREEN_SLEEP_ON_COMMAND = os.environ.get("SMART_THERMOSTAT_SCREEN_ON_COMMAND", "xset dpms force on")
+SCREEN_BRIGHTNESS_EDGE_ENABLED = str(os.environ.get("SMART_THERMOSTAT_SCREEN_BRIGHTNESS_EDGE", "1")).strip().lower() not in {"0", "false", "no", "off"}
+SCREEN_BRIGHTNESS_EDGE_WIDTH_PX = int(os.environ.get("SMART_THERMOSTAT_SCREEN_BRIGHTNESS_EDGE_WIDTH_PX", "72"))
+SCREEN_BRIGHTNESS_PIXELS_PER_PERCENT = float(os.environ.get("SMART_THERMOSTAT_SCREEN_BRIGHTNESS_PIXELS_PER_PERCENT", "7.0"))
+SCREEN_BRIGHTNESS_MIN_PERCENT = int(os.environ.get("SMART_THERMOSTAT_SCREEN_BRIGHTNESS_MIN_PERCENT", "8"))
+SCREEN_BRIGHTNESS_MAX_PERCENT = int(os.environ.get("SMART_THERMOSTAT_SCREEN_BRIGHTNESS_MAX_PERCENT", "100"))
+SCREEN_BRIGHTNESS_DEFAULT_PERCENT = int(os.environ.get("SMART_THERMOSTAT_SCREEN_BRIGHTNESS_DEFAULT_PERCENT", "100"))
+SCREEN_BRIGHTNESS_APPLY_DELAY_MS = int(os.environ.get("SMART_THERMOSTAT_SCREEN_BRIGHTNESS_APPLY_DELAY_MS", "80"))
+SCREEN_BRIGHTNESS_DISPLAY_OUTPUT = os.environ.get("SMART_THERMOSTAT_DISPLAY_OUTPUT", "DSI-1")
+SCREEN_BRIGHTNESS_BACKLIGHT_PATH = os.environ.get("SMART_THERMOSTAT_SCREEN_BACKLIGHT_PATH", "").strip()
+SCREEN_BRIGHTNESS_COMMAND = os.environ.get("SMART_THERMOSTAT_SCREEN_BRIGHTNESS_COMMAND", "").strip()
 ALARM_STATE_POLL_SECONDS = float(os.environ.get("SMART_THERMOSTAT_ALARM_POLL_SECONDS", "30"))
 
 
@@ -9806,6 +9816,7 @@ class MainWindow(Background):
     statusRefreshCompleted = pyqtSignal(object)
     alarmRefreshCompleted = pyqtSignal(object)
     mainAsyncCompleted = pyqtSignal(object)
+    screenBrightnessCompleted = pyqtSignal(object)
 
     def __init__(self):
         super().__init__()
@@ -9849,6 +9860,19 @@ class MainWindow(Background):
         self.header.set_page(self.current_name)
         self.header.set_locked(self.navigation_locked)
         self.stack.setCurrentWidget(self.pages[self.current_name])
+
+        self._brightness_drag_active = False
+        self._brightness_drag_start_y = 0.0
+        self._brightness_drag_start_pct = int(clamp(SCREEN_BRIGHTNESS_DEFAULT_PERCENT, SCREEN_BRIGHTNESS_MIN_PERCENT, SCREEN_BRIGHTNESS_MAX_PERCENT))
+        self._brightness_drag_moved = False
+        self._last_brightness_toast_at = 0.0
+        self._screen_brightness_pct = self.read_screen_brightness_percent()
+        self._screen_brightness_pending_pct: int | None = None
+        self._screen_brightness_inflight = False
+        self.screen_brightness_timer = QTimer(self)
+        self.screen_brightness_timer.setSingleShot(True)
+        self.screen_brightness_timer.timeout.connect(self.flush_screen_brightness)
+        self.screenBrightnessCompleted.connect(self.handle_screen_brightness_completed)
 
         self.poll_timer = QTimer(self)
         self.poll_timer.timeout.connect(self.poll)
@@ -9947,6 +9971,104 @@ class MainWindow(Background):
             QEvent.Wheel,
         }
 
+    def edge_brightness_event_types(self) -> set:
+        return {
+            QEvent.MouseButtonPress,
+            QEvent.MouseMove,
+            QEvent.MouseButtonRelease,
+            QEvent.TouchBegin,
+            QEvent.TouchUpdate,
+            QEvent.TouchEnd,
+            QEvent.TouchCancel,
+        }
+
+    def _event_point_in_window(self, event) -> QPoint | None:
+        try:
+            if event.type() in {QEvent.MouseButtonPress, QEvent.MouseMove, QEvent.MouseButtonRelease}:
+                if hasattr(event, "globalPos"):
+                    return self.mapFromGlobal(event.globalPos())
+                if hasattr(event, "pos"):
+                    point = event.pos()
+                    return QPoint(int(point.x()), int(point.y()))
+            if event.type() in {QEvent.TouchBegin, QEvent.TouchUpdate, QEvent.TouchEnd, QEvent.TouchCancel}:
+                points = []
+                try:
+                    points = list(event.touchPoints())
+                except Exception:
+                    points = []
+                if not points:
+                    try:
+                        points = list(event.changedTouchPoints())
+                    except Exception:
+                        points = []
+                if not points:
+                    return None
+                point = points[0]
+                screen_pos = None
+                try:
+                    screen_pos = point.screenPos()
+                except Exception:
+                    screen_pos = None
+                if screen_pos is not None:
+                    return self.mapFromGlobal(QPoint(int(screen_pos.x()), int(screen_pos.y())))
+                try:
+                    pos = point.pos()
+                    return QPoint(int(pos.x()), int(pos.y()))
+                except Exception:
+                    return None
+        except Exception:
+            return None
+        return None
+
+    def _brightness_edge_width(self) -> int:
+        return int(clamp(SCREEN_BRIGHTNESS_EDGE_WIDTH_PX, 24, max(24, min(160, self.width() // 5))))
+
+    def handle_edge_brightness_event(self, event_type, event) -> bool:
+        if not SCREEN_BRIGHTNESS_EDGE_ENABLED:
+            return False
+        if QApplication.activePopupWidget() is not None:
+            return False
+        point = self._event_point_in_window(event)
+        if point is None:
+            if event_type in {QEvent.TouchCancel, QEvent.TouchEnd, QEvent.MouseButtonRelease}:
+                was_active = bool(getattr(self, "_brightness_drag_active", False))
+                self._brightness_drag_active = False
+                return was_active
+            return False
+        x = int(point.x())
+        y = int(point.y())
+        if event_type in {QEvent.MouseButtonPress, QEvent.TouchBegin}:
+            if x < 0 or y < 0 or x > self.width() or y > self.height():
+                return False
+            if x > self._brightness_edge_width():
+                self._brightness_drag_active = False
+                return False
+            self._brightness_drag_active = True
+            self._brightness_drag_start_y = float(y)
+            self._brightness_drag_start_pct = int(clamp(getattr(self, "_screen_brightness_pct", SCREEN_BRIGHTNESS_DEFAULT_PERCENT), SCREEN_BRIGHTNESS_MIN_PERCENT, SCREEN_BRIGHTNESS_MAX_PERCENT))
+            self._brightness_drag_moved = False
+            self._last_user_activity_at = time.monotonic()
+            return True
+        if event_type in {QEvent.MouseMove, QEvent.TouchUpdate}:
+            if not getattr(self, "_brightness_drag_active", False):
+                return False
+            pixels_per_percent = max(1.0, float(SCREEN_BRIGHTNESS_PIXELS_PER_PERCENT or 7.0))
+            delta_pct = int(round((float(getattr(self, "_brightness_drag_start_y", y)) - float(y)) / pixels_per_percent))
+            target = int(clamp(int(getattr(self, "_brightness_drag_start_pct", self._screen_brightness_pct)) + delta_pct, SCREEN_BRIGHTNESS_MIN_PERCENT, SCREEN_BRIGHTNESS_MAX_PERCENT))
+            if abs(float(y) - float(getattr(self, "_brightness_drag_start_y", y))) >= 3:
+                self._brightness_drag_moved = True
+            if target != getattr(self, "_screen_brightness_pct", None):
+                self.set_screen_brightness_percent(target, show_feedback=True)
+            self._last_user_activity_at = time.monotonic()
+            return True
+        if event_type in {QEvent.MouseButtonRelease, QEvent.TouchEnd, QEvent.TouchCancel}:
+            if not getattr(self, "_brightness_drag_active", False):
+                return False
+            self._brightness_drag_active = False
+            self._last_user_activity_at = time.monotonic()
+            return True
+        return False
+
     def eventFilter(self, obj, event):
         try:
             event_type = event.type()
@@ -9959,9 +10081,154 @@ class MainWindow(Background):
                     return True
                 if event_type in self.display_activity_event_types():
                     self._last_user_activity_at = now
+            if event_type in self.edge_brightness_event_types():
+                if getattr(self, "_display_sleeping", False):
+                    return False
+                if now < getattr(self, "_display_wake_block_until", 0.0):
+                    return True
+                if self.handle_edge_brightness_event(event_type, event):
+                    return True
         except Exception:
             pass
         return super().eventFilter(obj, event)
+
+    def find_screen_backlight_path(self) -> Path | None:
+        try:
+            if SCREEN_BRIGHTNESS_BACKLIGHT_PATH:
+                path = Path(SCREEN_BRIGHTNESS_BACKLIGHT_PATH)
+                if path.exists():
+                    return path
+            base = Path("/sys/class/backlight")
+            if not base.exists():
+                return None
+            candidates: list[tuple[int, Path]] = []
+            for item in base.iterdir():
+                brightness = item / "brightness"
+                max_brightness = item / "max_brightness"
+                if not brightness.exists() or not max_brightness.exists():
+                    continue
+                try:
+                    max_value = int(max_brightness.read_text().strip() or "0")
+                except Exception:
+                    max_value = 0
+                candidates.append((max_value, brightness))
+            if not candidates:
+                return None
+            candidates.sort(reverse=True, key=lambda pair: pair[0])
+            return candidates[0][1]
+        except Exception:
+            return None
+
+    def read_screen_brightness_percent(self) -> int:
+        default = int(clamp(SCREEN_BRIGHTNESS_DEFAULT_PERCENT, SCREEN_BRIGHTNESS_MIN_PERCENT, SCREEN_BRIGHTNESS_MAX_PERCENT))
+        path = self.find_screen_backlight_path()
+        if path is None:
+            return default
+        try:
+            raw = int(path.read_text().strip() or "0")
+            max_raw = int((path.parent / "max_brightness").read_text().strip() or "0")
+            if max_raw <= 0:
+                return default
+            pct = int(round((raw / max_raw) * 100.0))
+            return int(clamp(pct, SCREEN_BRIGHTNESS_MIN_PERCENT, SCREEN_BRIGHTNESS_MAX_PERCENT))
+        except Exception:
+            return default
+
+    def set_screen_brightness_percent(self, percent: int, show_feedback: bool = False):
+        pct = int(clamp(percent, SCREEN_BRIGHTNESS_MIN_PERCENT, SCREEN_BRIGHTNESS_MAX_PERCENT))
+        self._screen_brightness_pct = pct
+        self._screen_brightness_pending_pct = pct
+        if show_feedback:
+            self.maybe_show_brightness_feedback(pct)
+        if getattr(self, "_screen_brightness_inflight", False):
+            return
+        self.screen_brightness_timer.start(max(10, SCREEN_BRIGHTNESS_APPLY_DELAY_MS))
+
+    def maybe_show_brightness_feedback(self, pct: int):
+        now = time.monotonic()
+        if now - getattr(self, "_last_brightness_toast_at", 0.0) < 0.45:
+            return
+        self._last_brightness_toast_at = now
+        try:
+            self.toast.show_message(f"Screen brightness {pct}%", 900)
+        except Exception:
+            pass
+
+    def flush_screen_brightness(self):
+        if getattr(self, "_screen_brightness_inflight", False):
+            return
+        pct = self._screen_brightness_pending_pct
+        if pct is None:
+            return
+        self._screen_brightness_pending_pct = None
+        self._screen_brightness_inflight = True
+
+        def worker():
+            ok = False
+            detail = ""
+            try:
+                ok, detail = self.apply_screen_brightness_now(int(pct))
+            except Exception as exc:
+                detail = str(exc)
+            self.screenBrightnessCompleted.emit({"ok": ok, "detail": detail, "percent": int(pct)})
+
+        threading.Thread(target=worker, name="screen-brightness", daemon=True).start()
+
+    def handle_screen_brightness_completed(self, data: object):
+        self._screen_brightness_inflight = False
+        if self._screen_brightness_pending_pct is not None:
+            self.screen_brightness_timer.start(20)
+            return
+        info = data if isinstance(data, dict) else {}
+        if not info.get("ok"):
+            detail = str(info.get("detail") or "not supported").strip()
+            try:
+                print(f"Screen brightness apply failed: {detail}", flush=True)
+            except Exception:
+                pass
+
+    def apply_screen_brightness_now(self, percent: int) -> tuple[bool, str]:
+        pct = int(clamp(percent, SCREEN_BRIGHTNESS_MIN_PERCENT, SCREEN_BRIGHTNESS_MAX_PERCENT))
+        ratio = max(0.01, min(1.0, pct / 100.0))
+        if SCREEN_BRIGHTNESS_COMMAND:
+            command = SCREEN_BRIGHTNESS_COMMAND.format(percent=pct, ratio=f"{ratio:.3f}")
+            result = subprocess.run(command, shell=True, check=False, timeout=1.5)
+            if result.returncode == 0:
+                return True, "custom command"
+        path = self.find_screen_backlight_path()
+        if path is not None:
+            try:
+                max_raw = int((path.parent / "max_brightness").read_text().strip() or "0")
+                if max_raw > 0:
+                    raw = int(clamp(round(max_raw * ratio), 1, max_raw))
+                    path.write_text(f"{raw}\n")
+                    return True, str(path)
+            except Exception as exc:
+                last_error = str(exc)
+            else:
+                last_error = ""
+        else:
+            last_error = "no backlight device"
+        try:
+            env = os.environ.copy()
+            env.setdefault("DISPLAY", ":0")
+            result = subprocess.run(
+                ["xrandr", "--output", SCREEN_BRIGHTNESS_DISPLAY_OUTPUT, "--brightness", f"{ratio:.3f}"],
+                check=False,
+                timeout=1.5,
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            if result.returncode == 0:
+                return True, "xrandr"
+            stderr = (result.stderr or "").strip()
+            return False, stderr or last_error or f"xrandr exited {result.returncode}"
+        except FileNotFoundError:
+            return False, last_error or "xrandr not installed"
+        except Exception as exc:
+            return False, f"{last_error}; {exc}" if last_error else str(exc)
 
     def _run_display_power_command(self, command: str):
         command = str(command or "").strip()
@@ -10001,6 +10268,9 @@ class MainWindow(Background):
         self._run_display_power_command(SCREEN_SLEEP_ON_COMMAND)
         self.sleep_overlay.hide()
         self.position_sleep_controls()
+        # Some display stacks reset gamma/backlight state after DPMS wake. Reapply
+        # the last edge-gesture brightness shortly after the panel comes back.
+        QTimer.singleShot(250, lambda: self.set_screen_brightness_percent(getattr(self, "_screen_brightness_pct", SCREEN_BRIGHTNESS_DEFAULT_PERCENT), show_feedback=False))
         QTimer.singleShot(int(SCREEN_WAKE_INPUT_BLOCK_SECONDS * 1000), self.finish_display_wake)
 
     def finish_display_wake(self):
