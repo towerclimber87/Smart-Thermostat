@@ -4811,6 +4811,7 @@ class RoomScreen(Page):
 
 class LightsScreen(Page):
     _lightActionCompleted = pyqtSignal(object)
+    _lightColorCompleted = pyqtSignal(object)
     _lightPollCompleted = pyqtSignal(object)
 
     def __init__(self, app_state: AppState, parent=None):
@@ -4819,12 +4820,16 @@ class LightsScreen(Page):
         self.room_buttons = {}
         self._card_by_entity: dict[str, LightCard] = {}
         self._light_send_timers: dict[str, QTimer] = {}
+        self._light_color_timers: dict[str, QTimer] = {}
         self._light_pending: dict[str, dict] = {}
+        self._light_color_pending: dict[str, dict] = {}
         self._light_inflight: set[str] = set()
+        self._light_color_inflight: set[str] = set()
         self._light_settle_until: dict[str, float] = {}
         self._light_poll_running = False
         self._last_light_error = ""
         self._lightActionCompleted.connect(self._handle_light_action_completed)
+        self._lightColorCompleted.connect(self._handle_light_color_completed)
         self._lightPollCompleted.connect(self._handle_light_poll_completed)
 
         root = QVBoxLayout(self)
@@ -4946,6 +4951,8 @@ class LightsScreen(Page):
             return True
         if entity_id in self._light_pending or entity_id in self._light_inflight:
             return True
+        if entity_id in self._light_color_pending or entity_id in self._light_color_inflight:
+            return True
         return time.monotonic() < self._light_settle_until.get(entity_id, 0.0)
 
     def _set_light_optimistic(self, light: dict, value: int | None = None, action: str | None = None, color: str | None = None):
@@ -5000,7 +5007,7 @@ class LightsScreen(Page):
             if not color:
                 return
             for item in targets:
-                self._send_light(item, "color", brightness_for(item), color=color)
+                self._send_light_color(item, brightness_for(item), color)
 
         def live_color(color: str):
             color = LightColorDialog.clean_color(color)
@@ -5052,6 +5059,83 @@ class LightsScreen(Page):
             timer.timeout.connect(lambda eid=entity_id: self._flush_light_send(eid))
             self._light_send_timers[entity_id] = timer
         return timer
+
+    def _timer_for_light_color(self, entity_id: str) -> QTimer:
+        timer = self._light_color_timers.get(entity_id)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(lambda eid=entity_id: self._flush_light_color_send(eid))
+            self._light_color_timers[entity_id] = timer
+        return timer
+
+    def _send_light_color(self, light: dict, brightness: int, color: str):
+        entity_id = str(light.get("haEntityId") or "")
+        if not entity_id:
+            return
+        color = LightColorDialog.clean_color(color)
+        brightness = int(clamp(brightness, 1, 100))
+        self._set_light_optimistic(light, brightness, action="color", color=color)
+        # Keep HA state refreshes from snapping RGB controls backward while the
+        # user is dragging the color picker. Only the newest pending color is sent.
+        self._light_settle_until[entity_id] = time.monotonic() + 1.35
+        self._light_color_pending[entity_id] = {"light": light, "brightness": brightness, "color": color}
+        timer = self._timer_for_light_color(entity_id)
+        if entity_id in self._light_color_inflight:
+            return
+        if not timer.isActive():
+            timer.start(120)
+
+    def _flush_light_color_send(self, entity_id: str):
+        pending = self._light_color_pending.get(entity_id)
+        if not pending:
+            return
+        if entity_id in self._light_color_inflight:
+            return
+        light = pending.get("light") or {}
+        brightness = int(clamp(pending.get("brightness", 100), 1, 100))
+        color = LightColorDialog.clean_color(str(pending.get("color") or "#ffd76f"))
+        self._light_color_inflight.add(entity_id)
+        payload = self.s.ha_payload({
+            "entityId": entity_id,
+            "action": "color",
+            "brightness": brightness,
+            "color": color,
+            "transition": 0.20,
+            "refresh": False,
+        })
+        api = self.s.api
+
+        def worker():
+            try:
+                result = api.post("/api/ha/light/action", payload)
+                self._lightColorCompleted.emit({"entityId": entity_id, "light": light, "brightness": brightness, "color": color, "result": result, "error": None})
+            except Exception as exc:
+                self._lightColorCompleted.emit({"entityId": entity_id, "light": light, "brightness": brightness, "color": color, "result": None, "error": str(exc)})
+
+        threading.Thread(target=worker, name=f"light-color-{entity_id}", daemon=True).start()
+
+    def _handle_light_color_completed(self, info: object):
+        data = info if isinstance(info, dict) else {}
+        entity_id = str(data.get("entityId") or "")
+        color = LightColorDialog.clean_color(str(data.get("color") or "#ffd76f"))
+        brightness = int(clamp(data.get("brightness", 100), 1, 100))
+        self._light_color_inflight.discard(entity_id)
+        if data.get("error"):
+            err = str(data.get("error"))
+            if err != self._last_light_error:
+                self._last_light_error = err
+                self.requestToast.emit(f"Light failed: {err}")
+        latest = self._light_color_pending.get(entity_id)
+        if latest:
+            latest_color = LightColorDialog.clean_color(str(latest.get("color") or color))
+            latest_brightness = int(clamp(latest.get("brightness", brightness), 1, 100))
+            if latest_color != color or latest_brightness != brightness:
+                self._timer_for_light_color(entity_id).start(80)
+                return
+        self._light_color_pending.pop(entity_id, None)
+        self._light_settle_until[entity_id] = time.monotonic() + 0.90
+        QTimer.singleShot(950, self.poll)
 
     def set_brightness(self, light: dict, value: int):
         entity_id = str(light.get("haEntityId") or "")
@@ -9721,6 +9805,7 @@ class AlarmControlDialog(QDialog):
 class MainWindow(Background):
     statusRefreshCompleted = pyqtSignal(object)
     alarmRefreshCompleted = pyqtSignal(object)
+    mainAsyncCompleted = pyqtSignal(object)
 
     def __init__(self):
         super().__init__()
@@ -9781,8 +9866,10 @@ class MainWindow(Background):
         self._ignore_info_until = 0.0
         self._status_refresh_running = False
         self._alarm_refresh_running = False
+        self._main_async_jobs: dict[str, tuple[Callable | None, Callable | None]] = {}
         self.statusRefreshCompleted.connect(self._handle_status_refresh_completed)
         self.alarmRefreshCompleted.connect(self._handle_alarm_refresh_completed)
+        self.mainAsyncCompleted.connect(self._handle_main_async_completed)
         self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self.refresh_status)
         self.status_timer.start(4000)
@@ -10086,6 +10173,32 @@ class MainWindow(Background):
             if entered is None:
                 return
         self.set_navigation_locked(False, show_toast=True)
+
+    def run_async(self, name: str, worker: Callable[[], Any], on_success: Callable[[Any], None] | None = None, on_error: Callable[[str], None] | None = None):
+        job_id = f"{name}-{time.monotonic_ns()}"
+        self._main_async_jobs[job_id] = (on_success, on_error)
+
+        def target():
+            try:
+                result = worker()
+                self.mainAsyncCompleted.emit({"id": job_id, "result": result, "error": None})
+            except Exception as exc:
+                self.mainAsyncCompleted.emit({"id": job_id, "result": None, "error": str(exc)})
+
+        threading.Thread(target=target, name=f"main-{name}", daemon=True).start()
+
+    def _handle_main_async_completed(self, info: object):
+        data = info if isinstance(info, dict) else {}
+        callbacks = self._main_async_jobs.pop(str(data.get("id") or ""), None)
+        if not callbacks:
+            return
+        on_success, on_error = callbacks
+        if data.get("error"):
+            if on_error:
+                on_error(str(data.get("error")))
+            return
+        if on_success:
+            on_success(data.get("result"))
 
     def poll_visible_page_now(self, name: str | None = None):
         try:
@@ -10448,29 +10561,47 @@ class MainWindow(Background):
             self._info_reopen_block_until = time.monotonic() + 1.5
 
     def do_fetch_update(self):
-        try:
-            data = self.s.api.post("/api/system/fetch-update", {})
+        self.toast.show_message("Starting fetch update...", 3500)
+
+        def done(data):
+            data = data if isinstance(data, dict) else {}
             self.toast.show_message(data.get("message") or "Fetch update started. Panel will restart.", 6500)
-        except Exception as exc:
-            self.toast.show_message(f"Fetch update failed: {exc}", 6500)
+
+        self.run_async(
+            "fetch-update",
+            lambda: self.s.api.post("/api/system/fetch-update", {}, timeout=8.0),
+            done,
+            lambda err: self.toast.show_message(f"Fetch update failed: {err}", 6500),
+        )
 
     def do_restart(self):
         if QMessageBox.question(self, "Restart", "Restart the thermostat service?") != QMessageBox.Yes:
             return
-        try:
-            self.s.api.post("/api/system/reboot", {})
-        except Exception as exc:
-            self.toast.show_message(f"Restart failed: {exc}")
+        self.toast.show_message("Restart command sent...", 3500)
+        self.run_async(
+            "restart",
+            lambda: self.s.api.post("/api/system/reboot", {}, timeout=4.0),
+            lambda _data: None,
+            lambda err: self.toast.show_message(f"Restart failed: {err}"),
+        )
 
     def show_config_portal(self, mode: str = "backup"):
-        try:
-            data = self.s.api.post("/api/system/config-web-portal", {})
+        self.toast.show_message("Opening backup portal...", 3000)
+
+        def done(data):
+            data = data if isinstance(data, dict) else {}
             url = str(data.get("url") or "").strip()
             if not url:
-                raise RuntimeError(data.get("error") or "The backup portal address was not returned.")
+                self.toast.show_message(f"Backup portal failed: {data.get('error') or 'The backup portal address was not returned.'}", 8000)
+                return
             self.show_config_portal_dialog(data, mode=mode)
-        except Exception as exc:
-            self.toast.show_message(f"Backup portal failed: {exc}", 8000)
+
+        self.run_async(
+            "config-portal",
+            lambda: self.s.api.post("/api/system/config-web-portal", {}, timeout=4.0),
+            done,
+            lambda err: self.toast.show_message(f"Backup portal failed: {err}", 8000),
+        )
 
     def show_config_portal_dialog(self, data: dict, mode: str = ""):
         url = str(data.get("url") or "").strip()
@@ -10562,10 +10693,12 @@ class MainWindow(Background):
             self.stop_config_portal()
 
     def stop_config_portal(self):
-        try:
-            self.s.api.post("/api/system/config-web-portal/close", {})
-        except Exception:
-            pass
+        self.run_async(
+            "config-portal-close",
+            lambda: self.s.api.post("/api/system/config-web-portal/close", {}, timeout=3.0),
+            None,
+            None,
+        )
 
     def backup_config(self):
         self.show_config_portal("backup")

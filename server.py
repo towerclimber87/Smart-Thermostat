@@ -38,7 +38,8 @@ HVAC_HISTORY_FILE = DATA_DIR / "hvac-history.json"
 APP_STARTED_AT = time.time()
 HA_STATES_CACHE_TTL_SECONDS = float(os.environ.get("SMART_THERMOSTAT_HA_STATES_CACHE_TTL_SECONDS", "8.0"))
 HA_ENTITY_STATE_CACHE_TTL_SECONDS = float(os.environ.get("SMART_THERMOSTAT_HA_ENTITY_STATE_CACHE_TTL_SECONDS", "8.0"))
-HA_REQUEST_TIMEOUT_SECONDS = float(os.environ.get("SMART_THERMOSTAT_HA_REQUEST_TIMEOUT_SECONDS", "3.0"))
+HA_REQUEST_TIMEOUT_SECONDS = max(0.5, float(os.environ.get("SMART_THERMOSTAT_HA_REQUEST_TIMEOUT_SECONDS", "3.0") or "3.0"))
+HA_REQUEST_CONCURRENCY = max(1, int(float(os.environ.get("SMART_THERMOSTAT_HA_REQUEST_CONCURRENCY", "4") or "4")))
 EXTERNAL_HA_AIR_VERIFY_INTERVAL_SECONDS = max(5.0, float(os.environ.get("SMART_THERMOSTAT_EXTERNAL_AIR_VERIFY_SECONDS", "30") or "30"))
 ACCESS_LOGS_ENABLED = os.environ.get("SMART_THERMOSTAT_ACCESS_LOGS", "0").strip().lower() in {"1", "true", "yes", "on"}
 HISTORY_PERSISTENCE_MODE = os.environ.get("SMART_THERMOSTAT_HISTORY_PERSISTENCE", "daily").strip().lower() or "daily"
@@ -67,6 +68,7 @@ PANEL_COMMAND_GRACE_MS = int(float(os.environ.get("SMART_THERMOSTAT_PANEL_COMMAN
 # value 30-60 seconds after the user tapped the touchscreen.
 PANEL_TARGET_COMMAND_GRACE_MS = int(float(os.environ.get("SMART_THERMOSTAT_PANEL_TARGET_GRACE_SECONDS", "300") or "300") * 1000)
 CONFIG_WEB_PORTAL_TIMEOUT_SECONDS = max(60.0, float(os.environ.get("SMART_THERMOSTAT_CONFIG_PORTAL_TIMEOUT_SECONDS", "900") or "900"))
+MANUAL_HARDWARE_TIMEOUT_SECONDS = max(0.0, float(os.environ.get("SMART_THERMOSTAT_MANUAL_HARDWARE_TIMEOUT_SECONDS", "300") or "300"))
 _CONFIG_WEB_PORTAL_LOCK = threading.RLock()
 _CONFIG_WEB_PORTAL_ENABLED_UNTIL = 0.0
 _CONFIG_WEB_PORTAL_STARTED_AT = 0.0
@@ -75,6 +77,8 @@ _HA_STATES_CACHE_LOCK = threading.Lock()
 _HA_STATES_CACHE: dict[tuple[str, str], tuple[float, list[dict]]] = {}
 _HA_ENTITY_STATE_CACHE_LOCK = threading.Lock()
 _HA_ENTITY_STATE_CACHE: dict[tuple[str, str, str], tuple[float, dict]] = {}
+_HA_REQUEST_SEMAPHORE = threading.BoundedSemaphore(HA_REQUEST_CONCURRENCY)
+_PANEL_CONFIG_LOCK = threading.RLock()
 _THERMOSTAT_RECORD_LOCK = threading.RLock()
 _THERMOSTAT_RECORD_CACHE: dict | None = None
 _THERMOSTAT_RECORD_LAST_PERSIST_SIGNATURE = ""
@@ -117,7 +121,12 @@ _HARDWARE_RELAY_BACKEND = None
 _HARDWARE_RGB_BACKEND = None
 _HARDWARE_LAST_RELAYS = {"fan": False, "heat": False, "cool": False}
 _HARDWARE_LAST_RELAY_SOURCE = "thermostat"
-_HARDWARE_MANUAL = {"active": False, "relays": {"fan": False, "heat": False, "cool": False}}
+_HARDWARE_MANUAL = {
+    "active": False,
+    "relays": {"fan": False, "heat": False, "cool": False},
+    "activatedAt": 0.0,
+    "expiresAt": 0.0,
+}
 _HARDWARE_RGB = {"on": False, "color": "#35eaff"}
 _HVAC_HISTORY_LAST_RELAYS = {"fan": False, "heat": False, "cool": False}
 _HVAC_HISTORY_LAST_SOURCE = "thermostat"
@@ -1093,10 +1102,23 @@ def _thermostat_record_for_disk(record: dict) -> dict:
 
 
 def _atomic_write_json(path: Path, record: dict) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(path.suffix + ".tmp")
-    temp_path.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
-    temp_path.replace(path)
+    """Durably write JSON without leaving a half-written file on SD-card power loss."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f".{path.name}.tmp")
+    body = json.dumps(record, indent=2, sort_keys=True).encode("utf-8")
+    with temp_path.open("wb") as handle:
+        handle.write(body)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temp_path, path)
+    try:
+        directory_fd = os.open(str(path.parent), os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except Exception:
+        pass
 
 
 def _schedule_entries_from_object(value: object) -> list[dict] | None:
@@ -1346,40 +1368,42 @@ def _normalize_panel_config(config: object) -> dict | None:
 
 
 def _read_panel_config_record() -> dict:
-    if not PANEL_CONFIG_FILE.exists():
-        return {"version": 1, "updatedAt": 0, "config": None}
+    with _PANEL_CONFIG_LOCK:
+        if not PANEL_CONFIG_FILE.exists():
+            return {"version": 1, "updatedAt": 0, "config": None}
 
-    try:
-        raw = json.loads(PANEL_CONFIG_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        raw = {}
+        try:
+            raw = json.loads(PANEL_CONFIG_FILE.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            raw = {}
 
-    version = 1
-    updated_at = 0
-    config = None
-    if isinstance(raw, dict):
-        version = int(raw.get("version", 1) or 1)
-        updated_at = int(raw.get("updatedAt", 0) or 0)
-        config = _normalize_panel_config(raw.get("config"))
-        if config is None and any(key in raw for key in ("thermostat", "alarm", "blinds", "lights", "integrations")):
-            config = _normalize_panel_config(raw)
+        version = 1
+        updated_at = 0
+        config = None
+        if isinstance(raw, dict):
+            version = int(raw.get("version", 1) or 1)
+            updated_at = int(raw.get("updatedAt", 0) or 0)
+            config = _normalize_panel_config(raw.get("config"))
+            if config is None and any(key in raw for key in ("thermostat", "alarm", "blinds", "lights", "integrations")):
+                config = _normalize_panel_config(raw)
 
-    return {"version": version, "updatedAt": updated_at, "config": config}
+        return {"version": version, "updatedAt": updated_at, "config": config}
 
 
 def _write_panel_config_record(config: dict) -> dict:
     safe_config = _normalize_panel_config(config) or {}
-    existing = _read_panel_config_record()
-    if existing.get("config") == safe_config and PANEL_CONFIG_FILE.exists():
-        return {
-            "version": int(existing.get("version", 1) or 1),
-            "updatedAt": int(existing.get("updatedAt", 0) or 0),
-            "config": safe_config,
-        }
-    next_version = int(existing.get("version", 0) or 0) + 1
-    record = {"version": next_version, "updatedAt": int(time.time()), "config": safe_config}
-    _atomic_write_json(PANEL_CONFIG_FILE, record)
-    return record
+    with _PANEL_CONFIG_LOCK:
+        existing = _read_panel_config_record()
+        if existing.get("config") == safe_config and PANEL_CONFIG_FILE.exists():
+            return {
+                "version": int(existing.get("version", 1) or 1),
+                "updatedAt": int(existing.get("updatedAt", 0) or 0),
+                "config": safe_config,
+            }
+        next_version = int(existing.get("version", 0) or 0) + 1
+        record = {"version": next_version, "updatedAt": int(time.time()), "config": safe_config}
+        _atomic_write_json(PANEL_CONFIG_FILE, record)
+        return record
 
 
 
@@ -3609,8 +3633,10 @@ def _schedule_thermostat_outputs_apply(thermostat: dict, *, reason: str = "contr
             with _THERMOSTAT_ASYNC_OUTPUT_LOCK:
                 if seq != _THERMOSTAT_ASYNC_OUTPUT_SEQ:
                     return
-            outputs = _thermostat_outputs(snapshot)
-            _apply_thermostat_outputs_to_hardware(outputs, snapshot)
+            latest = _read_thermostat_record().get("thermostat") or snapshot
+            latest = _merge_thermostat_state(latest)
+            outputs = _thermostat_outputs(latest)
+            _apply_thermostat_outputs_to_hardware(outputs, latest)
         except Exception as exc:  # noqa: BLE001 - never let async apply kill the server
             print(f"Thermostat async output apply failed ({reason}): {exc}", flush=True)
 
@@ -4315,6 +4341,29 @@ def _release_external_ha_air_outputs(thermostat: dict) -> None:
                 print(f"External {kind} air release failed for {entity_id}: {exc}", flush=True)
 
 
+def _expire_manual_hardware_locked(now: float | None = None) -> bool:
+    """Release hardware-test relay mode if it was left on too long."""
+    if not bool(_HARDWARE_MANUAL.get("active")):
+        return False
+    expires_at = float(_HARDWARE_MANUAL.get("expiresAt") or 0.0)
+    if expires_at <= 0:
+        return False
+    now = time.time() if now is None else float(now)
+    if now < expires_at:
+        return False
+    _HARDWARE_MANUAL["active"] = False
+    _HARDWARE_MANUAL["relays"] = {"fan": False, "heat": False, "cool": False}
+    _HARDWARE_MANUAL["activatedAt"] = 0.0
+    _HARDWARE_MANUAL["expiresAt"] = 0.0
+    print("Manual hardware relay override expired; returning to thermostat control.", flush=True)
+    return True
+
+
+def _expire_manual_hardware_if_needed() -> bool:
+    with _HARDWARE_LOCK:
+        return _expire_manual_hardware_locked()
+
+
 def _apply_thermostat_outputs_to_hardware(outputs: dict, thermostat: dict | None = None) -> None:
     thermostat = _merge_thermostat_state(thermostat or _read_thermostat_record().get("thermostat") or {})
     external_mode = _normalize_air_control_mode(thermostat.get("airControlMode")) == "external"
@@ -4324,6 +4373,7 @@ def _apply_thermostat_outputs_to_hardware(outputs: dict, thermostat: dict | None
         "cool": False if external_mode else bool(outputs.get("cool")),
     }
     with _HARDWARE_LOCK:
+        _expire_manual_hardware_locked()
         if _HARDWARE_MANUAL.get("active"):
             return
         _write_relay_outputs_locked(
@@ -4353,8 +4403,11 @@ def _set_manual_relay(relay: str, on: bool) -> dict:
             relays["cool"] = False
         if relay == "cool" and on:
             relays["heat"] = False
+        now = time.time()
         _HARDWARE_MANUAL["active"] = True
         _HARDWARE_MANUAL["relays"] = _normalize_relay_outputs(relays)
+        _HARDWARE_MANUAL["activatedAt"] = now
+        _HARDWARE_MANUAL["expiresAt"] = now + MANUAL_HARDWARE_TIMEOUT_SECONDS if MANUAL_HARDWARE_TIMEOUT_SECONDS > 0 else 0.0
         _write_relay_outputs_locked(_HARDWARE_MANUAL["relays"], "manual")
     return _hardware_status_payload()
 
@@ -4363,6 +4416,8 @@ def _release_manual_hardware() -> dict:
     with _HARDWARE_LOCK:
         _HARDWARE_MANUAL["active"] = False
         _HARDWARE_MANUAL["relays"] = {"fan": False, "heat": False, "cool": False}
+        _HARDWARE_MANUAL["activatedAt"] = 0.0
+        _HARDWARE_MANUAL["expiresAt"] = 0.0
     thermostat = _read_thermostat_record()["thermostat"]
     _apply_thermostat_outputs_to_hardware(_thermostat_outputs(thermostat))
     return _hardware_status_payload()
@@ -4942,6 +4997,12 @@ def _start_thermostat_control_loop() -> None:
     thread.start()
 
 def _hardware_status_payload(force_i2c: bool = False) -> dict:
+    if _expire_manual_hardware_if_needed():
+        try:
+            thermostat = _read_thermostat_record()["thermostat"]
+            _apply_thermostat_outputs_to_hardware(_thermostat_outputs(thermostat), thermostat)
+        except Exception as exc:
+            print(f"Manual hardware expiry reapply failed: {exc}", flush=True)
     with _HARDWARE_LOCK:
         relay_backend = _relay_backend()
         rgb_backend = _rgb_backend()
@@ -4968,9 +5029,13 @@ def _hardware_status_payload(force_i2c: bool = False) -> dict:
             "source": _HARDWARE_LAST_RELAY_SOURCE,
             "activeLow": HARDWARE_RELAY_ACTIVE_LOW,
         }
+        expires_at = float(_HARDWARE_MANUAL.get("expiresAt") or 0.0)
         manual = {
             "active": bool(_HARDWARE_MANUAL.get("active")),
             "relays": dict(_HARDWARE_MANUAL.get("relays") or {}),
+            "activatedAt": float(_HARDWARE_MANUAL.get("activatedAt") or 0.0),
+            "expiresAt": expires_at,
+            "remainingSeconds": max(0, int(round(expires_at - time.time()))) if expires_at else 0,
         }
 
     return {
@@ -5252,6 +5317,7 @@ echo "===== Smart Thermostat self-update finished: $(date) ====="
         "systemd-run",
         "--unit", unit_name,
         "--collect",
+        "--no-block",
         "--property", "Type=oneshot",
         "--property", f"WorkingDirectory={str(ROOT)}",
         "/bin/bash",
@@ -5259,7 +5325,7 @@ echo "===== Smart Thermostat self-update finished: $(date) ====="
     ]
 
     try:
-        started = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=12)
+        started = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, timeout=3)
     except Exception as exc:
         return {"ok": False, "error": f"Could not start update unit: {exc}"}
 
@@ -5454,6 +5520,9 @@ def _fetch_ha_covers(ha_url: str, token: str) -> list[dict]:
         },
         method="GET",
     )
+    acquired = _HA_REQUEST_SEMAPHORE.acquire(timeout=HA_REQUEST_TIMEOUT_SECONDS)
+    if not acquired:
+        raise RuntimeError("Home Assistant requests are backed up; try again in a moment")
     try:
         with request.urlopen(req, timeout=HA_REQUEST_TIMEOUT_SECONDS) as resp:
             raw = resp.read()
@@ -5462,6 +5531,8 @@ def _fetch_ha_covers(ha_url: str, token: str) -> list[dict]:
         raise RuntimeError(f"Home Assistant returned HTTP {exc.code}: {body}") from exc
     except error.URLError as exc:
         raise RuntimeError(f"Could not reach Home Assistant: {exc.reason}") from exc
+    finally:
+        _HA_REQUEST_SEMAPHORE.release()
 
     states = json.loads(raw.decode("utf-8"))
     covers = []
@@ -5520,14 +5591,19 @@ def _ha_json_request(ha_url: str, token: str, method: str, path: str, payload: d
         headers["Content-Type"] = "application/json"
 
     req = request.Request(f"{ha_url}{path}", data=data, headers=headers, method=method)
+    acquired = _HA_REQUEST_SEMAPHORE.acquire(timeout=HA_REQUEST_TIMEOUT_SECONDS)
+    if not acquired:
+        raise RuntimeError("Home Assistant requests are backed up; try again in a moment")
     try:
-        with request.urlopen(req, timeout=12) as resp:
+        with request.urlopen(req, timeout=HA_REQUEST_TIMEOUT_SECONDS) as resp:
             raw = resp.read()
     except error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[:500]
         raise RuntimeError(f"Home Assistant returned HTTP {exc.code}: {body}") from exc
     except error.URLError as exc:
         raise RuntimeError(f"Could not reach Home Assistant: {exc.reason}") from exc
+    finally:
+        _HA_REQUEST_SEMAPHORE.release()
 
     if not raw:
         return {}
@@ -5729,14 +5805,19 @@ def _fetch_ha_media_players(ha_url: str, token: str) -> list[dict]:
         },
         method="GET",
     )
+    acquired = _HA_REQUEST_SEMAPHORE.acquire(timeout=HA_REQUEST_TIMEOUT_SECONDS)
+    if not acquired:
+        raise RuntimeError("Home Assistant requests are backed up; try again in a moment")
     try:
-        with request.urlopen(req, timeout=12) as resp:
+        with request.urlopen(req, timeout=HA_REQUEST_TIMEOUT_SECONDS) as resp:
             raw = resp.read()
     except error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[:500]
         raise RuntimeError(f"Home Assistant returned HTTP {exc.code}: {body}") from exc
     except error.URLError as exc:
         raise RuntimeError(f"Could not reach Home Assistant: {exc.reason}") from exc
+    finally:
+        _HA_REQUEST_SEMAPHORE.release()
 
     states = json.loads(raw.decode("utf-8"))
     players = []
