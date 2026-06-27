@@ -315,6 +315,7 @@ AUDIO_NUMBER_CONTROL_ORDER: list[tuple[str, str]] = [
     ("music_surround", "Music Surround"),
 ]
 AUDIO_SWITCH_CONTROL_ORDER: list[tuple[str, str]] = [
+    ("tv_power", "TV Power"),
     ("projector", "Projector"),
     ("subwoofer", "Sub"),
     ("surround", "Surround Sound"),
@@ -920,6 +921,14 @@ class ModernAudioButton(QAbstractButton):
             for pt in pts:
                 p.drawEllipse(QRectF(pt.x() - w * 0.085, pt.y() - w * 0.085, w * 0.17, w * 0.17))
             p.setBrush(Qt.NoBrush)
+        elif key == "tv":
+            screen = QRectF(x + w * 0.12, y + h * 0.20, w * 0.76, h * 0.52)
+            p.drawRoundedRect(screen, w * 0.08, w * 0.08)
+            p.drawLine(QPointF(cx, y + h * 0.72), QPointF(cx, y + h * 0.84))
+            p.drawLine(QPointF(x + w * 0.34, y + h * 0.86), QPointF(x + w * 0.66, y + h * 0.86))
+            power = QRectF(cx - w * 0.13, y + h * 0.34, w * 0.26, h * 0.26)
+            p.drawArc(power, 35 * 16, 290 * 16)
+            p.drawLine(QPointF(cx, y + h * 0.30), QPointF(cx, y + h * 0.45))
         elif key == "projector":
             body = QRectF(x + w * 0.12, y + h * 0.34, w * 0.66, h * 0.34)
             p.drawRoundedRect(body, w * 0.08, w * 0.08)
@@ -6008,12 +6017,22 @@ class AudioScreen(Page):
             QSlider::add-page:horizontal { height:18px; border-radius:9px; background:rgba(110,92,180,0.42); }
             QSlider::handle:horizontal { width:46px; height:46px; margin:-14px 0; border-radius:23px; background:#f8f5ff; border:1px solid rgba(255,255,255,0.42); }
         """)
+        self.tv_power = ModernAudioButton("tv", "TV Power", min_h=64, holdable=True)
+        self.tv_power.setMinimumWidth(126)
         self.projector = ModernAudioButton("projector", "Projector", min_h=64, holdable=True)
         self.projector.setMinimumWidth(126)
+        self.switch_buttons["tv_power"] = self.tv_power
         self.switch_buttons["projector"] = self.projector
+        projector_row = QHBoxLayout()
+        projector_row.setContentsMargins(0, 0, 0, 0)
+        projector_row.setSpacing(12)
+        projector_row.addStretch(1)
+        projector_row.addWidget(self.tv_power)
+        projector_row.addWidget(self.projector)
+        projector_row.addStretch(1)
         vol_lay.addLayout(vol_row)
         vol_lay.addWidget(self.volume)
-        vol_lay.addWidget(self.projector, 0, Qt.AlignCenter)
+        vol_lay.addLayout(projector_row)
         lay.addWidget(vol_panel)
 
         eq = QHBoxLayout()
@@ -6062,9 +6081,11 @@ class AudioScreen(Page):
         self.volume.sliderReleased.connect(lambda: self.media_action("volume", self.volume.value()))
         self.sub.clicked.connect(lambda: self.toggle_audio_switch("subwoofer"))
         self.sur.clicked.connect(lambda: self.toggle_audio_switch("surround"))
+        self.tv_power.clicked.connect(lambda: self.toggle_audio_switch("tv_power"))
         self.projector.clicked.connect(lambda: self.toggle_audio_switch("projector"))
         self.sub.held.connect(lambda: self.assign_audio_control("subwoofer"))
         self.sur.held.connect(lambda: self.assign_audio_control("surround"))
+        self.tv_power.held.connect(lambda: self.assign_audio_control("tv_power"))
         self.projector.held.connect(lambda: self.assign_audio_control("projector"))
 
     def player_id(self):
