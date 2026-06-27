@@ -6123,7 +6123,12 @@ class AudioScreen(Page):
         return {}
 
     def assign_audio_control(self, name: str):
-        group = "audio-number" if name in {key for key, _label in AUDIO_NUMBER_CONTROL_ORDER} else "audio-toggle"
+        if name in {key for key, _label in AUDIO_NUMBER_CONTROL_ORDER}:
+            group = "audio-number"
+        elif name == "tv_power":
+            group = "audio-media-player"
+        else:
+            group = "audio-toggle"
         self.requestAssign.emit(group, {"audioControlKind": name}, name)
 
     def _set_audio_hold_ms(self, widget, hold_ms: int):
@@ -6292,7 +6297,11 @@ class AudioScreen(Page):
             assigned = isinstance(record, dict) and bool(record.get("entityId"))
             self._set_audio_hold_ms(button, self._audio_reassign_hold_ms(name))
             state = str(record.get("state") or "").lower() if isinstance(record, dict) else ""
-            on = state in {"on", "open", "true", "1"}
+            domain = str(record.get("domain") or "").lower() if isinstance(record, dict) else ""
+            if name == "tv_power" and domain == "media_player":
+                on = bool(state) and state not in {"off", "standby", "unavailable", "unknown"}
+            else:
+                on = state in {"on", "open", "true", "1"}
             button.setActive(on)
             button.setToolTip("Hold 6 seconds to reassign" if assigned else "Hold to assign")
             # The highlight is the on/off indicator. Keep these tiles clean with no
@@ -6471,10 +6480,18 @@ class AudioScreen(Page):
                 if isinstance(control, dict):
                     result["numbers"][name] = control
             for name, entity_id, action in switch_actions:
-                resp = self.s.api.post(
-                    "/api/ha/audio/switch/action",
-                    self.s.ha_payload({"entityId": entity_id, "action": action}),
-                )
+                record = self.audio_control_record(name)
+                domain = str(record.get("domain") or (entity_id.split(".", 1)[0] if "." in entity_id else "")).strip().lower()
+                if name == "tv_power" and domain == "media_player":
+                    resp = self.s.api.post(
+                        "/api/ha/room/action",
+                        self.s.ha_payload({"entityId": entity_id, "action": action}),
+                    )
+                else:
+                    resp = self.s.api.post(
+                        "/api/ha/audio/switch/action",
+                        self.s.ha_payload({"entityId": entity_id, "action": action}),
+                    )
                 control = resp.get("control") if isinstance(resp, dict) else None
                 if isinstance(control, dict):
                     result["switches"][name] = control
@@ -6547,10 +6564,14 @@ class AudioScreen(Page):
 
     def toggle_audio_switch(self, name: str):
         eid = self.control_entity(name)
+        title = AUDIO_CONTROL_LABELS.get(name, str(name or "").replace("_", " ").title())
         if not eid:
-            self.requestToast.emit(f"No {name} switch assigned")
+            self.requestToast.emit(f"No {title} entity assigned")
             return
-        payload = self.s.ha_payload({"entityId": eid, "action": "toggle"})
+
+        record = self.audio_control_record(name)
+        domain = str(record.get("domain") or (eid.split(".", 1)[0] if "." in eid else "")).strip().lower()
+
         def done(result):
             control = (result or {}).get("control") if isinstance(result, dict) else None
             if isinstance(control, dict):
@@ -6558,15 +6579,31 @@ class AudioScreen(Page):
                 previous = controls.get(name) if isinstance(controls.get(name), dict) else {}
                 updated = dict(previous)
                 updated.update(control)
+                updated.setdefault("domain", domain)
                 controls[name] = updated
                 self.apply_audio_control_state()
                 QTimer.singleShot(600, self.poll)
 
+        if name == "tv_power" and domain == "media_player":
+            state = str(record.get("state") or "").strip().lower()
+            action = "on" if state in {"", "off", "standby", "unavailable", "unknown"} else "off"
+            self._remember_switch_state(name, action)
+            self.apply_audio_control_state()
+            payload = self.s.ha_payload({"entityId": eid, "action": action})
+            self.run_async(
+                "audio-tv-power",
+                lambda: self.s.api.post("/api/ha/room/action", payload),
+                done,
+                lambda err, n=title: self.requestToast.emit(f"{n} failed: {err}"),
+            )
+            return
+
+        payload = self.s.ha_payload({"entityId": eid, "action": "toggle"})
         self.run_async(
             "audio-switch",
             lambda: self.s.api.post("/api/ha/audio/switch/action", payload),
             done,
-            lambda err, n=name: self.requestToast.emit(f"{n} failed: {err}"),
+            lambda err, n=title: self.requestToast.emit(f"{n} failed: {err}"),
         )
 
     def _compact_track_title(self, text: str) -> str:
@@ -6776,6 +6813,22 @@ class AudioScreen(Page):
                             target[key] = merged
                     self.apply_audio_control_state()
             self.run_async("audio-switch-poll", lambda: self.s.api.post("/api/ha/audio/switch_states", self.s.ha_payload({"controls": controls})), switch_done, None)
+
+        tv_power = self.audio_control_record("tv_power")
+        tv_power_entity = str(tv_power.get("entityId") or "").strip()
+        if tv_power_entity.startswith("media_player."):
+            def tv_power_done(result):
+                players = (result or {}).get("players") if isinstance(result, dict) else None
+                if isinstance(players, list) and players:
+                    player = players[0] if isinstance(players[0], dict) else {}
+                    target = self.config.setdefault("integrations", {}).setdefault("homeAssistant", {}).setdefault("audioControlEntities", {})
+                    previous = target.get("tv_power") if isinstance(target.get("tv_power"), dict) else {}
+                    merged = dict(previous)
+                    merged.update(player)
+                    merged["domain"] = "media_player"
+                    target["tv_power"] = merged
+                    self.apply_audio_control_state()
+            self.run_async("audio-tv-power-poll", lambda: self.s.api.post("/api/ha/media/states", self.s.ha_payload({"entityIds": [tv_power_entity]})), tv_power_done, None)
 
 
 class CodeKeypadDialog(QDialog):
@@ -11072,6 +11125,8 @@ class MainWindow(Background):
             return ["number"]
         if group == "audio-toggle":
             return ["switch", "input_boolean"]
+        if group == "audio-media-player":
+            return ["media_player"]
         return []
 
     def cached_entities_for(self, group: str) -> list[dict]:
@@ -11086,6 +11141,8 @@ class MainWindow(Background):
             return (ha.get("audioAvailableEntities") or {}).get("numbers") or []
         if group == "audio-toggle":
             return (ha.get("audioAvailableEntities") or {}).get("switches") or []
+        if group == "audio-media-player":
+            return ha.get("mediaPlayerEntities") or (ha.get("audioAvailableEntities") or {}).get("mediaPlayers") or []
         return []
 
     def assign_entity(self, group: str, obj: dict, kind: str):
@@ -11103,7 +11160,7 @@ class MainWindow(Background):
         display_kind = str(kind or "entry").replace("_", " ").replace("subwoofer", "sub").title()
         dlg = EntityPickerDialog(f"Assign {display_kind} Entity", entities, self)
 
-        if group in {"audio-number", "audio-toggle"}:
+        if group in {"audio-number", "audio-toggle", "audio-media-player"}:
             target_kind = str((obj or {}).get("audioControlKind") or kind or "").strip().lower()
 
             def apply_audio(ent):
@@ -11117,6 +11174,11 @@ class MainWindow(Background):
                 if group == "audio-number":
                     record["kind"] = target_kind
                     for key in ("min", "max", "step", "unit", "mode", "value", "state"):
+                        if key in ent:
+                            record[key] = ent.get(key)
+                elif group == "audio-media-player":
+                    record["kind"] = target_kind
+                    for key in ("state", "supportedFeatures", "volumeLevel", "source", "sourceList", "mediaTitle", "mediaArtist", "mediaAlbum"):
                         if key in ent:
                             record[key] = ent.get(key)
                 else:
