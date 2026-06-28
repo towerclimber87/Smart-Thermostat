@@ -51,6 +51,37 @@ if [[ -z "$APP_HOME" || ! -d "$APP_HOME" ]]; then
   APP_HOME="$(eval echo "~${APP_USER}")"
 fi
 
+run_as_app_user() {
+  if [[ "$(id -u)" -eq 0 && "$APP_USER" != "root" ]]; then
+    if command -v runuser >/dev/null 2>&1; then
+      runuser -u "$APP_USER" -- "$@"
+    else
+      su -s /bin/bash "$APP_USER" -c "$(printf '%q ' "$@")"
+    fi
+  else
+    "$@"
+  fi
+}
+
+configure_git_deploy_exclusions() {
+  # GitHub can keep repo-only supporting documents here, but the tablet should
+  # not spend SD-card space deploying them. Sparse checkout prevents future
+  # fetch/reset runs from materializing top-level Supporting/ on the unit.
+  [[ -d "$APP_DIR/.git" ]] || return 0
+  mkdir -p "$APP_DIR/.git/info"
+  cat >"$APP_DIR/.git/info/sparse-checkout" <<'SPARSE_CHECKOUT'
+/*
+!/Supporting/
+!/Supporting/**
+SPARSE_CHECKOUT
+  chown "$APP_USER:$APP_USER" "$APP_DIR/.git/info/sparse-checkout" 2>/dev/null || true
+  run_as_app_user git -C "$APP_DIR" config core.sparseCheckout true || true
+  run_as_app_user git -C "$APP_DIR" config core.sparseCheckoutCone false || true
+  rm -rf "$APP_DIR/Supporting"
+  run_as_app_user git -C "$APP_DIR" read-tree -mu HEAD 2>/dev/null || true
+  rm -rf "$APP_DIR/Supporting"
+}
+
 if [[ ! -f "$APP_DIR/server.py" || ! -f "$APP_DIR/native_app/main.py" ]]; then
   echo "This does not look like the SmartThermostatNative folder: $APP_DIR" >&2
   exit 1
@@ -96,6 +127,8 @@ if [[ "$CURRENT_OWNER" != "$APP_UID:$APP_GID" ]]; then
 else
   echo "Project ownership already correct; skipping recursive chown."
 fi
+
+configure_git_deploy_exclusions
 
 # The backend writes live settings to data/*.json through temp files such as
 # thermostat-state.json.tmp. Manual restores and sudo-run updates can leave the

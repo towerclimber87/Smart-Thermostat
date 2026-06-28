@@ -5484,6 +5484,23 @@ shutil.rmtree(root, ignore_errors=True)
 PY_CLEANUP
 }}
 
+configure_git_deploy_exclusions() {{
+  # Keep repo-only supporting documents out of the wall-panel checkout. The
+  # project can track a top-level Supporting/ folder in GitHub, but the tablet
+  # update path should never deploy it to the unit.
+  [[ -d ".git" ]] || return 0
+  mkdir -p .git/info
+  cat >.git/info/sparse-checkout <<'SPARSE_CHECKOUT'
+/*
+!/Supporting/
+!/Supporting/**
+SPARSE_CHECKOUT
+  chown "$APP_USER:$APP_USER" .git/info/sparse-checkout 2>/dev/null || true
+  run_as_app_user git config core.sparseCheckout true || true
+  run_as_app_user git config core.sparseCheckoutCone false || true
+  rm -rf Supporting
+}}
+
 backup_data_files() {{
   mkdir -p "$BACKUP_ROOT/$ts"
   for file in panel-config.json thermostat-state.json thermostat-schedules.json thermostat-schedules.backup.json hvac-history.json; do
@@ -5506,10 +5523,12 @@ backup_data_files
 
 # Match the terminal update path: git operations run as the project owner, not
 # root. This avoids Git safe-directory failures and root-owned checkout files.
+configure_git_deploy_exclusions
 run_as_app_user git fetch origin Development
 run_as_app_user git reset --hard origin/Development
 cleanup_legacy_usb_mounts
 run_as_app_user git clean -fd
+rm -rf Supporting
 
 restore_data_files
 chmod +x scripts/*.sh
