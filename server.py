@@ -3002,8 +3002,20 @@ def _apply_thermostat_schedules(thermostat: dict) -> dict:
         )
         if should_run:
             target = _schedule_target_for_current_mode(updated, sched)
-            updated["targetTemp"] = target
-            updated["lastComfortTarget"] = target
+            pause = _normalize_pause_function(updated.get("pauseFunction"))
+            if bool(pause.get("active")):
+                # A door/comfort pause temporarily owns the live setpoint, but
+                # schedules should still become the remembered Home comfort
+                # target. Otherwise the door-close restore would use the old
+                # target that was captured when the door first paused comfort.
+                pause["previousTargetTemp"] = target
+                pause["previousLastComfortTarget"] = target
+                updated["pauseFunction"] = pause
+                updated["lastComfortTarget"] = target
+                updated["targetTemp"] = _door_pause_away_target(updated)
+            else:
+                updated["targetTemp"] = target
+                updated["lastComfortTarget"] = target
             sched["lastTriggeredDate"] = date_key
             changed = True
         updated_schedules.append(sched)
