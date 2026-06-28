@@ -268,6 +268,8 @@ DEFAULT_HOME_ASSISTANT_CONFIG = {
     "roomAvailableEntities": [],
     "personAvailableEntities": [],
     "pauseFunctionAvailableEntities": [],
+    "syncThermostatEntities": [],
+    "syncAvailableThermostatEntities": [],
 }
 
 
@@ -6218,6 +6220,226 @@ def _fetch_ha_entities(ha_url: str, token: str, domains: list[str] | None = None
     return entities
 
 
+
+
+IHA_CLIMATE_DISCOVERY_ATTRS = {
+    "iha_panel",
+    "iha_sync_capable",
+    "iha_api_poll_seconds",
+    "iha_api_status_source",
+    "iha_api_stale_status_seconds",
+    "iha_entity_available_from_cache",
+}
+
+
+def _sync_peer_entity_id(entry: object) -> str:
+    if not isinstance(entry, dict):
+        return ""
+    entity_id = str(entry.get("entityId") or entry.get("entity_id") or "").strip()
+    return entity_id if entity_id.startswith("climate.") else ""
+
+
+def _normalize_sync_peer_entry(entry: object) -> dict | None:
+    if not isinstance(entry, dict):
+        return None
+    entity_id = _sync_peer_entity_id(entry)
+    if not entity_id:
+        return None
+    name = _preferred_ha_display_name(
+        entity_id,
+        entry.get("friendlyName"),
+        entry.get("friendly_name"),
+        entry.get("name"),
+    )
+    state = str(entry.get("state") or "unknown").strip().lower() or "unknown"
+    result = {
+        "entityId": entity_id,
+        "name": name[:120],
+        "friendlyName": name[:120],
+        "domain": "climate",
+        "state": state[:80],
+    }
+    for key in ("currentTemp", "targetTemp", "hvacAction", "away", "doorPauseActive", "ihaPanel", "syncCapable"):
+        if key in entry:
+            result[key] = entry.get(key)
+    return result
+
+
+def _normalize_sync_peer_entries(value: object) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    peers: list[dict] = []
+    seen: set[str] = set()
+    for raw in value:
+        peer = _normalize_sync_peer_entry(raw)
+        if not peer:
+            continue
+        entity_id = peer["entityId"]
+        if entity_id in seen:
+            continue
+        seen.add(entity_id)
+        peers.append(peer)
+    return peers
+
+
+def _ha_climate_item_is_iha(item: dict) -> bool:
+    attrs = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
+    if any(key in attrs for key in IHA_CLIMATE_DISCOVERY_ATTRS):
+        return True
+    manufacturer = str(attrs.get("manufacturer") or "").strip().lower()
+    model = str(attrs.get("model") or "").strip().lower()
+    friendly = str(attrs.get("friendly_name") or "").strip().lower()
+    return manufacturer == "iha" or "iha" in model or friendly.startswith("iha ")
+
+
+def _normalize_sync_climate_item(item: dict) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    entity_id = str(item.get("entity_id") or "").strip()
+    if not entity_id.startswith("climate."):
+        return None
+    attrs = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
+    name = _preferred_ha_display_name(entity_id, attrs.get("friendly_name"))
+    state = str(item.get("state") or "unknown").strip().lower() or "unknown"
+    preset = str(attrs.get("preset_mode") or "").strip().lower()
+    away = preset == "away" or bool(attrs.get("target_temperature_locked_by_preset"))
+    door_pause_active = bool(attrs.get("door_pause_active"))
+    return {
+        "entityId": entity_id,
+        "name": name[:120],
+        "friendlyName": name[:120],
+        "domain": "climate",
+        "state": state[:80],
+        "currentTemp": attrs.get("current_temperature"),
+        "targetTemp": attrs.get("temperature"),
+        "hvacAction": attrs.get("hvac_action"),
+        "away": away,
+        "doorPauseActive": door_pause_active,
+        "ihaPanel": _ha_climate_item_is_iha(item),
+        "syncCapable": _ha_climate_item_is_iha(item),
+    }
+
+
+def _fetch_ha_sync_thermostats(ha_url: str, token: str, saved: list[dict] | None = None, local_name: str = "") -> list[dict]:
+    """Return IHA thermostat climate entities visible to Home Assistant.
+
+    Discovery intentionally uses Home Assistant as the bus.  That avoids opening
+    LAN scanning/mDNS behavior on the Raspberry Pi and lets Home Assistant keep
+    owning IP changes, authentication and stale/unavailable handling.
+    """
+    saved_by_id = {peer["entityId"]: peer for peer in _normalize_sync_peer_entries(saved or [])}
+    states = _ha_json_request(ha_url, token, "GET", "/api/states")
+    if not isinstance(states, list):
+        states = []
+
+    local_key = str(local_name or "").strip().casefold()
+    by_id: dict[str, dict] = {}
+    for item in states:
+        if not isinstance(item, dict):
+            continue
+        entity_id = str(item.get("entity_id") or "")
+        if not entity_id.startswith("climate."):
+            continue
+        is_saved = entity_id in saved_by_id
+        if not is_saved and not _ha_climate_item_is_iha(item):
+            continue
+        peer = _normalize_sync_climate_item(item)
+        if not peer:
+            continue
+        # Hide the current wall panel when HA exposes it with the same friendly
+        # name.  If names do not match, keep it visible rather than accidentally
+        # hiding a different thermostat.
+        if local_key and str(peer.get("name") or "").strip().casefold() == local_key and entity_id not in saved_by_id:
+            continue
+        peer["selected"] = entity_id in saved_by_id
+        by_id[entity_id] = peer
+
+    # Keep previously selected peers visible even if HA is briefly unavailable or
+    # the peer has not yet been updated to expose the newer IHA sync markers.
+    for entity_id, saved_peer in saved_by_id.items():
+        by_id.setdefault(entity_id, saved_peer | {"selected": True})
+
+    peers = list(by_id.values())
+    peers.sort(key=lambda item: (not bool(item.get("selected")), str(item.get("name") or item.get("entityId") or "").lower()))
+    return peers
+
+
+def _sync_hvac_mode_for_ha(mode: object) -> str:
+    value = str(mode or "").strip().lower()
+    if value.startswith("hvacmode."):
+        value = value.split(".", 1)[1]
+    if value in {"auto", "heat_cool"}:
+        return "heat_cool"
+    return value if value in {"off", "heat", "cool"} else ""
+
+
+def _sync_target_temperature(value: object) -> int | None:
+    try:
+        return int(max(45, min(95, round(float(value)))))
+    except (TypeError, ValueError):
+        return None
+
+
+def _call_ha_sync_thermostat_services(ha_url: str, token: str, entity_ids: list[str], *, mode: object = None, target_temp: object = None) -> dict:
+    wanted = _ordered_unique_entity_ids(entity_ids, {"climate"})
+    if not wanted:
+        return {"ok": True, "synced": [], "skipped": [], "errors": [], "count": 0}
+
+    hvac_mode = _sync_hvac_mode_for_ha(mode)
+    target = _sync_target_temperature(target_temp)
+    if not hvac_mode and target is None:
+        return {"ok": False, "error": "Nothing to sync", "synced": [], "skipped": [], "errors": []}
+
+    # Read current peer states first so this panel does not try to overwrite an
+    # Away thermostat.  Door-pause state is also exposed by the updated IHA HA
+    # integration; if that attribute is not present, the peer panel still enforces
+    # its own protection after HA forwards the command.
+    state_items = _fetch_ha_state_items_for_entities(ha_url, token, wanted, {"climate"}, all_states_threshold=2, use_cache=False)
+    state_by_id = {str(item.get("entity_id") or ""): item for item in state_items if isinstance(item, dict)}
+
+    errors: list[dict] = []
+    skipped: list[dict] = []
+    mode_targets: list[str] = []
+    temp_targets: list[str] = []
+    for entity_id in wanted:
+        item = state_by_id.get(entity_id) or {}
+        attrs = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
+        friendly = attrs.get("friendly_name") or entity_id
+        preset = str(attrs.get("preset_mode") or "").strip().lower()
+        is_away = preset == "away" or bool(attrs.get("target_temperature_locked_by_preset"))
+        door_pause_active = bool(attrs.get("door_pause_active"))
+        if is_away:
+            skipped.append({"entityId": entity_id, "name": friendly, "reason": "away"})
+            continue
+        if door_pause_active:
+            skipped.append({"entityId": entity_id, "name": friendly, "reason": "door-pause"})
+            continue
+        if hvac_mode:
+            mode_targets.append(entity_id)
+        if target is not None:
+            temp_targets.append(entity_id)
+
+    try:
+        if hvac_mode and mode_targets:
+            _ha_json_request(ha_url, token, "POST", "/api/services/climate/set_hvac_mode", {"entity_id": mode_targets, "hvac_mode": hvac_mode})
+        if target is not None and temp_targets:
+            _ha_json_request(ha_url, token, "POST", "/api/services/climate/set_temperature", {"entity_id": temp_targets, "temperature": target})
+        if mode_targets or temp_targets:
+            _invalidate_ha_state_cache(ha_url, token)
+    except Exception as exc:
+        errors.append({"entityId": ",".join(wanted), "error": str(exc)})
+
+    synced_ids = sorted(set(mode_targets + temp_targets)) if not errors else []
+    return {
+        "ok": not bool(errors),
+        "synced": synced_ids,
+        "skipped": skipped,
+        "errors": errors,
+        "count": len(synced_ids),
+        "mode": hvac_mode,
+        "targetTemp": target,
+    }
+
 def _normalize_weather_item(item: dict) -> dict:
     attrs = item.get("attributes") or {}
     entity_id = str(item.get("entity_id", ""))
@@ -6927,7 +7149,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply"}:
             self.send_error(404, "Not found")
             return
 
@@ -7000,6 +7222,25 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                     payload.get("domains", []),
                 )
                 return _json(self, 200, {"ok": True, "entities": entities, "count": len(entities)})
+
+            if path == "/api/sync/thermostats":
+                peers = _fetch_ha_sync_thermostats(
+                    payload.get("url", ""),
+                    payload.get("token", ""),
+                    payload.get("selected", payload.get("selectedEntities", [])),
+                    str((_read_thermostat_record().get("thermostat") or {}).get("name") or ""),
+                )
+                return _json(self, 200, {"ok": True, "thermostats": peers, "count": len(peers)})
+
+            if path == "/api/sync/apply":
+                result = _call_ha_sync_thermostat_services(
+                    payload.get("url", ""),
+                    payload.get("token", ""),
+                    payload.get("entityIds", []),
+                    mode=payload.get("mode", payload.get("hvacMode", payload.get("hvac_mode"))),
+                    target_temp=payload.get("targetTemp", payload.get("target_temperature", payload.get("temperature"))),
+                )
+                return _json(self, 200 if result.get("ok") else 500, result)
 
             if path == "/api/ha/weather/state":
                 weather = _fetch_ha_weather_state(

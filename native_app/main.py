@@ -1227,6 +1227,88 @@ class SleepButton(QAbstractButton):
         p.drawEllipse(QRectF(cx + 18, cy + 1, 2.8, 2.8))
 
 
+class SyncButton(QAbstractButton):
+    """Floating thermostat sync control shown above the sleep button."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedSize(58, 58)
+        self.setToolTip("Sync thermostat changes")
+        self._active = False
+        self._remaining = 0
+
+    def setActive(self, active: bool, remaining: int = 0):
+        self._active = bool(active)
+        self._remaining = max(0, int(remaining or 0))
+        self.update()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self.rect().contains(event.pos()):
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
+        r = QRectF(self.rect()).adjusted(1.5, 1.5, -1.5, -1.5)
+        active = bool(self._active)
+
+        g = QLinearGradient(r.topLeft(), r.bottomRight())
+        if active:
+            g.setColorAt(0.0, QColor(68, 235, 255, 238))
+            g.setColorAt(0.58, QColor(62, 145, 255, 235))
+            g.setColorAt(1.0, QColor(41, 70, 173, 238))
+            border = QColor(222, 253, 255, 230)
+            icon = QColor(4, 17, 34, 238)
+            text = QColor(3, 17, 31, 230)
+        else:
+            g.setColorAt(0.0, QColor(42, 63, 95, 230))
+            g.setColorAt(0.56, QColor(19, 31, 55, 228))
+            g.setColorAt(1.0, QColor(9, 14, 27, 238))
+            border = QColor(108, 221, 255, 118)
+            icon = QColor(232, 246, 255, 232)
+            text = QColor(162, 220, 238, 218)
+
+        p.setBrush(QBrush(g))
+        p.setPen(QPen(border, 1.35))
+        p.drawRoundedRect(r, 20, 20)
+
+        glow = QRadialGradient(r.center(), 35)
+        glow.setColorAt(0.0, QColor(70, 230, 255, 84 if active else 44))
+        glow.setColorAt(0.70, QColor(64, 150, 255, 28 if active else 12))
+        glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.fillRect(self.rect(), glow)
+
+        cx = r.center().x()
+        cy = r.center().y() - 5
+        p.setPen(QPen(icon, 2.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.setBrush(Qt.NoBrush)
+        # Two clean circular arrows; drawn manually so no icon font is required.
+        p.drawArc(QRectF(cx - 17, cy - 14, 26, 26), 35 * 16, 245 * 16)
+        p.drawArc(QRectF(cx - 9, cy - 12, 26, 26), 215 * 16, 245 * 16)
+        p.setBrush(icon)
+        p.setPen(Qt.NoPen)
+        path1 = QPainterPath()
+        path1.moveTo(cx + 9, cy - 14)
+        path1.lineTo(cx + 16, cy - 13)
+        path1.lineTo(cx + 12, cy - 7)
+        path1.closeSubpath()
+        p.drawPath(path1)
+        path2 = QPainterPath()
+        path2.moveTo(cx - 9, cy + 14)
+        path2.lineTo(cx - 16, cy + 13)
+        path2.lineTo(cx - 12, cy + 7)
+        path2.closeSubpath()
+        p.drawPath(path2)
+
+        p.setFont(font(6, QFont.Black, 10))
+        p.setPen(text)
+        label = f"{int(self._remaining)}" if active and self._remaining > 0 else "SYNC"
+        p.drawText(QRectF(3, r.bottom() - 16, r.width() - 6, 14), Qt.AlignCenter, label)
+
+
 class ScreenSleepOverlay(QWidget):
     """Black touch shield shown while the appliance display is asleep/waking."""
     def __init__(self, parent=None):
@@ -4345,6 +4427,14 @@ class ThermostatScreen(Page):
         until = int(last_run + delay_minutes * 60000)
         return until if until > now_ms else 0
 
+    def request_peer_sync(self, changes: dict):
+        top = self.window()
+        if hasattr(top, "request_peer_sync"):
+            try:
+                top.request_peer_sync(changes)
+            except Exception:
+                pass
+
     def set_mode(self, mode: str):
         mode = str(mode or "").strip().lower()
         before_tap = copy.deepcopy(self.thermostat_view())
@@ -4382,6 +4472,8 @@ class ThermostatScreen(Page):
                     self.s.thermostat["manualPendingMode"] = ""
                     self.s.thermostat["manualLockoutUntil"] = 0
         self.sync(self.s.config, self.s.thermostat)
+        if mode != "away":
+            self.request_peer_sync({"mode": mode})
 
         def done(result):
             if isinstance(result, dict):
@@ -4503,6 +4595,8 @@ class ThermostatScreen(Page):
         self.s.set_target_override(val)
         self.apply_local_minimum_runtime_prediction(before_tap, val)
         self.sync(self.s.config, self.s.thermostat)
+        if not bool(t.get("away")):
+            self.request_peer_sync({"targetTemp": val})
 
         def done(result):
             if isinstance(result, dict):
@@ -7354,6 +7448,190 @@ class PeopleSelectionDialog(QDialog):
 
 
 
+class ThermostatSyncSelectionDialog(QDialog):
+    saved = pyqtSignal(list)
+
+    def __init__(self, state: AppState, selected_peers: list[dict] | None = None, parent=None):
+        super().__init__(parent)
+        self.s = state
+        self.selected_peers = copy.deepcopy(selected_peers or [])
+        self.available_peers: list[dict] = []
+        self.buttons: dict[str, RoundButton] = {}
+        self.setModal(True)
+        self.setWindowTitle("Thermostat Sync")
+        self.setWindowFlag(Qt.FramelessWindowHint, True)
+        self.setMinimumSize(720, 520)
+        self.resize(1280, 800)
+        self.setStyleSheet("""
+            QDialog { background:#09111f; color:#f7fbff; }
+            QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
+        """)
+        self.load_peers()
+        self.build()
+        QTimer.singleShot(0, self.fit_to_screen)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.fit_to_screen()
+
+    def fit_to_screen(self):
+        fit_dialog_to_available_screen(self, margin=0)
+
+    def selected_ids(self) -> set[str]:
+        return {str(p.get("entityId") or p.get("entity_id") or "").strip() for p in self.selected_peers if isinstance(p, dict)}
+
+    def load_peers(self):
+        by_id: dict[str, dict] = {}
+        for peer in self.selected_peers:
+            if not isinstance(peer, dict):
+                continue
+            eid = str(peer.get("entityId") or peer.get("entity_id") or "").strip()
+            if eid.startswith("climate."):
+                by_id[eid] = {
+                    "entityId": eid,
+                    "name": str(peer.get("name") or peer.get("friendlyName") or peer.get("friendly_name") or eid),
+                    "state": str(peer.get("state") or "unknown"),
+                    "domain": "climate",
+                    "selected": True,
+                }
+        try:
+            data = self.s.api.post("/api/sync/thermostats", self.s.ha_payload({"selected": list(by_id.values())}), timeout=8.0)
+            for peer in data.get("thermostats") or []:
+                if not isinstance(peer, dict):
+                    continue
+                eid = str(peer.get("entityId") or peer.get("entity_id") or "").strip()
+                if eid.startswith("climate."):
+                    by_id[eid] = {
+                        "entityId": eid,
+                        "name": str(peer.get("name") or peer.get("friendlyName") or peer.get("friendly_name") or eid),
+                        "state": str(peer.get("state") or "unknown"),
+                        "domain": "climate",
+                        "away": bool(peer.get("away")),
+                        "doorPauseActive": bool(peer.get("doorPauseActive")),
+                        "selected": eid in self.selected_ids() or bool(peer.get("selected")),
+                    }
+        except Exception as exc:
+            if not by_id:
+                self._load_error = str(exc)
+            else:
+                self._load_error = ""
+        self.available_peers = sorted(by_id.values(), key=lambda x: str(x.get("name") or x.get("entityId") or "").lower())
+
+    def build(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(12, 10, 12, 10)
+        root.setSpacing(8)
+        header = QHBoxLayout()
+        title = QLabel("THERMOSTAT SYNC")
+        title.setFont(font(22, QFont.Black))
+        title.setStyleSheet("color:#55f0ff; letter-spacing:3px;")
+        refresh = RoundButton("Refresh", active=True, min_h=40)
+        clear = RoundButton("Clear", active=False, kind="danger", min_h=40)
+        header.addWidget(title)
+        header.addStretch(1)
+        header.addWidget(refresh)
+        header.addWidget(clear)
+        root.addLayout(header)
+
+        note = QLabel("Select the other IHA thermostats that should receive mode and setpoint changes while the main-screen Sync button is active. Sync only stays armed for 30 seconds at a time.")
+        note.setWordWrap(True)
+        note.setFont(font(10, QFont.Black))
+        note.setStyleSheet("color:#cdd8ee; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.10); border-radius:12px; padding:8px;")
+        root.addWidget(note)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea{background:transparent;border:0;}")
+        body = QWidget()
+        self.body_lay = QVBoxLayout(body)
+        self.body_lay.setContentsMargins(0, 0, 0, 0)
+        self.body_lay.setSpacing(8)
+        scroll.setWidget(body)
+        root.addWidget(scroll, 1)
+
+        bottom = QHBoxLayout()
+        cancel = RoundButton("Cancel", active=False, min_h=42)
+        save = RoundButton("Save Selected", active=True, min_h=42)
+        bottom.addStretch(1)
+        bottom.addWidget(cancel)
+        bottom.addWidget(save)
+        root.addLayout(bottom)
+
+        refresh.clicked.connect(self.reload_peers)
+        clear.clicked.connect(self.clear_all)
+        cancel.clicked.connect(self.reject)
+        save.clicked.connect(self.save)
+        self.refresh()
+
+    def reload_peers(self):
+        self.load_peers()
+        self.refresh()
+
+    def refresh(self):
+        while self.body_lay.count():
+            item = self.body_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.buttons = {}
+        if not self.available_peers:
+            detail = getattr(self, "_load_error", "")
+            text = "No IHA thermostat climate entities found in Home Assistant."
+            if detail:
+                text += f"\n\n{detail}"
+            none = QLabel(text)
+            none.setWordWrap(True)
+            none.setStyleSheet("color:#c4d0e5; background:rgba(255,255,255,0.05); border-radius:12px; padding:12px;")
+            self.body_lay.addWidget(none)
+            return
+        selected = self.selected_ids()
+        for peer in self.available_peers:
+            eid = str(peer.get("entityId") or "").strip()
+            name = str(peer.get("name") or eid)
+            state = str(peer.get("state") or "")
+            badges = []
+            if peer.get("away"):
+                badges.append("Away")
+            if peer.get("doorPauseActive"):
+                badges.append("Door pause")
+            if state:
+                badges.append(state)
+            suffix = f"  ({' • '.join(badges)})" if badges else ""
+            active = eid in selected
+            b = RoundButton(("✓  " if active else "○  ") + name + suffix, active=active, min_h=52)
+            b.clicked.connect(lambda checked=False, p=peer: self.toggle_peer(p))
+            self.buttons[eid] = b
+            self.body_lay.addWidget(b)
+        self.body_lay.addStretch(1)
+
+    def toggle_peer(self, peer: dict):
+        eid = str(peer.get("entityId") or "").strip()
+        if not eid:
+            return
+        if eid in self.selected_ids():
+            self.selected_peers = [p for p in self.selected_peers if str(p.get("entityId") or "") != eid]
+        else:
+            self.selected_peers.append({"entityId": eid, "name": str(peer.get("name") or eid), "state": str(peer.get("state") or "unknown"), "domain": "climate"})
+        self.refresh()
+
+    def clear_all(self):
+        self.selected_peers = []
+        self.refresh()
+
+    def save(self):
+        clean = []
+        seen = set()
+        for peer in self.selected_peers:
+            if not isinstance(peer, dict):
+                continue
+            eid = str(peer.get("entityId") or peer.get("entity_id") or "").strip()
+            if not eid.startswith("climate.") or eid in seen:
+                continue
+            seen.add(eid)
+            clean.append({"entityId": eid, "name": str(peer.get("name") or peer.get("friendlyName") or peer.get("friendly_name") or eid), "domain": "climate", "state": str(peer.get("state") or "unknown")})
+        self.saved.emit(clean)
+        self.accept()
+
+
 class ColorWheelWidget(QWidget):
     colorChanged = pyqtSignal(QColor)
 
@@ -8885,6 +9163,77 @@ class SettingsDialog(QDialog):
             prefix="Home screen shows",
         )
 
+    def selected_sync_peers(self) -> list[dict]:
+        ha = self.s.ha()
+        peers = ha.get("syncThermostatEntities") if isinstance(ha, dict) else []
+        clean: list[dict] = []
+        if isinstance(peers, list):
+            for peer in peers:
+                if not isinstance(peer, dict):
+                    continue
+                entity_id = str(peer.get("entityId") or peer.get("entity_id") or "").strip()
+                if not entity_id.startswith("climate."):
+                    continue
+                clean.append({
+                    "entityId": entity_id,
+                    "name": str(peer.get("name") or peer.get("friendly_name") or entity_id),
+                    "state": str(peer.get("state") or "unknown"),
+                    "available": bool(peer.get("available", True)),
+                    "away": bool(peer.get("away", False)),
+                    "doorPauseActive": bool(peer.get("doorPauseActive", False)),
+                })
+        return clean
+
+    def sync_peer_summary_text(self) -> str:
+        peers = self.selected_sync_peers()
+        if not peers:
+            return "No sync thermostats selected. Tap Choose Thermostats to add."
+        names = [str(peer.get("name") or peer.get("entityId") or "Thermostat") for peer in peers]
+        shown = ", ".join(names[:3])
+        if len(names) > 3:
+            shown += f" +{len(names)-3} more"
+        return f"Sync sends changes to: {shown}"
+
+    def choose_sync_thermostats(self):
+        current = self.selected_sync_peers()
+        dlg = ThermostatSyncSelectionDialog(self.s, current, self)
+
+        def apply(peers):
+            try:
+                clean = []
+                seen = set()
+                for peer in peers if isinstance(peers, list) else []:
+                    if not isinstance(peer, dict):
+                        continue
+                    entity_id = str(peer.get("entityId") or peer.get("entity_id") or "").strip()
+                    if not entity_id.startswith("climate.") or entity_id in seen:
+                        continue
+                    seen.add(entity_id)
+                    clean.append({
+                        "entityId": entity_id,
+                        "name": str(peer.get("name") or peer.get("friendly_name") or entity_id),
+                        "state": str(peer.get("state") or "unknown"),
+                        "available": bool(peer.get("available", True)),
+                        "away": bool(peer.get("away", False)),
+                        "doorPauseActive": bool(peer.get("doorPauseActive", False)),
+                    })
+                ha = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
+                ha["syncThermostatEntities"] = copy.deepcopy(clean)
+                ha["syncAvailableThermostatEntities"] = copy.deepcopy(clean)
+                self.s.save_config()
+                if hasattr(self, "sync_peer_summary"):
+                    self.sync_peer_summary.setText(self.sync_peer_summary_text())
+                    self.sync_peer_summary.repaint()
+                top = self.window()
+                if hasattr(top, "update_sync_button_state"):
+                    top.update_sync_button_state()
+                self.saved.emit()
+            except Exception as exc:
+                QMessageBox.warning(self, "Sync", str(exc))
+
+        dlg.saved.connect(apply)
+        dlg.exec_()
+
     def choose_auto_away_people(self):
         current = self.s.thermostat.get("autoAwayPeople") if isinstance(self.s.thermostat, dict) else []
         dlg = PeopleSelectionDialog(
@@ -9342,7 +9691,7 @@ class SettingsDialog(QDialog):
         differential_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
         differential.layout().addWidget(differential_note)
 
-        minimum_runtime = self.add_section("Minimum Runtime", 4, 2, 1, 2)
+        minimum_runtime = self.add_section("Minimum Runtime", 5, 2, 1, 2)
         runtime_grid = self.section_grid(minimum_runtime, 2)
         self.add_section_value(runtime_grid, "heatMinimumRuntimeMinutes", "Heat", t.get("heatMinimumRuntimeMinutes", 2), 0, 0, 1, 30, " min")
         self.add_section_value(runtime_grid, "coolMinimumRuntimeMinutes", "Cool", t.get("coolMinimumRuntimeMinutes", 2), 0, 1, 1, 30, " min")
@@ -9380,7 +9729,13 @@ class SettingsDialog(QDialog):
         air_grid.addWidget(self.choose_external_cool_button, 1, 1)
         self.update_air_control_widgets()
 
-        temp_source = self.add_section("Current Temp", 2, 2, 1, 1)
+        temp_sources = self.add_section("Temperature Sources", 2, 2, 1, 2)
+        temp_sources_grid = QGridLayout()
+        temp_sources_grid.setContentsMargins(0, 0, 0, 0)
+        temp_sources_grid.setHorizontalSpacing(8)
+        temp_sources_grid.setVerticalSpacing(5)
+        temp_sources.layout().addLayout(temp_sources_grid)
+
         selected_temp = nested_get(self.s.config, "integrations", "homeAssistant", "currentTempEntity", default=None)
         if isinstance(selected_temp, dict):
             source_name = selected_temp.get("name") or selected_temp.get("friendly_name") or selected_temp.get("entityId") or "Home Assistant Sensor"
@@ -9388,17 +9743,14 @@ class SettingsDialog(QDialog):
         else:
             source_name = t.get("currentTempSourceName") or "Virtual Temp"
             source_line = "Virtual until sensor selected"
-        self.temp_source_label = QLabel(f"{compact_name(source_name, 30)}\n{source_line}")
+        self.temp_source_label = QLabel(f"Current: {compact_name(source_name, 26)}\n{source_line}")
         self.temp_source_label.setWordWrap(True)
         self.temp_source_label.setFont(font(7, QFont.Black))
-        self.temp_source_label.setStyleSheet("color:#dfe9ff; background:transparent; border:0;")
-        temp_source.layout().addWidget(self.temp_source_label)
-        choose = RoundButton("Sensor", active=True, min_h=28)
+        self.temp_source_label.setStyleSheet("color:#dfe9ff; background:rgba(5,10,20,0.28); border:1px solid rgba(160,180,210,0.16); border-radius:8px; padding:4px;")
+        choose = RoundButton("Current", active=True, min_h=28)
         choose.setMinimumWidth(92)
         choose.clicked.connect(self.choose_temp_sensor)
-        temp_source.layout().addWidget(choose, 0, Qt.AlignRight)
 
-        outdoor_source = self.add_section("Outside Temp", 2, 3, 1, 1)
         selected_outdoor = nested_get(self.s.config, "integrations", "homeAssistant", "outdoorTempEntity", default=None) or nested_get(self.s.config, "integrations", "homeAssistant", "weatherEntity", default=None)
         if isinstance(selected_outdoor, dict):
             outdoor_name = selected_outdoor.get("name") or selected_outdoor.get("friendly_name") or selected_outdoor.get("entityId") or "Outside Sensor"
@@ -9406,17 +9758,41 @@ class SettingsDialog(QDialog):
         else:
             outdoor_name = "Not selected"
             outdoor_line = "Choose outside temp/weather"
-        self.outdoor_source_label = QLabel(f"{compact_name(outdoor_name, 30)}\n{outdoor_line}")
+        self.outdoor_source_label = QLabel(f"Outside: {compact_name(outdoor_name, 26)}\n{outdoor_line}")
         self.outdoor_source_label.setWordWrap(True)
         self.outdoor_source_label.setFont(font(7, QFont.Black))
-        self.outdoor_source_label.setStyleSheet("color:#dfe9ff; background:transparent; border:0;")
-        outdoor_source.layout().addWidget(self.outdoor_source_label)
+        self.outdoor_source_label.setStyleSheet("color:#dfe9ff; background:rgba(5,10,20,0.28); border:1px solid rgba(160,180,210,0.16); border-radius:8px; padding:4px;")
         choose_outdoor = RoundButton("Outside", active=True, min_h=28)
         choose_outdoor.setMinimumWidth(92)
         choose_outdoor.clicked.connect(self.choose_outdoor_temp_sensor)
-        outdoor_source.layout().addWidget(choose_outdoor, 0, Qt.AlignRight)
 
-        person_tracking = self.add_section("Person Tracking", 3, 2, 1, 2)
+        temp_sources_grid.addWidget(self.temp_source_label, 0, 0)
+        temp_sources_grid.addWidget(choose, 1, 0)
+        temp_sources_grid.addWidget(self.outdoor_source_label, 0, 1)
+        temp_sources_grid.addWidget(choose_outdoor, 1, 1)
+        temp_sources_grid.setColumnStretch(0, 1)
+        temp_sources_grid.setColumnStretch(1, 1)
+
+        sync_section = self.add_section("Sync", 3, 2, 1, 2)
+        self.sync_peer_summary = QLabel(self.sync_peer_summary_text())
+        self.sync_peer_summary.setWordWrap(True)
+        self.sync_peer_summary.setFont(font(7, QFont.Black))
+        self.sync_peer_summary.setStyleSheet("color:#c4d0e5; background:rgba(5,10,20,0.42); border:1px dashed rgba(160,180,210,0.26); border-radius:8px; padding:4px;")
+        choose_sync = RoundButton("Choose Thermostats", active=True, min_h=28)
+        choose_sync.setMinimumWidth(156)
+        choose_sync.clicked.connect(self.choose_sync_thermostats)
+        sync_row = QHBoxLayout()
+        sync_row.setSpacing(6)
+        sync_row.addWidget(self.sync_peer_summary, 1)
+        sync_row.addWidget(choose_sync)
+        sync_section.layout().addLayout(sync_row)
+        sync_note = QLabel("When the main Sync button is armed, manual mode and setpoint changes are copied to these selected Home Assistant climate entities for 30 seconds.")
+        sync_note.setWordWrap(True)
+        sync_note.setFont(font(7, QFont.Black))
+        sync_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
+        sync_section.layout().addWidget(sync_note)
+
+        person_tracking = self.add_section("Person Tracking", 4, 2, 1, 2)
         self.person_tracking_summary = QLabel(self.people_summary_text())
         self.person_tracking_summary.setWordWrap(True)
         self.person_tracking_summary.setFont(font(7, QFont.Black))
@@ -9473,7 +9849,7 @@ class SettingsDialog(QDialog):
         code_grid.setColumnStretch(0, 1)
         code_grid.setColumnStretch(1, 1)
 
-        unit = self.add_section("Thermostat Unit", 5, 2, 1, 2)
+        unit = self.add_section("Thermostat Unit", 6, 2, 1, 2)
         unit_row = QHBoxLayout()
         unit_row.setSpacing(6)
         self.thermostat_name_label = QLabel(self.thermostat_name_summary_text())
@@ -9487,7 +9863,7 @@ class SettingsDialog(QDialog):
         unit_row.addWidget(edit_name)
         unit.layout().addLayout(unit_row)
 
-        display = self.add_section("Screen Rotation", 6, 0, 1, 4)
+        display = self.add_section("Screen Rotation", 7, 0, 1, 4)
         display_row = QHBoxLayout()
         display_row.setSpacing(8)
         self.screen_orientation_label = QLabel(self.screen_orientation_summary_text())
@@ -9510,7 +9886,7 @@ class SettingsDialog(QDialog):
         note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
         display.layout().addWidget(note)
 
-        self.grid.setRowStretch(7, 1)
+        self.grid.setRowStretch(8, 1)
 
     def val_number(self, key):
         text = self.controls[key].text().split()[0].replace("°", "")
@@ -10580,6 +10956,18 @@ class MainWindow(Background):
         self.sleep_overlay = ScreenSleepOverlay(self)
         self.sleep_button = SleepButton(self)
         self.sleep_button.clicked.connect(lambda: self.enter_display_sleep(manual=True))
+        self.sync_button = SyncButton(self)
+        self.sync_button.clicked.connect(self.toggle_sync_mode)
+        self._sync_active_until = 0.0
+        self._sync_pending_changes: dict[str, object] = {}
+        self._sync_apply_running = False
+        self._last_sync_notice_at = 0.0
+        self.peer_sync_timer = QTimer(self)
+        self.peer_sync_timer.setSingleShot(True)
+        self.peer_sync_timer.timeout.connect(self.flush_peer_sync)
+        self.sync_button_timer = QTimer(self)
+        self.sync_button_timer.timeout.connect(self.update_sync_button_state)
+        self.sync_button_timer.start(1000)
         self.header = Header()
         self.stack = QStackedWidget()
         self.pages: dict[str, Page] = {
@@ -10693,13 +11081,151 @@ class MainWindow(Background):
                 self.sleep_overlay.setGeometry(self.rect())
                 if self.sleep_overlay.isVisible():
                     self.sleep_overlay.raise_()
+            margin = 22
+            sleep_x = max(0, self.width() - self.sleep_button.width() - margin) if hasattr(self, "sleep_button") else 0
+            sleep_y = max(0, self.height() - self.sleep_button.height() - margin) if hasattr(self, "sleep_button") else 0
             if hasattr(self, "sleep_button"):
-                margin = 22
-                self.sleep_button.move(max(0, self.width() - self.sleep_button.width() - margin), max(0, self.height() - self.sleep_button.height() - margin))
-                if not getattr(self, "_display_sleeping", False):
-                    self.sleep_button.raise_()
+                self.sleep_button.move(sleep_x, sleep_y)
+            if hasattr(self, "sync_button"):
+                show_sync = (
+                    not getattr(self, "_display_sleeping", False)
+                    and self.current_name == "Thermostat"
+                    and bool(self.sync_peer_entities())
+                )
+                self.sync_button.setVisible(show_sync)
+                if show_sync:
+                    self.sync_button.move(sleep_x, max(0, sleep_y - self.sync_button.height() - 10))
+                    self.sync_button.raise_()
+            if hasattr(self, "sleep_button") and not getattr(self, "_display_sleeping", False):
+                self.sleep_button.raise_()
         except Exception:
             pass
+
+    def sync_peer_entities(self) -> list[dict]:
+        try:
+            ha = self.s.ha()
+            peers = ha.get("syncThermostatEntities") if isinstance(ha, dict) else []
+            clean: list[dict] = []
+            seen = set()
+            for peer in peers if isinstance(peers, list) else []:
+                if not isinstance(peer, dict):
+                    continue
+                entity_id = str(peer.get("entityId") or peer.get("entity_id") or "").strip()
+                if not entity_id.startswith("climate.") or entity_id in seen:
+                    continue
+                seen.add(entity_id)
+                clean.append({
+                    "entityId": entity_id,
+                    "name": str(peer.get("name") or peer.get("friendly_name") or entity_id),
+                })
+            return clean
+        except Exception:
+            return []
+
+    def sync_is_active(self) -> bool:
+        return bool(self.sync_peer_entities()) and time.monotonic() < float(getattr(self, "_sync_active_until", 0.0) or 0.0)
+
+    def update_sync_button_state(self):
+        try:
+            peers = self.sync_peer_entities()
+            active = bool(peers) and time.monotonic() < float(getattr(self, "_sync_active_until", 0.0) or 0.0)
+            if not active:
+                self._sync_active_until = 0.0
+                if not getattr(self, "_sync_apply_running", False):
+                    self._sync_pending_changes = {}
+            remaining = max(0, int(math.ceil(float(getattr(self, "_sync_active_until", 0.0) or 0.0) - time.monotonic()))) if active else 0
+            if hasattr(self, "sync_button"):
+                self.sync_button.setActive(active, remaining)
+            self.position_sleep_controls()
+        except Exception:
+            pass
+
+    def toggle_sync_mode(self):
+        peers = self.sync_peer_entities()
+        if self.sync_is_active():
+            self._sync_active_until = 0.0
+            self._sync_pending_changes = {}
+            self.peer_sync_timer.stop()
+            self.toast.show_message("Sync off")
+            self.update_sync_button_state()
+            return
+        if not peers:
+            self.toast.show_message("Choose Sync thermostats in Settings")
+            self.update_sync_button_state()
+            return
+        self._sync_active_until = time.monotonic() + 30.0
+        self._sync_pending_changes = {}
+        self.toast.show_message(f"Sync armed for 30 seconds · {len(peers)} thermostat{'s' if len(peers) != 1 else ''}")
+        self.update_sync_button_state()
+
+    def request_peer_sync(self, changes: dict):
+        if not self.sync_is_active():
+            return
+        if not isinstance(changes, dict):
+            return
+        allowed: dict[str, object] = {}
+        mode = str(changes.get("mode") or changes.get("hvacMode") or "").strip().lower()
+        if mode in {"off", "heat", "cool", "auto"}:
+            allowed["mode"] = mode
+        if "targetTemp" in changes:
+            try:
+                allowed["targetTemp"] = int(clamp(round(float(changes.get("targetTemp"))), 45, 95))
+            except Exception:
+                pass
+        if not allowed:
+            return
+        self._sync_pending_changes.update(allowed)
+        self.peer_sync_timer.start(250)
+        self.update_sync_button_state()
+
+    def show_sync_notice(self, message: str, duration: int = 1800):
+        now = time.monotonic()
+        if now - float(getattr(self, "_last_sync_notice_at", 0.0) or 0.0) < 4.0:
+            return
+        self._last_sync_notice_at = now
+        try:
+            self.toast.show_message(message, duration)
+        except Exception:
+            pass
+
+    def flush_peer_sync(self):
+        if getattr(self, "_sync_apply_running", False):
+            self.peer_sync_timer.start(300)
+            return
+        if not self.sync_is_active():
+            self._sync_pending_changes = {}
+            self.update_sync_button_state()
+            return
+        peers = self.sync_peer_entities()
+        changes = dict(getattr(self, "_sync_pending_changes", {}) or {})
+        if not peers or not changes:
+            return
+        self._sync_pending_changes = {}
+        payload = {
+            "entityIds": [peer.get("entityId") for peer in peers],
+        }
+        payload.update(changes)
+        self._sync_apply_running = True
+
+        def done(result):
+            self._sync_apply_running = False
+            info = result if isinstance(result, dict) else {}
+            skipped = info.get("skipped") if isinstance(info.get("skipped"), list) else []
+            errors = info.get("errors") if isinstance(info.get("errors"), list) else []
+            if errors:
+                self.show_sync_notice("Sync issue: " + str(errors[0])[:80], 2600)
+            elif skipped:
+                self.show_sync_notice("Sync skipped protected thermostat(s)", 2200)
+            if self._sync_pending_changes and self.sync_is_active():
+                self.peer_sync_timer.start(250)
+            self.update_sync_button_state()
+
+        def failed(err):
+            self._sync_apply_running = False
+            self.show_sync_notice(f"Sync failed: {err}", 3000)
+            self.update_sync_button_state()
+
+        self.run_async("peer-sync", lambda: self.s.api.post("/api/sync/apply", self.s.ha_payload(payload), timeout=8.0), done, failed)
 
     def display_input_event_types(self) -> set:
         return {
@@ -11157,6 +11683,7 @@ class MainWindow(Background):
         # sit on saved config for several seconds after navigation.
         QTimer.singleShot(60, lambda n=name: self.sync_visible_page(n))
         QTimer.singleShot(140, lambda n=name: self.poll_visible_page_now(n))
+        QTimer.singleShot(0, self.update_sync_button_state)
 
 
 
@@ -11325,11 +11852,13 @@ class MainWindow(Background):
         t = self.s.thermostat or {}
         self.header.update_values(t.get("currentTemp"), t.get("targetTemp"))
         self.sync_visible_page()
+        self.update_sync_button_state()
 
     def reload_all(self):
         try:
             self.s.load()
             self.sync_runtime_only()
+            self.update_sync_button_state()
         except Exception as exc:
             self.toast.show_message(f"Reload failed: {exc}")
 
