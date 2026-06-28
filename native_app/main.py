@@ -2098,10 +2098,18 @@ class ScheduleEditDialog(QDialog):
         self.people: list[dict] = []
         self.setModal(True)
         self.setWindowTitle("Schedule")
-        self.setFixedSize(780, 620)
+        # Keep this dialog inside the 10.1" touchscreen. The previous fixed
+        # 780x620 layout was taller than the kiosk display and the new weekday
+        # controls could visually collide with the person/bottom sections.
+        self.setMinimumSize(640, 420)
+        self.resize(860, 560)
         self.setStyleSheet("""
             QDialog { background:#09111f; color:#f7fbff; }
             QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
+            QScrollArea { background:transparent; border:0; }
+            QScrollBar:vertical { background:rgba(255,255,255,0.06); width:9px; border-radius:4px; }
+            QScrollBar::handle:vertical { background:rgba(85,240,255,0.45); border-radius:4px; min-height:28px; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }
         """)
         self.name = str(self.schedule.get("name") or "Morning")
         self.hour, self.minute = parse_schedule_time_24h(self.schedule.get("time") or "07:00")
@@ -2114,6 +2122,21 @@ class ScheduleEditDialog(QDialog):
         self.available_people: list[dict] = []
         self.load_people()
         self.build()
+        QTimer.singleShot(0, self.fit_to_screen)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.fit_to_screen()
+
+    def fit_to_screen(self):
+        screen = self.screen() or QApplication.primaryScreen()
+        if not screen:
+            return
+        geo = screen.availableGeometry()
+        width = max(640, min(860, geo.width() - 48))
+        height = max(420, min(560, geo.height() - 32))
+        self.resize(width, height)
+        self.move(geo.x() + (geo.width() - width) // 2, geo.y() + (geo.height() - height) // 2)
 
     def load_people(self):
         saved_groups = []
@@ -2135,90 +2158,65 @@ class ScheduleEditDialog(QDialog):
         except Exception:
             pass
 
+    def small_label(self, text: str) -> QLabel:
+        lab = QLabel(text)
+        lab.setFont(font(10, QFont.Black))
+        lab.setStyleSheet("color:#d8e8ff; background:transparent; border:0;")
+        return lab
+
     def build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(20, 18, 20, 18)
-        root.setSpacing(12)
+        root.setContentsMargins(16, 12, 16, 12)
+        root.setSpacing(8)
+
+        header = QHBoxLayout()
+        header.setSpacing(10)
         title = QLabel("SCHEDULE")
-        title.setFont(font(24, QFont.Black))
+        title.setFont(font(22, QFont.Black))
         title.setStyleSheet("color:#55f0ff; letter-spacing:3px;")
-        root.addWidget(title)
+        self.summary_label = QLabel("")
+        self.summary_label.setFont(font(11, QFont.Black))
+        self.summary_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.summary_label.setStyleSheet("color:#cde6ff; background:transparent; border:0;")
+        header.addWidget(title)
+        header.addStretch(1)
+        header.addWidget(self.summary_label)
+        root.addLayout(header)
 
-        top = QGridLayout()
-        top.setHorizontalSpacing(12)
-        top.setVerticalSpacing(10)
-        self.name_btn = RoundButton(self.name, active=True, min_h=52)
-        self.name_btn.clicked.connect(self.edit_name)
-        top.addWidget(QLabel("Name"), 0, 0)
-        top.addWidget(self.name_btn, 0, 1, 1, 3)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setFrameShape(QFrame.NoFrame)
+        content = QWidget()
+        content_lay = QVBoxLayout(content)
+        content_lay.setContentsMargins(0, 0, 0, 0)
+        content_lay.setSpacing(8)
 
-        self.time_label = QLabel("")
-        self.time_label.setAlignment(Qt.AlignCenter)
-        self.time_label.setFont(font(22, QFont.Black))
-        self.time_label.setStyleSheet("background:rgba(255,255,255,0.07); border:1px solid rgba(85,240,255,0.25); border-radius:16px; padding:8px;")
-        top.addWidget(QLabel("Time"), 1, 0)
-        top.addWidget(self.time_label, 1, 1)
-        self.ampm_btn = RoundButton("AM", active=True, min_h=42)
-        self.ampm_btn.clicked.connect(self.toggle_ampm)
-        top.addWidget(QLabel("AM / PM"), 2, 0)
-        top.addWidget(self.ampm_btn, 2, 1)
-        for text_value, delta_h, delta_m, col in [("Hour −", -1, 0, 2), ("Hour +", 1, 0, 3), ("Min −", 0, -5, 2), ("Min +", 0, 5, 3)]:
-            b = RoundButton(text_value, active=False, min_h=42)
-            b.clicked.connect(lambda checked=False, dh=delta_h, dm=delta_m: self.adjust_time(dh, dm))
-            top.addWidget(b, 1 if delta_m == 0 else 2, col)
-        root.addLayout(top)
+        top_row = QHBoxLayout()
+        top_row.setSpacing(10)
+        top_row.addWidget(self.time_panel(), 1)
 
-        target_row = QHBoxLayout()
-        target_row.setSpacing(12)
-        target_row.addWidget(self.target_control("Cool Target", "cool", 45, 95))
-        target_row.addWidget(self.target_control("Heat Target", "heat", 45, 95))
-        root.addLayout(target_row)
+        target_wrap = QWidget()
+        target_lay = QHBoxLayout(target_wrap)
+        target_lay.setContentsMargins(0, 0, 0, 0)
+        target_lay.setSpacing(10)
+        target_lay.addWidget(self.target_control("Cool Target", "cool", 45, 95))
+        target_lay.addWidget(self.target_control("Heat Target", "heat", 45, 95))
+        top_row.addWidget(target_wrap, 1)
+        content_lay.addLayout(top_row)
 
-        day_panel = GlassPanel(radius=18)
-        day_lay = QVBoxLayout(day_panel)
-        day_lay.setContentsMargins(12, 8, 12, 10)
-        day_lay.setSpacing(8)
-        day_hdr = QHBoxLayout()
-        day_hdr.addWidget(QLabel("Run on these days"))
-        day_hdr.addStretch(1)
-        every = RoundButton("Every Day", active=False, min_h=34)
-        weekdays = RoundButton("Weekdays", active=False, min_h=34)
-        every.clicked.connect(lambda checked=False: self.set_days(SCHEDULE_DAY_KEYS))
-        weekdays.clicked.connect(lambda checked=False: self.set_days(SCHEDULE_DAY_KEYS[:5]))
-        day_hdr.addWidget(every)
-        day_hdr.addWidget(weekdays)
-        day_lay.addLayout(day_hdr)
-        day_row = QHBoxLayout()
-        day_row.setSpacing(8)
-        for key, short, _long in SCHEDULE_DAY_OPTIONS:
-            btn = RoundButton(short, active=key in self.days, min_h=36)
-            btn.clicked.connect(lambda checked=False, d=key: self.toggle_day(d))
-            btn.setFixedHeight(36)
-            self.day_buttons[key] = btn
-            day_row.addWidget(btn)
-        day_lay.addLayout(day_row)
-        root.addWidget(day_panel)
-
-        people_panel = GlassPanel(radius=18)
-        people_lay = QVBoxLayout(people_panel)
-        people_lay.setContentsMargins(12, 10, 12, 10)
-        people_lay.setSpacing(8)
-        hdr = QHBoxLayout()
-        hdr.addWidget(QLabel("Only run if these people are home"))
-        hdr.addStretch(1)
-        add = RoundButton("+ Person", active=True, min_h=38)
-        add.clicked.connect(self.add_person)
-        hdr.addWidget(add)
-        people_lay.addLayout(hdr)
-        self.people_box = QVBoxLayout()
-        people_lay.addLayout(self.people_box)
-        root.addWidget(people_panel, 1)
+        content_lay.addWidget(self.days_panel())
+        content_lay.addWidget(self.people_panel(), 1)
+        scroll.setWidget(content)
+        root.addWidget(scroll, 1)
 
         bottom = QHBoxLayout()
-        self.enabled_btn = RoundButton("Enabled", active=self.enabled, min_h=48)
+        bottom.setSpacing(8)
+        self.enabled_btn = RoundButton("Enabled", active=self.enabled, min_h=42)
         self.enabled_btn.clicked.connect(self.toggle_enabled)
-        cancel = RoundButton("Cancel", active=False, kind="danger", min_h=48)
-        save = RoundButton("Save", active=True, min_h=48)
+        cancel = RoundButton("Cancel", active=False, kind="danger", min_h=42)
+        save = RoundButton("Save", active=True, min_h=42)
         cancel.clicked.connect(self.reject)
         save.clicked.connect(self.save)
         bottom.addWidget(self.enabled_btn)
@@ -2228,22 +2226,121 @@ class ScheduleEditDialog(QDialog):
         root.addLayout(bottom)
         self.refresh()
 
+    def time_panel(self) -> QWidget:
+        panel = GlassPanel(radius=18)
+        lay = QGridLayout(panel)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setHorizontalSpacing(8)
+        lay.setVerticalSpacing(7)
+
+        self.name_btn = RoundButton(self.name, active=True, min_h=40)
+        self.name_btn.clicked.connect(self.edit_name)
+        lay.addWidget(self.small_label("Name"), 0, 0)
+        lay.addWidget(self.name_btn, 0, 1, 1, 3)
+
+        self.time_label = QLabel("")
+        self.time_label.setAlignment(Qt.AlignCenter)
+        self.time_label.setMinimumHeight(38)
+        self.time_label.setFont(font(21, QFont.Black))
+        self.time_label.setStyleSheet("background:rgba(255,255,255,0.07); border:1px solid rgba(85,240,255,0.25); border-radius:14px; padding:4px;")
+        lay.addWidget(self.small_label("Time"), 1, 0)
+        lay.addWidget(self.time_label, 1, 1)
+
+        self.ampm_btn = RoundButton("AM", active=True, min_h=38)
+        self.ampm_btn.clicked.connect(self.toggle_ampm)
+        lay.addWidget(self.small_label("AM / PM"), 2, 0)
+        lay.addWidget(self.ampm_btn, 2, 1)
+
+        for text_value, delta_h, delta_m, row, col in [
+            ("Hour −", -1, 0, 1, 2),
+            ("Hour +", 1, 0, 1, 3),
+            ("Min −", 0, -5, 2, 2),
+            ("Min +", 0, 5, 2, 3),
+        ]:
+            btn = RoundButton(text_value, active=False, min_h=38)
+            btn.clicked.connect(lambda checked=False, dh=delta_h, dm=delta_m: self.adjust_time(dh, dm))
+            lay.addWidget(btn, row, col)
+        return panel
+
+    def days_panel(self) -> QWidget:
+        day_panel = GlassPanel(radius=18)
+        day_lay = QVBoxLayout(day_panel)
+        day_lay.setContentsMargins(12, 8, 12, 9)
+        day_lay.setSpacing(6)
+        day_hdr = QHBoxLayout()
+        title = self.small_label("Run on these days")
+        day_hdr.addWidget(title)
+        day_hdr.addStretch(1)
+        self.every_day_btn = RoundButton("Every Day", active=False, min_h=32)
+        self.weekdays_btn = RoundButton("Weekdays", active=False, min_h=32)
+        self.every_day_btn.setFixedHeight(32)
+        self.weekdays_btn.setFixedHeight(32)
+        self.every_day_btn.clicked.connect(lambda checked=False: self.set_days(SCHEDULE_DAY_KEYS))
+        self.weekdays_btn.clicked.connect(lambda checked=False: self.set_days(SCHEDULE_DAY_KEYS[:5]))
+        day_hdr.addWidget(self.every_day_btn)
+        day_hdr.addWidget(self.weekdays_btn)
+        day_lay.addLayout(day_hdr)
+        day_row = QHBoxLayout()
+        day_row.setSpacing(6)
+        for key, short, _long in SCHEDULE_DAY_OPTIONS:
+            btn = RoundButton(short, active=key in self.days, min_h=34)
+            btn.clicked.connect(lambda checked=False, d=key: self.toggle_day(d))
+            btn.setFixedHeight(34)
+            btn.setMinimumWidth(52)
+            self.day_buttons[key] = btn
+            day_row.addWidget(btn)
+        day_lay.addLayout(day_row)
+        return day_panel
+
+    def people_panel(self) -> QWidget:
+        people_panel = GlassPanel(radius=18)
+        people_lay = QVBoxLayout(people_panel)
+        people_lay.setContentsMargins(12, 8, 12, 8)
+        people_lay.setSpacing(6)
+        hdr = QHBoxLayout()
+        hdr.addWidget(self.small_label("Only run if these people are home"))
+        hdr.addStretch(1)
+        add = RoundButton("+ Person", active=True, min_h=34)
+        add.setFixedHeight(34)
+        add.clicked.connect(self.add_person)
+        hdr.addWidget(add)
+        people_lay.addLayout(hdr)
+
+        self.people_scroll = QScrollArea()
+        self.people_scroll.setWidgetResizable(True)
+        self.people_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.people_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.people_scroll.setFrameShape(QFrame.NoFrame)
+        self.people_scroll.setMinimumHeight(72)
+        self.people_list_widget = QWidget()
+        self.people_box = QVBoxLayout(self.people_list_widget)
+        self.people_box.setContentsMargins(0, 0, 0, 0)
+        self.people_box.setSpacing(5)
+        self.people_scroll.setWidget(self.people_list_widget)
+        people_lay.addWidget(self.people_scroll, 1)
+        return people_panel
+
     def target_control(self, title: str, attr: str, low: int, high: int) -> QWidget:
         panel = GlassPanel(radius=18)
         lay = QVBoxLayout(panel)
-        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setContentsMargins(10, 8, 10, 8)
+        lay.setSpacing(4)
         lab = QLabel(title)
-        lab.setFont(font(12, QFont.Black))
+        lab.setFont(font(11, QFont.Black))
+        lab.setStyleSheet("background:transparent; border:0;")
         lay.addWidget(lab, 0, Qt.AlignCenter)
         val = QLabel("")
         val.setObjectName(attr + "_value")
         val.setAlignment(Qt.AlignCenter)
-        val.setFont(font(30, QFont.Black))
+        val.setFont(font(28, QFont.Black))
         val.setStyleSheet("background:transparent; border:0;")
         lay.addWidget(val)
         row = QHBoxLayout()
-        minus = RoundButton("−", active=False, min_h=42)
-        plus = RoundButton("+", active=True, min_h=42)
+        row.setSpacing(8)
+        minus = RoundButton("−", active=False, min_h=36)
+        plus = RoundButton("+", active=True, min_h=36)
+        minus.setFixedHeight(36)
+        plus.setFixedHeight(36)
         minus.clicked.connect(lambda: self.adjust_target(attr, -1, low, high))
         plus.clicked.connect(lambda: self.adjust_target(attr, 1, low, high))
         row.addWidget(minus)
@@ -2254,6 +2351,8 @@ class ScheduleEditDialog(QDialog):
     def refresh(self):
         self.name_btn.setText(self.name)
         self.time_label.setText(format_schedule_time_12h(f"{self.hour:02d}:{self.minute:02d}"))
+        if hasattr(self, "summary_label"):
+            self.summary_label.setText(f"{schedule_days_text(self.days)} • {format_schedule_time_12h(f'{self.hour:02d}:{self.minute:02d}')}")
         if hasattr(self, "ampm_btn"):
             self.ampm_btn.setText("PM" if self.hour >= 12 else "AM")
             self.ampm_btn.setActive(self.hour >= 12)
@@ -2275,22 +2374,30 @@ class ScheduleEditDialog(QDialog):
                         child.widget().deleteLater()
         for key, btn in getattr(self, "day_buttons", {}).items():
             btn.setActive(key in self.days)
+        if hasattr(self, "every_day_btn"):
+            self.every_day_btn.setActive(set(self.days) == set(SCHEDULE_DAY_KEYS))
+        if hasattr(self, "weekdays_btn"):
+            self.weekdays_btn.setActive(self.days == SCHEDULE_DAY_KEYS[:5])
         if not self.person_ids:
-            none = QLabel("No people selected. This schedule runs whenever the selected days and time match.")
+            none = QLabel("No people selected. Runs when the selected days and time match.")
             none.setWordWrap(True)
+            none.setFont(font(10, QFont.Black))
             none.setStyleSheet("color:#c4d0e5; background:rgba(255,255,255,0.05); border-radius:10px; padding:8px;")
             self.people_box.addWidget(none)
         for eid in self.person_ids:
             row = QHBoxLayout()
+            row.setSpacing(8)
             name = self.person_name(eid)
             lab = QLabel(f"{name}\n{eid}")
             lab.setFont(font(10, QFont.Black))
             lab.setStyleSheet("color:#e8f1ff; background:transparent; border:0;")
-            remove = RoundButton("Remove", active=False, kind="danger", min_h=34)
+            remove = RoundButton("Remove", active=False, kind="danger", min_h=32)
+            remove.setFixedHeight(32)
             remove.clicked.connect(lambda checked=False, x=eid: self.remove_person(x))
             row.addWidget(lab, 1)
             row.addWidget(remove)
             self.people_box.addLayout(row)
+        self.people_box.addStretch(1)
 
     def person_name(self, entity_id: str) -> str:
         for p in self.available_people:
@@ -2384,10 +2491,15 @@ class ScheduleManagerDialog(QDialog):
         self.s = state
         self.setModal(True)
         self.setWindowTitle("Schedules")
-        self.setFixedSize(760, 620)
+        self.setMinimumSize(640, 420)
+        self.resize(820, 560)
         self.setStyleSheet("""
             QDialog { background:#09111f; color:#f7fbff; }
             QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
+            QScrollArea { background:transparent; border:0; }
+            QScrollBar:vertical { background:rgba(255,255,255,0.06); width:9px; border-radius:4px; }
+            QScrollBar::handle:vertical { background:rgba(85,240,255,0.45); border-radius:4px; min-height:28px; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }
         """)
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 18, 20, 18)
@@ -2415,6 +2527,21 @@ class ScheduleManagerDialog(QDialog):
         self.scroll.setWidget(self.body)
         root.addWidget(self.scroll, 1)
         self.refresh()
+        QTimer.singleShot(0, self.fit_to_screen)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.fit_to_screen()
+
+    def fit_to_screen(self):
+        screen = self.screen() or QApplication.primaryScreen()
+        if not screen:
+            return
+        geo = screen.availableGeometry()
+        width = max(640, min(820, geo.width() - 48))
+        height = max(420, min(560, geo.height() - 32))
+        self.resize(width, height)
+        self.move(geo.x() + (geo.width() - width) // 2, geo.y() + (geo.height() - height) // 2)
 
     def schedules(self) -> list[dict]:
         return self.s.thermostat_schedules()
