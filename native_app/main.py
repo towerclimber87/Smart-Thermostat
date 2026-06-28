@@ -3826,7 +3826,9 @@ class ThermostatScreen(Page):
             return
 
         pause = t.get("pauseFunction") if isinstance(t.get("pauseFunction"), dict) else {}
-        if pause.get("active"):
+        snooze_until = self.safe_float(pause.get("snoozeUntil"), 0.0)
+        door_pause_active = bool(pause.get("active")) and not (snooze_until > time.time() * 1000)
+        if door_pause_active:
             self.hide_notice_action_popup()
             self.bypass_pill.hide()
             self.notice.hide()

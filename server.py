@@ -3361,6 +3361,18 @@ def _apply_door_pause_logic(thermostat: dict) -> dict:
 def _apply_door_pause_snooze_request(existing: dict, minutes: object = 5) -> dict:
     t = _merge_thermostat_state(existing)
     pause = _normalize_pause_function(t.get("pauseFunction"))
+
+    # Some older/current configs keep the selected door only under
+    # integrations.homeAssistant.doorEntity.  If pauseFunction.entries is empty,
+    # _merge_thermostat_state intentionally clears runtime pause fields, including
+    # snoozeUntil.  Hydrate the configured door before saving the snooze so a
+    # snooze tap does not appear to work locally and then immediately re-open the
+    # comfort-pause alert on the next backend status/control-loop pass.
+    if not pause.get("entries"):
+        configured_entry = _configured_home_assistant_door_entry()
+        if configured_entry:
+            pause["entries"] = [configured_entry]
+
     snooze_minutes = _normalize_pause_function_duration(minutes, 5)
     now_ms = int(time.time() * 1000)
     if pause.get("active"):
