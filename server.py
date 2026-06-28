@@ -494,6 +494,62 @@ def _normalize_schedule_person_ids(value: object) -> list[str]:
     return ids
 
 
+SCHEDULE_DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+SCHEDULE_DAY_ALIASES = {
+    "0": "mon", "1": "mon", "m": "mon", "mon": "mon", "monday": "mon",
+    "2": "tue", "tu": "tue", "tue": "tue", "tues": "tue", "tuesday": "tue",
+    "3": "wed", "w": "wed", "wed": "wed", "weds": "wed", "wednesday": "wed",
+    "4": "thu", "th": "thu", "thur": "thu", "thurs": "thu", "thu": "thu", "thursday": "thu",
+    "5": "fri", "f": "fri", "fri": "fri", "friday": "fri",
+    "6": "sat", "sa": "sat", "sat": "sat", "saturday": "sat",
+    "7": "sun", "su": "sun", "sun": "sun", "sunday": "sun",
+}
+
+
+def _normalize_schedule_days(value: object) -> list[str]:
+    """Return selected schedule weekdays, Monday first.
+
+    Older schedules did not have a day selector, so missing/invalid day data
+    intentionally means every day. Numeric values accept both Python weekday
+    indexes (0=Monday) and common calendar values (1=Monday ... 7=Sunday).
+    """
+    if value is None:
+        return list(SCHEDULE_DAY_KEYS)
+    if isinstance(value, str):
+        raw_items: list[object] = [x.strip() for x in value.replace(";", ",").split(",")]
+    elif isinstance(value, list):
+        raw_items = value
+    elif isinstance(value, tuple):
+        raw_items = list(value)
+    else:
+        return list(SCHEDULE_DAY_KEYS)
+
+    selected: set[str] = set()
+    for raw in raw_items:
+        if isinstance(raw, bool):
+            continue
+        if isinstance(raw, (int, float)):
+            try:
+                n = int(raw)
+            except Exception:
+                continue
+            if n == 0:
+                key = "mon"
+            elif 1 <= n <= 7:
+                key = SCHEDULE_DAY_KEYS[n - 1]
+            else:
+                continue
+        else:
+            text = str(raw or "").strip().lower()
+            key = SCHEDULE_DAY_ALIASES.get(text)
+        if key in SCHEDULE_DAY_KEYS:
+            selected.add(key)
+
+    if not selected:
+        return list(SCHEDULE_DAY_KEYS)
+    return [key for key in SCHEDULE_DAY_KEYS if key in selected]
+
+
 def _normalize_schedule_entries(value: object) -> list[dict]:
     if not isinstance(value, list):
         return []
@@ -512,6 +568,7 @@ def _normalize_schedule_entries(value: object) -> list[dict]:
             "name": name,
             "enabled": not (item.get("enabled") is False),
             "time": _normalize_schedule_time(item.get("time"), "20:00"),
+            "days": _normalize_schedule_days(item.get("days", item.get("weekdays", item.get("daysOfWeek")))),
             "coolSetpoint": _intish(item.get("coolSetpoint", item.get("coolTarget", 68)), 68, 45, 95),
             "heatSetpoint": _intish(item.get("heatSetpoint", item.get("heatTarget", 71)), 71, 45, 95),
             "personEntityIds": _normalize_schedule_person_ids(item.get("personEntityIds", item.get("people", item.get("persons", [])))),
@@ -2989,6 +3046,7 @@ def _apply_thermostat_schedules(thermostat: dict) -> dict:
     now = datetime.now()
     time_key = now.strftime("%H:%M")
     date_key = now.strftime("%Y-%m-%d")
+    day_key = SCHEDULE_DAY_KEYS[now.weekday()]
     changed = False
     updated_schedules: list[dict] = []
     updated = dict(thermostat)
@@ -2997,25 +3055,14 @@ def _apply_thermostat_schedules(thermostat: dict) -> dict:
         should_run = (
             bool(sched.get("enabled", True))
             and str(sched.get("time") or "") == time_key
+            and day_key in _normalize_schedule_days(sched.get("days"))
             and str(sched.get("lastTriggeredDate") or "") != date_key
             and _schedule_people_are_home(sched, updated)
         )
         if should_run:
             target = _schedule_target_for_current_mode(updated, sched)
-            pause = _normalize_pause_function(updated.get("pauseFunction"))
-            if bool(pause.get("active")):
-                # A door/comfort pause temporarily owns the live setpoint, but
-                # schedules should still become the remembered Home comfort
-                # target. Otherwise the door-close restore would use the old
-                # target that was captured when the door first paused comfort.
-                pause["previousTargetTemp"] = target
-                pause["previousLastComfortTarget"] = target
-                updated["pauseFunction"] = pause
-                updated["lastComfortTarget"] = target
-                updated["targetTemp"] = _door_pause_away_target(updated)
-            else:
-                updated["targetTemp"] = target
-                updated["lastComfortTarget"] = target
+            updated["targetTemp"] = target
+            updated["lastComfortTarget"] = target
             sched["lastTriggeredDate"] = date_key
             changed = True
         updated_schedules.append(sched)

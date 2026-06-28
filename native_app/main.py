@@ -189,6 +189,76 @@ def format_schedule_time_12h(value: Any) -> str:
     return f"{display_hour}:{minute:02d} {suffix}"
 
 
+SCHEDULE_DAY_OPTIONS = (
+    ("mon", "Mon", "Monday"),
+    ("tue", "Tue", "Tuesday"),
+    ("wed", "Wed", "Wednesday"),
+    ("thu", "Thu", "Thursday"),
+    ("fri", "Fri", "Friday"),
+    ("sat", "Sat", "Saturday"),
+    ("sun", "Sun", "Sunday"),
+)
+SCHEDULE_DAY_KEYS = tuple(key for key, _short, _long in SCHEDULE_DAY_OPTIONS)
+SCHEDULE_DAY_LABELS = {key: short for key, short, _long in SCHEDULE_DAY_OPTIONS}
+SCHEDULE_DAY_ALIASES = {
+    "0": "mon", "1": "mon", "m": "mon", "mon": "mon", "monday": "mon",
+    "2": "tue", "tu": "tue", "tue": "tue", "tues": "tue", "tuesday": "tue",
+    "3": "wed", "w": "wed", "wed": "wed", "weds": "wed", "wednesday": "wed",
+    "4": "thu", "th": "thu", "thu": "thu", "thur": "thu", "thurs": "thu", "thursday": "thu",
+    "5": "fri", "f": "fri", "fri": "fri", "friday": "fri",
+    "6": "sat", "sa": "sat", "sat": "sat", "saturday": "sat",
+    "7": "sun", "su": "sun", "sun": "sun", "sunday": "sun",
+}
+
+
+def normalize_schedule_days(value: Any) -> list[str]:
+    if value is None:
+        return list(SCHEDULE_DAY_KEYS)
+    if isinstance(value, str):
+        raw_items: list[Any] = [x.strip() for x in value.replace(";", ",").split(",")]
+    elif isinstance(value, (list, tuple)):
+        raw_items = list(value)
+    else:
+        return list(SCHEDULE_DAY_KEYS)
+
+    selected: set[str] = set()
+    for raw in raw_items:
+        if isinstance(raw, bool):
+            continue
+        if isinstance(raw, (int, float)):
+            try:
+                n = int(raw)
+            except Exception:
+                continue
+            if n == 0:
+                key = "mon"
+            elif 1 <= n <= 7:
+                key = SCHEDULE_DAY_KEYS[n - 1]
+            else:
+                continue
+        else:
+            key = SCHEDULE_DAY_ALIASES.get(str(raw or "").strip().lower())
+        if key in SCHEDULE_DAY_KEYS:
+            selected.add(key)
+    if not selected:
+        return list(SCHEDULE_DAY_KEYS)
+    return [key for key in SCHEDULE_DAY_KEYS if key in selected]
+
+
+def schedule_days_text(value: Any, compact: bool = False) -> str:
+    days = normalize_schedule_days(value)
+    if len(days) >= 7:
+        return "Every day"
+    if days == list(SCHEDULE_DAY_KEYS[:5]):
+        return "Weekdays"
+    if days == list(SCHEDULE_DAY_KEYS[5:]):
+        return "Weekends"
+    labels = [SCHEDULE_DAY_LABELS.get(day, day.title()) for day in days]
+    if compact:
+        return ", ".join(labels)
+    return "Runs " + ", ".join(labels)
+
+
 def as_bool_state(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -2038,6 +2108,8 @@ class ScheduleEditDialog(QDialog):
         self.cool = int(float(self.schedule.get("coolSetpoint") or 72))
         self.heat = int(float(self.schedule.get("heatSetpoint") or 68))
         self.enabled = bool(self.schedule.get("enabled", True))
+        self.days = normalize_schedule_days(self.schedule.get("days", self.schedule.get("weekdays", self.schedule.get("daysOfWeek"))))
+        self.day_buttons: dict[str, RoundButton] = {}
         self.person_ids = [str(x) for x in (self.schedule.get("personEntityIds") or []) if str(x)]
         self.available_people: list[dict] = []
         self.load_people()
@@ -2101,6 +2173,31 @@ class ScheduleEditDialog(QDialog):
         target_row.addWidget(self.target_control("Cool Target", "cool", 45, 95))
         target_row.addWidget(self.target_control("Heat Target", "heat", 45, 95))
         root.addLayout(target_row)
+
+        day_panel = GlassPanel(radius=18)
+        day_lay = QVBoxLayout(day_panel)
+        day_lay.setContentsMargins(12, 8, 12, 10)
+        day_lay.setSpacing(8)
+        day_hdr = QHBoxLayout()
+        day_hdr.addWidget(QLabel("Run on these days"))
+        day_hdr.addStretch(1)
+        every = RoundButton("Every Day", active=False, min_h=34)
+        weekdays = RoundButton("Weekdays", active=False, min_h=34)
+        every.clicked.connect(lambda checked=False: self.set_days(SCHEDULE_DAY_KEYS))
+        weekdays.clicked.connect(lambda checked=False: self.set_days(SCHEDULE_DAY_KEYS[:5]))
+        day_hdr.addWidget(every)
+        day_hdr.addWidget(weekdays)
+        day_lay.addLayout(day_hdr)
+        day_row = QHBoxLayout()
+        day_row.setSpacing(8)
+        for key, short, _long in SCHEDULE_DAY_OPTIONS:
+            btn = RoundButton(short, active=key in self.days, min_h=36)
+            btn.clicked.connect(lambda checked=False, d=key: self.toggle_day(d))
+            btn.setFixedHeight(36)
+            self.day_buttons[key] = btn
+            day_row.addWidget(btn)
+        day_lay.addLayout(day_row)
+        root.addWidget(day_panel)
 
         people_panel = GlassPanel(radius=18)
         people_lay = QVBoxLayout(people_panel)
@@ -2176,8 +2273,10 @@ class ScheduleEditDialog(QDialog):
                     child = item.layout().takeAt(0)
                     if child.widget():
                         child.widget().deleteLater()
+        for key, btn in getattr(self, "day_buttons", {}).items():
+            btn.setActive(key in self.days)
         if not self.person_ids:
-            none = QLabel("No people selected. This schedule runs every day at the set time.")
+            none = QLabel("No people selected. This schedule runs whenever the selected days and time match.")
             none.setWordWrap(True)
             none.setStyleSheet("color:#c4d0e5; background:rgba(255,255,255,0.05); border-radius:10px; padding:8px;")
             self.people_box.addWidget(none)
@@ -2226,6 +2325,22 @@ class ScheduleEditDialog(QDialog):
         self.enabled = not self.enabled
         self.refresh()
 
+    def set_days(self, days: Any):
+        self.days = normalize_schedule_days(days)
+        self.refresh()
+
+    def toggle_day(self, day: str):
+        key = str(day or "").strip().lower()
+        if key not in SCHEDULE_DAY_KEYS:
+            return
+        selected = set(self.days)
+        if key in selected and len(selected) > 1:
+            selected.remove(key)
+        else:
+            selected.add(key)
+        self.days = [d for d in SCHEDULE_DAY_KEYS if d in selected]
+        self.refresh()
+
     def add_person(self):
         entities = self.available_people
         if not entities:
@@ -2251,6 +2366,7 @@ class ScheduleEditDialog(QDialog):
             "name": self.name or "Schedule",
             "enabled": self.enabled,
             "time": f"{self.hour:02d}:{self.minute:02d}",
+            "days": normalize_schedule_days(self.days),
             "coolSetpoint": int(self.cool),
             "heatSetpoint": int(self.heat),
             "personEntityIds": list(self.person_ids),
@@ -2331,9 +2447,10 @@ class ScheduleManagerDialog(QDialog):
         lay.setContentsMargins(14, 12, 14, 12)
         lay.setSpacing(10)
         people = sched.get("personEntityIds") or []
-        people_text = "Runs every day" if not people else f"{len(people)} person{'s' if len(people) != 1 else ''} required"
+        people_text = "No person requirement" if not people else f"{len(people)} person{'s' if len(people) != 1 else ''} required"
+        day_text = schedule_days_text(sched.get("days"))
         time_text = format_schedule_time_12h(sched.get('time') or '07:00')
-        text = QLabel(f"<b>{sched.get('name') or 'Schedule'}</b><br>{time_text} • Cool {sched.get('coolSetpoint')}° • Heat {sched.get('heatSetpoint')}°<br>{people_text}")
+        text = QLabel(f"<b>{sched.get('name') or 'Schedule'}</b><br>{day_text} at {time_text} • Cool {sched.get('coolSetpoint')}° • Heat {sched.get('heatSetpoint')}°<br>{people_text}")
         text.setTextFormat(Qt.RichText)
         text.setFont(font(11, QFont.Black))
         text.setStyleSheet("background:transparent; border:0; color:#eef4ff;")
