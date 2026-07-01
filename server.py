@@ -67,6 +67,7 @@ PANEL_COMMAND_GRACE_MS = int(float(os.environ.get("SMART_THERMOSTAT_PANEL_COMMAN
 # for setpoint changes so the wall thermostat does not snap back to an old HA
 # value 30-60 seconds after the user tapped the touchscreen.
 PANEL_TARGET_COMMAND_GRACE_MS = int(float(os.environ.get("SMART_THERMOSTAT_PANEL_TARGET_GRACE_SECONDS", "300") or "300") * 1000)
+ARRIVING_AWAY_BYPASS_MS = int(float(os.environ.get("SMART_THERMOSTAT_ARRIVING_BYPASS_MINUTES", "120") or "120") * 60000)
 CONFIG_WEB_PORTAL_TIMEOUT_SECONDS = max(60.0, float(os.environ.get("SMART_THERMOSTAT_CONFIG_PORTAL_TIMEOUT_SECONDS", "900") or "900"))
 MANUAL_HARDWARE_TIMEOUT_SECONDS = max(0.0, float(os.environ.get("SMART_THERMOSTAT_MANUAL_HARDWARE_TIMEOUT_SECONDS", "300") or "300"))
 _CONFIG_WEB_PORTAL_LOCK = threading.RLock()
@@ -736,23 +737,52 @@ def _normalize_manual_away_presence_latch(value: object) -> dict | None:
 def _normalize_presence_home_override(value: object) -> dict | None:
     if not isinstance(value, dict) or value.get("active") is False:
         return None
-    started_at = _number(value.get("startedAt"), int(time.time() * 1000), 0, None)
+    now_ms = int(time.time() * 1000)
+    started_at = _number(value.get("startedAt"), now_ms, 0, None)
     entity_ids = _normalize_presence_entity_list(value.get("entityIds", value.get("blockedEntityIds", [])))
-    return {
+    reason = str(value.get("reason") or "manual-return-home").strip()[:80] or "manual-return-home"
+    duration_ms = int(_number(value.get("durationMs", value.get("durationMilliseconds", 0)), 0, 0, None) or 0)
+    expires_at = int(_number(value.get("expiresAt", value.get("until", value.get("expires_at", 0))), 0, 0, None) or 0)
+    if reason == "arriving" and expires_at <= 0:
+        expires_at = int(started_at + (duration_ms if duration_ms > 0 else ARRIVING_AWAY_BYPASS_MS))
+    if expires_at > 0 and now_ms >= expires_at:
+        return None
+    payload = {
         "active": True,
         "startedAt": started_at,
         "entityIds": entity_ids,
-        "reason": str(value.get("reason") or "manual-return-home").strip()[:80] or "manual-return-home",
+        "reason": reason,
     }
+    if duration_ms > 0:
+        payload["durationMs"] = duration_ms
+    if expires_at > 0:
+        payload["expiresAt"] = expires_at
+    return payload
 
 
-def _presence_home_override_payload(entity_ids: list[str] | None = None, *, reason: str = "manual-return-home") -> dict:
-    return {
+def _presence_home_override_payload(
+    entity_ids: list[str] | None = None,
+    *,
+    reason: str = "manual-return-home",
+    duration_ms: int | None = None,
+    expires_at: int | None = None,
+) -> dict:
+    started_at = int(time.time() * 1000)
+    payload = {
         "active": True,
-        "startedAt": int(time.time() * 1000),
+        "startedAt": started_at,
         "entityIds": _normalize_presence_entity_list(entity_ids or []),
         "reason": reason,
     }
+    if duration_ms is not None and duration_ms > 0:
+        payload["durationMs"] = int(duration_ms)
+    if expires_at is not None and expires_at > 0:
+        payload["expiresAt"] = int(expires_at)
+    elif reason == "arriving":
+        duration = int(duration_ms) if duration_ms is not None and duration_ms > 0 else ARRIVING_AWAY_BYPASS_MS
+        payload["durationMs"] = duration
+        payload["expiresAt"] = started_at + duration
+    return payload
 
 
 def _allowed_mode_for_locks(mode: str, thermostat: dict, fallback: str = "cool") -> str:
@@ -3109,6 +3139,10 @@ def _apply_presence_away_logic(thermostat: dict) -> dict:
     updated = dict(thermostat)
     away_source = str(updated.get("awaySource") or "").strip().lower()
     home_override = _normalize_presence_home_override(updated.get("presenceHomeOverride"))
+    if home_override is None and updated.get("presenceHomeOverride"):
+        # Timed Arriving holds expire here. Once expired, normal Auto Away/Home
+        # logic below is allowed to put the thermostat back in Away if nobody is home.
+        updated["presenceHomeOverride"] = None
 
     if any_home:
         # A real Home report proves the phone/person tracker is back online, so

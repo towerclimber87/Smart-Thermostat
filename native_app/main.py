@@ -1531,16 +1531,26 @@ class AppState:
         self._target_override_value = None
         self._target_override_until = 0.0
 
-    def set_mode_override(self, mode: str, *, away: bool = False, hold_seconds: float = 14.0):
+    def set_mode_override(
+        self,
+        mode: str,
+        *,
+        away: bool = False,
+        hold_seconds: float = 14.0,
+        presence_home_override: dict | None = None,
+    ):
         """Hold a just-requested local mode against one stale status refresh."""
         mode = str(mode or "").strip().lower()
         if mode not in {"off", "heat", "cool", "away"}:
             return
-        self._mode_override = {
+        override = {
             "mode": "cool" if mode == "away" else mode,
             "away": bool(away or mode == "away"),
             "awaySource": "manual" if (away or mode == "away") else "",
         }
+        if presence_home_override is not None:
+            override["presenceHomeOverride"] = copy.deepcopy(presence_home_override)
+        self._mode_override = override
         self._mode_override_until = time.monotonic() + max(1.0, float(hold_seconds))
 
     def clear_mode_override(self):
@@ -3845,7 +3855,7 @@ class ThermostatScreen(Page):
                 equipment = "Idle • Fan Hold"
             elif relays.get("fan"):
                 equipment = "Fan"
-        mode_label = "Away" if away else mode.capitalize()
+        mode_label = "Away" if away else "Arriving" if self.arriving_override_active(t) else mode.capitalize()
         text = f"• {mode_label} • {equipment}"
         if self.status_badge.text() != text:
             self.status_badge.setText(text)
@@ -4314,11 +4324,12 @@ class ThermostatScreen(Page):
         # fully rounded pill style so they do not look squared-off or overlap.
         lay = QHBoxLayout()
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(16)
+        lay.setSpacing(12)
         lay.addStretch(1)
-        for mode in ["off", "cool", "heat", "away"]:
-            b = RoundButton(mode.capitalize(), active=False, min_h=38)
-            b.setFixedSize(82, 38)
+        for mode in ["off", "cool", "heat", "away", "arriving"]:
+            label = "Arriving" if mode == "arriving" else mode.capitalize()
+            b = RoundButton(label, active=False, min_h=38)
+            b.setFixedSize(106 if mode == "arriving" else 82, 38)
             b.clicked.connect(lambda checked=False, m=mode: self.set_mode(m))
             self.mode_buttons[mode] = b
             lay.addWidget(b)
@@ -4435,12 +4446,69 @@ class ThermostatScreen(Page):
             except Exception:
                 pass
 
+    def auto_away_entity_ids(self, snapshot: dict | None = None) -> list[str]:
+        t = snapshot if isinstance(snapshot, dict) else self.thermostat_view()
+        result: list[str] = []
+        for person in t.get("autoAwayPeople") or []:
+            if not isinstance(person, dict):
+                continue
+            entity_id = str(person.get("entityId") or person.get("entity_id") or "").strip()
+            if entity_id and entity_id not in result:
+                result.append(entity_id)
+        return result
+
+    def arriving_override_payload(self, snapshot: dict | None = None) -> dict:
+        now_ms = int(time.time() * 1000)
+        duration_ms = 120 * 60000
+        return {
+            "active": True,
+            "startedAt": now_ms,
+            "entityIds": self.auto_away_entity_ids(snapshot),
+            "reason": "arriving",
+            "durationMs": duration_ms,
+            "expiresAt": now_ms + duration_ms,
+        }
+
+    def arriving_override_active(self, snapshot: dict | None = None) -> bool:
+        t = snapshot if isinstance(snapshot, dict) else self.thermostat_view()
+        override = t.get("presenceHomeOverride") if isinstance(t.get("presenceHomeOverride"), dict) else {}
+        if not override or not bool(override.get("active")):
+            return False
+        if str(override.get("reason") or "").strip().lower() != "arriving":
+            return False
+        expires_at = self.safe_float(override.get("expiresAt") or override.get("until"), 0.0)
+        return expires_at <= 0 or expires_at > time.time() * 1000
+
     def set_mode(self, mode: str):
         mode = str(mode or "").strip().lower()
+        if mode not in {"off", "heat", "cool", "away", "arriving"}:
+            return
         before_tap = copy.deepcopy(self.thermostat_view())
-        if mode == "away":
+        if mode == "arriving":
+            arriving_override = self.arriving_override_payload(before_tap)
+            changes = {
+                "away": False,
+                "awaySource": "",
+                "manualAwayPresenceLatch": None,
+                "presenceHomeOverride": arriving_override,
+            }
+            resume_mode = str(before_tap.get("mode") or "cool").lower()
+            if resume_mode == "auto":
+                resume_mode = str(before_tap.get("autoActiveMode") or before_tap.get("activeMode") or "cool").lower()
+            if resume_mode not in {"heat", "cool", "off"}:
+                resume_mode = "cool"
+            self.s.set_mode_override(resume_mode, away=False, presence_home_override=arriving_override)
+            self.s.thermostat["away"] = False
+            self.s.thermostat["awaySource"] = ""
+            self.s.thermostat["manualAwayPresenceLatch"] = None
+            self.s.thermostat["presenceHomeOverride"] = copy.deepcopy(arriving_override)
+            if before_tap.get("lastComfortTarget") is not None:
+                self.s.thermostat["targetTemp"] = before_tap.get("lastComfortTarget")
+        elif mode == "away":
             going_away = not bool(before_tap.get("away"))
             changes = {"away": going_away, "awaySource": "manual" if going_away else ""}
+            if going_away:
+                changes["presenceHomeOverride"] = None
             resume_mode = str(before_tap.get("mode") or "cool").lower()
             if resume_mode == "auto":
                 resume_mode = str(before_tap.get("autoActiveMode") or before_tap.get("activeMode") or "cool").lower()
@@ -4449,6 +4517,8 @@ class ThermostatScreen(Page):
             self.s.set_mode_override("away" if going_away else resume_mode, away=going_away)
             self.s.thermostat["away"] = going_away
             self.s.thermostat["awaySource"] = changes["awaySource"]
+            if going_away:
+                self.s.thermostat["presenceHomeOverride"] = None
         else:
             # Physical/manual button taps should visibly win immediately.
             changes = {"mode": mode, "away": False, "awaySource": "", "modeChangeSource": "panel"}
@@ -4472,7 +4542,7 @@ class ThermostatScreen(Page):
                     self.s.thermostat["manualPendingMode"] = ""
                     self.s.thermostat["manualLockoutUntil"] = 0
         self.sync(self.s.config, self.s.thermostat)
-        if mode != "away":
+        if mode not in {"away", "arriving"}:
             self.request_peer_sync({"mode": mode})
 
         def done(result):
@@ -4765,8 +4835,9 @@ class ThermostatScreen(Page):
         self.plus.setVisible(setpoint_visible)
         self.minus.setEnabled(setpoint_visible)
         self.plus.setEnabled(setpoint_visible)
+        arriving = self.arriving_override_active(t) and not away
         for m, b in self.mode_buttons.items():
-            selected = (m == mode and not away) or (m == "away" and away)
+            selected = (m == mode and not away and not arriving) or (m == "away" and away) or (m == "arriving" and arriving)
             b.setStyleSheet(self._floating_button_style(selected))
         fan = str(t.get("fan") or "auto").lower()
         if self.cooling_is_active(t) and fan == "off":
