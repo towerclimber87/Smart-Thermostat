@@ -1834,9 +1834,12 @@ class ThermostatActionBanner(GlassPanel):
         self.setMinimumHeight(134)
         self.setMaximumHeight(230)
         self.title = QLabel("", self)
+        self.title.setAlignment(Qt.AlignCenter)
+        self.title.setWordWrap(True)
         self.title.setFont(font(17, QFont.Black))
         self.title.setStyleSheet("color:#ffffff; background:transparent; border:0;")
         self.body = QLabel("", self)
+        self.body.setAlignment(Qt.AlignCenter)
         self.body.setWordWrap(True)
         self.body.setFont(font(11, QFont.Black))
         self.body.setStyleSheet("color:#dfe8ff; background:transparent; border:0;")
@@ -1865,6 +1868,16 @@ class ThermostatActionBanner(GlassPanel):
     def _layout_buttons(self, bypass_left: bool = False):
         while self.buttons_layout.count():
             self.buttons_layout.takeAt(0)
+
+        visible_buttons = [btn for btn in (self.dismiss, self.revert, self.bypass) if btn.isVisible()]
+        if len(visible_buttons) == 1:
+            # Door-comfort pause only has the snooze action; keep it centered so
+            # the alert reads like a clean modal instead of a left-weighted banner.
+            self.buttons_layout.addStretch(1)
+            self.buttons_layout.addWidget(visible_buttons[0])
+            self.buttons_layout.addStretch(1)
+            return
+
         if bypass_left:
             self.buttons_layout.addWidget(self.bypass)
             self.buttons_layout.addStretch(1)
@@ -1879,11 +1892,11 @@ class ThermostatActionBanner(GlassPanel):
     def set_alert(self, kind: str, title: str, body: str, *, dismiss=False, revert=False, bypass=False, dismiss_text="Dismiss", revert_text="Revert", bypass_text="Bypass"):
         self.kind = kind or "info"
         if self.kind == "door-pause":
-            self.setMinimumHeight(168)
-            self.setMaximumHeight(238)
-            self.title.setFont(font(22, QFont.Black))
-            self.body.setFont(font(13, QFont.Black))
-            self.bypass.setFixedWidth(190)
+            self.setMinimumHeight(182)
+            self.setMaximumHeight(260)
+            self.title.setFont(font(24, QFont.Black))
+            self.body.setFont(font(14, QFont.Black))
+            self.bypass.setFixedWidth(220)
         elif self.kind == "lockout":
             self.setMinimumHeight(154)
             self.setMaximumHeight(210)
@@ -1904,17 +1917,17 @@ class ThermostatActionBanner(GlassPanel):
         self.dismiss.setVisible(bool(dismiss))
         self.revert.setVisible(bool(revert))
         self.bypass.setVisible(bool(bypass))
-        self._layout_buttons(bypass_left=self.kind in {"lockout", "door-pause"} and bool(bypass))
+        self._layout_buttons(bypass_left=self.kind == "lockout" and bool(bypass))
         color = {
             "heat": "rgba(255,72,83,0.58)",
             "cool": "rgba(65,225,255,0.48)",
             "lockout": "rgba(188,132,255,0.50)",
-            "door-pause": "rgba(255,154,36,0.76)",
+            "door-pause": "rgba(255,154,36,0.82)",
             "auto": "rgba(72,214,255,0.42)",
             "safety": "rgba(255,72,83,0.56)" if "Heat" in title else "rgba(65,225,255,0.50)",
         }.get(self.kind, "rgba(72,214,255,0.38)")
-        border = "rgba(255,231,164,0.52)" if self.kind == "door-pause" else "rgba(255,255,255,0.20)"
-        radius = 26 if self.kind == "door-pause" else 24
+        border = "rgba(255,231,164,0.62)" if self.kind == "door-pause" else "rgba(255,255,255,0.20)"
+        radius = 30 if self.kind == "door-pause" else 24
         border_width = 2 if self.kind == "door-pause" else 1
         self.setStyleSheet(f"""
             ThermostatActionBanner {{
@@ -3467,11 +3480,11 @@ class ThermostatScreen(Page):
             x = min(max(280, self.width() // 4), max(12, self.width() - self.alert_banner.width() - 26))
             y = 104
         elif kind == "door-pause":
-            w = min(660, max(540, self.width() - 96))
+            w = min(640, max(500, self.width() - 140))
             self.alert_banner.setFixedWidth(w)
             self.alert_banner.adjustSize()
             x = max(12, (self.width() - self.alert_banner.width()) // 2)
-            y = 54
+            y = max(18, (self.height() - self.alert_banner.height()) // 2)
         else:
             w = min(520, max(420, self.width() - 120))
             self.alert_banner.setFixedWidth(w)
@@ -3930,7 +3943,7 @@ class ThermostatScreen(Page):
             self.alert_banner.set_alert(
                 "door-pause",
                 "Comfort Paused",
-                f"{door_name} is open.\nUsing the away setpoint until it closes.",
+                f"{door_name} is open.\nComfort is paused and the away setpoint is being used until it closes.",
                 dismiss=False,
                 revert=False,
                 bypass=True,
