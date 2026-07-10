@@ -3093,8 +3093,20 @@ def _apply_thermostat_schedules(thermostat: dict) -> dict:
         )
         if should_run:
             target = _schedule_target_for_current_mode(updated, sched)
-            updated["targetTemp"] = target
-            updated["lastComfortTarget"] = target
+            pause = _normalize_pause_function(updated.get("pauseFunction"))
+            if pause.get("active"):
+                # A schedule may become due while an open door has temporarily
+                # moved the thermostat to its away setpoint. Keep that temporary
+                # setpoint in force, but replace the comfort target saved by the
+                # pause so closing the door resumes at the newly scheduled
+                # temperature instead of the stale pre-pause temperature.
+                pause["previousTargetTemp"] = target
+                pause["previousLastComfortTarget"] = target
+                updated["lastComfortTarget"] = target
+                updated["pauseFunction"] = pause
+            else:
+                updated["targetTemp"] = target
+                updated["lastComfortTarget"] = target
             sched["lastTriggeredDate"] = date_key
             changed = True
         updated_schedules.append(sched)
