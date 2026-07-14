@@ -3157,10 +3157,12 @@ def _apply_presence_away_logic(thermostat: dict) -> dict:
         updated["presenceHomeOverride"] = None
 
     if any_home:
-        # A real Home report proves the phone/person tracker is back online, so
-        # release a manual Return Home override and allow future all-away
-        # transitions to work normally again.
-        if home_override:
+        # A real Home report releases the indefinite manual Return Home hold,
+        # but it must not cancel the timed Arriving hold. Arrival is also used
+        # while already home to suppress Auto Away during a short trip, so that
+        # two-hour bypass must remain active even after a Home state is observed.
+        home_override_reason = str((home_override or {}).get("reason") or "").strip().lower()
+        if home_override and home_override_reason != "arriving":
             updated["presenceHomeOverride"] = None
         if bool(updated.get("away")) and away_source in {"presence", "auto", ""}:
             updated["away"] = False
@@ -3170,10 +3172,9 @@ def _apply_presence_away_logic(thermostat: dict) -> dict:
                 updated["targetTemp"] = updated.get("lastComfortTarget")
     else:
         if home_override:
-            # The user deliberately tapped Return Home while the assigned people
-            # still report Away/unknown. Keep Home until at least one assigned
-            # person reports Home again; this covers dead phones and stale
-            # presence data without disabling Auto Away forever.
+            # A Home override blocks Auto Away while all assigned people still
+            # report Away/unknown. Manual Return Home lasts until a real Home
+            # report; the Arriving override lasts only until its timed expiry.
             updated["away"] = False
             updated["awaySource"] = ""
             updated["manualAwayPresenceLatch"] = None
