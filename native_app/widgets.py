@@ -145,16 +145,39 @@ class IconCircle(QAbstractButton):
         self.text = text
         self.value = value or text
         self.active = active
+        self._press_feedback_active = False
+        self._press_feedback_timer = QTimer(self)
+        self._press_feedback_timer.setSingleShot(True)
+        self._press_feedback_timer.setInterval(140)
+        self._press_feedback_timer.timeout.connect(self._clear_press_feedback)
         self.setCursor(Qt.PointingHandCursor)
         self.setFixedSize(diameter, diameter)
         self.setFont(font(max(12, diameter // 3)))
 
+    def _clear_press_feedback(self):
+        self._press_feedback_active = False
+        self.update()
+
+    def _show_press_feedback(self):
+        self._press_feedback_active = True
+        self._press_feedback_timer.start()
+        self.update()
+
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
+        pressed = self.isDown() or self._press_feedback_active
         rect = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        if pressed:
+            # Briefly shrink and lower the face so a quick touchscreen tap
+            # still looks like a physical button being pushed in.
+            rect = rect.adjusted(4, 5, -4, -3)
         g = QLinearGradient(rect.topLeft(), rect.bottomRight())
-        if self.active:
+        if pressed:
+            g.setColorAt(0, QColor(35, 54, 72, 215))
+            g.setColorAt(1, QColor(12, 19, 31, 235))
+            text = QColor(164, 223, 236, 205)
+        elif self.active:
             g.setColorAt(0, QColor(72, 225, 255))
             g.setColorAt(1, QColor(75, 142, 255))
             text = QColor(2, 15, 30)
@@ -163,7 +186,7 @@ class IconCircle(QAbstractButton):
             g.setColorAt(1, QColor(25, 31, 46, 210))
             text = T.TEXT
         p.setBrush(g)
-        p.setPen(QPen(T.BORDER, 1.2))
+        p.setPen(QPen(QColor(89, 183, 207, 82) if pressed else T.BORDER, 1.2))
         p.drawEllipse(rect)
         p.setPen(text)
         p.setFont(self.font())
@@ -177,6 +200,7 @@ class IconCircle(QAbstractButton):
         # thermostat setpoint by 2° per tap instead of 1°.
         super().mouseReleaseEvent(event)
         if inside:
+            self._show_press_feedback()
             self.clickedValue.emit(self.value)
 
 

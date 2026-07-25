@@ -815,6 +815,11 @@ class ModernAudioButton(QAbstractButton):
         self.kind = str(kind or "normal")
         self.holdable = bool(holdable)
         self._hold_fired = False
+        self._press_feedback_active = False
+        self._press_feedback_timer = QTimer(self)
+        self._press_feedback_timer.setSingleShot(True)
+        self._press_feedback_timer.setInterval(140)
+        self._press_feedback_timer.timeout.connect(self._clear_press_feedback)
         self._hold_timer = QTimer(self)
         self._hold_timer.setSingleShot(True)
         self._hold_timer.setInterval(max(250, int(hold_ms)))
@@ -843,6 +848,15 @@ class ModernAudioButton(QAbstractButton):
         self._hold_fired = True
         self.held.emit()
 
+    def _clear_press_feedback(self):
+        self._press_feedback_active = False
+        self.update()
+
+    def _show_press_feedback(self):
+        self._press_feedback_active = True
+        self._press_feedback_timer.start()
+        self.update()
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton and self.holdable:
             self._hold_fired = False
@@ -857,6 +871,8 @@ class ModernAudioButton(QAbstractButton):
             event.accept()
             return
         if event.button() == Qt.LeftButton and self.rect().contains(event.pos()):
+            self.setDown(False)
+            self._show_press_feedback()
             self.clicked.emit()
             event.accept()
             return
@@ -894,7 +910,16 @@ class ModernAudioButton(QAbstractButton):
         p = QPainter(self)
         p.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
         rect = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        pressed = self.isDown() or self._press_feedback_active
+        if pressed:
+            rect = rect.adjusted(4, 5, -4, -3)
         icon_col, bg1, bg2, border, text_col = self._palette()
+        if pressed:
+            bg1 = QColor(max(0, bg1.red() - 34), max(0, bg1.green() - 34), max(0, bg1.blue() - 34), 220)
+            bg2 = QColor(max(0, bg2.red() - 22), max(0, bg2.green() - 22), max(0, bg2.blue() - 22), 232)
+            border = QColor(icon_col.red(), icon_col.green(), icon_col.blue(), 58)
+            icon_col = QColor(icon_col.red(), icon_col.green(), icon_col.blue(), 175)
+            text_col = QColor(text_col.red(), text_col.green(), text_col.blue(), 180)
 
         g = QLinearGradient(rect.topLeft(), rect.bottomRight())
         g.setColorAt(0.0, bg1)
@@ -6445,15 +6470,22 @@ class AudioScreen(Page):
         self.tv_power.setMinimumWidth(126)
         self.projector = ModernAudioButton("projector", "Projector", min_h=64, holdable=True)
         self.projector.setMinimumWidth(126)
+        self.volume_down = IconCircle("−", "volume_down", 58)
+        self.volume_down.setToolTip("Lower volume 2%")
+        self.volume_down.setAccessibleName("Lower volume 2 percent")
+        self.volume_up = IconCircle("+", "volume_up", 58)
+        self.volume_up.setToolTip("Raise volume 2%")
+        self.volume_up.setAccessibleName("Raise volume 2 percent")
         self.switch_buttons["tv_power"] = self.tv_power
         self.switch_buttons["projector"] = self.projector
         projector_row = QHBoxLayout()
         projector_row.setContentsMargins(0, 0, 0, 0)
         projector_row.setSpacing(12)
-        projector_row.addStretch(1)
-        projector_row.addWidget(self.tv_power)
         projector_row.addWidget(self.projector)
+        projector_row.addWidget(self.volume_down)
         projector_row.addStretch(1)
+        projector_row.addWidget(self.volume_up)
+        projector_row.addWidget(self.tv_power)
         vol_lay.addLayout(vol_row)
         vol_lay.addWidget(self.volume)
         vol_lay.addLayout(projector_row)
@@ -6501,6 +6533,8 @@ class AudioScreen(Page):
         self.prev.clicked.connect(lambda: self.media_action("previous"))
         self.play.clicked.connect(lambda: self.media_action("play_pause"))
         self.next.clicked.connect(lambda: self.media_action("next"))
+        self.volume_down.clicked.connect(lambda: self.adjust_volume(-2))
+        self.volume_up.clicked.connect(lambda: self.adjust_volume(2))
         self.volume.valueChanged.connect(lambda value: self.on_volume_slider_changed(value))
         self.volume.sliderReleased.connect(lambda: self.media_action("volume", self.volume.value()))
         self.sub.clicked.connect(lambda: self.toggle_audio_switch("subwoofer"))
@@ -6624,6 +6658,19 @@ class AudioScreen(Page):
 
     def on_volume_slider_changed(self, value: int):
         self._hold_audio_volume_local(value, 2.0 if self.volume.isSliderDown() else 0.75)
+
+    def adjust_volume(self, delta: int):
+        """Move the selected media player's volume in exact 2% increments."""
+        local = self._audio_volume_local_active()
+        try:
+            current = int(round(float(local.get("value")))) if local else int(self.volume.value())
+        except Exception:
+            current = int(self.volume.value() or 0)
+        target = int(clamp(current + int(delta), 0, 100))
+        if target == current:
+            self._hold_audio_volume_local(target, 1.0)
+            return
+        self.media_action("volume", target)
 
     def number_value_to_slider(self, record: dict, value) -> int:
         try:
