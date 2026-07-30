@@ -10613,6 +10613,7 @@ class AlarmControlDialog(QDialog):
         self._alarm_action_running = False
         self._closing = False
         self._destroyed = False
+        self._keypad_accept_after = 0.0
         self.destroyed.connect(lambda *_args: setattr(self, "_destroyed", True))
         self.alarmActionCompleted.connect(self.handle_alarm_action_completed)
 
@@ -10819,6 +10820,10 @@ class AlarmControlDialog(QDialog):
         self.body.addLayout(actions)
 
     def render_keypad(self):
+        # Do not accept the touch/release that opened this modal as keypad
+        # input. The Pi touchscreen can occasionally deliver that trailing
+        # event to the newly displayed dialog.
+        self._keypad_accept_after = time.monotonic() + 0.45
         state = self.current_state()
         accent = "#ff4979" if state != "triggered" else "#ff365b"
         title = "Alarm Triggered" if state == "triggered" else "Enter Code"
@@ -10891,6 +10896,8 @@ class AlarmControlDialog(QDialog):
             self.code_display.repaint()
 
     def add_code_digit(self, digit: str):
+        if time.monotonic() < getattr(self, "_keypad_accept_after", 0.0):
+            return
         if len(self.code_buffer) >= 4:
             return
         self.code_buffer += digit
@@ -10899,6 +10906,8 @@ class AlarmControlDialog(QDialog):
             QTimer.singleShot(120, self.auto_disarm)
 
     def backspace_code(self):
+        if time.monotonic() < getattr(self, "_keypad_accept_after", 0.0):
+            return
         self.code_buffer = self.code_buffer[:-1]
         self.update_code_display()
 
@@ -11023,6 +11032,19 @@ class AlarmControlDialog(QDialog):
             return
         if self._alarm_action_running:
             return
+        if action == "disarm":
+            expected = str((self.s.config.get("alarm") or {}).get("disarmCode") or "").strip()
+            entered = str(code or "").strip()
+            # Disarm must only be reached from a successfully completed keypad
+            # entry. Never allow a missing, stale, or implicitly supplied code
+            # to launch the Home Assistant service call.
+            if not expected:
+                QMessageBox.warning(self, "Alarm Code Required", "Configure an alarm disarm code before using Disarm.")
+                return
+            if not entered or entered != expected:
+                if hasattr(self, "code_display"):
+                    self.invalid_disarm_code()
+                return
         if self.countdown_timer.isActive():
             self.countdown_timer.stop()
         trace_runtime(f"alarm action sending action={action}")

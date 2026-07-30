@@ -3973,7 +3973,7 @@ def _strip_comfort_target_changes(incoming: dict) -> dict:
     return {k: v for k, v in incoming.items() if k not in THERMOSTAT_COMFORT_TARGET_KEYS}
 
 
-def _handle_thermostat_update(payload: dict) -> dict:
+def _handle_thermostat_update_locked(payload: dict) -> dict:
     existing = _read_thermostat_record()["thermostat"]
     incoming = payload.get("thermostat", payload) if isinstance(payload, dict) else {}
     if not isinstance(incoming, dict):
@@ -4172,6 +4172,28 @@ def _handle_thermostat_update(payload: dict) -> dict:
     # background worker so a slow HA switch command cannot surface as
     # "Set temp failed: timed out" on the touchscreen.
     _schedule_thermostat_outputs_apply(merged, reason="control")
+    return merged
+
+
+def _handle_thermostat_update(payload: dict) -> dict:
+    """Apply one thermostat command without racing the autonomous control loop.
+
+    The control endpoint previously read a full thermostat snapshot, calculated
+    the requested change, and then wrote that entire snapshot back. During that
+    window the two-second runtime loop could record that cooling/heating was on.
+    The older control snapshot would then overwrite those relay/cycle markers,
+    making the next output pass briefly believe the equipment was off. On an
+    external HA-controlled system that could produce a visible off/on command;
+    on local GPIO it could unnecessarily rewrite the active relay.
+
+    The thermostat record lock is re-entrant, so the existing read/write helpers
+    remain safe while this command owns one consistent state transaction.
+    """
+    with _THERMOSTAT_RECORD_LOCK:
+        _handle_thermostat_update_locked(payload)
+    # Build the response after releasing the state transaction. Status assembly
+    # may refresh Home Assistant person tracking and should never delay the
+    # autonomous HVAC loop while holding the thermostat record lock.
     return _thermostat_status_payload(refresh_runtime=False, apply_hardware=False)
 
 
@@ -4478,7 +4500,13 @@ def _write_relay_outputs_locked(relays: dict, source: str, *, record_history: bo
     global _HARDWARE_LAST_RELAYS, _HARDWARE_LAST_RELAY_SOURCE
     normalized = _normalize_relay_outputs(relays)
     backend = _relay_backend()
+    previous = dict(_HARDWARE_LAST_RELAYS)
     for relay, on in normalized.items():
+        # Reasserting an already-active relay on every control/status pass is
+        # unnecessary and can create a short dropout on some relay/interface
+        # boards. Only touch GPIO when the requested state actually changes.
+        if bool(previous.get(relay)) == bool(on):
+            continue
         try:
             backend.write(relay, on)
         except Exception as exc:
@@ -6258,6 +6286,17 @@ def _call_alarm_service(ha_url: str, token: str, entity_id: str, action: str, co
 
     payload = {"entity_id": entity_id}
     code_value = str(code or "").strip()
+    if action == "disarm":
+        panel_record = _read_panel_config_record()
+        panel_config = panel_record.get("config") if isinstance(panel_record, dict) else {}
+        alarm_config = (panel_config or {}).get("alarm") if isinstance(panel_config, dict) else {}
+        configured_code = str((alarm_config or {}).get("disarmCode") or "").strip()
+        if not configured_code:
+            raise ValueError("Alarm disarm code is not configured")
+        if not code_value:
+            raise ValueError("Alarm disarm code is required")
+        if code_value != configured_code:
+            raise ValueError("Invalid alarm disarm code")
     if code_value:
         payload["code"] = code_value
 
