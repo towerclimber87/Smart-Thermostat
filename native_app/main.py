@@ -1444,6 +1444,10 @@ class AppState:
         self._target_override_until = 0.0
         self._mode_override: dict | None = None
         self._mode_override_until = 0.0
+        # Monotonic timestamp of the last alarm state confirmed directly with
+        # Home Assistant. Saved panel config is display cache only and must never
+        # be treated as authoritative when opening alarm controls.
+        self.alarm_state_refreshed_at = 0.0
 
     def ha(self) -> dict:
         return nested_get(self.config, "integrations", "homeAssistant", default={}) or {}
@@ -1526,6 +1530,7 @@ class AppState:
             entity = {}
         entity.update(fresh)
         ha["alarmEntity"] = entity
+        self.alarm_state_refreshed_at = time.monotonic()
         return entity
 
     def refresh_alarm_state(self):
@@ -3114,6 +3119,10 @@ class ThermostatScreen(Page):
         self.alarm_card = InfoTile("Alarmo", "DISARMED", "盾", good=True)
         self.virtual_panel = VirtualOutputsPanel()
         self.virtual_temp_pending: float | None = None
+        self._alarm_dialog_open = False
+        self._alarm_reopen_block_until = 0.0
+        self._alarm_open_refresh_running = False
+        self._alarm_open_generation = 0
         self.virtual_temp_push_timer = QTimer(self)
         self.virtual_temp_push_timer.setSingleShot(True)
         self.virtual_temp_push_timer.timeout.connect(self.push_virtual_temp)
@@ -4743,66 +4752,134 @@ class ThermostatScreen(Page):
         except Exception as exc:
             self.requestToast.emit(f"Virtual temp failed: {exc}")
 
+    def cached_alarm_entity(self) -> dict:
+        ha = self.s.ha()
+        entity = ha.get("alarmEntity") or {}
+        return entity if isinstance(entity, dict) else {}
+
+    @staticmethod
+    def alarm_state_is_armed(state: str) -> bool:
+        state = str(state or "").strip().lower()
+        return state.startswith("armed") or state in {"arming", "pending", "triggered"}
+
+    @staticmethod
+    def alarm_state_is_controllable(state: str) -> bool:
+        state = str(state or "").strip().lower()
+        return state == "disarmed" or ThermostatScreen.alarm_state_is_armed(state)
+
+    def restore_alarm_card_from_cache(self):
+        entity = self.cached_alarm_entity()
+        state = str(entity.get("state") or "unknown").lower()
+        self.alarm_card.setValue(state.upper())
+        self.alarm_card.setAlarmState(state)
+
+    def mark_alarm_state_checking(self):
+        self.alarm_card.setValue("CHECKING")
+        self.alarm_card.setAlarmState("checking")
+
     def show_alarm_dialog(self):
+        """Confirm live HA state before exposing any alarm control.
+
+        The former flow rendered from cached panel config and refreshed after the
+        modal appeared. If the alarm had already changed while the screen slept,
+        the keypad could appear first and then switch to Disarmed, making a state
+        refresh look exactly like an unauthorized disarm. Controls now fail closed
+        until Home Assistant has answered this specific tap.
+        """
+        now = time.monotonic()
+        if getattr(self, "_alarm_dialog_open", False):
+            return
+        if getattr(self, "_alarm_open_refresh_running", False):
+            return
+        if now < getattr(self, "_alarm_reopen_block_until", 0.0):
+            return
+
+        entity = self.cached_alarm_entity()
+        eid = str(entity.get("entityId") or entity.get("entity_id") or "").strip()
+        if not eid:
+            self.requestToast.emit("No alarm entity assigned")
+            return
+
+        cached_state = str(entity.get("state") or "unknown").lower()
+        self._alarm_open_refresh_running = True
+        self._alarm_open_generation += 1
+        generation = self._alarm_open_generation
+        self.mark_alarm_state_checking()
+        self.requestToast.emit("Checking live alarm status")
+        trace_runtime(f"alarm control requested entity={eid} cached_state={cached_state}")
+
+        def refresh_done(fresh):
+            if generation != getattr(self, "_alarm_open_generation", 0):
+                return
+            self._alarm_open_refresh_running = False
+            if not isinstance(fresh, dict) or not fresh:
+                self.restore_alarm_card_from_cache()
+                self.requestToast.emit("Unable to verify alarm status")
+                trace_runtime("alarm control blocked because live state was empty")
+                return
+            confirmed = self.s.apply_alarm_state(fresh) or fresh
+            self.apply_alarm_state_refresh(confirmed)
+            live_state = str(confirmed.get("state") or "unknown").lower()
+            trace_runtime(f"alarm state confirmed before controls cached={cached_state} live={live_state}")
+            if not self.alarm_state_is_controllable(live_state):
+                self.requestToast.emit(f"Alarm status is {live_state.replace('_', ' ')}")
+                trace_runtime(f"alarm control blocked for non-controllable state={live_state}")
+                return
+            if self.alarm_state_is_armed(cached_state) and live_state == "disarmed":
+                self.requestToast.emit("Alarm was already disarmed; display refreshed")
+            self._open_verified_alarm_dialog(confirmed)
+
+        def refresh_failed(err):
+            if generation != getattr(self, "_alarm_open_generation", 0):
+                return
+            self._alarm_open_refresh_running = False
+            self.restore_alarm_card_from_cache()
+            self.requestToast.emit("Unable to verify alarm status")
+            trace_runtime(f"alarm control blocked because live refresh failed: {err}")
+
+        self.run_async("alarm-state-before-open", self.s.refresh_alarm_state, refresh_done, refresh_failed)
+
+    def _open_verified_alarm_dialog(self, verified_entity: dict):
         now = time.monotonic()
         if getattr(self, "_alarm_dialog_open", False):
             return
         if now < getattr(self, "_alarm_reopen_block_until", 0.0):
             return
-        ha = self.s.ha()
-        entity = ha.get("alarmEntity") or {}
-        eid = entity.get("entityId") or ""
-        if not eid:
-            self.requestToast.emit("No alarm entity assigned")
+        entity = self.cached_alarm_entity()
+        if isinstance(verified_entity, dict):
+            entity.update(verified_entity)
+        live_state = str(entity.get("state") or "unknown").lower()
+        if not self.alarm_state_is_controllable(live_state):
+            self.requestToast.emit("Alarm status could not be verified")
             return
-        # Open the alarm panel immediately. A Home Assistant state refresh can
-        # take long enough to make the touch feel dead, so refresh it in the
-        # background and re-render the panel only if the dialog is still alive.
-        # This avoids touching a modal dialog after Cancel/close on the Pi X11
-        # touchscreen, which can otherwise drop the full native UI to black.
+
         self._alarm_dialog_open = True
         dlg = AlarmControlDialog(self.s, entity, self)
-        trace_runtime(f"alarm dialog opened entity={eid} state={dlg.current_state()}")
-
-        def refresh_done(fresh):
-            if not fresh:
-                return
-            try:
-                entity.update(fresh)
-                if dlg.can_update_ui():
-                    dlg.apply_fresh_alarm_state(fresh)
-                else:
-                    trace_runtime("alarm open refresh skipped because dialog already closed")
-            except RuntimeError as exc:
-                trace_runtime(f"alarm open refresh skipped after Qt object cleanup: {exc}")
-            except Exception as exc:
-                trace_runtime(f"alarm open refresh failed: {exc}")
-
-        self.run_async("alarm-state-open", self.s.refresh_alarm_state, refresh_done, lambda err: trace_runtime(f"alarm open refresh failed: {err}"))
+        trace_runtime(f"verified alarm dialog opened entity={entity.get('entityId') or ''} state={dlg.current_state()}")
 
         def applied(alarm, action):
             if alarm:
                 entity.update(alarm)
             self.requestToast.emit(f"Alarm {action.replace('_', ' ')} sent")
             self.sync(self.s.config, self.s.thermostat)
+
         dlg.actionDone.connect(applied)
         self._alarm_dialog = dlg
         try:
             dlg.exec_()
         finally:
             try:
-                dlg.prepare_for_close("show_alarm_dialog finally")
+                dlg.prepare_for_close("verified alarm dialog finally")
             except Exception:
                 pass
             if getattr(self, "_alarm_dialog", None) is dlg:
                 self._alarm_dialog = None
             self._alarm_dialog_open = False
-            # Touchscreens can emit a final release after the modal has closed.
-            # Swallow it briefly so it cannot hit Sleep, Info, Settings, or Alarmo
-            # underneath and make the panel look like it crashed.
             self._alarm_reopen_block_until = time.monotonic() + 1.2
-            self._modal_touch_block_until = time.monotonic() + 0.55
-            trace_runtime("alarm dialog closed")
+            parent = self.window()
+            if parent is not None and hasattr(parent, "_modal_touch_block_until"):
+                parent._modal_touch_block_until = time.monotonic() + 0.55
+            trace_runtime("verified alarm dialog closed")
 
     def apply_alarm_state_refresh(self, fresh: dict | None):
         """Apply a Home Assistant-initiated alarm state change to visible controls."""
@@ -10918,7 +10995,12 @@ class AlarmControlDialog(QDialog):
         if not expected or self.code_buffer != expected:
             self.invalid_disarm_code()
             return
-        self.send_action("disarm", self.code_buffer)
+        confirmation = {
+            "method": "keypad",
+            "confirmedAt": int(time.time() * 1000),
+            "digits": len(self.code_buffer),
+        }
+        self.send_action("disarm", self.code_buffer, confirmation=confirmation)
 
     def invalid_disarm_code(self):
         self.code_buffer = ""
@@ -11026,7 +11108,7 @@ class AlarmControlDialog(QDialog):
         for btn in self.findChildren(QAbstractButton):
             btn.setEnabled(not busy)
 
-    def send_action(self, action: str, code: str = ""):
+    def send_action(self, action: str, code: str = "", confirmation: dict | None = None):
         if getattr(self, "_closing", False):
             trace_runtime(f"alarm action ignored after close action={action}")
             return
@@ -11054,6 +11136,8 @@ class AlarmControlDialog(QDialog):
             "entityId": self.entity.get("entityId") or "",
             "action": action,
             "code": code,
+            "confirmation": confirmation if action == "disarm" else None,
+            "source": "native-alarm-dialog",
         })
 
         def worker():
@@ -11700,6 +11784,13 @@ class MainWindow(Background):
         self._run_display_power_command(SCREEN_SLEEP_ON_COMMAND)
         self.sleep_overlay.hide()
         self.position_sleep_controls()
+        # Refresh Alarmo immediately on wake. The first wake touch remains blocked,
+        # and tapping Alarmo performs a second per-tap verification before controls
+        # are shown, so a sleeping display can never expose stale arm/disarm state.
+        page = self.pages.get("Thermostat")
+        if self.configured_alarm_entity_id() and isinstance(page, ThermostatScreen):
+            page.mark_alarm_state_checking()
+            QTimer.singleShot(0, self.refresh_alarm_state)
         # Some display stacks reset gamma/backlight state after DPMS wake. Reapply
         # the last edge-gesture brightness shortly after the panel comes back.
         QTimer.singleShot(250, lambda: self.set_screen_brightness_percent(getattr(self, "_screen_brightness_pct", SCREEN_BRIGHTNESS_DEFAULT_PERCENT), show_feedback=False))
@@ -11964,11 +12055,13 @@ class MainWindow(Background):
     def _handle_alarm_refresh_completed(self, info: object):
         self._alarm_refresh_running = False
         data = info if isinstance(info, dict) else {}
+        page = self.pages.get("Thermostat")
         fresh = data.get("alarm")
         if not isinstance(fresh, dict) or not fresh:
+            if isinstance(page, ThermostatScreen):
+                page.restore_alarm_card_from_cache()
             return
         self.s.apply_alarm_state(fresh)
-        page = self.pages.get("Thermostat")
         if isinstance(page, ThermostatScreen):
             page.apply_alarm_state_refresh(fresh)
         if self.current_name == "Thermostat":

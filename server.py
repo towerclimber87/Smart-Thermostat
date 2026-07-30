@@ -35,6 +35,7 @@ THERMOSTAT_SCHEDULES_FILE = DATA_DIR / "thermostat-schedules.json"
 THERMOSTAT_SCHEDULES_BACKUP_FILE = DATA_DIR / "thermostat-schedules.backup.json"
 PANEL_CONFIG_FILE = DATA_DIR / "panel-config.json"
 HVAC_HISTORY_FILE = DATA_DIR / "hvac-history.json"
+ALARM_ACTION_AUDIT_FILE = DATA_DIR / "alarm-actions.log"
 APP_STARTED_AT = time.time()
 HA_STATES_CACHE_TTL_SECONDS = float(os.environ.get("SMART_THERMOSTAT_HA_STATES_CACHE_TTL_SECONDS", "8.0"))
 HA_ENTITY_STATE_CACHE_TTL_SECONDS = float(os.environ.get("SMART_THERMOSTAT_HA_ENTITY_STATE_CACHE_TTL_SECONDS", "8.0"))
@@ -80,6 +81,7 @@ _HA_ENTITY_STATE_CACHE_LOCK = threading.Lock()
 _HA_ENTITY_STATE_CACHE: dict[tuple[str, str, str], tuple[float, dict]] = {}
 _HA_REQUEST_SEMAPHORE = threading.BoundedSemaphore(HA_REQUEST_CONCURRENCY)
 _PANEL_CONFIG_LOCK = threading.RLock()
+_ALARM_ACTION_AUDIT_LOCK = threading.RLock()
 _THERMOSTAT_RECORD_LOCK = threading.RLock()
 _THERMOSTAT_RECORD_CACHE: dict | None = None
 _THERMOSTAT_RECORD_LAST_PERSIST_SIGNATURE = ""
@@ -6268,9 +6270,53 @@ def _fetch_ha_alarm_states_for_entities(ha_url: str, token: str, entity_ids: lis
     return [by_id[entity_id] for entity_id in wanted if entity_id in by_id]
 
 
-def _call_alarm_service(ha_url: str, token: str, entity_id: str, action: str, code: str | None = None) -> dict:
+def _audit_alarm_action(event: str, **fields) -> None:
+    """Append a small local audit trail without ever recording the alarm code."""
+    record = {
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "event": str(event or "alarm_action"),
+    }
+    for key, value in fields.items():
+        if key.lower() in {"code", "token", "password"}:
+            continue
+        record[str(key)] = value
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        line = json.dumps(record, separators=(",", ":"), sort_keys=True)
+        with _ALARM_ACTION_AUDIT_LOCK:
+            # Keep the appliance log bounded. One megabyte is several thousand
+            # alarm events and is enough to distinguish a state refresh from an
+            # actual service call without allowing indefinite growth.
+            try:
+                if ALARM_ACTION_AUDIT_FILE.exists() and ALARM_ACTION_AUDIT_FILE.stat().st_size > 1_000_000:
+                    rotated = ALARM_ACTION_AUDIT_FILE.with_suffix(".log.1")
+                    try:
+                        rotated.unlink(missing_ok=True)
+                    except TypeError:
+                        if rotated.exists():
+                            rotated.unlink()
+                    ALARM_ACTION_AUDIT_FILE.replace(rotated)
+            except OSError:
+                pass
+            with ALARM_ACTION_AUDIT_FILE.open("a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+    except Exception as exc:
+        print(f"Alarm audit write failed: {exc}", flush=True)
+
+
+def _call_alarm_service(
+    ha_url: str,
+    token: str,
+    entity_id: str,
+    action: str,
+    code: str | None = None,
+    confirmation: dict | None = None,
+    source: str = "",
+) -> dict:
     entity_id = (entity_id or "").strip()
+    source = str(source or "unknown").strip() or "unknown"
     if not entity_id.startswith("alarm_control_panel."):
+        _audit_alarm_action("rejected", entityId=entity_id, action=action, source=source, reason="invalid_entity")
         raise ValueError("Entity must be an alarm_control_panel.* entity")
 
     service_by_action = {
@@ -6279,9 +6325,12 @@ def _call_alarm_service(ha_url: str, token: str, entity_id: str, action: str, co
         "arm_away": "alarm_arm_away",
         "arm_night": "alarm_arm_night",
     }
-    action = (action or "disarm").strip().lower()
+    # Never default an absent/malformed request to Disarm. An explicit action is
+    # required for every alarm service call.
+    action = str(action or "").strip().lower()
     service = service_by_action.get(action)
     if not service:
+        _audit_alarm_action("rejected", entityId=entity_id, action=action, source=source, reason="unsupported_action")
         raise ValueError("Unsupported alarm action")
 
     payload = {"entity_id": entity_id}
@@ -6292,21 +6341,64 @@ def _call_alarm_service(ha_url: str, token: str, entity_id: str, action: str, co
         alarm_config = (panel_config or {}).get("alarm") if isinstance(panel_config, dict) else {}
         configured_code = str((alarm_config or {}).get("disarmCode") or "").strip()
         if not configured_code:
+            _audit_alarm_action("rejected", entityId=entity_id, action=action, source=source, reason="code_not_configured")
             raise ValueError("Alarm disarm code is not configured")
         if not code_value:
+            _audit_alarm_action("rejected", entityId=entity_id, action=action, source=source, reason="code_missing")
             raise ValueError("Alarm disarm code is required")
         if code_value != configured_code:
+            _audit_alarm_action("rejected", entityId=entity_id, action=action, source=source, reason="invalid_code")
             raise ValueError("Invalid alarm disarm code")
+
+        confirm = confirmation if isinstance(confirmation, dict) else {}
+        method = str(confirm.get("method") or "").strip().lower()
+        try:
+            confirmed_at = int(confirm.get("confirmedAt") or 0)
+        except (TypeError, ValueError):
+            confirmed_at = 0
+        try:
+            digits = int(confirm.get("digits") or 0)
+        except (TypeError, ValueError):
+            digits = 0
+        age_ms = abs(int(time.time() * 1000) - confirmed_at) if confirmed_at else 999_999_999
+        if method != "keypad" or digits != len(code_value) or age_ms > 15_000:
+            _audit_alarm_action(
+                "rejected",
+                entityId=entity_id,
+                action=action,
+                source=source,
+                reason="fresh_keypad_confirmation_required",
+                confirmationMethod=method,
+                confirmationAgeMs=age_ms,
+                digits=digits,
+            )
+            raise ValueError("Fresh keypad confirmation is required to disarm")
+
     if code_value:
         payload["code"] = code_value
 
+    _audit_alarm_action(
+        "service_call",
+        entityId=entity_id,
+        action=action,
+        source=source,
+        hasCode=bool(code_value),
+    )
     _ha_json_request(ha_url, token, "POST", f"/api/services/alarm_control_panel/{service}", payload)
     _invalidate_ha_state_cache(ha_url, token)
     try:
-        return _fetch_ha_alarm_state(ha_url, token, entity_id)
+        result = _fetch_ha_alarm_state(ha_url, token, entity_id)
     except Exception:
         optimistic_state = "disarmed" if action == "disarm" else action.replace("arm_", "armed_")
-        return {"entityId": entity_id, "name": entity_id, "domain": "alarm_control_panel", "state": optimistic_state}
+        result = {"entityId": entity_id, "name": entity_id, "domain": "alarm_control_panel", "state": optimistic_state}
+    _audit_alarm_action(
+        "service_result",
+        entityId=entity_id,
+        action=action,
+        source=source,
+        state=str((result or {}).get("state") or "unknown"),
+    )
+    return result
 
 
 def _fetch_ha_entities(ha_url: str, token: str, domains: list[str] | None = None) -> list[dict]:
@@ -7368,8 +7460,10 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                     payload.get("url", ""),
                     payload.get("token", ""),
                     payload.get("entityId", ""),
-                    payload.get("action", "disarm"),
+                    payload.get("action", ""),
                     payload.get("code", ""),
+                    payload.get("confirmation"),
+                    payload.get("source", ""),
                 )
                 return _json(self, 200, {"ok": True, "alarm": alarm})
 
