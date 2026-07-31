@@ -5832,6 +5832,27 @@ def _start_thermostat_control_loop() -> None:
     thread = threading.Thread(target=_thermostat_control_loop, name="thermostat-control-loop", daemon=True)
     thread.start()
 
+def _hardware_telemetry_payload() -> dict:
+    """Return read-only onboard sensor telemetry for Home Assistant.
+
+    This endpoint intentionally avoids the full thermostat status path and any
+    Home Assistant proxy lookups. It reads the motion input without reapplying
+    configuration and uses the existing HDC2080 cache, so frequent motion polls
+    cannot create climate-command echoes or hammer the I2C bus.
+    """
+    temperature = _read_local_temperature_sensor(force=False)
+    motion = _motion_status_payload(apply_config=False)
+    return {
+        "ok": True,
+        "readAt": int(time.time()),
+        "motion": motion,
+        "temperature": temperature,
+        # Keep the established hardware-status key as an alias for clients that
+        # already understand the local sensor payload.
+        "localTempSensor": temperature,
+    }
+
+
 def _hardware_status_payload(force_i2c: bool = False) -> dict:
     if _expire_manual_hardware_if_needed():
         try:
@@ -6333,6 +6354,8 @@ def _discovery_payload() -> dict:
         "endpoints": {
             "status": "/api/thermostat/status",
             "control": "/api/thermostat/control",
+            "hardwareTelemetry": "/api/hardware/telemetry",
+            "motionControl": "/api/hardware/motion",
             "discovery": "/api/discovery",
         },
         "thermostat": status["thermostat"],
@@ -7856,8 +7879,12 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
             return _send_json_download(self, _config_backup_filename(), _config_export_payload(server_port))
         if path == "/api/hardware/status":
             return _json(self, 200, _hardware_status_payload(force_i2c=True))
+        if path == "/api/hardware/telemetry":
+            return _json(self, 200, _hardware_telemetry_payload())
         if path == "/api/hardware/motion":
-            return _json(self, 200, _motion_status_payload(apply_config=True))
+            # GET is strictly read-only. Configuration is applied at startup and
+            # only changed by an explicit POST from the panel or Home Assistant.
+            return _json(self, 200, _motion_status_payload(apply_config=False))
         if path == "/api/history":
             requested_date = (query.get("date") or [None])[0]
             return _json(self, 200, _hvac_history_payload(requested_date))
