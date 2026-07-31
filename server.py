@@ -115,12 +115,23 @@ HARDWARE_I2C_DEVICE = Path(f"/dev/i2c-{HARDWARE_I2C_BUS}")
 CONTROL_LOOP_ENABLED = os.environ.get("SMART_THERMOSTAT_CONTROL_LOOP", "1").strip().lower() not in {"0", "false", "no", "off"}
 CONTROL_LOOP_INTERVAL_SECONDS = max(1.0, float(os.environ.get("SMART_THERMOSTAT_CONTROL_LOOP_SECONDS", "2") or "2"))
 LOCAL_TEMP_SENSOR_ENABLED = os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_SENSOR", "auto").strip().lower() not in {"0", "false", "no", "off", "disabled"}
-LOCAL_TEMP_SENSOR_MODE = os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_MODE", "fallback").strip().lower() or "fallback"
+# The two onboard HDC2080 sensors are the primary room-temperature source.
+# Home Assistant remains available only when neither onboard sensor can provide
+# a trustworthy reading. Set SMART_THERMOSTAT_LOCAL_TEMP_MODE=fallback to
+# restore the older Home-Assistant-first behavior.
+LOCAL_TEMP_SENSOR_MODE = os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_MODE", "primary").strip().lower() or "primary"
 LOCAL_TEMP_SENSOR_POLL_SECONDS = max(2.0, float(os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_POLL_SECONDS", "5") or "5"))
 LOCAL_TEMP_SENSOR_STALE_SECONDS = max(15.0, float(os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_FALLBACK_AFTER_SECONDS", "60") or "60"))
 LOCAL_TEMP_SENSOR_ADDRESS = os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_I2C_ADDRESS", "").strip()
+LOCAL_TEMP_SENSOR_ADDRESSES = os.environ.get(
+    "SMART_THERMOSTAT_LOCAL_TEMP_I2C_ADDRESSES",
+    LOCAL_TEMP_SENSOR_ADDRESS or "0x40,0x41",
+).strip()
 LOCAL_TEMP_SENSOR_TYPE = os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_TYPE", "auto").strip().lower() or "auto"
-LOCAL_TEMP_SOURCE_NAMES = {"onboard", "local", "i2c", "hardware", "onboard-fallback"}
+LOCAL_TEMP_SENSOR_MAX_PAIR_DELTA_F = max(0.5, float(os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_MAX_PAIR_DELTA_F", "5") or "5"))
+LOCAL_TEMP_SENSOR_MAX_STEP_F = max(1.0, float(os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_MAX_STEP_F", "6") or "6"))
+LOCAL_TEMP_SENSOR_HOLD_LAST_SECONDS = max(15.0, float(os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_HOLD_LAST_SECONDS", "120") or "120"))
+LOCAL_TEMP_SOURCE_NAMES = {"onboard", "local", "i2c", "hardware", "onboard-fallback", "hdc2080", "hdc2080-pair"}
 
 _HARDWARE_LOCK = threading.RLock()
 _HARDWARE_RELAY_BACKEND = None
@@ -147,6 +158,12 @@ _THERMOSTAT_ASYNC_OUTPUT_SEQ = 0
 _HARDWARE_LAST_I2C_SCAN = {"at": 0.0, "payload": None}
 _LOCAL_TEMP_SENSOR_LOCK = threading.RLock()
 _LOCAL_TEMP_SENSOR_CACHE = {"at": 0.0, "payload": None}
+_LOCAL_TEMP_SENSOR_HEALTH = {
+    "lastAcceptedF": None,
+    "lastAcceptedAt": 0.0,
+    "selectedAddress": "",
+    "sensorLastF": {},
+}
 _CONTROL_LOOP_THREAD_STARTED = False
 _CONTROL_LOOP_STOP = threading.Event()
 
@@ -3452,9 +3469,24 @@ def _apply_runtime_thermostat_logic(record: dict, *, notify: bool = True) -> dic
     thermostat = record.get("thermostat") or {}
     was_away = bool(thermostat.get("away"))
     thermostat = _clear_expired_virtual_temp_override(thermostat)
-    thermostat = _apply_selected_ha_temperature_sensor_if_needed(thermostat)
+
+    if not _virtual_temp_override_active(thermostat):
+        local_primary = LOCAL_TEMP_SENSOR_MODE in {"primary", "onboard", "local", "always", "on", "force"}
+        if local_primary and LOCAL_TEMP_SENSOR_ENABLED:
+            sensor = _read_local_temperature_sensor()
+            if sensor.get("available") and sensor.get("temperatureF") is not None:
+                thermostat = _apply_local_temperature_sensor_if_needed(
+                    {"thermostat": thermostat}, sensor=sensor, force_use=True
+                )
+            else:
+                # Keep the configured HA sensor as a last-resort fallback only
+                # when neither onboard HDC2080 can provide a trusted reading.
+                thermostat = _apply_selected_ha_temperature_sensor_if_needed(thermostat)
+        else:
+            thermostat = _apply_selected_ha_temperature_sensor_if_needed(thermostat)
+            thermostat = _apply_local_temperature_sensor_if_needed({"thermostat": thermostat})
+
     thermostat = _apply_selected_ha_outdoor_temperature_sensor_if_needed(thermostat)
-    thermostat = _apply_local_temperature_sensor_if_needed({"thermostat": thermostat})
     updated = _apply_presence_away_logic(thermostat)
     updated = _apply_door_pause_logic(updated)
     updated = _apply_away_setpoint_logic(updated, was_away=was_away)
@@ -5000,21 +5032,285 @@ def _read_sht3x_temperature(bus, address: int) -> float:
     return -45.0 + 175.0 * (raw / 65535.0)
 
 
+def _parse_i2c_addresses(value: str, default: tuple[int, ...] = ()) -> list[int]:
+    addresses: list[int] = []
+    for part in str(value or "").replace(";", ",").split(","):
+        address = _parse_i2c_address(part)
+        if address is None or not (0x03 <= address <= 0x77) or address in addresses:
+            continue
+        addresses.append(address)
+    return addresses or list(default)
+
+
+def _read_hdc2080_measurement(bus, address: int) -> dict:
+    """Trigger and read one HDC2080 temperature/humidity conversion."""
+    bus.write_byte_data(address, 0x0F, 0x01)
+    # Default 14-bit temperature + humidity conversion is about 1.27 ms. Ten
+    # milliseconds leaves comfortable margin without slowing the 5-second poll.
+    time.sleep(0.010)
+    data = bus.read_i2c_block_data(address, 0x00, 4)
+    if len(data) < 4:
+        raise OSError(f"short HDC2080 read ({len(data)} bytes)")
+
+    raw_temp = int(data[0]) | (int(data[1]) << 8)
+    raw_humidity = int(data[2]) | (int(data[3]) << 8)
+    temp_c = (raw_temp / 65536.0) * 165.0 - 40.0
+    humidity = (raw_humidity / 65536.0) * 100.0
+    # Thermostat control accepts the same practical range used for Home
+    # Assistant temperature inputs: -40F through 130F.
+    if not (-40.0 <= _fahrenheit_from_celsius(temp_c) <= 130.0):
+        raise ValueError(f"unreasonable room temperature {temp_c:.2f}C")
+    if not (0.0 <= humidity <= 100.0):
+        raise ValueError(f"unreasonable humidity {humidity:.2f}%")
+    return {
+        "ok": True,
+        "available": True,
+        "address": f"0x{address:02X}",
+        "temperatureF": round(_fahrenheit_from_celsius(temp_c), 2),
+        "temperatureC": round(temp_c, 2),
+        "humidity": round(humidity, 2),
+        "error": "",
+    }
+
+
+def _select_hdc2080_pair_reading(readings: list[dict], errors: list[dict], now: float) -> dict:
+    valid = [item for item in readings if item.get("available") and item.get("temperatureF") is not None]
+    sensor_last = _LOCAL_TEMP_SENSOR_HEALTH.setdefault("sensorLastF", {})
+    previous_accepted = _LOCAL_TEMP_SENSOR_HEALTH.get("lastAcceptedF")
+    previous_accepted_at = float(_LOCAL_TEMP_SENSOR_HEALTH.get("lastAcceptedAt") or 0.0)
+    previous_selected = str(_LOCAL_TEMP_SENSOR_HEALTH.get("selectedAddress") or "")
+
+    def finalize(selected: list[dict], strategy: str, ignored: list[dict] | None = None, *, degraded: bool = False) -> dict:
+        ignored = ignored or []
+        temp_f = sum(float(item["temperatureF"]) for item in selected) / len(selected)
+        temp_c = sum(float(item["temperatureC"]) for item in selected) / len(selected)
+        humidities = [float(item["humidity"]) for item in selected if item.get("humidity") is not None]
+        humidity = sum(humidities) / len(humidities) if humidities else None
+        used_addresses = [str(item.get("address") or "") for item in selected]
+        for item in valid:
+            address = str(item.get("address") or "")
+            sensor_last[address] = float(item["temperatureF"])
+            item["used"] = address in used_addresses
+            if not item["used"] and not item.get("ignoredReason"):
+                item["ignoredReason"] = "disagreed with trusted temperature"
+
+        accepted_f = round(temp_f, 2)
+        _LOCAL_TEMP_SENSOR_HEALTH["lastAcceptedF"] = accepted_f
+        _LOCAL_TEMP_SENSOR_HEALTH["lastAcceptedAt"] = now
+        _LOCAL_TEMP_SENSOR_HEALTH["selectedAddress"] = used_addresses[0] if len(used_addresses) == 1 else ",".join(used_addresses)
+        delta = None
+        if len(valid) >= 2:
+            delta = round(max(float(item["temperatureF"]) for item in valid) - min(float(item["temperatureF"]) for item in valid), 2)
+        label = "HDC2080 pair " + "/".join(used_addresses) if len(used_addresses) > 1 else f"HDC2080 {used_addresses[0]}"
+        if ignored:
+            label += " (other sensor ignored)"
+        return {
+            "ok": True,
+            "available": True,
+            "temperatureF": round(temp_f, 1),
+            "temperatureC": round(temp_c, 2),
+            "humidity": round(humidity, 1) if humidity is not None else None,
+            "source": "hdc2080-pair",
+            "label": label,
+            "addresses": used_addresses,
+            "strategy": strategy,
+            "degraded": bool(degraded or ignored or errors),
+            "temperatureDeltaF": delta,
+            "maxAllowedDeltaF": LOCAL_TEMP_SENSOR_MAX_PAIR_DELTA_F,
+            "ignoredAddresses": [str(item.get("address") or "") for item in ignored],
+            "sensors": valid + errors,
+            "error": "; ".join(str(item.get("error") or "") for item in errors if item.get("error")),
+        }
+
+    if not valid:
+        if previous_accepted is not None and now - previous_accepted_at <= LOCAL_TEMP_SENSOR_HOLD_LAST_SECONDS:
+            return {
+                "ok": True,
+                "available": True,
+                "temperatureF": round(float(previous_accepted), 1),
+                "temperatureC": round((float(previous_accepted) - 32.0) * 5.0 / 9.0, 2),
+                "humidity": None,
+                "source": "hdc2080-pair",
+                "label": "HDC2080 pair (holding last trusted reading)",
+                "addresses": [],
+                "strategy": "hold-last-good",
+                "degraded": True,
+                "temperatureDeltaF": None,
+                "maxAllowedDeltaF": LOCAL_TEMP_SENSOR_MAX_PAIR_DELTA_F,
+                "ignoredAddresses": [],
+                "sensors": errors,
+                "error": "; ".join(str(item.get("error") or "") for item in errors if item.get("error")),
+            }
+        return {
+            "ok": False,
+            "available": False,
+            "temperatureF": None,
+            "temperatureC": None,
+            "humidity": None,
+            "source": "hdc2080-pair",
+            "label": "HDC2080 pair unavailable",
+            "addresses": [],
+            "strategy": "unavailable",
+            "degraded": True,
+            "temperatureDeltaF": None,
+            "maxAllowedDeltaF": LOCAL_TEMP_SENSOR_MAX_PAIR_DELTA_F,
+            "ignoredAddresses": [],
+            "sensors": errors,
+            "error": "; ".join(str(item.get("error") or "") for item in errors if item.get("error")) or "No HDC2080 readings",
+        }
+
+    if len(valid) == 1:
+        return finalize(valid, "single-sensor", degraded=True)
+
+    ordered = sorted(valid, key=lambda item: str(item.get("address") or ""))
+    pair_delta = abs(float(ordered[0]["temperatureF"]) - float(ordered[1]["temperatureF"]))
+    if pair_delta <= LOCAL_TEMP_SENSOR_MAX_PAIR_DELTA_F:
+        return finalize(ordered, "average-pair")
+
+    # With only two sensors, disagreement alone cannot prove which unit is bad.
+    # Use continuity from the last trusted pair value and the previously selected
+    # sensor to reject a sudden outlier. If there is no defensible winner, hold
+    # the last trusted temperature briefly instead of averaging a bad reading.
+    winner: dict | None = None
+    if previous_accepted is not None:
+        ranked = sorted(ordered, key=lambda item: abs(float(item["temperatureF"]) - float(previous_accepted)))
+        near_distance = abs(float(ranked[0]["temperatureF"]) - float(previous_accepted))
+        far_distance = abs(float(ranked[1]["temperatureF"]) - float(previous_accepted))
+        if near_distance <= LOCAL_TEMP_SENSOR_MAX_STEP_F and far_distance - near_distance >= 1.0:
+            winner = ranked[0]
+
+    if winner is None and previous_selected and "," not in previous_selected:
+        previous_addresses = {previous_selected}
+        prior = next((item for item in ordered if str(item.get("address") or "") in previous_addresses), None)
+        if prior is not None:
+            prior_address = str(prior.get("address") or "")
+            prior_raw = sensor_last.get(prior_address)
+            if prior_raw is None or abs(float(prior["temperatureF"]) - float(prior_raw)) <= LOCAL_TEMP_SENSOR_MAX_STEP_F:
+                winner = prior
+
+    if winner is not None:
+        ignored = [item for item in ordered if item is not winner]
+        for item in ignored:
+            item["ignoredReason"] = f"pair disagreement exceeded {LOCAL_TEMP_SENSOR_MAX_PAIR_DELTA_F:.1f}F"
+        return finalize([winner], "outlier-rejected", ignored, degraded=True)
+
+    if previous_accepted is not None and now - previous_accepted_at <= LOCAL_TEMP_SENSOR_HOLD_LAST_SECONDS:
+        for item in ordered:
+            item["used"] = False
+            item["ignoredReason"] = "pair disagreement; no trustworthy winner"
+        return {
+            "ok": True,
+            "available": True,
+            "temperatureF": round(float(previous_accepted), 1),
+            "temperatureC": round((float(previous_accepted) - 32.0) * 5.0 / 9.0, 2),
+            "humidity": None,
+            "source": "hdc2080-pair",
+            "label": "HDC2080 pair (holding last trusted reading)",
+            "addresses": [],
+            "strategy": "hold-last-good",
+            "degraded": True,
+            "temperatureDeltaF": round(pair_delta, 2),
+            "maxAllowedDeltaF": LOCAL_TEMP_SENSOR_MAX_PAIR_DELTA_F,
+            "ignoredAddresses": [str(item.get("address") or "") for item in ordered],
+            "sensors": ordered + errors,
+            "error": f"HDC2080 readings disagree by {pair_delta:.2f}F",
+        }
+
+    for item in ordered:
+        item["used"] = False
+        item["ignoredReason"] = "startup disagreement; no trusted history"
+    return {
+        "ok": False,
+        "available": False,
+        "temperatureF": None,
+        "temperatureC": None,
+        "humidity": None,
+        "source": "hdc2080-pair",
+        "label": "HDC2080 pair disagreement",
+        "addresses": [],
+        "strategy": "unresolved-disagreement",
+        "degraded": True,
+        "temperatureDeltaF": round(pair_delta, 2),
+        "maxAllowedDeltaF": LOCAL_TEMP_SENSOR_MAX_PAIR_DELTA_F,
+        "ignoredAddresses": [str(item.get("address") or "") for item in ordered],
+        "sensors": ordered + errors,
+        "error": f"HDC2080 readings disagree by {pair_delta:.2f}F and no trusted history exists",
+    }
+
+
+def _read_hdc2080_pair_sensor() -> dict | None:
+    addresses = _parse_i2c_addresses(LOCAL_TEMP_SENSOR_ADDRESSES, (0x40, 0x41))
+    if not addresses:
+        return None
+    try:
+        SMBus = _smbus_class()
+    except Exception as exc:
+        return {
+            "ok": False,
+            "available": False,
+            "temperatureF": None,
+            "temperatureC": None,
+            "humidity": None,
+            "source": "hdc2080-pair",
+            "label": "HDC2080 pair unavailable",
+            "error": str(exc),
+            "sensors": [],
+        }
+
+    readings: list[dict] = []
+    errors: list[dict] = []
+    try:
+        with SMBus(HARDWARE_I2C_BUS) as bus:
+            for address in addresses:
+                try:
+                    readings.append(_read_hdc2080_measurement(bus, address))
+                except Exception as exc:
+                    errors.append({
+                        "ok": False,
+                        "available": False,
+                        "address": f"0x{address:02X}",
+                        "temperatureF": None,
+                        "temperatureC": None,
+                        "humidity": None,
+                        "used": False,
+                        "error": str(exc),
+                    })
+    except Exception as exc:
+        errors.append({
+            "ok": False,
+            "available": False,
+            "address": "bus",
+            "temperatureF": None,
+            "temperatureC": None,
+            "humidity": None,
+            "used": False,
+            "error": str(exc),
+        })
+    return _select_hdc2080_pair_reading(readings, errors, time.time())
+
+
 def _read_direct_i2c_temperature_sensor() -> dict | None:
     if not HARDWARE_I2C_DEVICE.exists():
         return None
-    address_override = _parse_i2c_address(LOCAL_TEMP_SENSOR_ADDRESS)
     sensor_type = LOCAL_TEMP_SENSOR_TYPE
+
+    if sensor_type in {"auto", "hdc2080", "hdc20x0", "hdc20xx"}:
+        hdc_payload = _read_hdc2080_pair_sensor()
+        if hdc_payload and (hdc_payload.get("available") or sensor_type != "auto"):
+            return hdc_payload
+
+    address_override = _parse_i2c_address(LOCAL_TEMP_SENSOR_ADDRESS)
     probes: list[tuple[str, int]] = []
     if address_override is not None:
         if sensor_type in {"sht30", "sht31", "sht3x"}:
             probes.append(("sht3x", address_override))
         elif sensor_type in {"tmp102", "tmp112", "tmp10x"}:
             probes.append(("tmp102", address_override))
-        else:
+        elif sensor_type == "auto":
             probes.extend((kind, address_override) for kind in ("sht3x", "tmp102"))
-    else:
+    elif sensor_type in {"auto", "sht30", "sht31", "sht3x"}:
         probes.extend(("sht3x", address) for address in (0x44, 0x45))
+    if address_override is None and sensor_type in {"auto", "tmp102", "tmp112", "tmp10x"}:
         probes.extend(("tmp102", address) for address in (0x48, 0x49, 0x4A, 0x4B))
 
     if not probes:
@@ -5057,7 +5353,6 @@ def _read_direct_i2c_temperature_sensor() -> dict | None:
         return {"ok": False, "available": False, "temperatureF": None, "temperatureC": None, "source": "i2c", "label": "", "error": "; ".join(errors[-3:])}
     return None
 
-
 def _read_local_temperature_sensor(force: bool = False) -> dict:
     now = time.time()
     with _LOCAL_TEMP_SENSOR_LOCK:
@@ -5068,7 +5363,9 @@ def _read_local_temperature_sensor(force: bool = False) -> dict:
         if not LOCAL_TEMP_SENSOR_ENABLED:
             payload = {"ok": True, "available": False, "temperatureF": None, "temperatureC": None, "source": "disabled", "label": "", "error": "Local temperature sensor disabled"}
         else:
-            payload = _read_hwmon_temperature_sensor() or _read_direct_i2c_temperature_sensor()
+            # Prefer the dedicated room sensors over any unrelated kernel hwmon
+            # device that may be present on the Raspberry Pi.
+            payload = _read_direct_i2c_temperature_sensor() or _read_hwmon_temperature_sensor()
             if not payload:
                 payload = {
                     "ok": True,
@@ -5087,7 +5384,7 @@ def _read_local_temperature_sensor(force: bool = False) -> dict:
 
 def _thermostat_should_use_local_temp_sensor(thermostat: dict, now: float) -> bool:
     mode = LOCAL_TEMP_SENSOR_MODE
-    if mode in {"always", "on", "force"}:
+    if mode in {"primary", "onboard", "local", "always", "on", "force"}:
         return True
     source = str(thermostat.get("currentTempSource") or "").strip().lower()
     if source in LOCAL_TEMP_SOURCE_NAMES:
@@ -5145,9 +5442,12 @@ def _clear_expired_virtual_temp_override(thermostat: dict) -> dict:
     if source == "virtual" and until and until <= int(time.time() * 1000):
         updated = dict(thermostat)
         updated["virtualTempOverrideUntil"] = 0
-        # Return to the configured source. The runtime pass immediately below
-        # will read the selected Home Assistant sensor if one is configured.
-        if _selected_ha_temperature_entity():
+        # Return to the normal runtime source. The onboard HDC2080 pair is
+        # primary; Home Assistant is used only if the pair is unavailable.
+        if LOCAL_TEMP_SENSOR_ENABLED and LOCAL_TEMP_SENSOR_MODE in {"primary", "onboard", "local", "always", "on", "force"}:
+            updated["currentTempSource"] = "onboard"
+            updated["currentTempSourceName"] = "Onboard HDC2080 Sensors"
+        elif _selected_ha_temperature_entity():
             updated["currentTempSource"] = "home-assistant"
             updated["currentTempSourceName"] = "Home Assistant Sensor"
         return _merge_thermostat_state(updated)
@@ -5250,14 +5550,14 @@ def _apply_selected_ha_outdoor_temperature_sensor_if_needed(thermostat: dict) ->
         return thermostat
 
 
-def _apply_local_temperature_sensor_if_needed(record: dict) -> dict:
+def _apply_local_temperature_sensor_if_needed(record: dict, *, sensor: dict | None = None, force_use: bool = False) -> dict:
     thermostat = record.get("thermostat") or {}
     if _virtual_temp_override_active(thermostat):
         return thermostat
     now = time.time()
-    if not _thermostat_should_use_local_temp_sensor(thermostat, now):
+    if not force_use and not _thermostat_should_use_local_temp_sensor(thermostat, now):
         return thermostat
-    sensor = _read_local_temperature_sensor()
+    sensor = sensor if isinstance(sensor, dict) else _read_local_temperature_sensor()
     temp_f = sensor.get("temperatureF")
     if not sensor.get("available") or temp_f is None:
         return thermostat
@@ -5267,12 +5567,28 @@ def _apply_local_temperature_sensor_if_needed(record: dict) -> dict:
         return thermostat
     if not (-40.0 <= next_temp <= 130.0):
         return thermostat
-    label = str(sensor.get("label") or "Onboard Temp Sensor").strip() or "Onboard Temp Sensor"
+    label = str(sensor.get("label") or "Onboard HDC2080 Sensors").strip() or "Onboard HDC2080 Sensors"
     updated = dict(thermostat)
     updated["currentTemp"] = next_temp
     updated["currentTempUpdatedAt"] = int(now)
+    updated["currentTempSource"] = "onboard"
+    updated["currentTempSourceName"] = label
     updated["runtimeTempSource"] = "onboard"
     updated["runtimeTempSourceName"] = label
+    humidity = sensor.get("humidity")
+    if humidity is not None:
+        try:
+            next_humidity = round(float(humidity), 1)
+            if 0.0 <= next_humidity <= 100.0:
+                updated["humidity"] = next_humidity
+        except (TypeError, ValueError):
+            pass
+    updated["onboardTempSensorStatus"] = {
+        "strategy": str(sensor.get("strategy") or "single"),
+        "degraded": bool(sensor.get("degraded")),
+        "temperatureDeltaF": sensor.get("temperatureDeltaF"),
+        "ignoredAddresses": list(sensor.get("ignoredAddresses") or []),
+    }
     if updated != thermostat:
         _write_thermostat_record(updated, persist=False)
     return updated
