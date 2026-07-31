@@ -12450,15 +12450,8 @@ class MainWindow(Background):
                 poll_row.addWidget(button)
             motion_layout.addLayout(poll_row)
 
-            slider_style = """
-                QSlider::groove:horizontal { height:14px; border-radius:7px; background:rgba(160,170,190,0.23); }
-                QSlider::sub-page:horizontal { height:14px; border-radius:7px; background:#49e6ff; }
-                QSlider::add-page:horizontal { height:14px; border-radius:7px; background:rgba(110,92,180,0.42); }
-                QSlider::handle:horizontal { width:38px; height:38px; margin:-12px 0; border-radius:19px; background:#f8f5ff; border:1px solid rgba(255,255,255,0.42); }
-            """
-
             sensitivity_row = QHBoxLayout()
-            sensitivity_label = QLabel("Sensitivity")
+            sensitivity_label = QLabel("Hardware sensitivity")
             sensitivity_label.setFont(font(11, QFont.Black))
             sensitivity_value = QLabel("Maximum")
             sensitivity_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -12468,26 +12461,19 @@ class MainWindow(Background):
             sensitivity_row.addStretch(1)
             sensitivity_row.addWidget(sensitivity_value)
             motion_layout.addLayout(sensitivity_row)
-            sensitivity_slider = TouchFriendlySlider(Qt.Horizontal)
-            sensitivity_slider.setRange(0, 1)
-            sensitivity_slider.setSingleStep(1)
-            sensitivity_slider.setPageStep(1)
-            sensitivity_slider.setMinimumHeight(48)
-            sensitivity_slider.setStyleSheet(slider_style)
-            motion_layout.addWidget(sensitivity_slider)
-            sensitivity_ends = QHBoxLayout()
-            sens_max = QLabel("MAXIMUM")
-            sens_reduced = QLabel("REDUCED")
-            for label in (sens_max, sens_reduced):
-                label.setFont(font(7, QFont.Black, 12))
-                label.setStyleSheet("color:#8293ac;")
-            sensitivity_ends.addWidget(sens_max)
-            sensitivity_ends.addStretch(1)
-            sensitivity_ends.addWidget(sens_reduced)
-            motion_layout.addLayout(sensitivity_ends)
+
+            sensitivity_buttons = {}
+            sensitivity_choices = QHBoxLayout()
+            sensitivity_choices.setSpacing(10)
+            for level, label in ((0, "Maximum"), (25, "Reduced")):
+                button = RoundButton(label, active=False, min_h=46)
+                button.setMinimumWidth(195)
+                sensitivity_buttons[level] = button
+                sensitivity_choices.addWidget(button, 1)
+            motion_layout.addLayout(sensitivity_choices)
 
             ontime_row = QHBoxLayout()
-            ontime_label = QLabel("Motion hold time")
+            ontime_label = QLabel("Sensor hold time")
             ontime_label.setFont(font(11, QFont.Black))
             ontime_value = QLabel("2 seconds")
             ontime_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -12497,25 +12483,18 @@ class MainWindow(Background):
             ontime_row.addStretch(1)
             ontime_row.addWidget(ontime_value)
             motion_layout.addLayout(ontime_row)
-            ontime_slider = TouchFriendlySlider(Qt.Horizontal)
-            ontime_slider.setRange(0, 1)
-            ontime_slider.setSingleStep(1)
-            ontime_slider.setPageStep(1)
-            ontime_slider.setMinimumHeight(48)
-            ontime_slider.setStyleSheet(slider_style)
-            motion_layout.addWidget(ontime_slider)
-            ontime_ends = QHBoxLayout()
-            time_short = QLabel("2 SECONDS")
-            time_long = QLabel("10 MINUTES")
-            for label in (time_short, time_long):
-                label.setFont(font(7, QFont.Black, 12))
-                label.setStyleSheet("color:#8293ac;")
-            ontime_ends.addWidget(time_short)
-            ontime_ends.addStretch(1)
-            ontime_ends.addWidget(time_long)
-            motion_layout.addLayout(ontime_ends)
 
-            motion_note = QLabel("This board provides two stable hardware levels through its 15k/10k dividers. LOW is maximum sensitivity / 2 seconds; HIGH is reduced sensitivity / about 10 minutes.")
+            ontime_buttons = {}
+            ontime_choices = QHBoxLayout()
+            ontime_choices.setSpacing(10)
+            for seconds, label in ((2, "2 seconds"), (600, "10 minutes")):
+                button = RoundButton(label, active=False, min_h=46)
+                button.setMinimumWidth(195)
+                ontime_buttons[seconds] = button
+                ontime_choices.addWidget(button, 1)
+            motion_layout.addLayout(ontime_choices)
+
+            motion_note = QLabel("The current board exposes two electrical settings for each control, so these are intentionally two-position touch controls rather than continuous sliders. Intermediate sensitivity or hardware hold-time levels require a filtered analog output or DAC hardware change.")
             motion_note.setWordWrap(True)
             motion_note.setFont(font(8, QFont.DemiBold))
             motion_note.setStyleSheet("color:#8fa0b9;")
@@ -12573,8 +12552,10 @@ class MainWindow(Background):
 
                 motion_update_guard["active"] = True
                 try:
-                    sensitivity_slider.setValue(1 if sensitivity_level >= 25 else 0)
-                    ontime_slider.setValue(1 if on_time_seconds >= 600 else 0)
+                    for level, button in sensitivity_buttons.items():
+                        button.setActive(level == sensitivity_level)
+                    for seconds, button in ontime_buttons.items():
+                        button.setActive(seconds == on_time_seconds)
                 finally:
                     motion_update_guard["active"] = False
                 sensitivity_value.setText("Maximum (level 0)" if sensitivity_level == 0 else "Reduced (level 25)")
@@ -12608,20 +12589,18 @@ class MainWindow(Background):
             for seconds, button in poll_buttons.items():
                 button.clicked.connect(lambda _checked=False, value=seconds: save_motion({"pollSeconds": value}))
 
-            def sensitivity_changed(value):
-                sensitivity_value.setText("Maximum (level 0)" if int(value) == 0 else "Reduced (level 25)")
-
-            def ontime_changed(value):
-                ontime_value.setText("2 seconds" if int(value) == 0 else "10 minutes")
-
-            sensitivity_slider.valueChanged.connect(sensitivity_changed)
-            ontime_slider.valueChanged.connect(ontime_changed)
-            sensitivity_slider.sliderReleased.connect(
-                lambda: None if motion_update_guard["active"] else save_motion({"sensitivityLevel": 25 if sensitivity_slider.value() else 0})
-            )
-            ontime_slider.sliderReleased.connect(
-                lambda: None if motion_update_guard["active"] else save_motion({"onTimeSeconds": 600 if ontime_slider.value() else 2})
-            )
+            for level, button in sensitivity_buttons.items():
+                button.clicked.connect(
+                    lambda _checked=False, value=level: None
+                    if motion_update_guard["active"]
+                    else save_motion({"sensitivityLevel": value})
+                )
+            for seconds, button in ontime_buttons.items():
+                button.clicked.connect(
+                    lambda _checked=False, value=seconds: None
+                    if motion_update_guard["active"]
+                    else save_motion({"onTimeSeconds": value})
+                )
             motion_timer.timeout.connect(refresh_motion)
 
             fetch.clicked.connect(lambda: (dlg.accept(), self.do_fetch_update()))
