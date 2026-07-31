@@ -91,9 +91,12 @@ _HVAC_HISTORY_ARCHIVE: dict | None = None
 _HVAC_HISTORY_CURRENT: dict | None = None
 
 
+# Onboard HVAC relay outputs use BCM GPIO numbering. These pins are used when
+# airControlMode is Internal; External mode sends heat/cool calls to the
+# configured Home Assistant entities instead.
 HARDWARE_RELAY_PINS = {
-    "fan": {"gpio": 7, "physical": 26, "label": "Fan Relay", "resistor": "R98 470Ω"},
-    "cool": {"gpio": 8, "physical": 24, "label": "Cool Relay", "resistor": "R97 470Ω"},
+    "fan": {"gpio": 24, "physical": 18, "label": "Fan Relay", "resistor": "R98 470Ω"},
+    "cool": {"gpio": 23, "physical": 16, "label": "Cool Relay", "resistor": "R97 470Ω"},
     "heat": {"gpio": 22, "physical": 15, "label": "Heat Relay", "resistor": "R95 470Ω"},
 }
 HARDWARE_I2C_PINS = {
@@ -4662,6 +4665,12 @@ def _expire_manual_hardware_if_needed() -> bool:
 
 
 def _apply_thermostat_outputs_to_hardware(outputs: dict, thermostat: dict | None = None) -> None:
+    """Route HVAC calls to onboard GPIO unless External air control is selected.
+
+    Internal mode drives all three onboard relay outputs. External mode keeps the
+    local heat/cool relays de-energized and sends those two calls to the selected
+    Home Assistant entities; the onboard fan output remains available locally.
+    """
     thermostat = _merge_thermostat_state(thermostat or _read_thermostat_record().get("thermostat") or {})
     external_mode = _normalize_air_control_mode(thermostat.get("airControlMode")) == "external"
     hardware_relays = {
