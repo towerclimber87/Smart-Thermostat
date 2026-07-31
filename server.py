@@ -103,6 +103,18 @@ HARDWARE_I2C_PINS = {
     "sda": {"gpio": 2, "physical": 3, "label": "SDA"},
     "scl": {"gpio": 3, "physical": 5, "label": "SCL"},
 }
+# S18-L262B-2 motion sensor wiring from the thermostat schematic. REL is the
+# active-high motion output. SENS and ONTIME each pass through a 15k series /
+# 10k pull-down divider, so a GPIO HIGH presents about 0.4 x VDD to the sensor.
+# That exposes two stable board-level settings without pretending the GPIO is a
+# true DAC: 0V and approximately 0.4 x VDD.
+HARDWARE_MOTION_PINS = {
+    "rel": {"gpio": 27, "physical": 13, "label": "Motion REL"},
+    "sens": {"gpio": 25, "physical": 22, "label": "Motion SENS", "seriesOhms": 15000, "pulldownOhms": 10000},
+    "ontime": {"gpio": 16, "physical": 36, "label": "Motion ONTIME", "seriesOhms": 15000, "pulldownOhms": 10000},
+}
+HARDWARE_MOTION_POLL_OPTIONS = (1, 3, 6)
+HARDWARE_MOTION_DEFAULT_CONFIG = {"pollSeconds": 3, "sensitivityLevel": 0, "onTimeSeconds": 2}
 HARDWARE_RGB_PIN = {"gpio": 26, "physical": 37, "label": "RGB Data / LED"}
 HARDWARE_POWER_PINS = {
     "3v3": {"physical": 17, "label": "3.3V"},
@@ -156,6 +168,13 @@ _EXTERNAL_HA_AIR_LAST_ERROR_AT = {"heat": 0.0, "cool": 0.0}
 _THERMOSTAT_ASYNC_OUTPUT_LOCK = threading.Lock()
 _THERMOSTAT_ASYNC_OUTPUT_SEQ = 0
 _HARDWARE_LAST_I2C_SCAN = {"at": 0.0, "payload": None}
+_HARDWARE_MOTION_LOCK = threading.RLock()
+_HARDWARE_MOTION_BACKEND = None
+_HARDWARE_MOTION_RUNTIME = {
+    "motion": False,
+    "lastChangedAt": 0.0,
+    "lastReadAt": 0.0,
+}
 _LOCAL_TEMP_SENSOR_LOCK = threading.RLock()
 _LOCAL_TEMP_SENSOR_CACHE = {"at": 0.0, "payload": None}
 _LOCAL_TEMP_SENSOR_HEALTH = {
@@ -4774,6 +4793,201 @@ def _set_rgb_hardware(on: bool, color: object) -> dict:
     return _hardware_status_payload()
 
 
+
+
+def _normalize_motion_config(value: object) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    try:
+        requested_poll = int(raw.get("pollSeconds", HARDWARE_MOTION_DEFAULT_CONFIG["pollSeconds"]))
+    except (TypeError, ValueError):
+        requested_poll = HARDWARE_MOTION_DEFAULT_CONFIG["pollSeconds"]
+    poll_seconds = min(HARDWARE_MOTION_POLL_OPTIONS, key=lambda item: abs(item - requested_poll))
+
+    try:
+        requested_sensitivity = int(raw.get("sensitivityLevel", HARDWARE_MOTION_DEFAULT_CONFIG["sensitivityLevel"]))
+    except (TypeError, ValueError):
+        requested_sensitivity = HARDWARE_MOTION_DEFAULT_CONFIG["sensitivityLevel"]
+    # The current resistor-divider hardware provides only two stable DC levels:
+    # 0V (datasheet level 0, maximum sensitivity) and about 0.4 x VDD
+    # (datasheet level 25, substantially reduced sensitivity).
+    sensitivity_level = 25 if requested_sensitivity >= 13 else 0
+
+    try:
+        requested_on_time = int(raw.get("onTimeSeconds", HARDWARE_MOTION_DEFAULT_CONFIG["onTimeSeconds"]))
+    except (TypeError, ValueError):
+        requested_on_time = HARDWARE_MOTION_DEFAULT_CONFIG["onTimeSeconds"]
+    # At approximately 0.4 x VDD, the S18-L262B-2 digital ONTIME table selects
+    # the 600-second range. LOW selects the 2-second range.
+    on_time_seconds = 600 if requested_on_time >= 301 else 2
+    return {
+        "pollSeconds": poll_seconds,
+        "sensitivityLevel": sensitivity_level,
+        "onTimeSeconds": on_time_seconds,
+    }
+
+
+def _motion_config_from_panel() -> dict:
+    record = _read_panel_config_record()
+    config = record.get("config") if isinstance(record, dict) else {}
+    hardware = config.get("hardware") if isinstance(config, dict) else {}
+    motion = hardware.get("motion") if isinstance(hardware, dict) else {}
+    return _normalize_motion_config(motion)
+
+
+def _write_motion_config(updates: object) -> dict:
+    current = _motion_config_from_panel()
+    if isinstance(updates, dict):
+        current.update({key: updates[key] for key in ("pollSeconds", "sensitivityLevel", "onTimeSeconds") if key in updates})
+    normalized = _normalize_motion_config(current)
+
+    record = _read_panel_config_record()
+    config = _deepcopy_json(record.get("config") or {})
+    hardware = config.get("hardware") if isinstance(config.get("hardware"), dict) else {}
+    hardware = _deepcopy_json(hardware)
+    hardware["motion"] = normalized
+    config["hardware"] = hardware
+    _write_panel_config_record(config)
+    return normalized
+
+
+class _UnavailableMotionBackend:
+    backend = "unavailable"
+    available = False
+
+    def __init__(self, error: str):
+        self.error = str(error or "Motion GPIO is unavailable")
+
+    def apply(self, config: dict) -> None:
+        return
+
+    def read(self) -> bool:
+        return False
+
+
+class _GpioZeroMotionBackend:
+    backend = "gpiozero"
+    available = True
+    error = ""
+
+    def __init__(self):
+        from gpiozero import DigitalInputDevice, OutputDevice  # type: ignore
+
+        self.rel = DigitalInputDevice(
+            HARDWARE_MOTION_PINS["rel"]["gpio"],
+            pull_up=None,
+            active_state=True,
+            bounce_time=0.05,
+        )
+        self.sens = OutputDevice(
+            HARDWARE_MOTION_PINS["sens"]["gpio"],
+            active_high=True,
+            initial_value=False,
+        )
+        self.ontime = OutputDevice(
+            HARDWARE_MOTION_PINS["ontime"]["gpio"],
+            active_high=True,
+            initial_value=False,
+        )
+
+    def apply(self, config: dict) -> None:
+        if int(config.get("sensitivityLevel") or 0) >= 25:
+            self.sens.on()
+        else:
+            self.sens.off()
+        if int(config.get("onTimeSeconds") or 2) >= 600:
+            self.ontime.on()
+        else:
+            self.ontime.off()
+
+    def read(self) -> bool:
+        return bool(self.rel.is_active)
+
+
+def _motion_backend():
+    global _HARDWARE_MOTION_BACKEND
+    if _HARDWARE_MOTION_BACKEND is not None:
+        return _HARDWARE_MOTION_BACKEND
+    try:
+        _HARDWARE_MOTION_BACKEND = _GpioZeroMotionBackend()
+    except Exception as exc:
+        _HARDWARE_MOTION_BACKEND = _UnavailableMotionBackend(str(exc))
+    return _HARDWARE_MOTION_BACKEND
+
+
+def _motion_status_payload(*, apply_config: bool = True) -> dict:
+    now = time.time()
+    with _HARDWARE_MOTION_LOCK:
+        config = _motion_config_from_panel()
+        backend = _motion_backend()
+        if apply_config:
+            try:
+                backend.apply(config)
+            except Exception as exc:
+                backend.available = False
+                backend.error = str(exc)
+        motion = False
+        if backend.available:
+            try:
+                motion = bool(backend.read())
+            except Exception as exc:
+                backend.available = False
+                backend.error = str(exc)
+        previous = bool(_HARDWARE_MOTION_RUNTIME.get("motion"))
+        if motion != previous or not float(_HARDWARE_MOTION_RUNTIME.get("lastChangedAt") or 0.0):
+            _HARDWARE_MOTION_RUNTIME["lastChangedAt"] = now
+        _HARDWARE_MOTION_RUNTIME["motion"] = motion
+        _HARDWARE_MOTION_RUNTIME["lastReadAt"] = now
+
+        sensitivity_level = int(config["sensitivityLevel"])
+        on_time_seconds = int(config["onTimeSeconds"])
+        return {
+            "ok": True,
+            "available": bool(backend.available),
+            "backend": str(getattr(backend, "backend", "unavailable")),
+            "error": str(getattr(backend, "error", "") or ""),
+            "motion": motion,
+            "state": "motion" if motion else "clear",
+            "lastChangedAt": int(_HARDWARE_MOTION_RUNTIME.get("lastChangedAt") or now),
+            "readAt": int(now),
+            "pins": _deepcopy_json(HARDWARE_MOTION_PINS),
+            "config": config,
+            "choices": {
+                "pollSeconds": list(HARDWARE_MOTION_POLL_OPTIONS),
+                "sensitivity": [
+                    {"value": 0, "label": "Maximum", "detail": "Datasheet level 0 of 31; SENS = 0V"},
+                    {"value": 25, "label": "Reduced", "detail": "Approx. datasheet level 25 of 31; SENS ~= 0.4 x VDD"},
+                ],
+                "onTime": [
+                    {"value": 2, "label": "2 seconds", "detail": "ONTIME = 0V"},
+                    {"value": 600, "label": "10 minutes", "detail": "ONTIME ~= 0.4 x VDD"},
+                ],
+            },
+            "display": {
+                "sensitivity": "Maximum (level 0)" if sensitivity_level == 0 else "Reduced (level 25)",
+                "onTime": "2 seconds" if on_time_seconds == 2 else "10 minutes",
+            },
+            "electrical": {
+                "stableBoardLevels": 2,
+                "lowRatioVdd": 0.0,
+                "highRatioVdd": 0.4,
+                "note": "The installed 15k/10k dividers expose two stable DC settings. Continuous analog adjustment requires a DAC or filtered PWM hardware revision.",
+            },
+        }
+
+
+def _set_motion_hardware(payload: object) -> dict:
+    updates = payload if isinstance(payload, dict) else {}
+    _write_motion_config(updates)
+    return _motion_status_payload(apply_config=True)
+
+
+def _initialize_motion_hardware() -> None:
+    try:
+        _motion_status_payload(apply_config=True)
+    except Exception as exc:
+        print(f"Motion sensor GPIO initialization failed: {exc}", flush=True)
+
+
 def _parse_i2cdetect_output(output: str) -> list[dict]:
     devices: list[dict] = []
     for line in output.splitlines():
@@ -7642,6 +7856,8 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
             return _send_json_download(self, _config_backup_filename(), _config_export_payload(server_port))
         if path == "/api/hardware/status":
             return _json(self, 200, _hardware_status_payload(force_i2c=True))
+        if path == "/api/hardware/motion":
+            return _json(self, 200, _motion_status_payload(apply_config=True))
         if path == "/api/history":
             requested_date = (query.get("date") or [None])[0]
             return _json(self, 200, _hvac_history_payload(requested_date))
@@ -7671,7 +7887,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply"}:
             self.send_error(404, "Not found")
             return
 
@@ -7726,6 +7942,9 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
             if path == "/api/hardware/release":
                 return _json(self, 200, _release_manual_hardware())
+
+            if path == "/api/hardware/motion":
+                return _json(self, 200, _set_motion_hardware(payload))
 
             if path == "/api/thermostat/status":
                 return _json(self, 200, _thermostat_status_payload(refresh_runtime=False, apply_hardware=False))
@@ -7952,6 +8171,7 @@ def main() -> None:
     except Exception:
         pass
 
+    _initialize_motion_hardware()
     _start_thermostat_control_loop()
 
     httpd = SmartThermostatHTTPServer((args.host, args.port), SmartThermostatHandler)

@@ -712,6 +712,66 @@ class TouchFriendlySlider(QSlider):
         super().mouseReleaseEvent(event)
 
 
+
+class MotionStatusIndicator(QWidget):
+    """Vector person/motion indicator for the protected panel information view."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._motion = False
+        self._available = True
+        self.setFixedSize(104, 104)
+
+    def setMotion(self, motion: bool, available: bool = True):
+        next_motion = bool(motion)
+        next_available = bool(available)
+        if next_motion == self._motion and next_available == self._available:
+            return
+        self._motion = next_motion
+        self._available = next_available
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
+        r = QRectF(self.rect()).adjusted(5, 5, -5, -5)
+
+        if not self._available:
+            accent = QColor(255, 103, 114)
+            glow_alpha = 45
+        elif self._motion:
+            accent = QColor(80, 241, 174)
+            glow_alpha = 135
+        else:
+            accent = QColor(126, 145, 174)
+            glow_alpha = 34
+
+        glow = QRadialGradient(r.center(), r.width() * 0.58)
+        glow.setColorAt(0.0, QColor(accent.red(), accent.green(), accent.blue(), glow_alpha))
+        glow.setColorAt(0.70, QColor(accent.red(), accent.green(), accent.blue(), max(0, glow_alpha // 4)))
+        glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.fillRect(self.rect(), glow)
+
+        p.setBrush(QColor(7, 18, 32, 220))
+        p.setPen(QPen(QColor(accent.red(), accent.green(), accent.blue(), 165 if self._motion else 75), 2))
+        p.drawRoundedRect(r, 28, 28)
+
+        p.setPen(QPen(accent, 7, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        cx = r.center().x()
+        p.drawEllipse(QRectF(cx - 8, r.top() + 17, 16, 16))
+        p.drawLine(QPointF(cx, r.top() + 38), QPointF(cx, r.top() + 63))
+        p.drawLine(QPointF(cx, r.top() + 45), QPointF(cx - 18, r.top() + 56))
+        p.drawLine(QPointF(cx, r.top() + 45), QPointF(cx + 18, r.top() + 56))
+        p.drawLine(QPointF(cx, r.top() + 63), QPointF(cx - 15, r.top() + 80))
+        p.drawLine(QPointF(cx, r.top() + 63), QPointF(cx + 15, r.top() + 80))
+
+        if self._motion and self._available:
+            p.setPen(QPen(QColor(80, 241, 174, 210), 3, Qt.SolidLine, Qt.RoundCap))
+            p.drawArc(QRectF(r.left() + 8, r.top() + 27, 28, 42), 75 * 16, 160 * 16)
+            p.drawArc(QRectF(r.right() - 36, r.top() + 27, 28, 42), -55 * 16, 160 * 16)
+        p.end()
+
+
 class CoverArtLabel(QLabel):
     """Rounded album-art card with a clean fallback when no artwork is available."""
 
@@ -12298,7 +12358,7 @@ class MainWindow(Background):
             dlg = QDialog(self)
             dlg.setModal(True)
             dlg.setWindowTitle("Thermostat Info")
-            dlg.setFixedSize(660, 500)
+            dlg.setFixedSize(940, 640)
             dlg.setStyleSheet("""
                 QDialog {
                     background:qlineargradient(x1:0,y1:0,x2:1,y2:1,
@@ -12315,14 +12375,18 @@ class MainWindow(Background):
                 }
             """)
             root = QVBoxLayout(dlg)
-            root.setContentsMargins(26, 24, 26, 22)
-            root.setSpacing(14)
+            root.setContentsMargins(24, 20, 24, 18)
+            root.setSpacing(12)
 
             title = QLabel("<span style='color:#46e8ff; letter-spacing:4px; font-size:11px; font-weight:900'>THERMOSTAT</span><br><span style='font-size:31px; font-weight:1000; color:#ffffff'>Panel Information</span>")
             title.setTextFormat(Qt.RichText)
             root.addWidget(title)
 
+            content = QHBoxLayout()
+            content.setSpacing(14)
+
             grid_panel = GlassPanel(radius=22)
+            grid_panel.setMinimumWidth(350)
             grid = QGridLayout(grid_panel)
             grid.setContentsMargins(18, 16, 18, 16)
             grid.setHorizontalSpacing(14)
@@ -12341,9 +12405,123 @@ class MainWindow(Background):
                 v = QLabel(str(value))
                 v.setFont(font(13, QFont.Black))
                 v.setStyleSheet("color:#ffffff;")
+                v.setWordWrap(True)
                 grid.addWidget(l, row, 0)
                 grid.addWidget(v, row, 1)
-            root.addWidget(grid_panel, 1)
+            content.addWidget(grid_panel, 4)
+
+            motion_panel = GlassPanel(radius=22)
+            motion_panel.setMinimumWidth(500)
+            motion_layout = QVBoxLayout(motion_panel)
+            motion_layout.setContentsMargins(18, 14, 18, 14)
+            motion_layout.setSpacing(8)
+
+            motion_header = QHBoxLayout()
+            motion_icon = MotionStatusIndicator()
+            motion_header.addWidget(motion_icon)
+            motion_text = QVBoxLayout()
+            motion_title = QLabel("MOTION SENSOR")
+            motion_title.setFont(font(10, QFont.Black, 16))
+            motion_title.setStyleSheet("color:#96a7c2; letter-spacing:2px;")
+            motion_state = QLabel("Checking...")
+            motion_state.setFont(font(20, QFont.Black))
+            motion_state.setStyleSheet("color:#ffffff;")
+            motion_detail = QLabel("GPIO27 REL")
+            motion_detail.setFont(font(9, QFont.Bold))
+            motion_detail.setStyleSheet("color:#aebbd0;")
+            motion_text.addWidget(motion_title)
+            motion_text.addWidget(motion_state)
+            motion_text.addWidget(motion_detail)
+            motion_text.addStretch(1)
+            motion_header.addLayout(motion_text, 1)
+            motion_layout.addLayout(motion_header)
+
+            poll_row = QHBoxLayout()
+            poll_label = QLabel("CHECK EVERY")
+            poll_label.setFont(font(8, QFont.Black, 16))
+            poll_label.setStyleSheet("color:#96a7c2;")
+            poll_row.addWidget(poll_label)
+            poll_row.addStretch(1)
+            poll_buttons = {}
+            for seconds in (1, 3, 6):
+                button = RoundButton(f"{seconds}s", active=False, min_h=36)
+                button.setFixedWidth(64)
+                poll_buttons[seconds] = button
+                poll_row.addWidget(button)
+            motion_layout.addLayout(poll_row)
+
+            slider_style = """
+                QSlider::groove:horizontal { height:14px; border-radius:7px; background:rgba(160,170,190,0.23); }
+                QSlider::sub-page:horizontal { height:14px; border-radius:7px; background:#49e6ff; }
+                QSlider::add-page:horizontal { height:14px; border-radius:7px; background:rgba(110,92,180,0.42); }
+                QSlider::handle:horizontal { width:38px; height:38px; margin:-12px 0; border-radius:19px; background:#f8f5ff; border:1px solid rgba(255,255,255,0.42); }
+            """
+
+            sensitivity_row = QHBoxLayout()
+            sensitivity_label = QLabel("Sensitivity")
+            sensitivity_label.setFont(font(11, QFont.Black))
+            sensitivity_value = QLabel("Maximum")
+            sensitivity_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            sensitivity_value.setFont(font(10, QFont.Black))
+            sensitivity_value.setStyleSheet("color:#49e6ff;")
+            sensitivity_row.addWidget(sensitivity_label)
+            sensitivity_row.addStretch(1)
+            sensitivity_row.addWidget(sensitivity_value)
+            motion_layout.addLayout(sensitivity_row)
+            sensitivity_slider = TouchFriendlySlider(Qt.Horizontal)
+            sensitivity_slider.setRange(0, 1)
+            sensitivity_slider.setSingleStep(1)
+            sensitivity_slider.setPageStep(1)
+            sensitivity_slider.setMinimumHeight(48)
+            sensitivity_slider.setStyleSheet(slider_style)
+            motion_layout.addWidget(sensitivity_slider)
+            sensitivity_ends = QHBoxLayout()
+            sens_max = QLabel("MAXIMUM")
+            sens_reduced = QLabel("REDUCED")
+            for label in (sens_max, sens_reduced):
+                label.setFont(font(7, QFont.Black, 12))
+                label.setStyleSheet("color:#8293ac;")
+            sensitivity_ends.addWidget(sens_max)
+            sensitivity_ends.addStretch(1)
+            sensitivity_ends.addWidget(sens_reduced)
+            motion_layout.addLayout(sensitivity_ends)
+
+            ontime_row = QHBoxLayout()
+            ontime_label = QLabel("Motion hold time")
+            ontime_label.setFont(font(11, QFont.Black))
+            ontime_value = QLabel("2 seconds")
+            ontime_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            ontime_value.setFont(font(10, QFont.Black))
+            ontime_value.setStyleSheet("color:#49e6ff;")
+            ontime_row.addWidget(ontime_label)
+            ontime_row.addStretch(1)
+            ontime_row.addWidget(ontime_value)
+            motion_layout.addLayout(ontime_row)
+            ontime_slider = TouchFriendlySlider(Qt.Horizontal)
+            ontime_slider.setRange(0, 1)
+            ontime_slider.setSingleStep(1)
+            ontime_slider.setPageStep(1)
+            ontime_slider.setMinimumHeight(48)
+            ontime_slider.setStyleSheet(slider_style)
+            motion_layout.addWidget(ontime_slider)
+            ontime_ends = QHBoxLayout()
+            time_short = QLabel("2 SECONDS")
+            time_long = QLabel("10 MINUTES")
+            for label in (time_short, time_long):
+                label.setFont(font(7, QFont.Black, 12))
+                label.setStyleSheet("color:#8293ac;")
+            ontime_ends.addWidget(time_short)
+            ontime_ends.addStretch(1)
+            ontime_ends.addWidget(time_long)
+            motion_layout.addLayout(ontime_ends)
+
+            motion_note = QLabel("This board provides two stable hardware levels through its 15k/10k dividers. LOW is maximum sensitivity / 2 seconds; HIGH is reduced sensitivity / about 10 minutes.")
+            motion_note.setWordWrap(True)
+            motion_note.setFont(font(8, QFont.DemiBold))
+            motion_note.setStyleSheet("color:#8fa0b9;")
+            motion_layout.addWidget(motion_note)
+            content.addWidget(motion_panel, 6)
+            root.addLayout(content, 1)
 
             button_grid = QGridLayout()
             button_grid.setHorizontalSpacing(10)
@@ -12354,18 +12532,107 @@ class MainWindow(Background):
             close = RoundButton("Close", active=False, min_h=46)
 
             for b in [fetch, reboot, backup, close]:
-                b.setMinimumWidth(156)
+                b.setMinimumWidth(190)
             button_grid.addWidget(fetch, 0, 0)
             button_grid.addWidget(reboot, 0, 1)
             button_grid.addWidget(backup, 0, 2)
             button_grid.addWidget(close, 0, 3)
             root.addLayout(button_grid)
 
+            motion_timer = QTimer(dlg)
+            motion_timer.setSingleShot(False)
+            motion_update_guard = {"active": False}
+            latest_motion = {"pollSeconds": 3, "sensitivityLevel": 0, "onTimeSeconds": 2}
+
+            def apply_motion_payload(data):
+                data = data if isinstance(data, dict) else {}
+                config = data.get("config") if isinstance(data.get("config"), dict) else {}
+                poll_seconds = int(config.get("pollSeconds") or 3)
+                sensitivity_level = int(config.get("sensitivityLevel") or 0)
+                on_time_seconds = int(config.get("onTimeSeconds") or 2)
+                latest_motion.update({
+                    "pollSeconds": poll_seconds,
+                    "sensitivityLevel": sensitivity_level,
+                    "onTimeSeconds": on_time_seconds,
+                })
+                available = bool(data.get("available"))
+                motion = bool(data.get("motion"))
+                motion_icon.setMotion(motion, available)
+                if not available:
+                    motion_state.setText("Unavailable")
+                    motion_state.setStyleSheet("color:#ff6772;")
+                    motion_detail.setText(str(data.get("error") or "Motion GPIO unavailable"))
+                elif motion:
+                    motion_state.setText("Motion detected")
+                    motion_state.setStyleSheet("color:#50f1ae;")
+                    motion_detail.setText("REL HIGH - GPIO27")
+                else:
+                    motion_state.setText("No motion")
+                    motion_state.setStyleSheet("color:#ffffff;")
+                    motion_detail.setText("REL LOW - GPIO27")
+
+                motion_update_guard["active"] = True
+                try:
+                    sensitivity_slider.setValue(1 if sensitivity_level >= 25 else 0)
+                    ontime_slider.setValue(1 if on_time_seconds >= 600 else 0)
+                finally:
+                    motion_update_guard["active"] = False
+                sensitivity_value.setText("Maximum (level 0)" if sensitivity_level == 0 else "Reduced (level 25)")
+                ontime_value.setText("2 seconds" if on_time_seconds == 2 else "10 minutes")
+                for seconds, button in poll_buttons.items():
+                    button.setActive(seconds == poll_seconds)
+                motion_timer.setInterval(max(1, poll_seconds) * 1000)
+                if isinstance(self.s.config, dict):
+                    hardware = self.s.config.setdefault("hardware", {})
+                    if isinstance(hardware, dict):
+                        hardware["motion"] = copy.deepcopy(latest_motion)
+
+            def refresh_motion():
+                try:
+                    apply_motion_payload(self.s.api.get("/api/hardware/motion"))
+                except Exception as exc:
+                    motion_icon.setMotion(False, False)
+                    motion_state.setText("Unavailable")
+                    motion_state.setStyleSheet("color:#ff6772;")
+                    motion_detail.setText(str(exc))
+
+            def save_motion(changes):
+                try:
+                    payload = dict(latest_motion)
+                    payload.update(changes)
+                    apply_motion_payload(self.s.api.post("/api/hardware/motion", payload))
+                except Exception as exc:
+                    self.toast.show_message(f"Motion setting failed: {exc}", 5500)
+                    refresh_motion()
+
+            for seconds, button in poll_buttons.items():
+                button.clicked.connect(lambda _checked=False, value=seconds: save_motion({"pollSeconds": value}))
+
+            def sensitivity_changed(value):
+                sensitivity_value.setText("Maximum (level 0)" if int(value) == 0 else "Reduced (level 25)")
+
+            def ontime_changed(value):
+                ontime_value.setText("2 seconds" if int(value) == 0 else "10 minutes")
+
+            sensitivity_slider.valueChanged.connect(sensitivity_changed)
+            ontime_slider.valueChanged.connect(ontime_changed)
+            sensitivity_slider.sliderReleased.connect(
+                lambda: None if motion_update_guard["active"] else save_motion({"sensitivityLevel": 25 if sensitivity_slider.value() else 0})
+            )
+            ontime_slider.sliderReleased.connect(
+                lambda: None if motion_update_guard["active"] else save_motion({"onTimeSeconds": 600 if ontime_slider.value() else 2})
+            )
+            motion_timer.timeout.connect(refresh_motion)
+
             fetch.clicked.connect(lambda: (dlg.accept(), self.do_fetch_update()))
             reboot.clicked.connect(lambda: (dlg.accept(), self.do_restart()))
             backup.clicked.connect(lambda: (dlg.accept(), self.backup_config()))
             close.clicked.connect(dlg.accept)
+
+            refresh_motion()
+            motion_timer.start(max(1, int(latest_motion["pollSeconds"])) * 1000)
             dlg.exec_()
+            motion_timer.stop()
         except Exception as exc:
             self.toast.show_message(f"Info failed: {exc}")
         finally:
