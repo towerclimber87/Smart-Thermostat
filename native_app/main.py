@@ -4034,6 +4034,8 @@ class ThermostatScreen(Page):
             entries = pause.get("entries") if isinstance(pause.get("entries"), list) else []
             open_entries = [e for e in entries if isinstance(e, dict) and self.pause_entry_is_open(e)]
             door_name = self.pause_entry_name(open_entries[0], "Selected door") if open_entries else "Selected door"
+            resume_minutes = int(max(1, min(60, round(self.safe_float(pause.get("durationMinutes"), 5.0)))))
+            minute_label = "Minute" if resume_minutes == 1 else "Minutes"
             self.alert_banner.set_alert(
                 "door-pause",
                 "Comfort Paused",
@@ -4041,7 +4043,7 @@ class ThermostatScreen(Page):
                 dismiss=False,
                 revert=False,
                 bypass=True,
-                bypass_text="Snooze 5 Minutes",
+                bypass_text=f"Resume {resume_minutes} {minute_label}",
             )
             self.position_alert_banner()
             return
@@ -4293,7 +4295,7 @@ class ThermostatScreen(Page):
         snooze_until = int(float(pause.get("snoozeUntil") or 0))
         if snooze_until > now_ms:
             remaining = self.format_remaining((snooze_until - now_ms) / 1000)
-            self.door_countdown.setText(f"{short_name} OPEN\nSNOOZED {remaining}")
+            self.door_countdown.setText(f"{short_name} OPEN\nRESUMED {remaining}")
             self.door_countdown.show()
             return
         if pause.get("active"):
@@ -4310,20 +4312,22 @@ class ThermostatScreen(Page):
         self.door_countdown.show()
 
     def snooze_door_pause(self):
-        changes = {"pauseFunction": {"action": "snooze", "snoozeMinutes": 5}}
         pause = self.s.thermostat.setdefault("pauseFunction", {})
+        duration_minutes = int(max(1, min(60, round(self.safe_float(pause.get("durationMinutes") if isinstance(pause, dict) else 5, 5.0)))))
+        changes = {"pauseFunction": {"action": "resume"}}
         if isinstance(pause, dict):
-            pause["snoozeUntil"] = int(time.time() * 1000) + 300000
+            pause["snoozeUntil"] = int(time.time() * 1000) + duration_minutes * 60000
             pause["active"] = False
             pause["pausedAt"] = 0
             pause["previousTargetTemp"] = None
             pause["previousLastComfortTarget"] = None
             pause["activeEntityIds"] = []
             pause["countdownAllowed"] = False
-            pause["countdownReason"] = "snoozed"
+            pause["countdownReason"] = "resumed"
         self.s.status_refresh_paused_until = max(getattr(self.s, "status_refresh_paused_until", 0.0), time.monotonic() + 2.5)
         self.sync(self.s.config, self.s.thermostat)
-        self.requestToast.emit("Door pause snoozed for 5 minutes")
+        minute_label = "minute" if duration_minutes == 1 else "minutes"
+        self.requestToast.emit(f"Comfort resumed for {duration_minutes} {minute_label}")
 
         def done(result):
             if isinstance(result, dict):
@@ -4334,7 +4338,7 @@ class ThermostatScreen(Page):
             "door-snooze",
             lambda: self.s.api.thermostat_update(changes),
             done,
-            lambda err: self.requestToast.emit(f"Snooze failed: {err}"),
+            lambda err: self.requestToast.emit(f"Resume failed: {err}"),
         )
 
 

@@ -3555,7 +3555,7 @@ def _apply_door_pause_logic(thermostat: dict) -> dict:
     return _merge_thermostat_state(t)
 
 
-def _apply_door_pause_snooze_request(existing: dict, minutes: object = 5) -> dict:
+def _apply_door_pause_snooze_request(existing: dict, minutes: object = None) -> dict:
     t = _merge_thermostat_state(existing)
     pause = _normalize_pause_function(t.get("pauseFunction"))
 
@@ -3570,7 +3570,12 @@ def _apply_door_pause_snooze_request(existing: dict, minutes: object = 5) -> dic
         if configured_entry:
             pause["entries"] = [configured_entry]
 
-    snooze_minutes = _normalize_pause_function_duration(minutes, 5)
+    configured_minutes = _normalize_pause_function_duration(pause.get("durationMinutes"), 5)
+    snooze_minutes = (
+        configured_minutes
+        if minutes in (None, "")
+        else _normalize_pause_function_duration(minutes, configured_minutes)
+    )
     now_ms = int(time.time() * 1000)
     if pause.get("active"):
         t = _restore_from_door_pause(t, pause)
@@ -3585,7 +3590,7 @@ def _apply_door_pause_snooze_request(existing: dict, minutes: object = 5) -> dic
         "activeEntityIds": [],
         "snoozeUntil": now_ms + snooze_minutes * 60000,
         "countdownAllowed": False,
-        "countdownReason": "snoozed",
+        "countdownReason": "resumed",
     })
     t["pauseFunction"] = pause
     return _merge_thermostat_state(t)
@@ -4177,11 +4182,16 @@ def _handle_thermostat_update_locked(payload: dict) -> dict:
         incoming = _strip_comfort_target_changes(dict(incoming))
 
     pause_incoming = incoming.get("pauseFunction") if isinstance(incoming.get("pauseFunction"), dict) else {}
-    if pause_incoming and str(pause_incoming.get("action") or "").strip().lower() == "snooze":
-        existing = _apply_door_pause_snooze_request(existing, pause_incoming.get("snoozeMinutes", 5))
+    pause_action = str(pause_incoming.get("action") or "").strip().lower()
+    if pause_incoming and pause_action in {"resume", "snooze"}:
+        # Resume always restarts the saved door-delay window. Keep the older
+        # snooze action compatible with clients that intentionally provide a
+        # specific snoozeMinutes value.
+        requested_minutes = None if pause_action == "resume" else pause_incoming.get("snoozeMinutes")
+        existing = _apply_door_pause_snooze_request(existing, requested_minutes)
         incoming = {k: v for k, v in incoming.items() if k != "pauseFunction"}
     elif pause_incoming and pause_incoming.get("snoozeMinutes") is not None:
-        existing = _apply_door_pause_snooze_request(existing, pause_incoming.get("snoozeMinutes", 5))
+        existing = _apply_door_pause_snooze_request(existing, pause_incoming.get("snoozeMinutes"))
         incoming = {k: v for k, v in incoming.items() if k != "pauseFunction"}
 
     bypass_mode = str(incoming.get("bypassChangeoverLockout") or "").strip().lower()
@@ -6392,17 +6402,44 @@ def _current_update_job_status() -> dict:
     return record
 
 
+def _cached_update_info(installed: str | None = None) -> dict:
+    """Return update metadata without performing network or Git operations."""
+    installed = str(installed or _read_version_value()).strip()
+    cached = _read_update_check_record()
+    if cached:
+        result = dict(cached)
+        result.setdefault("ok", True)
+        result.setdefault("branch", _normalized_update_branch())
+        result.setdefault("installedVersion", installed)
+        result.setdefault("latestVersion", installed)
+        result.setdefault("updateAvailable", _update_available(installed, result.get("latestVersion")))
+        return result
+    return {
+        "ok": True,
+        "branch": _normalized_update_branch(),
+        "installedVersion": installed,
+        "latestVersion": installed,
+        "updateAvailable": False,
+        "checkedAt": None,
+        "checkedAtEpoch": 0,
+        "checkError": None,
+    }
+
+
 def _update_status_payload(refresh_remote: bool = False) -> dict:
     job = _current_update_job_status()
     installed = _read_version_value()
     if bool(job.get("inProgress")):
         # Never run a second Git operation alongside the transient installer.
         # During installation, report the last completed version check instead.
-        check = _read_update_check_record()
+        check = _cached_update_info(installed)
     elif refresh_remote:
         check = _refresh_remote_update_info(force=True)
     else:
-        check = _refresh_remote_update_info(force=False)
+        # Home Assistant first loads this local snapshot so the Software entity
+        # is immediately available. Its next update-coordinator pass performs
+        # the slower GitHub refresh without holding initial entity setup open.
+        check = _cached_update_info(installed)
 
     latest = str(check.get("latestVersion") or job.get("targetVersion") or installed).strip() or installed
     return {
