@@ -5716,6 +5716,7 @@ class LightsScreen(Page):
         self._light_color_pending: dict[str, dict] = {}
         self._light_inflight: set[str] = set()
         self._light_color_inflight: set[str] = set()
+        self._light_power_pending: dict[str, dict] = {}
         self._light_settle_until: dict[str, float] = {}
         self._light_poll_running = False
         self._last_light_error = ""
@@ -5844,6 +5845,8 @@ class LightsScreen(Page):
             return True
         if entity_id in self._light_color_pending or entity_id in self._light_color_inflight:
             return True
+        if entity_id in self._light_power_pending:
+            return True
         return time.monotonic() < self._light_settle_until.get(entity_id, 0.0)
 
     def _set_light_optimistic(self, light: dict, value: int | None = None, action: str | None = None, color: str | None = None):
@@ -5941,6 +5944,33 @@ class LightsScreen(Page):
         action = "off" if bool(light.get("on")) else "on"
         bright = int(light.get("lastBrightness") or light.get("brightness") or 100) if action == "on" else 0
         self._send_light(light, action, bright)
+
+    def _cancel_pending_light_adjustments(self, entity_id: str):
+        """Prevent a stale dim/color command from running after a power command."""
+        entity_id = str(entity_id or "")
+        timer = self._light_send_timers.get(entity_id)
+        if timer is not None and timer.isActive():
+            timer.stop()
+        color_timer = self._light_color_timers.get(entity_id)
+        if color_timer is not None and color_timer.isActive():
+            color_timer.stop()
+        self._light_pending.pop(entity_id, None)
+        self._light_color_pending.pop(entity_id, None)
+
+    def _flush_pending_light_power(self, entity_id: str):
+        pending = self._light_power_pending.get(str(entity_id or ""))
+        if not isinstance(pending, dict):
+            return
+        if entity_id in self._light_inflight or entity_id in self._light_color_inflight:
+            QTimer.singleShot(100, lambda eid=entity_id: self._flush_pending_light_power(eid))
+            return
+        self._light_power_pending.pop(entity_id, None)
+        self._send_light(
+            pending.get("light") or {},
+            str(pending.get("action") or "off"),
+            pending.get("brightness"),
+            pending.get("color"),
+        )
 
     def _timer_for_light(self, entity_id: str) -> QTimer:
         timer = self._light_send_timers.get(entity_id)
@@ -6098,13 +6128,33 @@ class LightsScreen(Page):
         entity_id = str(light.get("haEntityId") or "")
         if not entity_id:
             return
+        action = str(action or "").strip().lower()
+        if action in {"on", "off", "toggle"}:
+            self._cancel_pending_light_adjustments(entity_id)
+            if entity_id in self._light_inflight or entity_id in self._light_color_inflight:
+                # Let an already-sent dim/color request finish, then send the
+                # newest power command last so an old request cannot turn the
+                # light back on after Room Off or an individual Off tap.
+                self._light_power_pending[entity_id] = {
+                    "light": light,
+                    "action": action,
+                    "brightness": brightness,
+                    "color": color,
+                }
+                self._set_light_optimistic(light, brightness, action=action, color=None if action == "off" else color)
+                QTimer.singleShot(100, lambda eid=entity_id: self._flush_pending_light_power(eid))
+                return
+            self._light_power_pending.pop(entity_id, None)
         payload = {"entityId": entity_id, "action": action, "refresh": False}
         if brightness is not None:
             payload["brightness"] = int(clamp(brightness, 0, 100))
-            payload["transition"] = 0.25
-        if color:
+            # A transition on light.turn_off is unreliable on some Z-Wave
+            # dimmers. Off must be a clean power service call, not a fade.
+            if action != "off":
+                payload["transition"] = 0.25
+        if color and action != "off":
             payload["color"] = color
-        elif light.get("colorSupported") and light.get("color"):
+        elif action != "off" and light.get("colorSupported") and light.get("color"):
             payload["color"] = light.get("color")
         self._set_light_optimistic(light, payload.get("brightness"), action=action, color=payload.get("color"))
         self._light_settle_until[entity_id] = time.monotonic() + 0.80
@@ -6112,7 +6162,13 @@ class LightsScreen(Page):
         def worker():
             return self.s.api.post("/api/ha/light/action", self.s.ha_payload(payload))
 
-        def done(_result):
+        def done(result):
+            returned = (result or {}).get("light") if isinstance(result, dict) else None
+            if isinstance(returned, dict):
+                self._apply_light_state(light, returned)
+                self.sync(self.s.config, self.s.thermostat)
+                if action == "off" and returned.get("commandVerified") is False:
+                    self.requestToast.emit(f"{light.get('haName') or light.get('name') or 'Light'} did not confirm Off")
             QTimer.singleShot(950, self.poll)
 
         self.run_async(
@@ -6531,9 +6587,22 @@ class AudioScreen(Page):
         header.setSpacing(10)
         title_col = QVBoxLayout()
         title_col.setSpacing(4)
-        self.room_title = QLabel("Livingroom Sonos")
+        self.room_title = QPushButton("Livingroom Sonos")
         self.room_title.setFont(font(24, QFont.Black))
-        self.room_title.setStyleSheet("color:#f6f8ff;")
+        self.room_title.setCursor(Qt.PointingHandCursor)
+        self.room_title.setToolTip("Press to choose the Audio page media player")
+        self.room_title.setAccessibleName("Choose Audio media player")
+        self.room_title.setStyleSheet("""
+            QPushButton {
+                color:#f6f8ff;
+                background:transparent;
+                border:0;
+                padding:0;
+                text-align:left;
+            }
+            QPushButton:pressed { color:#49e6ff; }
+        """)
+        self.room_title.clicked.connect(self.assign_primary_media_player)
         self.state_pill = QLabel("Idle")
         self.state_pill.setAlignment(Qt.AlignCenter)
         self.state_pill.setFont(font(9, QFont.Black))
@@ -6729,6 +6798,14 @@ class AudioScreen(Page):
         else:
             group = "audio-toggle"
         self.requestAssign.emit(group, {"audioControlKind": name}, name)
+
+    def assign_primary_media_player(self):
+        """Choose the media player used by transport, source, and volume."""
+        self.requestAssign.emit(
+            "audio-primary-media-player",
+            {"audioControlKind": "primary_media_player"},
+            "Audio Media Player",
+        )
 
     def _set_audio_hold_ms(self, widget, hold_ms: int):
         try:
@@ -10885,6 +10962,22 @@ class AlarmControlDialog(QDialog):
         self.resize(width, height)
         self.setMinimumSize(min(width, 620), min(height, 520))
 
+    def fit_keypad_to_parent(self):
+        """Use a compact, centered shape for the four-digit disarm keypad."""
+        parent = self.parentWidget()
+        if parent:
+            base_w = max(620, parent.width())
+            base_h = max(620, parent.height())
+        else:
+            screen = QApplication.primaryScreen()
+            geo = screen.availableGeometry() if screen else QRectF(0, 0, 1000, 700)
+            base_w = int(geo.width())
+            base_h = int(geo.height())
+        width = max(560, min(int(base_w * 0.56), 720))
+        height = max(620, min(int(base_h * 0.92), 820))
+        self.setMinimumSize(min(width, 560), min(height, 620))
+        self.resize(width, height)
+
     def _clear_layout(self, layout):
         while layout.count():
             item = layout.takeAt(0)
@@ -10942,8 +11035,10 @@ class AlarmControlDialog(QDialog):
             return
         self.clear_body()
         if self.is_armed():
+            self.fit_keypad_to_parent()
             self.render_keypad()
         else:
+            self.fit_to_parent()
             self.render_arm_options()
 
     def header_html(self, eyebrow: str, title: str, accent: str = "#55f0ff") -> str:
@@ -11039,41 +11134,37 @@ class AlarmControlDialog(QDialog):
 
         self.body.addWidget(self.make_status_panel(
             "Code required to disarm",
-            "Enter the alarm disarm code. The panel will send Disarm automatically after four digits.",
+            "Enter your four-digit alarm code.",
             accent,
         ))
 
-        content = QHBoxLayout()
-        content.setSpacing(22)
-
-        left = QVBoxLayout()
-        left.setSpacing(16)
-        left.addStretch(1)
+        code_area = QVBoxLayout()
+        code_area.setSpacing(8)
+        helper = QLabel("DISARM CODE")
+        helper.setAlignment(Qt.AlignCenter)
+        helper.setFont(font(10, QFont.Black))
+        helper.setStyleSheet("color:#ff9cb5; letter-spacing:3px;")
+        code_area.addWidget(helper)
         self.code_display = QLabel("····")
         self.code_display.setAlignment(Qt.AlignCenter)
-        self.code_display.setFont(font(42, QFont.Black))
+        self.code_display.setFont(font(38, QFont.Black))
+        self.code_display.setFixedHeight(78)
         self.code_display.setStyleSheet("""
             QLabel {
                 color:#ffffff;
                 background:rgba(255,255,255,0.07);
                 border:1px solid rgba(255,73,121,0.55);
-                border-radius:30px;
-                padding:24px 16px;
-                letter-spacing:12px;
+                border-radius:22px;
+                padding:10px 16px;
+                letter-spacing:16px;
             }
         """)
-        left.addWidget(self.code_display)
-        helper = QLabel("DISARM CODE")
-        helper.setAlignment(Qt.AlignCenter)
-        helper.setFont(font(11, QFont.Black))
-        helper.setStyleSheet("color:#ff9cb5; letter-spacing:3px;")
-        left.addWidget(helper)
-        left.addStretch(1)
-        content.addLayout(left, 1)
+        code_area.addWidget(self.code_display)
+        self.body.addLayout(code_area)
 
         keypad = QGridLayout()
-        keypad.setHorizontalSpacing(12)
-        keypad.setVerticalSpacing(12)
+        keypad.setHorizontalSpacing(10)
+        keypad.setVerticalSpacing(10)
         keys = [
             ("1", 0, 0), ("2", 0, 1), ("3", 0, 2),
             ("4", 1, 0), ("5", 1, 1), ("6", 1, 2),
@@ -11081,8 +11172,8 @@ class AlarmControlDialog(QDialog):
             ("⌫", 3, 0), ("0", 3, 1), ("Cancel", 3, 2),
         ]
         for label, row, col in keys:
-            b = RoundButton(label, active=(label not in {"⌫", "Cancel"}), min_h=72)
-            b.setMinimumWidth(92)
+            b = RoundButton(label, active=(label not in {"⌫", "Cancel"}), min_h=64)
+            b.setMinimumWidth(104)
             if label == "Cancel":
                 b.setKind("danger")
                 b.clicked.connect(self.reject)
@@ -11091,8 +11182,11 @@ class AlarmControlDialog(QDialog):
             else:
                 b.pressed.connect(lambda d=label: self.add_code_digit(d))
             keypad.addWidget(b, row, col)
-        content.addLayout(keypad, 1)
-        self.body.addLayout(content, 1)
+        keypad_row = QHBoxLayout()
+        keypad_row.addStretch(1)
+        keypad_row.addLayout(keypad)
+        keypad_row.addStretch(1)
+        self.body.addLayout(keypad_row, 1)
         self.update_code_display()
 
     def update_code_display(self):
@@ -11142,9 +11236,9 @@ class AlarmControlDialog(QDialog):
                 color:#ffffff;
                 background:rgba(255,54,91,0.18);
                 border:1px solid rgba(255,74,111,0.78);
-                border-radius:30px;
-                padding:24px 16px;
-                letter-spacing:12px;
+                border-radius:22px;
+                padding:10px 16px;
+                letter-spacing:16px;
             }
         """)
         QTimer.singleShot(800, self.restore_keypad_after_invalid)
@@ -11156,9 +11250,9 @@ class AlarmControlDialog(QDialog):
                 color:#ffffff;
                 background:rgba(255,255,255,0.07);
                 border:1px solid rgba(255,73,121,0.55);
-                border-radius:30px;
-                padding:24px 16px;
-                letter-spacing:12px;
+                border-radius:22px;
+                padding:10px 16px;
+                letter-spacing:16px;
             }
         """)
         self.update_code_display()
@@ -12277,7 +12371,7 @@ class MainWindow(Background):
             return ["number"]
         if group == "audio-toggle":
             return ["switch", "input_boolean"]
-        if group == "audio-media-player":
+        if group in {"audio-media-player", "audio-primary-media-player"}:
             return ["media_player"]
         return []
 
@@ -12293,7 +12387,7 @@ class MainWindow(Background):
             return (ha.get("audioAvailableEntities") or {}).get("numbers") or []
         if group == "audio-toggle":
             return (ha.get("audioAvailableEntities") or {}).get("switches") or []
-        if group == "audio-media-player":
+        if group in {"audio-media-player", "audio-primary-media-player"}:
             return ha.get("mediaPlayerEntities") or (ha.get("audioAvailableEntities") or {}).get("mediaPlayers") or []
         return []
 
@@ -12311,6 +12405,34 @@ class MainWindow(Background):
             return
         display_kind = str(kind or "entry").replace("_", " ").replace("subwoofer", "sub").title()
         dlg = EntityPickerDialog(f"Assign {display_kind} Entity", entities, self)
+
+        if group == "audio-primary-media-player":
+            def apply_primary_media_player(ent):
+                entity_id = str(ent.get("entityId") or ent.get("entity_id") or "").strip()
+                if not entity_id:
+                    self.toast.show_message("No media player selected")
+                    return
+                try:
+                    ha = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
+                    ha["selectedMediaPlayerId"] = entity_id
+                    ha["mediaPlayerEntity"] = {
+                        "entityId": entity_id,
+                        "name": ent.get("name") or entity_id,
+                        "domain": "media_player",
+                    }
+                    audio_page = self.pages.get("Audio")
+                    if audio_page is not None:
+                        audio_page.player_state = {}
+                    self.s.save_config()
+                    self.sync_runtime_only()
+                    self.toast.show_message(f"Audio player: {ent.get('name') or entity_id}")
+                    QTimer.singleShot(120, lambda: self.pages.get("Audio") and self.pages["Audio"].poll())
+                except Exception as exc:
+                    self.toast.show_message(f"Save failed: {exc}")
+
+            dlg.selected.connect(apply_primary_media_player)
+            dlg.exec_()
+            return
 
         if group in {"audio-number", "audio-toggle", "audio-media-player"}:
             target_kind = str((obj or {}).get("audioControlKind") or kind or "").strip().lower()
