@@ -12522,17 +12522,45 @@ class MainWindow(Background):
             motion_timer.setSingleShot(False)
             motion_update_guard = {"active": False}
             latest_motion = {"pollSeconds": 3, "sensitivityLevel": 0, "onTimeSeconds": 2}
+            motion_io = {
+                "readRunning": False,
+                "writeRunning": False,
+                "closed": False,
+                "generation": 0,
+            }
+
+            def set_motion_controls_enabled(enabled: bool):
+                for controls in (poll_buttons, sensitivity_buttons, ontime_buttons):
+                    for button in controls.values():
+                        button.setEnabled(bool(enabled))
+
+            def apply_motion_config_controls():
+                poll_seconds = int(latest_motion.get("pollSeconds") or 3)
+                sensitivity_level = int(latest_motion.get("sensitivityLevel") or 0)
+                on_time_seconds = int(latest_motion.get("onTimeSeconds") or 2)
+
+                motion_update_guard["active"] = True
+                try:
+                    for level, button in sensitivity_buttons.items():
+                        button.setActive(level == sensitivity_level)
+                    for seconds, button in ontime_buttons.items():
+                        button.setActive(seconds == on_time_seconds)
+                    for seconds, button in poll_buttons.items():
+                        button.setActive(seconds == poll_seconds)
+                finally:
+                    motion_update_guard["active"] = False
+
+                sensitivity_value.setText("Maximum (level 0)" if sensitivity_level == 0 else "Reduced (level 25)")
+                ontime_value.setText("2 seconds" if on_time_seconds == 2 else "10 minutes")
+                motion_timer.setInterval(max(1, poll_seconds) * 1000)
 
             def apply_motion_payload(data):
                 data = data if isinstance(data, dict) else {}
                 config = data.get("config") if isinstance(data.get("config"), dict) else {}
-                poll_seconds = int(config.get("pollSeconds") or 3)
-                sensitivity_level = int(config.get("sensitivityLevel") or 0)
-                on_time_seconds = int(config.get("onTimeSeconds") or 2)
                 latest_motion.update({
-                    "pollSeconds": poll_seconds,
-                    "sensitivityLevel": sensitivity_level,
-                    "onTimeSeconds": on_time_seconds,
+                    "pollSeconds": int(config.get("pollSeconds") or 3),
+                    "sensitivityLevel": int(config.get("sensitivityLevel") or 0),
+                    "onTimeSeconds": int(config.get("onTimeSeconds") or 2),
                 })
                 available = bool(data.get("available"))
                 motion = bool(data.get("motion"))
@@ -12550,41 +12578,84 @@ class MainWindow(Background):
                     motion_state.setStyleSheet("color:#ffffff;")
                     motion_detail.setText("REL LOW - GPIO27")
 
-                motion_update_guard["active"] = True
-                try:
-                    for level, button in sensitivity_buttons.items():
-                        button.setActive(level == sensitivity_level)
-                    for seconds, button in ontime_buttons.items():
-                        button.setActive(seconds == on_time_seconds)
-                finally:
-                    motion_update_guard["active"] = False
-                sensitivity_value.setText("Maximum (level 0)" if sensitivity_level == 0 else "Reduced (level 25)")
-                ontime_value.setText("2 seconds" if on_time_seconds == 2 else "10 minutes")
-                for seconds, button in poll_buttons.items():
-                    button.setActive(seconds == poll_seconds)
-                motion_timer.setInterval(max(1, poll_seconds) * 1000)
+                apply_motion_config_controls()
                 if isinstance(self.s.config, dict):
                     hardware = self.s.config.setdefault("hardware", {})
                     if isinstance(hardware, dict):
                         hardware["motion"] = copy.deepcopy(latest_motion)
 
+            def show_motion_read_error(message: str):
+                motion_icon.setMotion(False, False)
+                motion_state.setText("Unavailable")
+                motion_state.setStyleSheet("color:#ff6772;")
+                motion_detail.setText(str(message))
+
             def refresh_motion():
-                try:
-                    apply_motion_payload(self.s.api.get("/api/hardware/motion"))
-                except Exception as exc:
-                    motion_icon.setMotion(False, False)
-                    motion_state.setText("Unavailable")
-                    motion_state.setStyleSheet("color:#ff6772;")
-                    motion_detail.setText(str(exc))
+                if motion_io["closed"] or motion_io["readRunning"] or motion_io["writeRunning"]:
+                    return
+                request_generation = int(motion_io["generation"])
+                motion_io["readRunning"] = True
+
+                def completed(data):
+                    motion_io["readRunning"] = False
+                    if motion_io["closed"] or request_generation != motion_io["generation"] or motion_io["writeRunning"]:
+                        return
+                    apply_motion_payload(data)
+
+                def failed(message):
+                    motion_io["readRunning"] = False
+                    if motion_io["closed"] or request_generation != motion_io["generation"] or motion_io["writeRunning"]:
+                        return
+                    show_motion_read_error(message)
+
+                # Never perform network I/O on the Qt event thread. At a one-second
+                # poll interval even a brief local API stall otherwise freezes every
+                # touch, animation, and repaint until the request times out.
+                self.run_async(
+                    "motion-read",
+                    lambda: self.s.api.get("/api/hardware/motion"),
+                    completed,
+                    failed,
+                )
 
             def save_motion(changes):
-                try:
-                    payload = dict(latest_motion)
-                    payload.update(changes)
-                    apply_motion_payload(self.s.api.post("/api/hardware/motion", payload))
-                except Exception as exc:
-                    self.toast.show_message(f"Motion setting failed: {exc}", 5500)
+                if motion_io["closed"] or motion_io["writeRunning"]:
+                    return
+
+                motion_io["generation"] += 1
+                request_generation = int(motion_io["generation"])
+                motion_io["writeRunning"] = True
+                motion_timer.stop()
+
+                payload = dict(latest_motion)
+                payload.update(changes)
+                latest_motion.update(changes)
+                apply_motion_config_controls()
+                set_motion_controls_enabled(False)
+
+                def completed(data):
+                    motion_io["writeRunning"] = False
+                    if motion_io["closed"] or request_generation != motion_io["generation"]:
+                        return
+                    set_motion_controls_enabled(True)
+                    apply_motion_payload(data)
+                    motion_timer.start()
+
+                def failed(message):
+                    motion_io["writeRunning"] = False
+                    if motion_io["closed"] or request_generation != motion_io["generation"]:
+                        return
+                    set_motion_controls_enabled(True)
+                    self.toast.show_message(f"Motion setting failed: {message}", 5500)
+                    motion_timer.start()
                     refresh_motion()
+
+                self.run_async(
+                    "motion-write",
+                    lambda: self.s.api.post("/api/hardware/motion", payload),
+                    completed,
+                    failed,
+                )
 
             for seconds, button in poll_buttons.items():
                 button.clicked.connect(lambda _checked=False, value=seconds: save_motion({"pollSeconds": value}))
@@ -12611,6 +12682,7 @@ class MainWindow(Background):
             refresh_motion()
             motion_timer.start(max(1, int(latest_motion["pollSeconds"])) * 1000)
             dlg.exec_()
+            motion_io["closed"] = True
             motion_timer.stop()
         except Exception as exc:
             self.toast.show_message(f"Info failed: {exc}")
