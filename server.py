@@ -167,6 +167,7 @@ _EXTERNAL_HA_AIR_NEXT_VERIFY_AT = {"heat": 0.0, "cool": 0.0, "fan": 0.0}
 _EXTERNAL_HA_AIR_LAST_ERROR_AT = {"heat": 0.0, "cool": 0.0, "fan": 0.0}
 _THERMOSTAT_ASYNC_OUTPUT_LOCK = threading.Lock()
 _THERMOSTAT_ASYNC_OUTPUT_SEQ = 0
+_HVAC_OUTPUT_LAST_LOG_SIGNATURE = None
 _HARDWARE_LAST_I2C_SCAN = {"at": 0.0, "payload": None}
 _HARDWARE_MOTION_LOCK = threading.RLock()
 _HARDWARE_MOTION_BACKEND = None
@@ -478,6 +479,35 @@ def _equipment_control_mode(thermostat: dict, kind: str) -> str:
     if kind in {"heat", "cool"}:
         return _normalize_air_control_mode(thermostat.get("airControlMode"), "internal")
     return "internal"
+
+
+def _known_equipment_output_on(thermostat: dict, kind: str) -> bool:
+    """Return the best known real/commanded state for one HVAC output.
+
+    Runtime relay markers are normally authoritative, but they are written at
+    the end of the output-application pass.  A Home Assistant call or another
+    output worker can therefore leave a brief window where the physical/local
+    relay (or the last confirmed external command) is on while relayWasOn is
+    still false.  Fan overrun and minimum-cycle protection must not drop out in
+    that window.
+    """
+    kind = str(kind or "").strip().lower()
+    if kind not in {"heat", "cool", "fan"}:
+        return False
+    relay_key = {
+        "heat": "heatRelayWasOn",
+        "cool": "coolRelayWasOn",
+    }.get(kind)
+    if relay_key and bool(thermostat.get(relay_key)):
+        return True
+
+    if _equipment_control_mode(thermostat, kind) == "internal":
+        return bool(_HARDWARE_LAST_RELAYS.get(kind))
+
+    entry = _external_air_entity_for_kind(thermostat, kind)
+    entity_id = str((entry or {}).get("entityId") or "").strip()
+    last_entity = str(_EXTERNAL_HA_AIR_LAST_ENTITIES.get(kind) or "").strip()
+    return bool(entity_id and entity_id == last_entity and _EXTERNAL_HA_AIR_LAST_STATES.get(kind) is True)
 
 
 def _room_temp_control_mode(thermostat: dict) -> str:
@@ -3601,46 +3631,49 @@ def _apply_runtime_thermostat_logic(record: dict, *, notify: bool = True) -> dic
 def _mark_thermostat_equipment_run(outputs: dict) -> None:
     now_ms = int(time.time() * 1000)
     try:
-        current = _read_thermostat_record()["thermostat"]
-        changes: dict[str, float | bool] = {}
-        was_heating = bool(current.get("heatRelayWasOn"))
-        is_heating = bool(outputs.get("heat"))
-        was_cooling = bool(current.get("coolRelayWasOn"))
-        is_cooling = bool(outputs.get("cool"))
+        # Keep the read/modify/write transaction atomic. Multiple output workers
+        # can otherwise write stale relay markers over a newer thermostat state.
+        with _THERMOSTAT_RECORD_LOCK:
+            current = _read_thermostat_record()["thermostat"]
+            changes: dict[str, float | bool] = {}
+            was_heating = bool(current.get("heatRelayWasOn"))
+            is_heating = bool(outputs.get("heat"))
+            was_cooling = bool(current.get("coolRelayWasOn"))
+            is_cooling = bool(outputs.get("cool"))
 
-        if is_heating:
-            changes["equipmentLastHeatRunAt"] = now_ms
-            changes["lastHeatRunAt"] = now_ms
-            changes["heatRelayWasOn"] = True
-            if (not was_heating) or not _number(current.get("heatCycleStartedAt"), 0, 0):
-                changes["heatCycleStartedAt"] = now_ms
-                changes["heatCycleStoppedAt"] = 0
-        elif was_heating:
-            changes["heatRelayWasOn"] = False
-            changes["heatCycleStartedAt"] = 0
-            changes["heatCycleStoppedAt"] = now_ms
+            if is_heating:
+                changes["equipmentLastHeatRunAt"] = now_ms
+                changes["lastHeatRunAt"] = now_ms
+                changes["heatRelayWasOn"] = True
+                if (not was_heating) or not _number(current.get("heatCycleStartedAt"), 0, 0):
+                    changes["heatCycleStartedAt"] = now_ms
+                    changes["heatCycleStoppedAt"] = 0
+            elif was_heating:
+                changes["heatRelayWasOn"] = False
+                changes["heatCycleStartedAt"] = 0
+                changes["heatCycleStoppedAt"] = now_ms
 
-        if is_cooling:
-            changes["equipmentLastCoolRunAt"] = now_ms
-            changes["lastCoolRunAt"] = now_ms
-            changes["coolRelayWasOn"] = True
-            changes["coolFanHoldUntil"] = 0
-            if (not was_cooling) or not _number(current.get("coolCycleStartedAt"), 0, 0):
-                changes["coolCycleStartedAt"] = now_ms
-                changes["coolCycleStoppedAt"] = 0
-        elif was_cooling:
-            remain_minutes = _number(current.get("coolFanRemainOnMinutes"), 2, 0, 15)
-            changes["coolRelayWasOn"] = False
-            changes["coolCycleStartedAt"] = 0
-            changes["coolCycleStoppedAt"] = now_ms
-            changes["coolFanHoldUntil"] = int(now_ms + remain_minutes * 60000) if remain_minutes > 0 else 0
-        elif _number(current.get("coolFanHoldUntil"), 0, 0) and _number(current.get("coolFanHoldUntil"), 0, 0) <= now_ms:
-            changes["coolFanHoldUntil"] = 0
+            if is_cooling:
+                changes["equipmentLastCoolRunAt"] = now_ms
+                changes["lastCoolRunAt"] = now_ms
+                changes["coolRelayWasOn"] = True
+                changes["coolFanHoldUntil"] = 0
+                if (not was_cooling) or not _number(current.get("coolCycleStartedAt"), 0, 0):
+                    changes["coolCycleStartedAt"] = now_ms
+                    changes["coolCycleStoppedAt"] = 0
+            elif was_cooling:
+                remain_minutes = _number(current.get("coolFanRemainOnMinutes"), 2, 0, 15)
+                changes["coolRelayWasOn"] = False
+                changes["coolCycleStartedAt"] = 0
+                changes["coolCycleStoppedAt"] = now_ms
+                changes["coolFanHoldUntil"] = int(now_ms + remain_minutes * 60000) if remain_minutes > 0 else 0
+            elif _number(current.get("coolFanHoldUntil"), 0, 0) and _number(current.get("coolFanHoldUntil"), 0, 0) <= now_ms:
+                changes["coolFanHoldUntil"] = 0
 
-        if not changes:
-            return
-        updated = {**current, **changes}
-        _write_thermostat_record(updated, persist=False)
+            if not changes:
+                return
+            updated = {**current, **changes}
+            _write_thermostat_record(updated, persist=False)
     except Exception as exc:
         print(f"Unable to mark HVAC equipment runtime: {exc}", flush=True)
 
@@ -3659,6 +3692,7 @@ def _apply_minimum_cycle_protection(
     active_mode: str,
     safety_mode: str,
     now_ms: int,
+    was_on: bool | None = None,
 ) -> tuple[bool, int, str]:
     """Apply minimum-on and minimum-off protection for one HVAC side.
 
@@ -3673,7 +3707,7 @@ def _apply_minimum_cycle_protection(
     relay_key = "heatRelayWasOn" if kind == "heat" else "coolRelayWasOn"
     started_key = "heatCycleStartedAt" if kind == "heat" else "coolCycleStartedAt"
     stopped_key = "heatCycleStoppedAt" if kind == "heat" else "coolCycleStoppedAt"
-    was_on = bool(thermostat.get(relay_key))
+    was_on = bool(thermostat.get(relay_key)) if was_on is None else bool(was_on)
     min_ms = _minimum_cycle_runtime_ms(thermostat, kind)
 
     if locked or active_mode == "off":
@@ -3744,8 +3778,8 @@ def _thermostat_outputs(thermostat: dict) -> dict:
         active_mode = safety_mode
         target = safety_low if safety_mode == "heat" else safety_high
     differential = 0 if safety_mode else _number(thermostat.get("temperatureDifferential"), 0, 0, 5)
-    heat_was_on = bool(thermostat.get("heatRelayWasOn"))
-    cool_was_on = bool(thermostat.get("coolRelayWasOn"))
+    heat_was_on = _known_equipment_output_on(thermostat, "heat")
+    cool_was_on = _known_equipment_output_on(thermostat, "cool")
 
     # Temperature differential is a start threshold, not an early shutoff.
     # Example with target 70 and differential 1:
@@ -3778,14 +3812,12 @@ def _thermostat_outputs(thermostat: dict) -> dict:
         heat = False
         cool = False
         active_mode = "lockout"
-    elif not safety_mode and mode != "auto" and (heat or cool):
-        pending_mode = "heat" if heat else "cool"
-        until = _manual_changeover_lockout_until(thermostat, pending_mode, now_ms=now_ms)
-        if until > now_ms:
-            heat = False
-            cool = False
-            active_mode = "lockout"
-            manual_lockout_until = until
+    # Do not infer a new manual changeover delay from old opposite-run timestamps
+    # during every normal output calculation. The control handler arms
+    # manualPendingMode/manualLockoutUntil only when the selected mode actually
+    # changes. Recomputing it here made an already-selected Cool mode suddenly
+    # enter "Cool Delay" after a repeated HA/status command or a late runtime
+    # marker, even though no Heat -> Cool transition had occurred.
     heat_cycle_until = 0
     cool_cycle_until = 0
     heat_cycle_reason = ""
@@ -3797,6 +3829,7 @@ def _thermostat_outputs(thermostat: dict) -> dict:
         active_mode=active_mode,
         safety_mode=safety_mode,
         now_ms=now_ms,
+        was_on=heat_was_on,
     )
     cool, cool_cycle_until, cool_cycle_reason = _apply_minimum_cycle_protection(
         thermostat,
@@ -3805,6 +3838,7 @@ def _thermostat_outputs(thermostat: dict) -> dict:
         active_mode=active_mode,
         safety_mode=safety_mode,
         now_ms=now_ms,
+        was_on=cool_was_on,
     )
     if heat and cool:
         # Heat and cool must never be energized together. Favor the current
@@ -3823,7 +3857,7 @@ def _thermostat_outputs(thermostat: dict) -> dict:
     # off, keep the fan output high immediately. _mark_thermostat_equipment_run
     # will then write coolFanHoldUntil, but the relay never sees a false/true
     # blip in between.
-    starting_cool_fan_hold = bool(thermostat.get("coolRelayWasOn")) and (not cool) and remain_minutes > 0
+    starting_cool_fan_hold = cool_was_on and (not cool) and remain_minutes > 0
     cooling_fan_hold = (not cool) and (active_hold_until > now_ms or starting_cool_fan_hold)
     fan = bool(cool or cooling_fan_hold or thermostat.get("fan") == "on")
     action = "heating" if heat else "cooling" if cool else "fan" if fan else "idle"
@@ -4259,7 +4293,13 @@ def _handle_thermostat_update_locked(payload: dict) -> dict:
             merged["lastPanelTargetTemp"] = panel_target
             merged["lastPanelTargetRequestAt"] = now_ms
 
-    if requested_mode in {"heat", "cool"}:
+    existing_selected_mode = _normalize_mode(existing.get("mode"), "")
+    is_real_manual_mode_transition = (
+        requested_mode in {"heat", "cool"}
+        and requested_mode != existing_selected_mode
+    )
+
+    if is_real_manual_mode_transition:
         # Manual / physical mode changes always win, whether they came from the
         # touchscreen buttons or Home Assistant. If opposite equipment has just
         # run, create the manual changeover cooldown immediately, even when the
@@ -4292,7 +4332,7 @@ def _handle_thermostat_update_locked(payload: dict) -> dict:
             }
         else:
             merged["autoSwitchHold"] = _empty_auto_switch_hold()
-    elif requested_mode == "off":
+    elif requested_mode == "off" and requested_mode != existing_selected_mode:
         merged["autoSwitchNotice"] = _empty_auto_switch_notice()
         merged["autoSwitchNoticeDismissed"] = _empty_auto_switch_notice_dismissed()
         merged["autoSwitchHold"] = _empty_auto_switch_hold()
@@ -4787,6 +4827,7 @@ def _expire_manual_hardware_if_needed() -> bool:
 
 def _apply_thermostat_outputs_to_hardware(outputs: dict, thermostat: dict | None = None) -> None:
     """Route room outputs independently to onboard GPIO or Home Assistant."""
+    global _HVAC_OUTPUT_LAST_LOG_SIGNATURE
     thermostat = _merge_thermostat_state(thermostat or _read_thermostat_record().get("thermostat") or {})
     modes = {kind: _equipment_control_mode(thermostat, kind) for kind in ("fan", "heat", "cool")}
     hardware_relays = {
@@ -4796,6 +4837,28 @@ def _apply_thermostat_outputs_to_hardware(outputs: dict, thermostat: dict | None
     any_external = any(mode == "external" for mode in modes.values())
     any_internal = any(mode == "internal" for mode in modes.values())
     history_source = "thermostat-mixed" if any_external and any_internal else ("thermostat-external" if any_external else "thermostat")
+    log_signature = (
+        bool(outputs.get("fan")),
+        bool(outputs.get("heat")),
+        bool(outputs.get("cool")),
+        str(outputs.get("pendingMode") or ""),
+        str(outputs.get("minimumCycleMode") or ""),
+        str(outputs.get("minimumCycleReason") or ""),
+        bool(outputs.get("coolingFanHold")),
+        tuple((kind, modes[kind]) for kind in ("fan", "heat", "cool")),
+    )
+    if log_signature != _HVAC_OUTPUT_LAST_LOG_SIGNATURE:
+        _HVAC_OUTPUT_LAST_LOG_SIGNATURE = log_signature
+        print(
+            "HVAC output transition: "
+            f"mode={thermostat.get('mode')} current={_number(thermostat.get('currentTemp'), 70):g} "
+            f"target={_number(thermostat.get('targetTemp'), 70):g} "
+            f"fan={int(bool(outputs.get('fan')))} heat={int(bool(outputs.get('heat')))} cool={int(bool(outputs.get('cool')))} "
+            f"pending={outputs.get('pendingMode') or '-'} minimum={outputs.get('minimumCycleMode') or '-'}:{outputs.get('minimumCycleReason') or '-'} "
+            f"fan_hold={int(bool(outputs.get('coolingFanHold')))} "
+            f"sources=fan:{modes['fan']},heat:{modes['heat']},cool:{modes['cool']}",
+            flush=True,
+        )
     with _HARDWARE_LOCK:
         _expire_manual_hardware_locked()
         if _HARDWARE_MANUAL.get("active"):
