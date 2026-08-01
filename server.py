@@ -2262,7 +2262,7 @@ uploadButton.addEventListener('click', async () => {{
     if (!response.ok || !data.ok) {{
       throw new Error(data.error || data.message || 'Upload failed.');
     }}
-    setStatus(data.message || 'Config uploaded. Restart or refresh the panel if needed.', 'ok');
+    setStatus(data.message || 'Config uploaded. Close the Backup Config popup on the thermostat to apply it immediately.', 'ok');
   }} catch (err) {{
     setStatus(err && err.message ? err.message : String(err), 'bad');
   }}
@@ -2697,7 +2697,7 @@ def _config_import_payload(payload: object) -> dict:
 
     return {
         "ok": True,
-        "message": "Config uploaded. Settings were restored on this panel.",
+        "message": "Config uploaded. Close the Backup Config popup on the thermostat to apply the restored settings immediately.",
         "version": panel_record["version"],
         "updatedAt": panel_record["updatedAt"],
         "config": panel_record["config"],

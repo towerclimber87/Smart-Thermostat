@@ -12949,6 +12949,11 @@ class MainWindow(Background):
             dlg.exec_()
         finally:
             self.stop_config_portal()
+            # A config uploaded through the browser is written by the backend,
+            # while the native touchscreen keeps its current config in memory.
+            # Reload after the portal closes so restored rooms/settings appear
+            # immediately without rebooting the unit or restarting the UI.
+            QTimer.singleShot(0, self.reload_all)
 
     def stop_config_portal(self):
         self.run_async(
