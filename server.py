@@ -8126,6 +8126,13 @@ def _compact_key(value: str) -> str:
 
 
 def _score_audio_control(item: dict, kind: str, player_entity_id: str, player_name: str) -> int:
+    """Score a number.* tone control against the selected media player.
+
+    Generic words such as ``sonos`` or ``connect`` are deliberately excluded
+    from the identity match. A house can contain several Sonos products, and
+    treating the brand as a strong match can assign Living Room Bass to a
+    Bedroom player. Room/device-specific tokens are what make a candidate safe.
+    """
     attrs = item.get("attributes") or {}
     entity_id = str(item.get("entity_id", ""))
     friendly = str(attrs.get("friendly_name") or "")
@@ -8136,23 +8143,34 @@ def _score_audio_control(item: dict, kind: str, player_entity_id: str, player_na
         "bass": ["bass"],
         "treble": ["treble"],
         "gain": ["gain", "subwoofergain", "subgain"],
-        "music_surround": ["musicsurround", "surroundmusic", "music", "surroundlevel", "surroundvolume", "musicvolume"],
+        "music_surround": ["musicsurround", "surroundmusic", "surroundlevel", "surroundvolume", "musicvolume"],
     }
     if not any(term in compact for term in kind_terms.get(kind, [kind])):
         return -1
 
+    generic_tokens = {
+        "media", "player", "audio", "speaker", "sound", "sonos", "connect",
+        "amp", "port", "zone", "room", "home", "number", "level", "control",
+        "bass", "treble", "gain", "sub", "subwoofer", "surround", "music",
+    }
+
+    def identity_tokens(value: str) -> set[str]:
+        return {
+            token
+            for token in re.findall(r"[a-z0-9]+", str(value or "").lower())
+            if len(token) > 2 and token not in generic_tokens
+        }
+
     player_slug = player_entity_id.split(".", 1)[-1]
     player_compact = _compact_key(player_slug)
-    name_words = [word for word in str(player_name or "").lower().replace("-", " ").split() if len(word) > 2]
+    player_tokens = identity_tokens(player_slug) | identity_tokens(player_name)
+    candidate_tokens = identity_tokens(entity_id) | identity_tokens(friendly)
+    shared_tokens = player_tokens & candidate_tokens
 
     score = 5
     if player_compact and player_compact in compact:
-        score += 20
-    for word in name_words:
-        if _compact_key(word) in compact:
-            score += 4
-    if "sonos" in compact:
-        score += 1
+        score += 30
+    score += 12 * len(shared_tokens)
     if kind == "gain" and "subwoofer" in compact:
         score += 10
     return score
@@ -8185,7 +8203,10 @@ def _fetch_ha_audio_controls(ha_url: str, token: str, media_player_id: str, medi
             if score > best_score:
                 best = item
                 best_score = score
-        if best is not None and best_score >= 8:
+        # Require at least one device/room identity match. The base kind score
+        # is only 5, so unrelated tone controls from another Sonos zone cannot
+        # be selected merely because they share the same brand.
+        if best is not None and best_score >= 12:
             controls[kind] = _normalize_number_control(best, kind)
     return controls
 

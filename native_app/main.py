@@ -6505,6 +6505,9 @@ class AudioScreen(Page):
         self._audio_volume_local: dict[str, Any] = {"value": None, "until": 0.0}
         self._audio_assign_short_ms = 700
         self._audio_assign_reassign_ms = 6000
+        self._audio_detected_player_id = ""
+        self._audio_detect_running_player_id = ""
+        self._audio_detect_last_attempt: dict[str, float] = {}
         root = QHBoxLayout(self)
         root.setContentsMargins(28, 6, 28, 18)
         root.setSpacing(18)
@@ -6764,15 +6767,27 @@ class AudioScreen(Page):
         super().sync(config, thermostat)
         ha = self.s.ha()
         mp = self.player_id()
-        title = "Livingroom Sonos"
+        selected = ha.get("mediaPlayerEntity") if isinstance(ha.get("mediaPlayerEntity"), dict) else {}
+        title = str(selected.get("name") or "").strip() if selected.get("entityId") == mp else ""
         for p in ha.get("mediaPlayerEntities") or ha.get("audioAvailableEntities", {}).get("mediaPlayers", []) or []:
             if p.get("entityId") == mp:
                 title = p.get("name") or title
+                break
+        title = title or (mp.split(".", 1)[-1].replace("_", " ").title() if mp else "Audio")
         self.room_title.setText(title)
         self.source_label.setText(title.upper())
         if not self.player_state:
             self.artist_label.setText(title)
         self.apply_audio_control_state()
+
+        # Discover tone-control entities once for each selected player. The
+        # returned number.* records include Home Assistant's live min/max/step,
+        # so a Sonos Connect/Port exposing 0..10 automatically behaves
+        # differently from a speaker exposing -10..10.
+        if mp and mp != self._audio_detected_player_id:
+            last_attempt = float(self._audio_detect_last_attempt.get(mp) or 0.0)
+            if self._audio_detect_running_player_id != mp and time.monotonic() - last_attempt >= 30.0:
+                QTimer.singleShot(0, lambda eid=mp, name=title: self.auto_detect_audio_number_controls(eid, name))
 
     def audio_controls(self) -> dict:
         return nested_get(self.config, "integrations", "homeAssistant", "audioControlEntities", default={}) or {}
@@ -6805,6 +6820,79 @@ class AudioScreen(Page):
             "audio-primary-media-player",
             {"audioControlKind": "primary_media_player"},
             "Audio Media Player",
+        )
+
+    def auto_detect_audio_number_controls(self, media_player_id: str | None = None, media_player_name: str = "", notify: bool = False):
+        """Associate tone controls with the selected player and adopt HA ranges."""
+        entity_id = str(media_player_id or self.player_id() or "").strip()
+        if not entity_id.startswith("media_player."):
+            return
+        if self._audio_detect_running_player_id == entity_id:
+            return
+
+        self._audio_detect_running_player_id = entity_id
+        self._audio_detect_last_attempt[entity_id] = time.monotonic()
+        payload = self.s.ha_payload({
+            "mediaPlayerId": entity_id,
+            "mediaPlayerName": str(media_player_name or self.room_title.text() or "").strip(),
+        })
+
+        def done(result):
+            self._audio_detect_running_player_id = ""
+            # Ignore a result that arrived after the user selected another room.
+            if self.player_id() != entity_id:
+                return
+            fresh = (result or {}).get("controls") if isinstance(result, dict) else None
+            if not isinstance(fresh, dict):
+                self._audio_detected_player_id = entity_id
+                return
+
+            target = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {}).setdefault("audioControlEntities", {})
+            changed_names: list[str] = []
+            cleared_names: list[str] = []
+            for key, _label in AUDIO_NUMBER_CONTROL_ORDER:
+                discovered = fresh.get(key)
+                previous = target.get(key) if isinstance(target.get(key), dict) else {}
+                if isinstance(discovered, dict) and str(discovered.get("entityId") or "").startswith("number."):
+                    record = dict(discovered)
+                    record["kind"] = key
+                    record["autoDetected"] = True
+                    record["forMediaPlayerId"] = entity_id
+                    comparable_previous = {k: v for k, v in previous.items() if k not in {"state", "value"}}
+                    comparable_record = {k: v for k, v in record.items() if k not in {"state", "value"}}
+                    if comparable_previous != comparable_record or previous.get("value") != record.get("value"):
+                        changed_names.append(key)
+                    target[key] = record
+                elif previous.get("autoDetected"):
+                    target[key] = None
+                    cleared_names.append(key)
+
+            self._audio_detected_player_id = entity_id
+            if changed_names or cleared_names:
+                try:
+                    self.s.save_config()
+                    self.config = self.s.config
+                except Exception as exc:
+                    self.requestToast.emit(f"Audio control save failed: {exc}")
+            self.apply_audio_control_state()
+            QTimer.singleShot(100, self.poll)
+            if notify:
+                if changed_names:
+                    labels = ", ".join(AUDIO_CONTROL_LABELS.get(k, k.replace("_", " ").title()) for k in changed_names)
+                    self.requestToast.emit(f"Auto-configured {labels}")
+                else:
+                    self.requestToast.emit("Audio player updated")
+
+        def failed(error):
+            self._audio_detect_running_player_id = ""
+            if notify:
+                self.requestToast.emit(f"Tone-control detection failed: {error}")
+
+        self.run_async(
+            "audio-control-detect",
+            lambda: self.s.api.post("/api/ha/audio/controls", payload),
+            done,
+            failed,
         )
 
     def _set_audio_hold_ms(self, widget, hold_ms: int):
@@ -12426,7 +12514,13 @@ class MainWindow(Background):
                     self.s.save_config()
                     self.sync_runtime_only()
                     self.toast.show_message(f"Audio player: {ent.get('name') or entity_id}")
-                    QTimer.singleShot(120, lambda: self.pages.get("Audio") and self.pages["Audio"].poll())
+                    if audio_page is not None:
+                        audio_page._audio_detected_player_id = ""
+                        QTimer.singleShot(
+                            120,
+                            lambda page=audio_page, eid=entity_id, name=(ent.get("name") or entity_id):
+                                page.auto_detect_audio_number_controls(eid, name, notify=True),
+                        )
                 except Exception as exc:
                     self.toast.show_message(f"Save failed: {exc}")
 
