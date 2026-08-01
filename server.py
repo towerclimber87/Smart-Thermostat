@@ -4978,7 +4978,12 @@ def _motion_status_payload(*, apply_config: bool = True) -> dict:
 def _set_motion_hardware(payload: object) -> dict:
     updates = payload if isinstance(payload, dict) else {}
     _write_motion_config(updates)
-    return _motion_status_payload(apply_config=True)
+    # pollSeconds is a panel refresh preference, not an electrical setting.
+    # Re-driving SENS and ONTIME for a poll-only change adds unnecessary GPIO
+    # work and previously made the innocent 3s -> 6s selection share the same
+    # failure path as a hardware output change.
+    changes_hardware_output = any(key in updates for key in ("sensitivityLevel", "onTimeSeconds"))
+    return _motion_status_payload(apply_config=changes_hardware_output)
 
 
 def _initialize_motion_hardware() -> None:

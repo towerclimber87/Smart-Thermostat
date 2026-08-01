@@ -12520,6 +12520,9 @@ class MainWindow(Background):
 
             motion_timer = QTimer(dlg)
             motion_timer.setSingleShot(False)
+            motion_write_watchdog = QTimer(dlg)
+            motion_write_watchdog.setSingleShot(True)
+            motion_write_watchdog.setInterval(4000)
             motion_update_guard = {"active": False}
             latest_motion = {"pollSeconds": 3, "sensitivityLevel": 0, "onTimeSeconds": 2}
             motion_io = {
@@ -12527,12 +12530,9 @@ class MainWindow(Background):
                 "writeRunning": False,
                 "closed": False,
                 "generation": 0,
+                "pendingChanges": {},
+                "activePayload": {},
             }
-
-            def set_motion_controls_enabled(enabled: bool):
-                for controls in (poll_buttons, sensitivity_buttons, ontime_buttons):
-                    for button in controls.values():
-                        button.setEnabled(bool(enabled))
 
             def apply_motion_config_controls():
                 poll_seconds = int(latest_motion.get("pollSeconds") or 3)
@@ -12562,6 +12562,13 @@ class MainWindow(Background):
                     "sensitivityLevel": int(config.get("sensitivityLevel") or 0),
                     "onTimeSeconds": int(config.get("onTimeSeconds") or 2),
                 })
+                # A second tap may be queued while the first save is still in
+                # flight. Keep the newer local selection visible instead of
+                # briefly snapping back to the first server response.
+                pending = motion_io.get("pendingChanges")
+                if isinstance(pending, dict) and pending:
+                    latest_motion.update(pending)
+
                 available = bool(data.get("available"))
                 motion = bool(data.get("motion"))
                 motion_icon.setMotion(motion, available)
@@ -12618,60 +12625,109 @@ class MainWindow(Background):
                     failed,
                 )
 
-            def save_motion(changes):
+            def flush_motion_save():
                 if motion_io["closed"] or motion_io["writeRunning"]:
                     return
+                pending = motion_io.get("pendingChanges")
+                if not isinstance(pending, dict) or not pending:
+                    return
 
+                # Send only fields that actually changed. In particular, changing
+                # CHECK EVERY must not re-toggle the SENS/ONTIME GPIO outputs.
+                payload = dict(pending)
+                pending.clear()
                 motion_io["generation"] += 1
                 request_generation = int(motion_io["generation"])
                 motion_io["writeRunning"] = True
+                motion_io["activePayload"] = dict(payload)
                 motion_timer.stop()
-
-                payload = dict(latest_motion)
-                payload.update(changes)
-                latest_motion.update(changes)
-                apply_motion_config_controls()
-                set_motion_controls_enabled(False)
+                motion_write_watchdog.start()
+                trace_runtime(f"motion setting save started generation={request_generation} changes={payload}")
 
                 def completed(data):
-                    motion_io["writeRunning"] = False
                     if motion_io["closed"] or request_generation != motion_io["generation"]:
                         return
-                    set_motion_controls_enabled(True)
+                    motion_write_watchdog.stop()
+                    motion_io["writeRunning"] = False
+                    motion_io["activePayload"] = {}
                     apply_motion_payload(data)
+                    trace_runtime(f"motion setting save completed generation={request_generation}")
                     motion_timer.start()
+                    if motion_io.get("pendingChanges"):
+                        QTimer.singleShot(0, flush_motion_save)
 
                 def failed(message):
-                    motion_io["writeRunning"] = False
                     if motion_io["closed"] or request_generation != motion_io["generation"]:
                         return
-                    set_motion_controls_enabled(True)
+                    motion_write_watchdog.stop()
+                    motion_io["writeRunning"] = False
+                    motion_io["activePayload"] = {}
+                    trace_runtime(f"motion setting save failed generation={request_generation}: {message}")
                     self.toast.show_message(f"Motion setting failed: {message}", 5500)
                     motion_timer.start()
                     refresh_motion()
+                    if motion_io.get("pendingChanges"):
+                        QTimer.singleShot(0, flush_motion_save)
 
                 self.run_async(
                     "motion-write",
-                    lambda: self.s.api.post("/api/hardware/motion", payload),
+                    lambda: self.s.api.post("/api/hardware/motion", payload, timeout=2.5),
                     completed,
                     failed,
                 )
 
+            def recover_motion_write_timeout():
+                if motion_io["closed"] or not motion_io["writeRunning"]:
+                    return
+                timed_out_generation = int(motion_io["generation"])
+                motion_io["generation"] += 1  # Ignore any late worker callback.
+                motion_io["writeRunning"] = False
+                motion_io["activePayload"] = {}
+                trace_runtime(f"motion setting save watchdog recovered generation={timed_out_generation}")
+                self.toast.show_message("Motion setting timed out; controls recovered", 5500)
+                motion_timer.start()
+                refresh_motion()
+                if motion_io.get("pendingChanges"):
+                    QTimer.singleShot(0, flush_motion_save)
+
+            motion_write_watchdog.timeout.connect(recover_motion_write_timeout)
+
+            def request_motion_save(changes):
+                if motion_io["closed"] or motion_update_guard["active"] or not isinstance(changes, dict):
+                    return
+                clean = {
+                    key: value
+                    for key, value in changes.items()
+                    if key in {"pollSeconds", "sensitivityLevel", "onTimeSeconds"}
+                    and latest_motion.get(key) != value
+                }
+                if not clean:
+                    return
+
+                # Return from the touchscreen's current click/release event before
+                # changing styles or starting I/O. Disabling/restyling the pressed
+                # widget inside that event can leave some X11 touch drivers holding
+                # a stale pointer grab, which looks like the whole screen froze.
+                def queue_change(next_changes=dict(clean)):
+                    if motion_io["closed"]:
+                        return
+                    latest_motion.update(next_changes)
+                    pending = motion_io.get("pendingChanges")
+                    if isinstance(pending, dict):
+                        pending.update(next_changes)
+                    apply_motion_config_controls()
+                    trace_runtime(f"motion setting selected changes={next_changes}")
+                    flush_motion_save()
+
+                QTimer.singleShot(0, queue_change)
+
             for seconds, button in poll_buttons.items():
-                button.clicked.connect(lambda _checked=False, value=seconds: save_motion({"pollSeconds": value}))
+                button.clicked.connect(lambda _checked=False, value=seconds: request_motion_save({"pollSeconds": value}))
 
             for level, button in sensitivity_buttons.items():
-                button.clicked.connect(
-                    lambda _checked=False, value=level: None
-                    if motion_update_guard["active"]
-                    else save_motion({"sensitivityLevel": value})
-                )
+                button.clicked.connect(lambda _checked=False, value=level: request_motion_save({"sensitivityLevel": value}))
             for seconds, button in ontime_buttons.items():
-                button.clicked.connect(
-                    lambda _checked=False, value=seconds: None
-                    if motion_update_guard["active"]
-                    else save_motion({"onTimeSeconds": value})
-                )
+                button.clicked.connect(lambda _checked=False, value=seconds: request_motion_save({"onTimeSeconds": value}))
             motion_timer.timeout.connect(refresh_motion)
 
             fetch.clicked.connect(lambda: (dlg.accept(), self.do_fetch_update()))
@@ -12684,6 +12740,7 @@ class MainWindow(Background):
             dlg.exec_()
             motion_io["closed"] = True
             motion_timer.stop()
+            motion_write_watchdog.stop()
         except Exception as exc:
             self.toast.show_message(f"Info failed: {exc}")
         finally:
