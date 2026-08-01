@@ -13,6 +13,7 @@ import html
 import json
 import mimetypes
 import os
+import re
 import signal
 import socket
 import shutil
@@ -30,6 +31,13 @@ ROOT = Path(__file__).resolve().parent
 PUBLIC = ROOT / "public"
 DATA_DIR = ROOT / "data"
 VERSION_FILE = ROOT / "VERSION"
+UPDATE_RUNTIME_DIR = Path(os.environ.get("SMART_THERMOSTAT_UPDATE_RUNTIME_DIR", "/tmp/smart-thermostat-self-update")).expanduser()
+UPDATE_STATUS_FILE = UPDATE_RUNTIME_DIR / "update-status.json"
+UPDATE_CHECK_FILE = UPDATE_RUNTIME_DIR / "update-check.json"
+UPDATE_BRANCH = os.environ.get("SMART_THERMOSTAT_UPDATE_BRANCH", "Development").strip() or "Development"
+UPDATE_CHECK_TTL_SECONDS = max(60.0, float(os.environ.get("SMART_THERMOSTAT_UPDATE_CHECK_TTL_SECONDS", "900") or "900"))
+_UPDATE_LAUNCH_LOCK = threading.Lock()
+_UPDATE_CHECK_LOCK = threading.Lock()
 THERMOSTAT_STATE_FILE = DATA_DIR / "thermostat-state.json"
 THERMOSTAT_SCHEDULES_FILE = DATA_DIR / "thermostat-schedules.json"
 THERMOSTAT_SCHEDULES_BACKUP_FILE = DATA_DIR / "thermostat-schedules.backup.json"
@@ -6173,7 +6181,304 @@ def _reboot_payload() -> dict:
     return {"ok": True, "message": "Restart command sent. The server will reboot now."}
 
 
+
+def _read_json_record(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_json_record(path: Path, record: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    temp.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
+    os.replace(temp, path)
+
+
+def _version_key(value: object) -> tuple[int, ...]:
+    numbers = [int(item) for item in re.findall(r"\d+", str(value or ""))]
+    return tuple(numbers) if numbers else (0,)
+
+
+def _update_available(installed: object, latest: object) -> bool:
+    installed_text = str(installed or "").strip()
+    latest_text = str(latest or "").strip()
+    return bool(latest_text and latest_text != installed_text and _version_key(latest_text) > _version_key(installed_text))
+
+
+def _normalized_update_branch() -> str:
+    branch = UPDATE_BRANCH
+    if re.fullmatch(r"[A-Za-z0-9._/-]+", branch):
+        return branch
+    return "Development"
+
+
+def _read_update_check_record() -> dict:
+    return _read_json_record(UPDATE_CHECK_FILE)
+
+
+def _refresh_remote_update_info(force: bool = False) -> dict:
+    """Refresh the remote VERSION without changing the checked-out files."""
+    installed = _read_version_value()
+    cached = _read_update_check_record()
+    now = time.time()
+    checked_at = float(cached.get("checkedAtEpoch") or 0)
+    if not force and checked_at and (now - checked_at) < UPDATE_CHECK_TTL_SECONDS:
+        return cached
+
+    with _UPDATE_CHECK_LOCK:
+        cached = _read_update_check_record()
+        checked_at = float(cached.get("checkedAtEpoch") or 0)
+        now = time.time()
+        if not force and checked_at and (now - checked_at) < UPDATE_CHECK_TTL_SECONDS:
+            return cached
+
+        branch = _normalized_update_branch()
+        latest = str(cached.get("latestVersion") or installed).strip() or installed
+        error_message = ""
+        if not (ROOT / ".git").exists():
+            error_message = "This thermostat folder is not connected to Git."
+        else:
+            fetch_cmd = [
+                "git",
+                "fetch",
+                "--quiet",
+                "origin",
+                f"+{branch}:refs/remotes/origin/{branch}",
+            ]
+            try:
+                fetched = subprocess.run(
+                    fetch_cmd,
+                    cwd=str(ROOT),
+                    capture_output=True,
+                    text=True,
+                    timeout=8,
+                )
+                if fetched.returncode != 0:
+                    error_message = (fetched.stderr or fetched.stdout or "Git fetch failed").strip()
+            except Exception as exc:
+                error_message = f"Git fetch failed: {exc}"
+
+            try:
+                shown = subprocess.run(
+                    ["git", "show", f"refs/remotes/origin/{branch}:VERSION"],
+                    cwd=str(ROOT),
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                )
+                if shown.returncode == 0 and shown.stdout.strip():
+                    latest = shown.stdout.strip().splitlines()[0].strip()
+                elif not error_message:
+                    error_message = (shown.stderr or shown.stdout or "Could not read the remote VERSION file").strip()
+            except Exception as exc:
+                if not error_message:
+                    error_message = f"Could not read the remote VERSION file: {exc}"
+
+        record = {
+            "ok": True,
+            "branch": branch,
+            "installedVersion": installed,
+            "latestVersion": latest,
+            "updateAvailable": _update_available(installed, latest),
+            "checkedAt": int(now * 1000),
+            "checkedAtEpoch": now,
+            "checkError": error_message or None,
+        }
+        try:
+            _write_json_record(UPDATE_CHECK_FILE, record)
+        except OSError:
+            pass
+        return record
+
+
+def _update_unit_state(unit_name: str) -> dict:
+    unit = str(unit_name or "").strip()
+    if not unit:
+        return {"activeState": "unknown", "subState": "unknown", "result": "unknown"}
+    systemctl = shutil.which("systemctl") or "/usr/bin/systemctl"
+    try:
+        result = subprocess.run(
+            [
+                systemctl,
+                "show",
+                unit,
+                "--property=ActiveState",
+                "--property=SubState",
+                "--property=Result",
+                "--value",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except Exception:
+        return {"activeState": "unknown", "subState": "unknown", "result": "unknown"}
+    values = [line.strip() for line in (result.stdout or "").splitlines()]
+    while len(values) < 3:
+        values.append("")
+    return {
+        "activeState": values[0] or "unknown",
+        "subState": values[1] or "unknown",
+        "result": values[2] or "unknown",
+    }
+
+
+def _read_update_log(log_path: object) -> str:
+    path = Path(str(log_path or UPDATE_RUNTIME_DIR / "fetch-update.log"))
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return ""
+    return data[-262144:].decode("utf-8", errors="replace")
+
+
+def _current_update_job_status() -> dict:
+    installed = _read_version_value()
+    record = _read_json_record(UPDATE_STATUS_FILE)
+    if not record:
+        return {
+            "inProgress": False,
+            "phase": "idle",
+            "message": "No update is currently running.",
+            "installedVersion": installed,
+            "unit": None,
+            "log": str(UPDATE_RUNTIME_DIR / "fetch-update.log"),
+        }
+
+    record["installedVersion"] = installed
+    if not bool(record.get("inProgress")):
+        return record
+
+    unit_state = _update_unit_state(str(record.get("unit") or ""))
+    record["unitState"] = unit_state
+    active_state = unit_state.get("activeState")
+    started_at = float(record.get("startedAtEpoch") or 0)
+    age = max(0.0, time.time() - started_at) if started_at else 0.0
+    log_text = _read_update_log(record.get("log"))
+
+    if "===== Smart Thermostat self-update finished:" in log_text:
+        record.update(
+            {
+                "inProgress": False,
+                "phase": "complete",
+                "message": "The thermostat update completed successfully.",
+                "error": None,
+                "finishedAt": int(time.time() * 1000),
+                "installedVersion": installed,
+            }
+        )
+    elif active_state in {"active", "activating", "reloading"} or age < 15:
+        record["phase"] = "installing"
+        record["message"] = "The thermostat is fetching and installing the update."
+    else:
+        record.update(
+            {
+                "inProgress": False,
+                "phase": "failed",
+                "message": "The thermostat update did not finish successfully.",
+                "error": f"Update unit state: {active_state or 'unknown'}; result: {unit_state.get('result') or 'unknown'}",
+                "finishedAt": int(time.time() * 1000),
+                "installedVersion": installed,
+            }
+        )
+
+    try:
+        _write_json_record(UPDATE_STATUS_FILE, record)
+    except OSError:
+        pass
+    return record
+
+
+def _update_status_payload(refresh_remote: bool = False) -> dict:
+    job = _current_update_job_status()
+    installed = _read_version_value()
+    if bool(job.get("inProgress")):
+        # Never run a second Git operation alongside the transient installer.
+        # During installation, report the last completed version check instead.
+        check = _read_update_check_record()
+    elif refresh_remote:
+        check = _refresh_remote_update_info(force=True)
+    else:
+        check = _refresh_remote_update_info(force=False)
+
+    latest = str(check.get("latestVersion") or job.get("targetVersion") or installed).strip() or installed
+    return {
+        "ok": True,
+        "title": "Smart Thermostat Software",
+        "installedVersion": installed,
+        "latestVersion": latest,
+        "updateAvailable": _update_available(installed, latest),
+        "inProgress": bool(job.get("inProgress")),
+        "phase": job.get("phase") or "idle",
+        "message": job.get("message") or "",
+        "error": job.get("error"),
+        "unit": job.get("unit"),
+        "unitState": job.get("unitState"),
+        "log": job.get("log") or str(UPDATE_RUNTIME_DIR / "fetch-update.log"),
+        "startedAt": job.get("startedAt"),
+        "finishedAt": job.get("finishedAt"),
+        "branch": check.get("branch") or _normalized_update_branch(),
+        "checkedAt": check.get("checkedAt"),
+        "checkError": check.get("checkError"),
+    }
+
+
 def _fetch_update_payload() -> dict:
+    """Start the existing safe updater once and expose its state to Home Assistant."""
+    with _UPDATE_LAUNCH_LOCK:
+        current = _current_update_job_status()
+        if bool(current.get("inProgress")):
+            return {
+                "ok": True,
+                "started": False,
+                "alreadyRunning": True,
+                "inProgress": True,
+                "unit": current.get("unit"),
+                "log": current.get("log"),
+                "message": "A thermostat update is already in progress.",
+            }
+
+        result = _start_update_payload_unlocked()
+        now = time.time()
+        if result.get("ok"):
+            check = _read_update_check_record()
+            record = {
+                "ok": True,
+                "inProgress": True,
+                "phase": "queued",
+                "message": result.get("message") or "Thermostat update started.",
+                "error": None,
+                "unit": result.get("unit"),
+                "log": result.get("log"),
+                "targetVersion": check.get("latestVersion"),
+                "startedAt": int(now * 1000),
+                "startedAtEpoch": now,
+                "finishedAt": None,
+            }
+        else:
+            record = {
+                "ok": False,
+                "inProgress": False,
+                "phase": "failed",
+                "message": "The thermostat update could not be started.",
+                "error": result.get("error") or "Unknown update startup error",
+                "unit": result.get("unit"),
+                "log": result.get("log") or str(UPDATE_RUNTIME_DIR / "fetch-update.log"),
+                "startedAt": int(now * 1000),
+                "startedAtEpoch": now,
+                "finishedAt": int(now * 1000),
+            }
+        try:
+            _write_json_record(UPDATE_STATUS_FILE, record)
+        except OSError:
+            pass
+        return {**result, "inProgress": bool(record.get("inProgress")), "phase": record.get("phase")}
+
+
+def _start_update_payload_unlocked() -> dict:
     """Start the full self-update/deploy command from the panel Info dialog.
 
     Important: do NOT run the update as a child of the backend service. When the
@@ -6187,10 +6492,14 @@ def _fetch_update_payload() -> dict:
     # Keep transient self-update scripts/logs out of the Git checkout and out
     # of the backend service RuntimeDirectory. The update restarts this service,
     # so the script must live somewhere that survives that restart.
-    runtime = Path(os.environ.get("SMART_THERMOSTAT_UPDATE_RUNTIME_DIR", "/tmp/smart-thermostat-self-update")).expanduser()
+    runtime = UPDATE_RUNTIME_DIR
     runtime.mkdir(parents=True, exist_ok=True)
     log_path = runtime / "fetch-update.log"
     script_path = runtime / "self-update.sh"
+    try:
+        log_path.write_text("", encoding="utf-8")
+    except OSError:
+        pass
 
     script = f"""#!/usr/bin/env bash
 set -Eeuo pipefail
@@ -7998,6 +8307,9 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
         if path == "/api/system/info":
             server_port = getattr(self.server, "server_address", (None, None))[1]
             return _json(self, 200, _system_info_payload(server_port))
+        if path == "/api/system/update-status":
+            refresh = str((query.get("refresh") or [""])[0]).strip().lower() in {"1", "true", "yes", "on"}
+            return _json(self, 200, _update_status_payload(refresh_remote=refresh))
         if path == "/":
             if not _config_web_portal_active(touch=True):
                 self.send_error(404, "Not found")
