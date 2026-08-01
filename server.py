@@ -160,11 +160,11 @@ _HARDWARE_RGB = {"on": False, "color": "#35eaff"}
 _HVAC_HISTORY_LAST_RELAYS = {"fan": False, "heat": False, "cool": False}
 _HVAC_HISTORY_LAST_SOURCE = "thermostat"
 _EXTERNAL_HA_AIR_LOCK = threading.RLock()
-_EXTERNAL_HA_AIR_LAST_STATES = {"heat": None, "cool": None}
-_EXTERNAL_HA_AIR_LAST_ENTITIES = {"heat": "", "cool": ""}
-_EXTERNAL_HA_AIR_RETRY_AFTER = {"heat": 0.0, "cool": 0.0}
-_EXTERNAL_HA_AIR_NEXT_VERIFY_AT = {"heat": 0.0, "cool": 0.0}
-_EXTERNAL_HA_AIR_LAST_ERROR_AT = {"heat": 0.0, "cool": 0.0}
+_EXTERNAL_HA_AIR_LAST_STATES = {"heat": None, "cool": None, "fan": None}
+_EXTERNAL_HA_AIR_LAST_ENTITIES = {"heat": "", "cool": "", "fan": ""}
+_EXTERNAL_HA_AIR_RETRY_AFTER = {"heat": 0.0, "cool": 0.0, "fan": 0.0}
+_EXTERNAL_HA_AIR_NEXT_VERIFY_AT = {"heat": 0.0, "cool": 0.0, "fan": 0.0}
+_EXTERNAL_HA_AIR_LAST_ERROR_AT = {"heat": 0.0, "cool": 0.0, "fan": 0.0}
 _THERMOSTAT_ASYNC_OUTPUT_LOCK = threading.Lock()
 _THERMOSTAT_ASYNC_OUTPUT_SEQ = 0
 _HARDWARE_LAST_I2C_SCAN = {"at": 0.0, "payload": None}
@@ -233,9 +233,16 @@ DEFAULT_THERMOSTAT = {
     "heatMinimumRuntimeMinutes": 2,
     "coolMinimumRuntimeMinutes": 2,
     "coolFanRemainOnMinutes": 2,
+    # Independent source routing. airControlMode remains as a legacy
+    # compatibility value for older panel builds.
     "airControlMode": "internal",
+    "roomTempControlMode": "internal",
+    "heatControlMode": "internal",
+    "coolControlMode": "internal",
+    "fanControlMode": "internal",
     "externalHeatEntity": None,
     "externalCoolEntity": None,
+    "externalFanEntity": None,
     "heatLocked": False,
     "coolLocked": False,
     "people": [],
@@ -302,6 +309,10 @@ DEFAULT_HOME_ASSISTANT_CONFIG = {
     "weatherAvailableEntities": [],
     "currentTempEntity": None,
     "currentTempAvailableEntities": [],
+    "externalHeatControlEntity": None,
+    "externalCoolControlEntity": None,
+    "externalFanControlEntity": None,
+    "externalAirControlAvailableEntities": [],
     "alarmEntity": None,
     "alarmAvailableEntities": [],
     "doorEntity": None,
@@ -448,6 +459,29 @@ def _normalize_air_control_mode(value: object, fallback: str = "internal") -> st
     if mode in {"internal", "local", "onboard", "gpio", "hardware"}:
         return "internal"
     return fallback if fallback in {"internal", "external"} else "internal"
+
+
+def _equipment_control_mode(thermostat: dict, kind: str) -> str:
+    """Return the independent Internal/External mode for one HVAC output."""
+    kind = str(kind or "").strip().lower()
+    key = {
+        "heat": "heatControlMode",
+        "cool": "coolControlMode",
+        "fan": "fanControlMode",
+    }.get(kind)
+    if not key:
+        return "internal"
+    explicit = thermostat.get(key)
+    if explicit is not None:
+        return _normalize_air_control_mode(explicit, "internal")
+    # Older state only had one switch for heat/cool and always kept fan local.
+    if kind in {"heat", "cool"}:
+        return _normalize_air_control_mode(thermostat.get("airControlMode"), "internal")
+    return "internal"
+
+
+def _room_temp_control_mode(thermostat: dict) -> str:
+    return _normalize_air_control_mode(thermostat.get("roomTempControlMode"), "internal")
 
 
 def _normalize_external_air_entity(value: object) -> dict | None:
@@ -957,10 +991,34 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             base["coolLocked"] = _boolish(source.get("coolLocked"))
         air_mode_value = source.get("airControlMode", source.get("airSwitchMode", source.get("airSourceMode", None)))
         if air_mode_value is not None:
-            base["airControlMode"] = _normalize_air_control_mode(air_mode_value, base.get("airControlMode", "internal"))
+            legacy_mode = _normalize_air_control_mode(air_mode_value, base.get("airControlMode", "internal"))
+            base["airControlMode"] = legacy_mode
+            # Migration for state written before independent routing existed.
+            # Once any independent mode is present, never let the lossy legacy
+            # flag overwrite the unchanged side during a partial update.
+            has_independent_mode = any(key in source for key in (
+                "roomTempControlMode", "roomTempSourceMode", "temperatureSourceMode",
+                "heatControlMode", "heatSourceMode",
+                "coolControlMode", "coolSourceMode",
+                "fanControlMode", "fanSourceMode",
+            ))
+            if not has_independent_mode:
+                base["heatControlMode"] = legacy_mode
+                base["coolControlMode"] = legacy_mode
+        for dst_key, aliases in (
+            ("roomTempControlMode", ("roomTempControlMode", "roomTempSourceMode", "temperatureSourceMode")),
+            ("heatControlMode", ("heatControlMode", "heatSourceMode")),
+            ("coolControlMode", ("coolControlMode", "coolSourceMode")),
+            ("fanControlMode", ("fanControlMode", "fanSourceMode")),
+        ):
+            for alias in aliases:
+                if alias in source:
+                    base[dst_key] = _normalize_air_control_mode(source.get(alias), base.get(dst_key, "internal"))
+                    break
         for dst_key, aliases in (
             ("externalHeatEntity", ("externalHeatEntity", "externalHeatControlEntity", "externalHeatEntry", "heatControlEntity")),
             ("externalCoolEntity", ("externalCoolEntity", "externalCoolControlEntity", "externalCoolEntry", "coolControlEntity")),
+            ("externalFanEntity", ("externalFanEntity", "externalFanControlEntity", "externalFanEntry", "fanControlEntity")),
         ):
             for alias in aliases:
                 if alias in source:
@@ -1135,6 +1193,12 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
     if not base["away"] and not base.get("pauseFunction", {}).get("active"):
         base["targetTemp"] = _number(base["targetTemp"], 70, mode_limits.get("min"), mode_limits.get("max"))
         base["lastComfortTarget"] = _number(base["lastComfortTarget"], base["targetTemp"], mode_limits.get("min"), mode_limits.get("max"))
+    # Preserve a meaningful legacy value for older clients. Mixed routing cannot
+    # be represented by the old flag, so only report External when both sides are.
+    base["airControlMode"] = "external" if (
+        _normalize_air_control_mode(base.get("heatControlMode"), "internal") == "external"
+        and _normalize_air_control_mode(base.get("coolControlMode"), "internal") == "external"
+    ) else "internal"
     return base
 
 
@@ -1163,8 +1227,13 @@ THERMOSTAT_PERSIST_KEYS = (
     "coolMinimumRuntimeMinutes",
     "coolFanRemainOnMinutes",
     "airControlMode",
+    "roomTempControlMode",
+    "heatControlMode",
+    "coolControlMode",
+    "fanControlMode",
     "externalHeatEntity",
     "externalCoolEntity",
+    "externalFanEntity",
     "heatLocked",
     "coolLocked",
     "people",
@@ -3490,20 +3559,29 @@ def _apply_runtime_thermostat_logic(record: dict, *, notify: bool = True) -> dic
     thermostat = _clear_expired_virtual_temp_override(thermostat)
 
     if not _virtual_temp_override_active(thermostat):
-        local_primary = LOCAL_TEMP_SENSOR_MODE in {"primary", "onboard", "local", "always", "on", "force"}
-        if local_primary and LOCAL_TEMP_SENSOR_ENABLED:
-            sensor = _read_local_temperature_sensor()
-            if sensor.get("available") and sensor.get("temperatureF") is not None:
-                thermostat = _apply_local_temperature_sensor_if_needed(
-                    {"thermostat": thermostat}, sensor=sensor, force_use=True
-                )
-            else:
-                # Keep the configured HA sensor as a last-resort fallback only
-                # when neither onboard HDC2080 can provide a trusted reading.
-                thermostat = _apply_selected_ha_temperature_sensor_if_needed(thermostat)
-        else:
+        room_mode = _room_temp_control_mode(thermostat)
+        if room_mode == "external":
+            # External means the selected Home Assistant sensor/climate entity is
+            # primary. Onboard sensors remain a safety fallback if HA is missing.
+            before_ha = thermostat
             thermostat = _apply_selected_ha_temperature_sensor_if_needed(thermostat)
-            thermostat = _apply_local_temperature_sensor_if_needed({"thermostat": thermostat})
+            if thermostat is before_ha and LOCAL_TEMP_SENSOR_ENABLED:
+                thermostat = _apply_local_temperature_sensor_if_needed(
+                    {"thermostat": thermostat}, force_use=True
+                )
+        else:
+            # Internal means the onboard HDC2080 pair is primary. Keep HA only as
+            # a fallback when neither onboard sensor can provide a trusted value.
+            if LOCAL_TEMP_SENSOR_ENABLED:
+                sensor = _read_local_temperature_sensor()
+                if sensor.get("available") and sensor.get("temperatureF") is not None:
+                    thermostat = _apply_local_temperature_sensor_if_needed(
+                        {"thermostat": thermostat}, sensor=sensor, force_use=True
+                    )
+                else:
+                    thermostat = _apply_selected_ha_temperature_sensor_if_needed(thermostat)
+            else:
+                thermostat = _apply_selected_ha_temperature_sensor_if_needed(thermostat)
 
     thermostat = _apply_selected_ha_outdoor_temperature_sensor_if_needed(thermostat)
     updated = _apply_presence_away_logic(thermostat)
@@ -3824,8 +3902,13 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
         "coolFanHoldUntil": thermostat.get("coolFanHoldUntil", 0),
         "schedules": thermostat.get("schedules") or [],
         "airControlMode": _normalize_air_control_mode(thermostat.get("airControlMode")),
+        "roomTempControlMode": _room_temp_control_mode(thermostat),
+        "heatControlMode": _equipment_control_mode(thermostat, "heat"),
+        "coolControlMode": _equipment_control_mode(thermostat, "cool"),
+        "fanControlMode": _equipment_control_mode(thermostat, "fan"),
         "externalHeatEntity": _normalize_external_air_entity(thermostat.get("externalHeatEntity")),
         "externalCoolEntity": _normalize_external_air_entity(thermostat.get("externalCoolEntity")),
+        "externalFanEntity": _normalize_external_air_entity(thermostat.get("externalFanEntity")),
         "relays": {"fan": outputs["fan"], "heat": outputs["heat"], "cool": outputs["cool"]},
         "outputs": outputs,
         "serial": serial,
@@ -3897,8 +3980,13 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
         "coolFanHoldUntil": thermostat.get("coolFanHoldUntil", 0),
         "schedules": thermostat.get("schedules") or [],
         "airControlMode": _normalize_air_control_mode(thermostat.get("airControlMode")),
+        "roomTempControlMode": _room_temp_control_mode(thermostat),
+        "heatControlMode": _equipment_control_mode(thermostat, "heat"),
+        "coolControlMode": _equipment_control_mode(thermostat, "cool"),
+        "fanControlMode": _equipment_control_mode(thermostat, "fan"),
         "externalHeatEntity": _normalize_external_air_entity(thermostat.get("externalHeatEntity")),
         "externalCoolEntity": _normalize_external_air_entity(thermostat.get("externalCoolEntity")),
+        "externalFanEntity": _normalize_external_air_entity(thermostat.get("externalFanEntity")),
         "relays": {"fan": outputs["fan"], "heat": outputs["heat"], "cool": outputs["cool"]},
         "relayFan": outputs["fan"],
         "relayHeat": outputs["heat"],
@@ -4575,8 +4663,12 @@ def _write_relay_outputs_locked(relays: dict, source: str, *, record_history: bo
 
 
 def _external_air_entity_for_kind(thermostat: dict, kind: str) -> dict | None:
-    key = "externalHeatEntity" if kind == "heat" else "externalCoolEntity"
-    return _normalize_external_air_entity(thermostat.get(key))
+    key = {
+        "heat": "externalHeatEntity",
+        "cool": "externalCoolEntity",
+        "fan": "externalFanEntity",
+    }.get(str(kind or "").strip().lower())
+    return _normalize_external_air_entity(thermostat.get(key)) if key else None
 
 
 def _external_ha_state_is_on(item: dict | None) -> bool | None:
@@ -4591,27 +4683,27 @@ def _external_ha_state_is_on(item: dict | None) -> bool | None:
 
 
 def _apply_external_ha_air_outputs(thermostat: dict, outputs: dict) -> None:
-    if _normalize_air_control_mode(thermostat.get("airControlMode")) != "external":
-        return
+    """Apply each independently configured external HVAC output in Home Assistant."""
     ha_url, token = _ha_credentials_from_panel_config()
     if not ha_url or not token:
         return
 
     desired = {
-        "heat": bool(outputs.get("heat")),
-        "cool": bool(outputs.get("cool")),
+        kind: bool(outputs.get(kind)) if _equipment_control_mode(thermostat, kind) == "external" else False
+        for kind in ("heat", "cool", "fan")
     }
     if desired["heat"] and desired["cool"]:
         desired["cool"] = False
 
     with _EXTERNAL_HA_AIR_LOCK:
         now = time.monotonic()
-        # Turn inactive side off first, then energize the active side. That keeps
-        # external HA helpers from seeing heat and cool on at the same moment.
-        ordered = [kind for kind in ("heat", "cool") if not desired[kind]] + [kind for kind in ("heat", "cool") if desired[kind]]
+        # Turn inactive outputs off first, then energize active outputs.
+        ordered = [kind for kind in ("heat", "cool", "fan") if not desired[kind]] + [
+            kind for kind in ("heat", "cool", "fan") if desired[kind]
+        ]
         for kind in ordered:
             entry = _external_air_entity_for_kind(thermostat, kind)
-            entity_id = str((entry or {}).get("entityId") or "").strip()
+            entity_id = str((entry or {}).get("entityId") or _EXTERNAL_HA_AIR_LAST_ENTITIES.get(kind) or "").strip()
             if not entity_id:
                 _EXTERNAL_HA_AIR_LAST_STATES[kind] = None
                 _EXTERNAL_HA_AIR_LAST_ENTITIES[kind] = ""
@@ -4620,15 +4712,16 @@ def _apply_external_ha_air_outputs(thermostat: dict, outputs: dict) -> None:
             want_on = desired[kind]
             last_entity = str(_EXTERNAL_HA_AIR_LAST_ENTITIES.get(kind) or "")
             last_state = _EXTERNAL_HA_AIR_LAST_STATES.get(kind)
+            if last_entity and last_entity != entity_id and last_state is True:
+                try:
+                    _call_room_control_service(ha_url, token, last_entity, "off")
+                except Exception as exc:
+                    print(f"External {kind} previous entry release failed for {last_entity}: {exc}", flush=True)
             retry_after = float(_EXTERNAL_HA_AIR_RETRY_AFTER.get(kind) or 0.0)
             next_verify_at = float(_EXTERNAL_HA_AIR_NEXT_VERIFY_AT.get(kind) or 0.0)
             needs_call = last_entity != entity_id or last_state is None or bool(last_state) != want_on
             can_try_now = not (retry_after and now < retry_after and last_entity == entity_id)
 
-            # In external mode, do not only trust the command we sent earlier.
-            # Wireless HA commands can be missed by remote heat/cool helpers, so
-            # every 30 seconds verify the actual HA state and re-apply the desired
-            # on/off state when it drifted.
             if (not needs_call) and can_try_now and now >= next_verify_at:
                 try:
                     item = _ha_state_cached(ha_url, token, entity_id, ttl=0.0)
@@ -4644,7 +4737,7 @@ def _apply_external_ha_air_outputs(thermostat: dict, outputs: dict) -> None:
                     last_error_at = float(_EXTERNAL_HA_AIR_LAST_ERROR_AT.get(kind) or 0.0)
                     if now - last_error_at > 60.0:
                         _EXTERNAL_HA_AIR_LAST_ERROR_AT[kind] = now
-                        print(f"External {kind} air state verify failed for {entity_id}: {exc}", flush=True)
+                        print(f"External {kind} state verify failed for {entity_id}: {exc}", flush=True)
                     continue
 
             if not needs_call or not can_try_now:
@@ -4660,36 +4753,13 @@ def _apply_external_ha_air_outputs(thermostat: dict, outputs: dict) -> None:
                 last_error_at = float(_EXTERNAL_HA_AIR_LAST_ERROR_AT.get(kind) or 0.0)
                 if now - last_error_at > 60.0:
                     _EXTERNAL_HA_AIR_LAST_ERROR_AT[kind] = now
-                    print(f"External {kind} air control failed for {entity_id}: {exc}", flush=True)
+                    print(f"External {kind} control failed for {entity_id}: {exc}", flush=True)
 
 
 def _release_external_ha_air_outputs(thermostat: dict) -> None:
-    ha_url, token = _ha_credentials_from_panel_config()
-    if not ha_url or not token:
-        return
-    with _EXTERNAL_HA_AIR_LOCK:
-        now = time.monotonic()
-        for kind in ("heat", "cool"):
-            if _EXTERNAL_HA_AIR_LAST_STATES.get(kind) is not True:
-                continue
-            entry = _external_air_entity_for_kind(thermostat, kind)
-            entity_id = str((entry or {}).get("entityId") or _EXTERNAL_HA_AIR_LAST_ENTITIES.get(kind) or "").strip()
-            if not entity_id:
-                _EXTERNAL_HA_AIR_LAST_STATES[kind] = None
-                _EXTERNAL_HA_AIR_LAST_ENTITIES[kind] = ""
-                continue
-            retry_after = float(_EXTERNAL_HA_AIR_RETRY_AFTER.get(kind) or 0.0)
-            if retry_after and now < retry_after:
-                continue
-            try:
-                _call_room_control_service(ha_url, token, entity_id, "off")
-                _EXTERNAL_HA_AIR_LAST_STATES[kind] = False
-                _EXTERNAL_HA_AIR_LAST_ENTITIES[kind] = entity_id
-                _EXTERNAL_HA_AIR_RETRY_AFTER[kind] = 0.0
-                _EXTERNAL_HA_AIR_NEXT_VERIFY_AT[kind] = time.monotonic() + EXTERNAL_HA_AIR_VERIFY_INTERVAL_SECONDS
-            except Exception as exc:
-                _EXTERNAL_HA_AIR_RETRY_AFTER[kind] = time.monotonic() + 30.0
-                print(f"External {kind} air release failed for {entity_id}: {exc}", flush=True)
+    # Retained for callers outside this module. Feeding all-false outputs turns
+    # off every previously energized HA helper, including the external fan.
+    _apply_external_ha_air_outputs(thermostat, {"heat": False, "cool": False, "fan": False})
 
 
 def _expire_manual_hardware_locked(now: float | None = None) -> bool:
@@ -4716,36 +4786,31 @@ def _expire_manual_hardware_if_needed() -> bool:
 
 
 def _apply_thermostat_outputs_to_hardware(outputs: dict, thermostat: dict | None = None) -> None:
-    """Route HVAC calls to onboard GPIO unless External air control is selected.
-
-    Internal mode drives all three onboard relay outputs. External mode keeps the
-    local heat/cool relays de-energized and sends those two calls to the selected
-    Home Assistant entities; the onboard fan output remains available locally.
-    """
+    """Route room outputs independently to onboard GPIO or Home Assistant."""
     thermostat = _merge_thermostat_state(thermostat or _read_thermostat_record().get("thermostat") or {})
-    external_mode = _normalize_air_control_mode(thermostat.get("airControlMode")) == "external"
+    modes = {kind: _equipment_control_mode(thermostat, kind) for kind in ("fan", "heat", "cool")}
     hardware_relays = {
-        "fan": bool(outputs.get("fan")),
-        "heat": False if external_mode else bool(outputs.get("heat")),
-        "cool": False if external_mode else bool(outputs.get("cool")),
+        kind: bool(outputs.get(kind)) if modes[kind] == "internal" else False
+        for kind in ("fan", "heat", "cool")
     }
+    any_external = any(mode == "external" for mode in modes.values())
+    any_internal = any(mode == "internal" for mode in modes.values())
+    history_source = "thermostat-mixed" if any_external and any_internal else ("thermostat-external" if any_external else "thermostat")
     with _HARDWARE_LOCK:
         _expire_manual_hardware_locked()
         if _HARDWARE_MANUAL.get("active"):
             return
         _write_relay_outputs_locked(
             hardware_relays,
-            "thermostat-external" if external_mode else "thermostat",
-            record_history=not external_mode,
+            history_source,
+            record_history=not any_external,
         )
-    if external_mode:
-        _apply_external_ha_air_outputs(thermostat, outputs)
+    _apply_external_ha_air_outputs(thermostat, outputs)
+    if any_external:
         _remember_hvac_history_source(
             {"fan": outputs.get("fan"), "heat": outputs.get("heat"), "cool": outputs.get("cool")},
-            "thermostat-external",
+            history_source,
         )
-    else:
-        _release_external_ha_air_outputs(thermostat)
     _mark_thermostat_equipment_run(outputs)
 
 
@@ -5602,6 +5667,8 @@ def _read_local_temperature_sensor(force: bool = False) -> dict:
 
 
 def _thermostat_should_use_local_temp_sensor(thermostat: dict, now: float) -> bool:
+    if _room_temp_control_mode(thermostat) == "external":
+        return False
     mode = LOCAL_TEMP_SENSOR_MODE
     if mode in {"primary", "onboard", "local", "always", "on", "force"}:
         return True
@@ -5635,12 +5702,16 @@ def _selected_ha_temperature_entity() -> dict | None:
 
 def _temperature_from_ha_state_item(item: dict) -> tuple[float | None, str]:
     attrs = item.get("attributes") or {}
-    raw = item.get("state")
+    # A sensor stores the temperature in state; a climate entity stores the
+    # measured room temperature in current_temperature.
+    raw = attrs.get("current_temperature")
+    if raw is None:
+        raw = item.get("state")
     try:
         value = float(raw)
     except (TypeError, ValueError):
         return None, ""
-    unit = str(attrs.get("unit_of_measurement") or "").strip()
+    unit = str(attrs.get("temperature_unit") or attrs.get("unit_of_measurement") or "").strip()
     if unit.lower() in {"°c", "c", "celsius"}:
         value = value * 9.0 / 5.0 + 32.0
     if not (-40.0 <= value <= 130.0):

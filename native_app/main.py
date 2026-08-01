@@ -9677,11 +9677,29 @@ class SettingsDialog(QDialog):
         dlg.exec_()
 
 
-    def air_control_mode(self) -> str:
-        mode = str((self.s.thermostat or {}).get("airControlMode") or "internal").strip().lower()
+    def source_mode_key(self, kind: str) -> str:
+        return {
+            "room": "roomTempControlMode",
+            "heat": "heatControlMode",
+            "cool": "coolControlMode",
+            "fan": "fanControlMode",
+        }.get(str(kind or "").strip().lower(), "roomTempControlMode")
+
+    def source_control_mode(self, kind: str) -> str:
+        kind = str(kind or "").strip().lower()
+        t = self.s.thermostat if isinstance(self.s.thermostat, dict) else {}
+        value = t.get(self.source_mode_key(kind))
+        if value is None and kind in {"heat", "cool"}:
+            value = t.get("airControlMode")
+        mode = str(value or "internal").strip().lower()
         return "external" if mode in {"external", "home-assistant", "ha", "remote"} else "internal"
 
-    def external_air_entity(self, kind: str) -> dict | None:
+    def external_source_entity(self, kind: str) -> dict | None:
+        kind = str(kind or "").strip().lower()
+        if kind == "room":
+            entry = nested_get(self.s.config, "integrations", "homeAssistant", "currentTempEntity", default=None)
+            return entry if isinstance(entry, dict) and str(entry.get("entityId") or entry.get("entity_id") or "").strip() else None
+
         def allowed(entry: dict | None) -> dict | None:
             if not isinstance(entry, dict):
                 return None
@@ -9691,68 +9709,121 @@ class SettingsDialog(QDialog):
             domain = str(entry.get("domain") or eid.split(".", 1)[0]).strip().lower()
             return entry if domain in {"switch", "input_boolean"} else None
 
-        kind = "heat" if str(kind).lower() == "heat" else "cool"
         t = self.s.thermostat if isinstance(self.s.thermostat, dict) else {}
-        key = "externalHeatEntity" if kind == "heat" else "externalCoolEntity"
-        entry = allowed(t.get(key))
+        thermostat_key = {
+            "heat": "externalHeatEntity",
+            "cool": "externalCoolEntity",
+            "fan": "externalFanEntity",
+        }.get(kind)
+        entry = allowed(t.get(thermostat_key)) if thermostat_key else None
         if entry:
             return entry
         ha = self.s.ha()
-        ha_key = "externalHeatControlEntity" if kind == "heat" else "externalCoolControlEntity"
-        return allowed(ha.get(ha_key) if isinstance(ha, dict) else None)
+        ha_key = {
+            "heat": "externalHeatControlEntity",
+            "cool": "externalCoolControlEntity",
+            "fan": "externalFanControlEntity",
+        }.get(kind)
+        return allowed(ha.get(ha_key) if isinstance(ha, dict) and ha_key else None)
 
-    def external_air_summary_text(self, kind: str) -> str:
-        label = "Heat" if str(kind).lower() == "heat" else "Cool"
-        entry = self.external_air_entity(kind)
+    def source_label(self, kind: str) -> str:
+        return {"room": "Room Temp", "heat": "Heat", "cool": "Cool", "fan": "Fan"}.get(kind, "Source")
+
+    def source_summary_text(self, kind: str) -> str:
+        kind = str(kind or "").strip().lower()
+        mode = self.source_control_mode(kind)
+        if mode == "internal":
+            return "Onboard HDC2080 sensors" if kind == "room" else "Onboard GPIO relay"
+        entry = self.external_source_entity(kind)
         if not entry:
-            return f"{label}: No HA entry selected"
-        name = str(entry.get("name") or entry.get("friendly_name") or entry.get("entityId") or f"{label} Entry")
+            return "No HA sensor/climate selected" if kind == "room" else "No HA entry selected"
+        name = str(entry.get("name") or entry.get("friendly_name") or entry.get("entityId") or "Home Assistant")
         entity_id = str(entry.get("entityId") or entry.get("entity_id") or "")
-        return f"{label}: {name}\n{entity_id}"
+        return f"{compact_name(name, 28)}\n{entity_id}"
 
-    def air_mode_summary_text(self) -> str:
-        if self.air_control_mode() == "external":
-            return "External mode: heat/cool calls control selected HA entries."
-        return "Internal mode: onboard sensors/GPIO; HA heat/cool entries ignored."
+    def update_source_control_widgets(self):
+        for kind in ("room", "heat", "cool", "fan"):
+            mode = self.source_control_mode(kind)
+            external = mode == "external"
+            mode_button = getattr(self, f"{kind}_source_mode_button", None)
+            if mode_button is not None:
+                mode_button.setText(mode.upper())
+                if hasattr(mode_button, "setActive"):
+                    mode_button.setActive(external)
+            summary = getattr(self, f"{kind}_source_summary", None)
+            if summary is not None:
+                summary.setText(self.source_summary_text(kind))
+                summary.repaint()
+            choose_button = getattr(self, f"{kind}_source_choose_button", None)
+            if choose_button is not None and hasattr(choose_button, "setActive"):
+                choose_button.setActive(external)
 
-    def update_air_control_widgets(self):
-        external = self.air_control_mode() == "external"
-        if hasattr(self, "air_mode_summary"):
-            self.air_mode_summary.setText(self.air_mode_summary_text())
-        if hasattr(self, "air_switch_button"):
-            self.air_switch_button.setText("Internal / External: EXTERNAL" if external else "Internal / External: INTERNAL")
-            if hasattr(self.air_switch_button, "setActive"):
-                self.air_switch_button.setActive(external)
-        if hasattr(self, "external_heat_label"):
-            self.external_heat_label.setText(self.external_air_summary_text("heat") if external else "Heat: not used in Internal mode")
-        if hasattr(self, "external_cool_label"):
-            self.external_cool_label.setText(self.external_air_summary_text("cool") if external else "Cool: not used in Internal mode")
-        for attr in ("choose_external_heat_button", "choose_external_cool_button"):
-            if hasattr(self, attr):
-                getattr(self, attr).setEnabled(external)
+    def legacy_air_mode_with(self, changed_kind: str, changed_mode: str) -> str:
+        heat_mode = changed_mode if changed_kind == "heat" else self.source_control_mode("heat")
+        cool_mode = changed_mode if changed_kind == "cool" else self.source_control_mode("cool")
+        return "external" if heat_mode == "external" and cool_mode == "external" else "internal"
 
-    def toggle_air_control_mode(self):
-        next_mode = "internal" if self.air_control_mode() == "external" else "external"
+    def set_source_control_mode(self, kind: str, mode: str):
+        kind = str(kind or "").strip().lower()
+        if kind not in {"room", "heat", "cool", "fan"}:
+            return
+        mode = "external" if str(mode or "").strip().lower() == "external" else "internal"
+        if mode == "external" and not self.external_source_entity(kind):
+            if kind == "room":
+                self.choose_temp_sensor()
+            else:
+                self.choose_external_air_entry(kind)
+            return
+        changes = {self.source_mode_key(kind): mode}
+        if kind in {"heat", "cool"}:
+            changes["airControlMode"] = self.legacy_air_mode_with(kind, mode)
+        if kind == "room":
+            if mode == "internal":
+                changes.update({
+                    "currentTempSource": "onboard",
+                    "currentTempSourceName": "Onboard HDC2080 Sensors",
+                    "runtimeTempSource": "onboard",
+                    "runtimeTempSourceName": "Onboard HDC2080 Sensors",
+                })
+            else:
+                entry = self.external_source_entity("room") or {}
+                name = str(entry.get("name") or entry.get("friendly_name") or "Home Assistant Sensor")
+                changes.update({
+                    "currentTempSource": "home-assistant",
+                    "currentTempSourceName": name,
+                    "runtimeTempSource": "home-assistant",
+                    "runtimeTempSourceName": name,
+                })
         try:
-            self.s.update_thermostat({"airControlMode": next_mode})
-            self.update_air_control_widgets()
+            self.s.update_thermostat(changes)
+            self.update_source_control_widgets()
             self.saved.emit()
         except Exception as exc:
-            QMessageBox.warning(self, "Internal / External Air Switch", str(exc))
+            QMessageBox.warning(self, f"{self.source_label(kind)} Source", str(exc))
+
+    def toggle_source_control_mode(self, kind: str):
+        next_mode = "internal" if self.source_control_mode(kind) == "external" else "external"
+        self.set_source_control_mode(kind, next_mode)
 
     def choose_external_air_entry(self, kind: str):
-        kind = "heat" if str(kind).lower() == "heat" else "cool"
-        label = "Heat" if kind == "heat" else "Cool"
+        kind = str(kind or "").strip().lower()
+        if kind not in {"heat", "cool", "fan"}:
+            return
+        label = self.source_label(kind)
         ha = self.s.ha()
         stored = []
+        selected_key = {
+            "heat": "externalHeatControlEntity",
+            "cool": "externalCoolControlEntity",
+            "fan": "externalFanControlEntity",
+        }[kind]
         if isinstance(ha, dict):
-            selected_key = "externalHeatControlEntity" if kind == "heat" else "externalCoolControlEntity"
             current = ha.get(selected_key)
             if isinstance(current, dict):
                 stored.append(current)
             if isinstance(ha.get("externalAirControlAvailableEntities"), list):
                 stored.extend(ha.get("externalAirControlAvailableEntities") or [])
-        current_entry = self.external_air_entity(kind)
+        current_entry = self.external_source_entity(kind)
         if isinstance(current_entry, dict):
             stored.insert(0, current_entry)
 
@@ -9783,7 +9854,7 @@ class SettingsDialog(QDialog):
             }
         entities = list(by_id.values())
         if not entities:
-            QMessageBox.warning(self, f"External {label} Entry", "No Home Assistant switch or input_boolean entries found for external air control.")
+            QMessageBox.warning(self, f"External {label} Entry", "No Home Assistant switch or input_boolean entries found.")
             return
 
         dlg = EntityPickerDialog(f"Choose External {label} Entry", entities, self)
@@ -9794,7 +9865,7 @@ class SettingsDialog(QDialog):
                     return
                 domain = str(e.get("domain") or (eid.split(".", 1)[0] if "." in eid else "switch")).strip().lower()
                 if domain not in allowed_domains:
-                    QMessageBox.warning(self, f"External {label} Entry", "External air control can only use switch or input_boolean entries.")
+                    QMessageBox.warning(self, f"External {label} Entry", "External control can only use switch or input_boolean entries.")
                     return
                 selected = {
                     "entityId": eid,
@@ -9802,18 +9873,27 @@ class SettingsDialog(QDialog):
                     "domain": domain,
                     "state": str(e.get("state") or "unknown"),
                 }
-                ha = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
-                selected_key = "externalHeatControlEntity" if kind == "heat" else "externalCoolControlEntity"
-                thermo_key = "externalHeatEntity" if kind == "heat" else "externalCoolEntity"
-                ha[selected_key] = selected
+                ha_config = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
+                thermostat_key = {
+                    "heat": "externalHeatEntity",
+                    "cool": "externalCoolEntity",
+                    "fan": "externalFanEntity",
+                }[kind]
+                ha_config[selected_key] = selected
                 available = [selected]
                 for item in entities:
                     if isinstance(item, dict) and str(item.get("entityId") or "") != eid:
                         available.append(item)
-                ha["externalAirControlAvailableEntities"] = available
+                ha_config["externalAirControlAvailableEntities"] = available
                 self.s.save_config()
-                self.s.update_thermostat({"airControlMode": "external", thermo_key: selected})
-                self.update_air_control_widgets()
+                changes = {
+                    self.source_mode_key(kind): "external",
+                    thermostat_key: selected,
+                }
+                if kind in {"heat", "cool"}:
+                    changes["airControlMode"] = self.legacy_air_mode_with(kind, "external")
+                self.s.update_thermostat(changes)
+                self.update_source_control_widgets()
                 self.saved.emit()
                 try:
                     dlg.accept()
@@ -9823,7 +9903,6 @@ class SettingsDialog(QDialog):
                 QMessageBox.warning(self, f"External {label} Entry", str(exc))
         dlg.selected.connect(apply)
         dlg.exec_()
-
 
 
     def current_screen_orientation(self) -> str:
@@ -9969,56 +10048,46 @@ class SettingsDialog(QDialog):
         runtime_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
         minimum_runtime.layout().addWidget(runtime_note)
 
-        air_control = self.add_section("Internal / External Air", 2, 0, 1, 2)
-        self.air_mode_summary = QLabel(self.air_mode_summary_text())
-        self.air_mode_summary.setWordWrap(True)
-        self.air_mode_summary.setFont(font(7, QFont.Black))
-        self.air_mode_summary.setStyleSheet("color:#c4d0e5; background:rgba(5,10,20,0.42); border:1px dashed rgba(160,180,210,0.26); border-radius:8px; padding:4px;")
-        air_control.layout().addWidget(self.air_mode_summary)
-        self.air_switch_button = RoundButton("Internal / External Air Switch", active=(self.air_control_mode() == "external"), min_h=28)
-        self.air_switch_button.clicked.connect(self.toggle_air_control_mode)
-        air_control.layout().addWidget(self.air_switch_button)
-        air_grid = self.section_grid(air_control, 2)
-        self.external_heat_label = QLabel(self.external_air_summary_text("heat"))
-        self.external_heat_label.setWordWrap(True)
-        self.external_heat_label.setFont(font(7, QFont.Black))
-        self.external_heat_label.setStyleSheet("color:#dfe9ff; background:transparent; border:0;")
-        self.choose_external_heat_button = RoundButton("Heat Entry", active=True, min_h=27)
-        self.choose_external_heat_button.clicked.connect(lambda checked=False: self.choose_external_air_entry("heat"))
-        self.external_cool_label = QLabel(self.external_air_summary_text("cool"))
-        self.external_cool_label.setWordWrap(True)
-        self.external_cool_label.setFont(font(7, QFont.Black))
-        self.external_cool_label.setStyleSheet("color:#dfe9ff; background:transparent; border:0;")
-        self.choose_external_cool_button = RoundButton("Cool Entry", active=True, min_h=27)
-        self.choose_external_cool_button.clicked.connect(lambda checked=False: self.choose_external_air_entry("cool"))
-        air_grid.addWidget(self.external_heat_label, 0, 0)
-        air_grid.addWidget(self.choose_external_heat_button, 0, 1)
-        air_grid.addWidget(self.external_cool_label, 1, 0)
-        air_grid.addWidget(self.choose_external_cool_button, 1, 1)
-        self.update_air_control_widgets()
+        source_control = self.add_section("Internal / External Sources", 2, 0, 1, 4)
+        source_note = QLabel("Choose each source independently. Internal uses onboard sensors/GPIO; External uses the selected Home Assistant entity.")
+        source_note.setWordWrap(True)
+        source_note.setFont(font(7, QFont.Black))
+        source_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
+        source_control.layout().addWidget(source_note)
+        source_grid = self.section_grid(source_control, 4)
+        source_grid.setColumnStretch(0, 0)
+        source_grid.setColumnStretch(1, 0)
+        source_grid.setColumnStretch(2, 1)
+        source_grid.setColumnStretch(3, 0)
+        for row, kind in enumerate(("room", "heat", "cool", "fan")):
+            title_label = QLabel(self.source_label(kind))
+            title_label.setFont(font(8, QFont.Black))
+            title_label.setMinimumWidth(86)
+            title_label.setStyleSheet("color:#ffffff; background:transparent; border:0;")
+            mode_button = RoundButton(self.source_control_mode(kind).upper(), active=(self.source_control_mode(kind) == "external"), min_h=28)
+            mode_button.setMinimumWidth(112)
+            mode_button.clicked.connect(lambda checked=False, k=kind: self.toggle_source_control_mode(k))
+            summary = QLabel(self.source_summary_text(kind))
+            summary.setWordWrap(True)
+            summary.setFont(font(7, QFont.Black))
+            summary.setMinimumHeight(30)
+            summary.setStyleSheet("color:#dfe9ff; background:rgba(5,10,20,0.28); border:1px solid rgba(160,180,210,0.16); border-radius:8px; padding:3px 5px;")
+            choose_button = RoundButton("Choose HA", active=(self.source_control_mode(kind) == "external"), min_h=28)
+            choose_button.setMinimumWidth(112)
+            if kind == "room":
+                choose_button.clicked.connect(self.choose_temp_sensor)
+            else:
+                choose_button.clicked.connect(lambda checked=False, k=kind: self.choose_external_air_entry(k))
+            setattr(self, f"{kind}_source_mode_button", mode_button)
+            setattr(self, f"{kind}_source_summary", summary)
+            setattr(self, f"{kind}_source_choose_button", choose_button)
+            source_grid.addWidget(title_label, row, 0)
+            source_grid.addWidget(mode_button, row, 1)
+            source_grid.addWidget(summary, row, 2)
+            source_grid.addWidget(choose_button, row, 3)
+        self.update_source_control_widgets()
 
-        temp_sources = self.add_section("Temperature Sources", 2, 2, 1, 2)
-        temp_sources_grid = QGridLayout()
-        temp_sources_grid.setContentsMargins(0, 0, 0, 0)
-        temp_sources_grid.setHorizontalSpacing(8)
-        temp_sources_grid.setVerticalSpacing(5)
-        temp_sources.layout().addLayout(temp_sources_grid)
-
-        selected_temp = nested_get(self.s.config, "integrations", "homeAssistant", "currentTempEntity", default=None)
-        if isinstance(selected_temp, dict):
-            source_name = selected_temp.get("name") or selected_temp.get("friendly_name") or selected_temp.get("entityId") or "Home Assistant Sensor"
-            source_line = f"{selected_temp.get('entityId') or 'selected sensor'}"
-        else:
-            source_name = t.get("currentTempSourceName") or "Virtual Temp"
-            source_line = "Virtual until sensor selected"
-        self.temp_source_label = QLabel(f"Current: {compact_name(source_name, 26)}\n{source_line}")
-        self.temp_source_label.setWordWrap(True)
-        self.temp_source_label.setFont(font(7, QFont.Black))
-        self.temp_source_label.setStyleSheet("color:#dfe9ff; background:rgba(5,10,20,0.28); border:1px solid rgba(160,180,210,0.16); border-radius:8px; padding:4px;")
-        choose = RoundButton("Current", active=True, min_h=28)
-        choose.setMinimumWidth(92)
-        choose.clicked.connect(self.choose_temp_sensor)
-
+        outdoor_source = self.add_section("Outside Temperature", 6, 0, 1, 2)
         selected_outdoor = nested_get(self.s.config, "integrations", "homeAssistant", "outdoorTempEntity", default=None) or nested_get(self.s.config, "integrations", "homeAssistant", "weatherEntity", default=None)
         if isinstance(selected_outdoor, dict):
             outdoor_name = selected_outdoor.get("name") or selected_outdoor.get("friendly_name") or selected_outdoor.get("entityId") or "Outside Sensor"
@@ -10030,17 +10099,11 @@ class SettingsDialog(QDialog):
         self.outdoor_source_label.setWordWrap(True)
         self.outdoor_source_label.setFont(font(7, QFont.Black))
         self.outdoor_source_label.setStyleSheet("color:#dfe9ff; background:rgba(5,10,20,0.28); border:1px solid rgba(160,180,210,0.16); border-radius:8px; padding:4px;")
-        choose_outdoor = RoundButton("Outside", active=True, min_h=28)
-        choose_outdoor.setMinimumWidth(92)
+        choose_outdoor = RoundButton("Choose HA", active=True, min_h=28)
+        choose_outdoor.setMinimumWidth(112)
         choose_outdoor.clicked.connect(self.choose_outdoor_temp_sensor)
-
-        temp_sources_grid.addWidget(self.temp_source_label, 0, 0)
-        temp_sources_grid.addWidget(choose, 1, 0)
-        temp_sources_grid.addWidget(self.outdoor_source_label, 0, 1)
-        temp_sources_grid.addWidget(choose_outdoor, 1, 1)
-        temp_sources_grid.setColumnStretch(0, 1)
-        temp_sources_grid.setColumnStretch(1, 1)
-
+        outdoor_source.layout().addWidget(self.outdoor_source_label)
+        outdoor_source.layout().addWidget(choose_outdoor)
         sync_section = self.add_section("Sync", 3, 2, 1, 2)
         self.sync_peer_summary = QLabel(self.sync_peer_summary_text())
         self.sync_peer_summary.setWordWrap(True)
@@ -10458,7 +10521,7 @@ class SettingsDialog(QDialog):
         stored = ha.get("currentTempAvailableEntities") or []
         entities = []
         try:
-            data = self.s.api.post("/api/ha/entities", self.s.ha_payload({"domains": ["sensor"]}))
+            data = self.s.api.post("/api/ha/entities", self.s.ha_payload({"domains": ["sensor", "climate"]}))
             entities = data.get("entities") or []
         except Exception:
             entities = []
@@ -10473,16 +10536,16 @@ class SettingsDialog(QDialog):
             by_id[eid] = {
                 "entityId": eid,
                 "name": str(item.get("name") or item.get("friendly_name") or eid),
-                "domain": str(item.get("domain") or "sensor"),
+                "domain": str(item.get("domain") or (eid.split(".", 1)[0] if "." in eid else "sensor")),
                 "state": item.get("state"),
                 "unitOfMeasurement": item.get("unitOfMeasurement") or item.get("unit_of_measurement") or "",
             }
         entities = list(by_id.values())
         if not entities:
-            QMessageBox.warning(self, "Failed", "No Home Assistant sensor entities found.")
+            QMessageBox.warning(self, "Failed", "No Home Assistant sensor or climate entities found.")
             return
 
-        dlg = EntityPickerDialog("Choose Temperature Sensor", entities, self)
+        dlg = EntityPickerDialog("Choose Room Temperature Entity", entities, self)
         def apply(e):
             try:
                 eid = str(e.get("entityId") or e.get("entity_id") or "").strip()
@@ -10491,7 +10554,7 @@ class SettingsDialog(QDialog):
                 selected = {
                     "entityId": eid,
                     "name": str(e.get("name") or e.get("friendly_name") or eid),
-                    "domain": str(e.get("domain") or "sensor"),
+                    "domain": str(e.get("domain") or (eid.split(".", 1)[0] if "." in eid else "sensor")),
                     "unitOfMeasurement": str(e.get("unitOfMeasurement") or e.get("unit_of_measurement") or ""),
                 }
                 ha = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
@@ -10505,14 +10568,18 @@ class SettingsDialog(QDialog):
                 ha["currentTempAvailableEntities"] = available
                 self.s.save_config()
                 self.s.update_thermostat({
+                    "roomTempControlMode": "external",
                     "currentTempSource": "home-assistant",
                     "currentTempSourceName": selected["name"],
                     "runtimeTempSource": "home-assistant",
                     "runtimeTempSourceName": selected["name"],
                 })
-                if hasattr(self, "temp_source_label"):
-                    self.temp_source_label.setText(f"{selected['name']}\nUsing {selected['entityId']}")
+                self.update_source_control_widgets()
                 self.saved.emit()
+                try:
+                    dlg.accept()
+                except Exception:
+                    pass
             except Exception as exc:
                 QMessageBox.warning(self, "Choose Sensor", str(exc))
         dlg.selected.connect(apply)
