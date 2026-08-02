@@ -4613,8 +4613,14 @@ class ThermostatScreen(Page):
             self.s.thermostat["awaySource"] = ""
             self.s.thermostat["manualAwayPresenceLatch"] = None
             self.s.thermostat["presenceHomeOverride"] = copy.deepcopy(arriving_override)
-            if before_tap.get("lastComfortTarget") is not None:
-                self.s.thermostat["targetTemp"] = before_tap.get("lastComfortTarget")
+            restore_target = before_tap.get("preAwayTargetTemp")
+            if restore_target is None:
+                restore_target = before_tap.get("lastComfortTarget")
+            if restore_target is not None:
+                # Optimistic display only. The backend performs the authoritative
+                # restore and clears preAwayTargetTemp after leaving Away.
+                self.s.thermostat["targetTemp"] = restore_target
+                self.s.thermostat["lastComfortTarget"] = restore_target
         elif mode == "away":
             going_away = not bool(before_tap.get("away"))
             changes = {"away": going_away, "awaySource": "manual" if going_away else ""}
@@ -4629,6 +4635,9 @@ class ThermostatScreen(Page):
             self.s.thermostat["away"] = going_away
             self.s.thermostat["awaySource"] = changes["awaySource"]
             if going_away:
+                # Keep the immediate UI snapshot aligned with the backend in case
+                # Arriving is tapped before the Away request finishes its round trip.
+                self.s.thermostat["preAwayTargetTemp"] = before_tap.get("targetTemp", before_tap.get("lastComfortTarget"))
                 self.s.thermostat["presenceHomeOverride"] = None
         else:
             # Physical/manual button taps should visibly win immediately.
@@ -4653,7 +4662,13 @@ class ThermostatScreen(Page):
                     self.s.thermostat["manualPendingMode"] = ""
                     self.s.thermostat["manualLockoutUntil"] = 0
         self.sync(self.s.config, self.s.thermostat)
-        if mode not in {"away", "arriving"}:
+        if mode == "arriving":
+            # Each peer leaves Away and restores its own pre-Away temperature.
+            # Do not send this panel's setpoint with the Arriving command.
+            self.request_peer_sync({"presetMode": "arriving"})
+        elif mode in {"off", "heat", "cool"}:
+            # HVAC selection is shared, but Away/Home status remains independent
+            # on every thermostat.
             self.request_peer_sync({"mode": mode})
 
         def done(result):
@@ -7970,7 +7985,7 @@ class ThermostatSyncSelectionDialog(QDialog):
         header.addWidget(clear)
         root.addLayout(header)
 
-        note = QLabel("Select the other IHA thermostats that should receive mode and setpoint changes while the main-screen Sync button is active. Sync only stays armed for 30 seconds at a time.")
+        note = QLabel("Select the other IHA thermostats that should receive Heat, Cool, Off, Arriving, and setpoint changes while the main-screen Sync button is active. Away and Return Home always remain separate on each thermostat. Sync only stays armed for 30 seconds at a time.")
         note.setWordWrap(True)
         note.setFont(font(10, QFont.Black))
         note.setStyleSheet("color:#cdd8ee; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.10); border-radius:12px; padding:8px;")
@@ -10286,7 +10301,7 @@ class SettingsDialog(QDialog):
         sync_row.addWidget(self.sync_peer_summary, 1)
         sync_row.addWidget(choose_sync)
         sync_section.layout().addLayout(sync_row)
-        sync_note = QLabel("When the main Sync button is armed, manual mode and setpoint changes are copied to these selected Home Assistant climate entities for 30 seconds.")
+        sync_note = QLabel("When the main Sync button is armed, Heat, Cool, Off, Arriving, and setpoint changes are copied for 30 seconds. Away and Return Home remain local to each thermostat.")
         sync_note.setWordWrap(True)
         sync_note.setFont(font(7, QFont.Black))
         sync_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
@@ -11717,6 +11732,9 @@ class MainWindow(Background):
         mode = str(changes.get("mode") or changes.get("hvacMode") or "").strip().lower()
         if mode in {"off", "heat", "cool", "auto"}:
             allowed["mode"] = mode
+        preset = str(changes.get("presetMode") or changes.get("preset_mode") or changes.get("preset") or "").strip().lower()
+        if preset == "arriving":
+            allowed["presetMode"] = preset
         if "targetTemp" in changes:
             try:
                 allowed["targetTemp"] = int(clamp(round(float(changes.get("targetTemp"))), 45, 95))

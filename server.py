@@ -216,6 +216,10 @@ DEFAULT_THERMOSTAT = {
     "virtualTempOverrideUntil": 0,
     "targetTemp": 70,
     "lastComfortTarget": 70,
+    # Exact local setpoint captured when this unit enters Away. Unlike
+    # lastComfortTarget, this is intentionally insulated from schedules and
+    # other activity while Away so Arriving can restore the real pre-Away value.
+    "preAwayTargetTemp": None,
     "temperatureDifferential": 0,
     "lastPanelTargetTemp": 0,
     "lastPanelTargetRequestAt": 0,
@@ -1022,6 +1026,12 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             base["manualAwayPresenceLatch"] = _normalize_manual_away_presence_latch(source.get("manualAwayPresenceLatch"))
         if "presenceHomeOverride" in source:
             base["presenceHomeOverride"] = _normalize_presence_home_override(source.get("presenceHomeOverride"))
+        if "preAwayTargetTemp" in source:
+            raw_pre_away_target = source.get("preAwayTargetTemp")
+            if raw_pre_away_target is None or raw_pre_away_target == "":
+                base["preAwayTargetTemp"] = None
+            else:
+                base["preAwayTargetTemp"] = _number(raw_pre_away_target, base.get("lastComfortTarget", 70), 40, 100)
 
         if "heatLocked" in source:
             base["heatLocked"] = _boolish(source.get("heatLocked"))
@@ -1246,6 +1256,7 @@ THERMOSTAT_PERSIST_KEYS = (
     "currentTempSourceName",
     "targetTemp",
     "lastComfortTarget",
+    "preAwayTargetTemp",
     "mode",
     "fan",
     "away",
@@ -3186,21 +3197,43 @@ def _away_target_for_current_mode(thermostat: dict) -> int:
     return _intish(thermostat.get("awayCool"), DEFAULT_THERMOSTAT.get("awayCool", 85), 75, 100)
 
 
-def _apply_away_setpoint_logic(thermostat: dict, *, was_away: bool | None = None) -> dict:
-    """Keep Away mode tied to Heat Away / Cool Away without losing the Home target."""
+def _apply_away_setpoint_logic(
+    thermostat: dict,
+    *,
+    was_away: bool | None = None,
+    finalize_restore: bool = False,
+) -> dict:
+    """Use Away setpoints temporarily and restore this unit's exact pre-Away target."""
     t = dict(thermostat or {})
     away = bool(t.get("away"))
     previous_away = bool(was_away) if was_away is not None else away
 
     if away:
         away_target = _away_target_for_current_mode(t)
-        if not previous_away:
+        if not previous_away and t.get("preAwayTargetTemp") is None:
             current_target = _number(t.get("targetTemp"), t.get("lastComfortTarget", 70), 45, 95)
-            if abs(float(current_target) - float(away_target)) > 0.01:
-                t["lastComfortTarget"] = current_target
+            # Preserve a dedicated snapshot. lastComfortTarget can legitimately
+            # change while Away (for example, when a schedule becomes due), but
+            # Arriving must return to the temperature that was active at the
+            # exact moment this individual thermostat entered Away. The null
+            # check makes this safe when one control transaction reapplies Away
+            # protection more than once.
+            t["preAwayTargetTemp"] = current_target
+            t["lastComfortTarget"] = current_target
         t["targetTemp"] = away_target
     elif was_away is True:
-        t["targetTemp"] = _number(t.get("lastComfortTarget"), t.get("targetTemp", 70), 45, 95)
+        restore_target = t.get("preAwayTargetTemp")
+        if restore_target is None:
+            restore_target = t.get("lastComfortTarget")
+        restore_target = _number(restore_target, t.get("targetTemp", 70), 45, 95)
+        t["targetTemp"] = restore_target
+        t["lastComfortTarget"] = restore_target
+        if finalize_restore:
+            t["preAwayTargetTemp"] = None
+    elif finalize_restore and t.get("preAwayTargetTemp") is not None:
+        # Clean up a snapshot left by an interrupted prior Home/Arriving
+        # transition without changing the already-restored Home setpoint.
+        t["preAwayTargetTemp"] = None
 
     return _merge_thermostat_state(t)
 
@@ -3632,7 +3665,7 @@ def _apply_runtime_thermostat_logic(record: dict, *, notify: bool = True) -> dic
     updated = _apply_away_setpoint_logic(updated, was_away=was_away)
     updated = _apply_comfort_auto_switch_logic(updated, notify=notify)
     scheduled = _apply_thermostat_schedules(updated)
-    scheduled = _apply_away_setpoint_logic(scheduled, was_away=was_away)
+    scheduled = _apply_away_setpoint_logic(scheduled, was_away=was_away, finalize_restore=True)
     if scheduled != updated:
         _write_thermostat_record(scheduled, persist=True)
         updated = scheduled
@@ -3914,7 +3947,14 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
     if apply_hardware:
         _apply_thermostat_outputs_to_hardware(outputs, thermostat)
     hvac_mode = thermostat["mode"] if thermostat["mode"] in {"off", "heat", "cool"} else str(thermostat.get("autoActiveMode") or "cool")
-    preset_mode = "away" if thermostat.get("away") else "home"
+    presence_override = _normalize_presence_home_override(thermostat.get("presenceHomeOverride"))
+    preset_mode = (
+        "away"
+        if thermostat.get("away")
+        else "arriving"
+        if presence_override and str(presence_override.get("reason") or "").strip().lower() == "arriving"
+        else "home"
+    )
     thermostat_detail = {
         **thermostat,
         "current_temperature": thermostat["currentTemp"],
@@ -4153,7 +4193,7 @@ def _incoming_explicitly_leaves_away(incoming: dict | None) -> bool:
     if "away" in incoming and not _boolish(incoming.get("away")):
         return True
     preset = incoming.get("preset_mode", incoming.get("presetMode"))
-    return str(preset or "").strip().lower() == "home"
+    return str(preset or "").strip().lower() in {"home", "arriving"}
 
 
 def _incoming_has_comfort_target_change(incoming: dict | None) -> bool:
@@ -4170,6 +4210,31 @@ def _handle_thermostat_update_locked(payload: dict) -> dict:
     if not isinstance(incoming, dict):
         incoming = {}
     incoming_has_schedules = "schedules" in incoming
+
+    requested_preset = str(incoming.get("preset_mode", incoming.get("presetMode")) or "").strip().lower()
+    if requested_preset in {"home", "away", "arriving"}:
+        # Treat Home Assistant preset commands exactly like the matching wall-panel
+        # actions. Arriving may come from temporary peer Sync; Home and Away may
+        # still be commanded directly in Home Assistant. The receiving thermostat
+        # remains responsible for its own Away/Arrival and safety logic.
+        incoming = dict(incoming)
+        incoming["away"] = requested_preset == "away"
+        incoming["awaySource"] = "manual" if requested_preset == "away" else ""
+        incoming["manualAwayPresenceLatch"] = None
+        if requested_preset == "away":
+            incoming["presenceHomeOverride"] = None
+        elif requested_preset == "arriving":
+            if not _normalize_presence_home_override(incoming.get("presenceHomeOverride")):
+                incoming["presenceHomeOverride"] = _presence_home_override_payload(
+                    _thermostat_auto_away_entity_ids(existing),
+                    reason="arriving",
+                    duration_ms=ARRIVING_AWAY_BYPASS_MS,
+                )
+        else:
+            # Explicit Home clears a prior timed Arrival hold. If the thermostat
+            # was Away, the existing return-home guard below replaces this with
+            # the normal presence hold so Auto Away cannot immediately reassert.
+            incoming.setdefault("presenceHomeOverride", None)
 
     if (
         bool(existing.get("away"))
@@ -4360,7 +4425,7 @@ def _handle_thermostat_update_locked(payload: dict) -> dict:
         merged["manualLockoutUntil"] = 0
 
     merged = _apply_comfort_auto_switch_logic(merged, notify=True)
-    merged = _apply_away_setpoint_logic(merged, was_away=was_away)
+    merged = _apply_away_setpoint_logic(merged, was_away=was_away, finalize_restore=True)
     merged = _normalize_fan_for_active_cooling(merged)
     _write_thermostat_record(merged)
     if incoming_has_schedules:
@@ -7624,56 +7689,80 @@ def _sync_target_temperature(value: object) -> int | None:
         return None
 
 
-def _call_ha_sync_thermostat_services(ha_url: str, token: str, entity_ids: list[str], *, mode: object = None, target_temp: object = None) -> dict:
+def _sync_preset_mode_for_ha(value: object) -> str:
+    # Away and Return Home are deliberately local to each thermostat. Arriving
+    # is the only preset that the temporary Sync button may propagate.
+    preset = str(value or "").strip().lower()
+    return "arriving" if preset == "arriving" else ""
+
+
+def _call_ha_sync_thermostat_services(
+    ha_url: str,
+    token: str,
+    entity_ids: list[str],
+    *,
+    mode: object = None,
+    target_temp: object = None,
+    preset_mode: object = None,
+) -> dict:
     wanted = _ordered_unique_entity_ids(entity_ids, {"climate"})
     if not wanted:
         return {"ok": True, "synced": [], "skipped": [], "errors": [], "count": 0}
 
     hvac_mode = _sync_hvac_mode_for_ha(mode)
     target = _sync_target_temperature(target_temp)
-    if not hvac_mode and target is None:
+    preset = _sync_preset_mode_for_ha(preset_mode)
+    if not hvac_mode and target is None and not preset:
         return {"ok": False, "error": "Nothing to sync", "synced": [], "skipped": [], "errors": []}
 
-    # Read current peer states first so this panel does not try to overwrite an
-    # Away thermostat.  Door-pause state is also exposed by the updated IHA HA
-    # integration; if that attribute is not present, the peer panel still enforces
-    # its own protection after HA forwards the command.
+    # Read current peer states so setpoint-only sync still respects Away and
+    # door-pause protection. HVAC mode changes do not alter a peer's independent
+    # Away/Home state. Arriving is forwarded as the one synchronized preset, and
+    # the receiving thermostat restores its own saved pre-Away setpoint.
     state_items = _fetch_ha_state_items_for_entities(ha_url, token, wanted, {"climate"}, all_states_threshold=2, use_cache=False)
     state_by_id = {str(item.get("entity_id") or ""): item for item in state_items if isinstance(item, dict)}
 
     errors: list[dict] = []
     skipped: list[dict] = []
+    preset_targets: list[str] = []
     mode_targets: list[str] = []
     temp_targets: list[str] = []
+    preset_leaves_away = preset == "arriving"
     for entity_id in wanted:
         item = state_by_id.get(entity_id) or {}
         attrs = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
         friendly = attrs.get("friendly_name") or entity_id
-        preset = str(attrs.get("preset_mode") or "").strip().lower()
-        is_away = preset == "away" or bool(attrs.get("target_temperature_locked_by_preset"))
+        current_preset = str(attrs.get("preset_mode") or "").strip().lower()
+        is_away = current_preset == "away" or bool(attrs.get("target_temperature_locked_by_preset"))
         door_pause_active = bool(attrs.get("door_pause_active"))
-        if is_away:
-            skipped.append({"entityId": entity_id, "name": friendly, "reason": "away"})
-            continue
-        if door_pause_active:
-            skipped.append({"entityId": entity_id, "name": friendly, "reason": "door-pause"})
-            continue
+
+        if preset:
+            preset_targets.append(entity_id)
         if hvac_mode:
             mode_targets.append(entity_id)
         if target is not None:
-            temp_targets.append(entity_id)
+            if is_away and not preset_leaves_away:
+                skipped.append({"entityId": entity_id, "name": friendly, "reason": "away-target"})
+            elif door_pause_active:
+                skipped.append({"entityId": entity_id, "name": friendly, "reason": "door-pause-target"})
+            else:
+                temp_targets.append(entity_id)
 
     try:
+        # Arriving first releases Away on each peer. No temperature is copied;
+        # the receiving unit restores its own dedicated pre-Away target.
+        if preset and preset_targets:
+            _ha_json_request(ha_url, token, "POST", "/api/services/climate/set_preset_mode", {"entity_id": preset_targets, "preset_mode": preset})
         if hvac_mode and mode_targets:
             _ha_json_request(ha_url, token, "POST", "/api/services/climate/set_hvac_mode", {"entity_id": mode_targets, "hvac_mode": hvac_mode})
         if target is not None and temp_targets:
             _ha_json_request(ha_url, token, "POST", "/api/services/climate/set_temperature", {"entity_id": temp_targets, "temperature": target})
-        if mode_targets or temp_targets:
+        if preset_targets or mode_targets or temp_targets:
             _invalidate_ha_state_cache(ha_url, token)
     except Exception as exc:
         errors.append({"entityId": ",".join(wanted), "error": str(exc)})
 
-    synced_ids = sorted(set(mode_targets + temp_targets)) if not errors else []
+    synced_ids = sorted(set(preset_targets + mode_targets + temp_targets)) if not errors else []
     return {
         "ok": not bool(errors),
         "synced": synced_ids,
@@ -7682,6 +7771,7 @@ def _call_ha_sync_thermostat_services(ha_url: str, token: str, entity_ids: list[
         "count": len(synced_ids),
         "mode": hvac_mode,
         "targetTemp": target,
+        "presetMode": preset,
     }
 
 def _normalize_weather_item(item: dict) -> dict:
@@ -8516,6 +8606,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                     payload.get("entityIds", []),
                     mode=payload.get("mode", payload.get("hvacMode", payload.get("hvac_mode"))),
                     target_temp=payload.get("targetTemp", payload.get("target_temperature", payload.get("temperature"))),
+                    preset_mode=payload.get("presetMode", payload.get("preset_mode", payload.get("preset"))),
                 )
                 return _json(self, 200 if result.get("ok") else 500, result)
 
