@@ -77,6 +77,7 @@ PANEL_COMMAND_GRACE_MS = int(float(os.environ.get("SMART_THERMOSTAT_PANEL_COMMAN
 # value 30-60 seconds after the user tapped the touchscreen.
 PANEL_TARGET_COMMAND_GRACE_MS = int(float(os.environ.get("SMART_THERMOSTAT_PANEL_TARGET_GRACE_SECONDS", "300") or "300") * 1000)
 ARRIVING_AWAY_BYPASS_MS = int(float(os.environ.get("SMART_THERMOSTAT_ARRIVING_BYPASS_MINUTES", "120") or "120") * 60000)
+SYNC_ARM_DURATION_SECONDS = max(5.0, float(os.environ.get("SMART_THERMOSTAT_SYNC_ARM_SECONDS", "30") or "30"))
 CONFIG_WEB_PORTAL_TIMEOUT_SECONDS = max(60.0, float(os.environ.get("SMART_THERMOSTAT_CONFIG_PORTAL_TIMEOUT_SECONDS", "900") or "900"))
 MANUAL_HARDWARE_TIMEOUT_SECONDS = max(0.0, float(os.environ.get("SMART_THERMOSTAT_MANUAL_HARDWARE_TIMEOUT_SECONDS", "300") or "300"))
 _CONFIG_WEB_PORTAL_LOCK = threading.RLock()
@@ -97,6 +98,10 @@ _THERMOSTAT_RECORD_DIRTY = False
 _HVAC_HISTORY_LOCK = threading.RLock()
 _HVAC_HISTORY_ARCHIVE: dict | None = None
 _HVAC_HISTORY_CURRENT: dict | None = None
+_SYNC_ARM_LOCK = threading.RLock()
+_SYNC_ARMED_UNTIL = 0.0
+_SYNC_ARM_SOURCE = ""
+_SYNC_LAST_RESULT: dict = {}
 
 
 # Onboard HVAC relay outputs use BCM GPIO numbering. These pins are used when
@@ -3955,6 +3960,7 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
         if presence_override and str(presence_override.get("reason") or "").strip().lower() == "arriving"
         else "home"
     )
+    sync_status = _sync_status_payload()
     thermostat_detail = {
         **thermostat,
         "current_temperature": thermostat["currentTemp"],
@@ -4007,6 +4013,9 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
         "model": "Smart Thermostat Wall Panel",
         "sw_version": sw_version,
         "swVersion": sw_version,
+        "sync": sync_status,
+        "syncArmed": bool(sync_status.get("active")),
+        "syncRemainingSeconds": int(sync_status.get("remainingSeconds") or 0),
     }
     payload = {
         "ok": True,
@@ -4078,6 +4087,9 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
         "relayFan": outputs["fan"],
         "relayHeat": outputs["heat"],
         "relayCool": outputs["cool"],
+        "sync": sync_status,
+        "syncArmed": bool(sync_status.get("active")),
+        "syncRemainingSeconds": int(sync_status.get("remainingSeconds") or 0),
     }
     return payload
 
@@ -4457,7 +4469,10 @@ def _handle_thermostat_update(payload: dict) -> dict:
     remain safe while this command owns one consistent state transaction.
     """
     with _THERMOSTAT_RECORD_LOCK:
-        _handle_thermostat_update_locked(payload)
+        accepted = _handle_thermostat_update_locked(payload)
+    sync_changes = _sync_changes_from_control_payload(payload, accepted)
+    if sync_changes:
+        _schedule_armed_thermostat_sync(sync_changes)
     # Build the response after releasing the state transaction. Status assembly
     # may refresh Home Assistant person tracking and should never delay the
     # autonomous HVAC loop while holding the thermostat record lock.
@@ -7568,7 +7583,17 @@ def _normalize_sync_peer_entry(entry: object) -> dict | None:
         "domain": "climate",
         "state": state[:80],
     }
-    for key in ("currentTemp", "targetTemp", "hvacAction", "away", "doorPauseActive", "ihaPanel", "syncCapable"):
+    for key in (
+        "currentTemp",
+        "targetTemp",
+        "hvacAction",
+        "away",
+        "doorPauseActive",
+        "ihaPanel",
+        "syncCapable",
+        "serial",
+        "arrivingButtonEntityId",
+    ):
         if key in entry:
             result[key] = entry.get(key)
     return result
@@ -7601,7 +7626,7 @@ def _ha_climate_item_is_iha(item: dict) -> bool:
     return manufacturer == "iha" or "iha" in model or friendly.startswith("iha ")
 
 
-def _normalize_sync_climate_item(item: dict) -> dict | None:
+def _normalize_sync_climate_item(item: dict, arriving_buttons_by_serial: dict[str, str] | None = None) -> dict | None:
     if not isinstance(item, dict):
         return None
     entity_id = str(item.get("entity_id") or "").strip()
@@ -7613,7 +7638,8 @@ def _normalize_sync_climate_item(item: dict) -> dict | None:
     preset = str(attrs.get("preset_mode") or "").strip().lower()
     away = preset == "away" or bool(attrs.get("target_temperature_locked_by_preset"))
     door_pause_active = bool(attrs.get("door_pause_active"))
-    return {
+    serial = str(attrs.get("iha_serial") or attrs.get("serial") or "").strip()
+    result = {
         "entityId": entity_id,
         "name": name[:120],
         "friendlyName": name[:120],
@@ -7626,7 +7652,30 @@ def _normalize_sync_climate_item(item: dict) -> dict | None:
         "doorPauseActive": door_pause_active,
         "ihaPanel": _ha_climate_item_is_iha(item),
         "syncCapable": _ha_climate_item_is_iha(item),
+        "serial": serial,
     }
+    if serial and isinstance(arriving_buttons_by_serial, dict):
+        button_id = str(arriving_buttons_by_serial.get(serial) or "").strip()
+        if button_id.startswith("button."):
+            result["arrivingButtonEntityId"] = button_id
+    return result
+
+
+def _ha_iha_action_buttons_by_serial(states: list[dict], action: str) -> dict[str, str]:
+    wanted_action = str(action or "").strip().lower()
+    result: dict[str, str] = {}
+    for item in states if isinstance(states, list) else []:
+        if not isinstance(item, dict):
+            continue
+        entity_id = str(item.get("entity_id") or "").strip()
+        if not entity_id.startswith("button."):
+            continue
+        attrs = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
+        item_action = str(attrs.get("iha_action") or "").strip().lower()
+        serial = str(attrs.get("iha_serial") or attrs.get("serial") or "").strip()
+        if item_action == wanted_action and serial:
+            result[serial] = entity_id
+    return result
 
 
 def _fetch_ha_sync_thermostats(ha_url: str, token: str, saved: list[dict] | None = None, local_name: str = "") -> list[dict]:
@@ -7640,6 +7689,7 @@ def _fetch_ha_sync_thermostats(ha_url: str, token: str, saved: list[dict] | None
     states = _ha_json_request(ha_url, token, "GET", "/api/states")
     if not isinstance(states, list):
         states = []
+    arriving_buttons_by_serial = _ha_iha_action_buttons_by_serial(states, "arriving-sync-receiver")
 
     local_key = str(local_name or "").strip().casefold()
     by_id: dict[str, dict] = {}
@@ -7652,7 +7702,7 @@ def _fetch_ha_sync_thermostats(ha_url: str, token: str, saved: list[dict] | None
         is_saved = entity_id in saved_by_id
         if not is_saved and not _ha_climate_item_is_iha(item):
             continue
-        peer = _normalize_sync_climate_item(item)
+        peer = _normalize_sync_climate_item(item, arriving_buttons_by_serial)
         if not peer:
             continue
         # Hide the current wall panel when HA exposes it with the same friendly
@@ -7715,16 +7765,25 @@ def _call_ha_sync_thermostat_services(
     if not hvac_mode and target is None and not preset:
         return {"ok": False, "error": "Nothing to sync", "synced": [], "skipped": [], "errors": []}
 
-    # Read current peer states so setpoint-only sync still respects Away and
-    # door-pause protection. HVAC mode changes do not alter a peer's independent
-    # Away/Home state. Arriving is forwarded as the one synchronized preset, and
-    # the receiving thermostat restores its own saved pre-Away setpoint.
-    state_items = _fetch_ha_state_items_for_entities(ha_url, token, wanted, {"climate"}, all_states_threshold=2, use_cache=False)
-    state_by_id = {str(item.get("entity_id") or ""): item for item in state_items if isinstance(item, dict)}
+    # Read one fresh HA state table. Besides the selected climate entities, this
+    # finds each IHA device's hidden Arriving receiver button. Using button.press
+    # avoids relying exclusively on climate.set_preset_mode, which may be absent
+    # from HA until a preset-capable climate platform has fully registered.
+    all_states = _ha_json_request(ha_url, token, "GET", "/api/states")
+    if not isinstance(all_states, list):
+        all_states = []
+    state_by_id = {
+        str(item.get("entity_id") or ""): item
+        for item in all_states
+        if isinstance(item, dict) and str(item.get("entity_id") or "") in wanted
+    }
+    arriving_buttons_by_serial = _ha_iha_action_buttons_by_serial(all_states, "arriving-sync-receiver")
 
     errors: list[dict] = []
     skipped: list[dict] = []
     preset_targets: list[str] = []
+    arriving_button_by_climate: dict[str, str] = {}
+    arriving_preset_fallback_targets: list[str] = []
     mode_targets: list[str] = []
     temp_targets: list[str] = []
     preset_leaves_away = preset == "arriving"
@@ -7733,11 +7792,17 @@ def _call_ha_sync_thermostat_services(
         attrs = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
         friendly = attrs.get("friendly_name") or entity_id
         current_preset = str(attrs.get("preset_mode") or "").strip().lower()
+        serial = str(attrs.get("iha_serial") or attrs.get("serial") or "").strip()
         is_away = current_preset == "away" or bool(attrs.get("target_temperature_locked_by_preset"))
         door_pause_active = bool(attrs.get("door_pause_active"))
 
         if preset:
             preset_targets.append(entity_id)
+            receiver_button = str(arriving_buttons_by_serial.get(serial) or "").strip() if serial else ""
+            if preset == "arriving" and receiver_button.startswith("button."):
+                arriving_button_by_climate[entity_id] = receiver_button
+            else:
+                arriving_preset_fallback_targets.append(entity_id)
         if hvac_mode:
             mode_targets.append(entity_id)
         if target is not None:
@@ -7748,21 +7813,56 @@ def _call_ha_sync_thermostat_services(
             else:
                 temp_targets.append(entity_id)
 
-    try:
-        # Arriving first releases Away on each peer. No temperature is copied;
-        # the receiving unit restores its own dedicated pre-Away target.
-        if preset and preset_targets:
-            _ha_json_request(ha_url, token, "POST", "/api/services/climate/set_preset_mode", {"entity_id": preset_targets, "preset_mode": preset})
-        if hvac_mode and mode_targets:
-            _ha_json_request(ha_url, token, "POST", "/api/services/climate/set_hvac_mode", {"entity_id": mode_targets, "hvac_mode": hvac_mode})
-        if target is not None and temp_targets:
-            _ha_json_request(ha_url, token, "POST", "/api/services/climate/set_temperature", {"entity_id": temp_targets, "temperature": target})
-        if preset_targets or mode_targets or temp_targets:
-            _invalidate_ha_state_cache(ha_url, token)
-    except Exception as exc:
-        errors.append({"entityId": ",".join(wanted), "error": str(exc)})
+    successful: set[str] = set()
 
-    synced_ids = sorted(set(preset_targets + mode_targets + temp_targets)) if not errors else []
+    # Arriving first releases Away on each peer. No temperature is copied; the
+    # receiving unit restores its own dedicated pre-Away target. New IHA builds
+    # receive this through a hidden button entity, while older builds retain the
+    # standard climate preset action as a compatibility fallback.
+    if preset == "arriving" and arriving_button_by_climate:
+        try:
+            _ha_json_request(
+                ha_url,
+                token,
+                "POST",
+                "/api/services/button/press",
+                {"entity_id": sorted(set(arriving_button_by_climate.values()))},
+            )
+            successful.update(arriving_button_by_climate.keys())
+        except Exception as exc:
+            errors.append({"entityId": ",".join(sorted(arriving_button_by_climate)), "action": "arriving", "error": str(exc)})
+
+    if preset and arriving_preset_fallback_targets:
+        try:
+            _ha_json_request(
+                ha_url,
+                token,
+                "POST",
+                "/api/services/climate/set_preset_mode",
+                {"entity_id": arriving_preset_fallback_targets, "preset_mode": preset},
+            )
+            successful.update(arriving_preset_fallback_targets)
+        except Exception as exc:
+            errors.append({"entityId": ",".join(arriving_preset_fallback_targets), "action": "preset", "error": str(exc)})
+
+    if hvac_mode and mode_targets:
+        try:
+            _ha_json_request(ha_url, token, "POST", "/api/services/climate/set_hvac_mode", {"entity_id": mode_targets, "hvac_mode": hvac_mode})
+            successful.update(mode_targets)
+        except Exception as exc:
+            errors.append({"entityId": ",".join(mode_targets), "action": "mode", "error": str(exc)})
+
+    if target is not None and temp_targets:
+        try:
+            _ha_json_request(ha_url, token, "POST", "/api/services/climate/set_temperature", {"entity_id": temp_targets, "temperature": target})
+            successful.update(temp_targets)
+        except Exception as exc:
+            errors.append({"entityId": ",".join(temp_targets), "action": "temperature", "error": str(exc)})
+
+    if preset_targets or mode_targets or temp_targets:
+        _invalidate_ha_state_cache(ha_url, token)
+
+    synced_ids = sorted(successful)
     return {
         "ok": not bool(errors),
         "synced": synced_ids,
@@ -7773,6 +7873,153 @@ def _call_ha_sync_thermostat_services(
         "targetTemp": target,
         "presetMode": preset,
     }
+
+
+def _sync_panel_context() -> dict:
+    record = _read_panel_config_record()
+    config = record.get("config") if isinstance(record, dict) else {}
+    config = config if isinstance(config, dict) else {}
+    integrations = config.get("integrations") if isinstance(config.get("integrations"), dict) else {}
+    ha = integrations.get("homeAssistant") if isinstance(integrations.get("homeAssistant"), dict) else {}
+    peers = _normalize_sync_peer_entries(ha.get("syncThermostatEntities") or [])
+    return {
+        "url": str(ha.get("url") or "").strip(),
+        "token": str(ha.get("token") or "").strip(),
+        "peers": peers,
+        "entityIds": [peer.get("entityId") for peer in peers if peer.get("entityId")],
+    }
+
+
+def _sync_status_payload() -> dict:
+    global _SYNC_ARMED_UNTIL, _SYNC_ARM_SOURCE
+    context = _sync_panel_context()
+    now = time.monotonic()
+    with _SYNC_ARM_LOCK:
+        active = bool(context.get("entityIds")) and now < float(_SYNC_ARMED_UNTIL or 0.0)
+        if not active:
+            _SYNC_ARMED_UNTIL = 0.0
+            _SYNC_ARM_SOURCE = ""
+        remaining = max(0, int(round(_SYNC_ARMED_UNTIL - now))) if active else 0
+        source = _SYNC_ARM_SOURCE if active else ""
+        last_result = _deepcopy_json(_SYNC_LAST_RESULT) if isinstance(_SYNC_LAST_RESULT, dict) else {}
+    return {
+        "ok": True,
+        "active": active,
+        "armed": active,
+        "remainingSeconds": remaining,
+        "durationSeconds": int(round(SYNC_ARM_DURATION_SECONDS)),
+        "source": source,
+        "configuredCount": len(context.get("entityIds") or []),
+        "lastResult": last_result,
+    }
+
+
+def _set_sync_arm(payload: dict | None = None) -> dict:
+    global _SYNC_ARMED_UNTIL, _SYNC_ARM_SOURCE
+    request_payload = payload if isinstance(payload, dict) else {}
+    context = _sync_panel_context()
+    if not context.get("entityIds"):
+        result = _sync_status_payload()
+        result.update({"ok": False, "error": "No Sync thermostats are configured on this panel."})
+        return result
+
+    action = str(request_payload.get("action") or "arm").strip().lower()
+    source = str(request_payload.get("source") or "home-assistant").strip().lower()[:40] or "home-assistant"
+    try:
+        duration = float(request_payload.get("durationSeconds", SYNC_ARM_DURATION_SECONDS) or SYNC_ARM_DURATION_SECONDS)
+    except (TypeError, ValueError):
+        duration = SYNC_ARM_DURATION_SECONDS
+    duration = max(5.0, min(120.0, duration))
+
+    with _SYNC_ARM_LOCK:
+        currently_active = time.monotonic() < float(_SYNC_ARMED_UNTIL or 0.0)
+        if action in {"off", "disable", "disarm", "cancel"} or (action == "toggle" and currently_active):
+            _SYNC_ARMED_UNTIL = 0.0
+            _SYNC_ARM_SOURCE = ""
+        else:
+            _SYNC_ARMED_UNTIL = time.monotonic() + duration
+            _SYNC_ARM_SOURCE = source
+    return _sync_status_payload()
+
+
+def _sync_changes_from_control_payload(payload: dict, accepted: dict | None = None) -> dict:
+    incoming = payload.get("thermostat", payload) if isinstance(payload, dict) else {}
+    if not isinstance(incoming, dict):
+        return {}
+    sources = {
+        str(incoming.get(key) or "").strip().lower()
+        for key in (
+            "commandSource",
+            "source",
+            "modeChangeSource",
+            "targetChangeSource",
+            "presetChangeSource",
+        )
+    }
+    if any(source in {"peer-sync", "sync-receiver", "thermostat-sync"} for source in sources):
+        return {}
+
+    changes: dict[str, object] = {}
+    mode_raw = incoming.get("mode", incoming.get("hvac_mode", incoming.get("hvacMode")))
+    mode = _sync_hvac_mode_for_ha(mode_raw)
+    if mode in {"off", "heat", "cool"}:
+        changes["mode"] = mode
+
+    preset = _sync_preset_mode_for_ha(incoming.get("preset_mode", incoming.get("presetMode", incoming.get("preset"))))
+    if not preset:
+        override = incoming.get("presenceHomeOverride", incoming.get("presence_home_override"))
+        if isinstance(override, dict) and str(override.get("reason") or "").strip().lower() == "arriving":
+            preset = "arriving"
+    if preset == "arriving":
+        changes["presetMode"] = "arriving"
+
+    target = None
+    for key in ("targetTemp", "target_temperature", "temperature", "targetTemperature"):
+        if key in incoming:
+            target = _sync_target_temperature(incoming.get(key))
+            break
+    accepted_state = accepted if isinstance(accepted, dict) else {}
+    if target is not None and not bool(accepted_state.get("away")):
+        changes["targetTemp"] = target
+    return changes
+
+
+def _schedule_armed_thermostat_sync(changes: dict) -> None:
+    global _SYNC_LAST_RESULT
+    status = _sync_status_payload()
+    if not status.get("active") or not isinstance(changes, dict) or not changes:
+        return
+    context = _sync_panel_context()
+    if not context.get("url") or not context.get("token") or not context.get("entityIds"):
+        with _SYNC_ARM_LOCK:
+            _SYNC_LAST_RESULT = {
+                "ok": False,
+                "error": "Sync is armed, but Home Assistant connection details or peer thermostats are missing.",
+                "at": int(time.time() * 1000),
+            }
+        return
+
+    payload = dict(changes)
+
+    def _worker() -> None:
+        global _SYNC_LAST_RESULT
+        try:
+            result = _call_ha_sync_thermostat_services(
+                context["url"],
+                context["token"],
+                context["entityIds"],
+                mode=payload.get("mode"),
+                target_temp=payload.get("targetTemp"),
+                preset_mode=payload.get("presetMode"),
+            )
+        except Exception as exc:  # noqa: BLE001 - sync must never block local HVAC control
+            result = {"ok": False, "error": str(exc), "synced": [], "errors": [{"error": str(exc)}]}
+        result = dict(result or {})
+        result["at"] = int(time.time() * 1000)
+        with _SYNC_ARM_LOCK:
+            _SYNC_LAST_RESULT = result
+
+    threading.Thread(target=_worker, name="thermostat-peer-sync", daemon=True).start()
 
 def _normalize_weather_item(item: dict) -> dict:
     attrs = item.get("attributes") or {}
@@ -8493,6 +8740,8 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
             return _json(self, 200, _panel_config_payload())
         if path == "/api/thermostat/status":
             return _json(self, 200, _thermostat_status_payload(refresh_runtime=False, apply_hardware=False))
+        if path == "/api/sync/status":
+            return _json(self, 200, _sync_status_payload())
         if path == "/api/discovery":
             return _json(self, 200, _discovery_payload())
 
@@ -8513,7 +8762,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply", "/api/sync/arm"}:
             self.send_error(404, "Not found")
             return
 
@@ -8577,6 +8826,10 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
             if path == "/api/thermostat/control":
                 return _json(self, 200, _handle_thermostat_update(payload))
+
+            if path == "/api/sync/arm":
+                result = _set_sync_arm(payload)
+                return _json(self, 200 if result.get("ok") else 400, result)
 
             if path == "/api/ha/covers":
                 covers = _fetch_ha_covers(payload.get("url", ""), payload.get("token", ""))

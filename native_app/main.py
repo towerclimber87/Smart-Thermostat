@@ -11524,12 +11524,9 @@ class MainWindow(Background):
         self.sync_button = SyncButton(self)
         self.sync_button.clicked.connect(self.toggle_sync_mode)
         self._sync_active_until = 0.0
-        self._sync_pending_changes: dict[str, object] = {}
-        self._sync_apply_running = False
+        self._sync_status_poll_running = False
         self._last_sync_notice_at = 0.0
-        self.peer_sync_timer = QTimer(self)
-        self.peer_sync_timer.setSingleShot(True)
-        self.peer_sync_timer.timeout.connect(self.flush_peer_sync)
+        self._last_sync_result_at = 0
         self.sync_button_timer = QTimer(self)
         self.sync_button_timer.timeout.connect(self.update_sync_button_state)
         self.sync_button_timer.start(1000)
@@ -11690,61 +11687,92 @@ class MainWindow(Background):
     def sync_is_active(self) -> bool:
         return bool(self.sync_peer_entities()) and time.monotonic() < float(getattr(self, "_sync_active_until", 0.0) or 0.0)
 
+    def apply_sync_status(self, result: object):
+        info = result if isinstance(result, dict) else {}
+        active = bool(info.get("active", info.get("armed", False)))
+        try:
+            remaining = max(0, int(info.get("remainingSeconds") or 0))
+        except Exception:
+            remaining = 0
+        self._sync_active_until = time.monotonic() + remaining if active and remaining > 0 else 0.0
+        if hasattr(self, "sync_button"):
+            self.sync_button.setActive(active and remaining > 0, remaining)
+        last_result = info.get("lastResult") if isinstance(info.get("lastResult"), dict) else {}
+        try:
+            result_at = int(last_result.get("at") or 0)
+        except Exception:
+            result_at = 0
+        if result_at > int(getattr(self, "_last_sync_result_at", 0) or 0):
+            self._last_sync_result_at = result_at
+            errors = last_result.get("errors") if isinstance(last_result.get("errors"), list) else []
+            skipped = last_result.get("skipped") if isinstance(last_result.get("skipped"), list) else []
+            if errors:
+                detail = errors[0].get("error") if isinstance(errors[0], dict) else errors[0]
+                self.show_sync_notice("Sync issue: " + str(detail or "Unknown error")[:90], 2800)
+            elif skipped:
+                self.show_sync_notice("Sync skipped protected thermostat(s)", 2200)
+        self.position_sleep_controls()
+
+    def refresh_sync_status(self):
+        if getattr(self, "_sync_status_poll_running", False):
+            return
+        self._sync_status_poll_running = True
+
+        def done(result):
+            self._sync_status_poll_running = False
+            self.apply_sync_status(result)
+
+        def failed(_err):
+            self._sync_status_poll_running = False
+
+        self.run_async("sync-status", lambda: self.s.api.get("/api/sync/status"), done, failed)
+
     def update_sync_button_state(self):
         try:
             peers = self.sync_peer_entities()
             active = bool(peers) and time.monotonic() < float(getattr(self, "_sync_active_until", 0.0) or 0.0)
             if not active:
                 self._sync_active_until = 0.0
-                if not getattr(self, "_sync_apply_running", False):
-                    self._sync_pending_changes = {}
             remaining = max(0, int(math.ceil(float(getattr(self, "_sync_active_until", 0.0) or 0.0) - time.monotonic()))) if active else 0
             if hasattr(self, "sync_button"):
                 self.sync_button.setActive(active, remaining)
             self.position_sleep_controls()
+            self.refresh_sync_status()
         except Exception:
             pass
 
     def toggle_sync_mode(self):
         peers = self.sync_peer_entities()
-        if self.sync_is_active():
-            self._sync_active_until = 0.0
-            self._sync_pending_changes = {}
-            self.peer_sync_timer.stop()
-            self.toast.show_message("Sync off")
-            self.update_sync_button_state()
-            return
         if not peers:
             self.toast.show_message("Choose Sync thermostats in Settings")
             self.update_sync_button_state()
             return
-        self._sync_active_until = time.monotonic() + 30.0
-        self._sync_pending_changes = {}
-        self.toast.show_message(f"Sync armed for 30 seconds · {len(peers)} thermostat{'s' if len(peers) != 1 else ''}")
-        self.update_sync_button_state()
+        was_active = self.sync_is_active()
+
+        def done(result):
+            self.apply_sync_status(result)
+            if bool((result or {}).get("active")):
+                self.toast.show_message(f"Sync armed for 30 seconds · {len(peers)} thermostat{'s' if len(peers) != 1 else ''}")
+            else:
+                self.toast.show_message("Sync off")
+
+        self.run_async(
+            "sync-toggle",
+            lambda: self.s.api.post(
+                "/api/sync/arm",
+                {"action": "off" if was_active else "arm", "durationSeconds": 30, "source": "touchscreen"},
+                timeout=4.0,
+            ),
+            done,
+            lambda err: self.show_sync_notice(f"Sync failed: {err}", 3000),
+        )
 
     def request_peer_sync(self, changes: dict):
-        if not self.sync_is_active():
-            return
-        if not isinstance(changes, dict):
-            return
-        allowed: dict[str, object] = {}
-        mode = str(changes.get("mode") or changes.get("hvacMode") or "").strip().lower()
-        if mode in {"off", "heat", "cool", "auto"}:
-            allowed["mode"] = mode
-        preset = str(changes.get("presetMode") or changes.get("preset_mode") or changes.get("preset") or "").strip().lower()
-        if preset == "arriving":
-            allowed["presetMode"] = preset
-        if "targetTemp" in changes:
-            try:
-                allowed["targetTemp"] = int(clamp(round(float(changes.get("targetTemp"))), 45, 95))
-            except Exception:
-                pass
-        if not allowed:
-            return
-        self._sync_pending_changes.update(allowed)
-        self.peer_sync_timer.start(250)
-        self.update_sync_button_state()
+        # Sync is now owned by the backend so touchscreen and Home Assistant
+        # share one 30-second arm window. The following thermostat control write
+        # is inspected and propagated by the backend; no second UI-side request
+        # is needed here.
+        return
 
     def show_sync_notice(self, message: str, duration: int = 1800):
         now = time.monotonic()
@@ -11757,43 +11785,7 @@ class MainWindow(Background):
             pass
 
     def flush_peer_sync(self):
-        if getattr(self, "_sync_apply_running", False):
-            self.peer_sync_timer.start(300)
-            return
-        if not self.sync_is_active():
-            self._sync_pending_changes = {}
-            self.update_sync_button_state()
-            return
-        peers = self.sync_peer_entities()
-        changes = dict(getattr(self, "_sync_pending_changes", {}) or {})
-        if not peers or not changes:
-            return
-        self._sync_pending_changes = {}
-        payload = {
-            "entityIds": [peer.get("entityId") for peer in peers],
-        }
-        payload.update(changes)
-        self._sync_apply_running = True
-
-        def done(result):
-            self._sync_apply_running = False
-            info = result if isinstance(result, dict) else {}
-            skipped = info.get("skipped") if isinstance(info.get("skipped"), list) else []
-            errors = info.get("errors") if isinstance(info.get("errors"), list) else []
-            if errors:
-                self.show_sync_notice("Sync issue: " + str(errors[0])[:80], 2600)
-            elif skipped:
-                self.show_sync_notice("Sync skipped protected thermostat(s)", 2200)
-            if self._sync_pending_changes and self.sync_is_active():
-                self.peer_sync_timer.start(250)
-            self.update_sync_button_state()
-
-        def failed(err):
-            self._sync_apply_running = False
-            self.show_sync_notice(f"Sync failed: {err}", 3000)
-            self.update_sync_button_state()
-
-        self.run_async("peer-sync", lambda: self.s.api.post("/api/sync/apply", self.s.ha_payload(payload), timeout=8.0), done, failed)
+        return
 
     def display_input_event_types(self) -> set:
         return {
