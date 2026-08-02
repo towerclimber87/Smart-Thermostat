@@ -3348,6 +3348,12 @@ class ThermostatScreen(Page):
         self.alarm_card.clicked.connect(self.show_alarm_dialog)
 
         self.fx_phase = 0
+        # Cache the full-screen procedural environment layer. The cache is
+        # rebuilt only when the screen size, temperature palette, safety state,
+        # or optional animation phase changes, keeping the richer background
+        # inexpensive on Raspberry Pi-class hardware.
+        self._environment_background_cache = QPixmap()
+        self._environment_background_cache_key = None
         self.alert_banner = ThermostatActionBanner(self)
         self.alert_banner.dismissClicked.connect(self.dismiss_auto_switch)
         self.alert_banner.revertClicked.connect(self.revert_auto_switch)
@@ -3434,12 +3440,11 @@ class ThermostatScreen(Page):
         return max(cold_ratio, hot_ratio, 0.38 if heat_mode_visual else 0.0)
 
     def background_animation_enabled(self) -> bool:
-        """Return True only when the expensive moving PCB background is enabled.
+        """Return True only when optional ambient background pulsing is enabled.
 
-        The Raspberry Pi 3B can spend most of one CPU core repainting the full
-        thermostat page when the temperature-reactive background animates every
-        ~520 ms.  Keep the rich static background and temperature color shifts,
-        but do not continuously repaint the whole page unless a developer
+        The futuristic environment is intentionally static by default and is
+        cached as a single pixmap. Temperature changes rebuild the cache, but the
+        panel does not continuously repaint the full screen unless a developer
         explicitly opts in with SMART_THERMOSTAT_BACKGROUND_ANIMATION=1.
         """
         value = str(os.environ.get("SMART_THERMOSTAT_BACKGROUND_ANIMATION") or "").strip().lower()
@@ -3449,8 +3454,8 @@ class ThermostatScreen(Page):
         if not hasattr(self, "fx_timer"):
             return
         # Keep the timer at one second for door-pause/manual-delay countdown
-        # text refreshes.  Do not speed it up for background animation by
-        # default; that was measured using ~80% CPU on a Pi-class panel.
+        # text refreshes. Do not use a fast frame rate for the optional ambient
+        # pulse; the cached background only advances every 1.5 seconds.
         interval = 1000
         if self.background_animation_enabled() and self.environment_effect_intensity() > 0.01:
             interval = 1500
@@ -3462,8 +3467,8 @@ class ThermostatScreen(Page):
         if animated:
             self.fx_phase = (self.fx_phase + 1) % 10000
         else:
-            # Static phase keeps the PCB nodes from jumping on occasional status
-            # refresh paints while the low-resource default is active.
+            # Static phase keeps glow nodes stable on occasional status refresh
+            # paints while the low-resource default is active.
             self.fx_phase = 0
         self.update_door_pause_ui()
         self.update_alert_banner()
@@ -3608,9 +3613,272 @@ class ThermostatScreen(Page):
         if self.alert_banner.isVisible():
             self.alert_banner.raise_()
 
+    def _temperature_environment_palette(self, current: float, neutral_off: bool) -> dict[str, QColor]:
+        """Return the smooth cold-to-hot palette used by the thermostat backdrop."""
+        anchors = [
+            (58.0, {
+                "base0": (1, 5, 19), "base1": (2, 14, 45), "base2": (5, 29, 78),
+                "primary": (25, 210, 255), "secondary": (65, 83, 255), "highlight": (145, 245, 255),
+            }),
+            (66.0, {
+                "base0": (2, 5, 22), "base1": (5, 18, 58), "base2": (16, 38, 92),
+                "primary": (40, 176, 255), "secondary": (91, 66, 255), "highlight": (120, 225, 255),
+            }),
+            (71.0, {
+                "base0": (4, 5, 22), "base1": (11, 14, 53), "base2": (36, 23, 80),
+                "primary": (45, 154, 255), "secondary": (165, 64, 255), "highlight": (99, 218, 255),
+            }),
+            (75.0, {
+                "base0": (10, 4, 22), "base1": (40, 8, 54), "base2": (85, 17, 74),
+                "primary": (73, 133, 255), "secondary": (245, 59, 209), "highlight": (255, 120, 210),
+            }),
+            (79.0, {
+                "base0": (18, 3, 19), "base1": (68, 8, 39), "base2": (123, 26, 49),
+                "primary": (238, 49, 156), "secondary": (255, 86, 57), "highlight": (255, 172, 83),
+            }),
+            (85.0, {
+                "base0": (24, 2, 14), "base1": (87, 7, 27), "base2": (143, 25, 29),
+                "primary": (255, 50, 83), "secondary": (255, 124, 38), "highlight": (255, 209, 104),
+            }),
+        ]
+
+        def rgb_lerp(a: tuple[int, int, int], b: tuple[int, int, int], amount: float) -> tuple[int, int, int]:
+            amount = clamp(amount, 0.0, 1.0)
+            return tuple(int(round(a[i] + (b[i] - a[i]) * amount)) for i in range(3))
+
+        def sample(name: str) -> QColor:
+            if current <= anchors[0][0]:
+                rgb = anchors[0][1][name]
+            elif current >= anchors[-1][0]:
+                rgb = anchors[-1][1][name]
+            else:
+                rgb = anchors[-1][1][name]
+                for index in range(len(anchors) - 1):
+                    temp_a, palette_a = anchors[index]
+                    temp_b, palette_b = anchors[index + 1]
+                    if temp_a <= current <= temp_b:
+                        amount = (current - temp_a) / max(0.001, temp_b - temp_a)
+                        rgb = rgb_lerp(palette_a[name], palette_b[name], amount)
+                        break
+            color = QColor(*rgb)
+            if neutral_off:
+                # Off mode remains temperature-reactive, but is intentionally
+                # quieter so the panel still communicates that HVAC is disabled.
+                neutral = QColor(5, 9, 20)
+                mix = 0.48 if name.startswith("base") else 0.28
+                color = QColor(
+                    int(color.red() * (1.0 - mix) + neutral.red() * mix),
+                    int(color.green() * (1.0 - mix) + neutral.green() * mix),
+                    int(color.blue() * (1.0 - mix) + neutral.blue() * mix),
+                )
+            return color
+
+        return {name: sample(name) for name in ("base0", "base1", "base2", "primary", "secondary", "highlight")}
+
+    @staticmethod
+    def _alpha_color(color: QColor, alpha: int) -> QColor:
+        return QColor(color.red(), color.green(), color.blue(), int(clamp(alpha, 0, 255)))
+
+    def _render_environment_background(
+        self,
+        width: int,
+        height: int,
+        current: float,
+        neutral_off: bool,
+        safety_alert: bool,
+        phase: int,
+    ) -> QPixmap:
+        """Draw the cached lightweight neo-futurist environment layer."""
+        pixmap = QPixmap(width, height)
+        pixmap.fill(Qt.transparent)
+        p = QPainter(pixmap)
+        p.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing | QPainter.SmoothPixmapTransform)
+        r = QRectF(0, 0, width, height)
+        w = float(width)
+        h = float(height)
+        palette = self._temperature_environment_palette(current, neutral_off)
+        base0 = palette["base0"]
+        base1 = palette["base1"]
+        base2 = palette["base2"]
+        primary = palette["primary"]
+        secondary = palette["secondary"]
+        highlight = palette["highlight"]
+        visual_scale = 0.58 if neutral_off else 1.0
+        if safety_alert:
+            visual_scale = min(1.15, visual_scale + 0.15)
+
+        # Deep graphite/navy base. The color stops themselves interpolate with
+        # room temperature, so every status refresh can move smoothly from an
+        # icy cyan/blue environment to magenta, orange, and red.
+        base = QLinearGradient(0, 0, w, h)
+        base.setColorAt(0.0, base0)
+        base.setColorAt(0.42, base1)
+        base.setColorAt(0.76, base2)
+        base.setColorAt(1.0, QColor(2, 4, 12))
+        p.fillRect(r, base)
+
+        # A very faint micro-grid gives the background depth without the busy
+        # circuit-board appearance. It is fewer than thirty static lines.
+        grid = self._alpha_color(highlight, int(12 * visual_scale))
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(grid, 1.0))
+        for index in range(1, 18):
+            x = w * index / 18.0
+            p.drawLine(QPointF(x, h * 0.10), QPointF(x, h * 0.94))
+        for index in range(2, 12):
+            y = h * index / 12.0
+            p.drawLine(QPointF(w * 0.02, y), QPointF(w * 0.98, y))
+
+        # Broad aurora fields. These are simple radial gradients—not blurred
+        # images or shaders—and are only redrawn when the cache key changes.
+        left_field = QRadialGradient(QPointF(w * 0.38, h * 0.48), w * 0.58)
+        left_field.setColorAt(0.0, self._alpha_color(primary, int(92 * visual_scale)))
+        left_field.setColorAt(0.36, self._alpha_color(primary, int(48 * visual_scale)))
+        left_field.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.fillRect(r, left_field)
+
+        right_field = QRadialGradient(QPointF(w * 0.68, h * 0.46), w * 0.56)
+        right_field.setColorAt(0.0, self._alpha_color(secondary, int(86 * visual_scale)))
+        right_field.setColorAt(0.42, self._alpha_color(secondary, int(42 * visual_scale)))
+        right_field.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.fillRect(r, right_field)
+
+        lower_field = QRadialGradient(QPointF(w * 0.54, h * 0.93), w * 0.56)
+        lower_field.setColorAt(0.0, self._alpha_color(highlight, int(34 * visual_scale)))
+        lower_field.setColorAt(0.48, self._alpha_color(secondary, int(18 * visual_scale)))
+        lower_field.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.fillRect(r, lower_field)
+
+        # Temperature-reactive halo behind the main thermostat. This gives the
+        # dial the requested focal-point wow factor without changing its layout.
+        center = QPointF(w * 0.50, h * 0.515)
+        halo_radius = min(w, h) * 0.48
+        halo = QRadialGradient(center, halo_radius)
+        halo.setColorAt(0.0, QColor(0, 0, 0, 0))
+        halo.setColorAt(0.28, QColor(0, 0, 0, 0))
+        halo.setColorAt(0.43, self._alpha_color(primary, int(88 * visual_scale)))
+        halo.setColorAt(0.55, self._alpha_color(secondary, int(46 * visual_scale)))
+        halo.setColorAt(0.74, self._alpha_color(secondary, int(14 * visual_scale)))
+        halo.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.fillRect(r, halo)
+
+        # A few clean holographic arcs frame the dial. They are ordinary vector
+        # arcs and remain static unless the optional low-rate pulse is enabled.
+        pulse = 0.78 + 0.22 * math.sin(phase * 0.18) if phase else 0.88
+        ring_base = min(w, h) * 0.405
+        arc_specs = (
+            (ring_base, primary, 204, 152, 1.7, 78),
+            (ring_base + 18, secondary, 326, 154, 1.3, 58),
+            (ring_base + 34, highlight, 24, 122, 1.0, 38),
+        )
+        p.setBrush(Qt.NoBrush)
+        for radius, color, start_deg, span_deg, pen_width, alpha in arc_specs:
+            arc_rect = QRectF(center.x() - radius, center.y() - radius, radius * 2, radius * 2)
+            p.setPen(QPen(self._alpha_color(color, int(alpha * visual_scale * pulse)), pen_width, Qt.SolidLine, Qt.RoundCap))
+            p.drawArc(arc_rect, int(start_deg * 16), int(span_deg * 16))
+
+        def draw_light_path(path: QPainterPath, color: QColor, alpha: int = 58, width_px: float = 1.25):
+            outer_alpha = max(4, int(alpha * 0.18 * visual_scale))
+            p.setPen(QPen(self._alpha_color(color, outer_alpha), width_px * 6.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            p.drawPath(path)
+            p.setPen(QPen(self._alpha_color(color, int(alpha * visual_scale)), width_px, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            p.drawPath(path)
+
+        # Sparse, flowing contour routes replace the old dense PCB traces. The
+        # curves are deterministic and use only six QPainterPaths.
+        contours: list[tuple[QPainterPath, QColor, int, float]] = []
+
+        path = QPainterPath(QPointF(-w * 0.06, h * 0.43))
+        path.cubicTo(QPointF(w * 0.10, h * 0.22), QPointF(w * 0.20, h * 0.62), QPointF(w * 0.36, h * 0.39))
+        path.cubicTo(QPointF(w * 0.46, h * 0.23), QPointF(w * 0.55, h * 0.18), QPointF(w * 0.67, h * 0.31))
+        path.cubicTo(QPointF(w * 0.78, h * 0.44), QPointF(w * 0.86, h * 0.20), QPointF(w * 1.06, h * 0.34))
+        contours.append((path, primary, 66, 1.35))
+
+        path = QPainterPath(QPointF(-w * 0.05, h * 0.73))
+        path.cubicTo(QPointF(w * 0.14, h * 0.58), QPointF(w * 0.22, h * 0.91), QPointF(w * 0.40, h * 0.76))
+        path.cubicTo(QPointF(w * 0.52, h * 0.66), QPointF(w * 0.64, h * 0.61), QPointF(w * 0.74, h * 0.72))
+        path.cubicTo(QPointF(w * 0.84, h * 0.82), QPointF(w * 0.92, h * 0.58), QPointF(w * 1.05, h * 0.70))
+        contours.append((path, secondary, 62, 1.45))
+
+        path = QPainterPath(QPointF(w * 0.12, -h * 0.05))
+        path.cubicTo(QPointF(w * 0.22, h * 0.09), QPointF(w * 0.23, h * 0.35), QPointF(w * 0.31, h * 0.39))
+        path.cubicTo(QPointF(w * 0.38, h * 0.43), QPointF(w * 0.39, h * 0.18), QPointF(w * 0.48, h * 0.14))
+        path.cubicTo(QPointF(w * 0.58, h * 0.10), QPointF(w * 0.62, h * 0.29), QPointF(w * 0.72, h * 0.26))
+        contours.append((path, highlight, 42, 1.05))
+
+        path = QPainterPath(QPointF(w * 0.36, h * 1.06))
+        path.cubicTo(QPointF(w * 0.39, h * 0.86), QPointF(w * 0.49, h * 0.93), QPointF(w * 0.55, h * 0.82))
+        path.cubicTo(QPointF(w * 0.63, h * 0.69), QPointF(w * 0.69, h * 0.91), QPointF(w * 0.78, h * 0.81))
+        path.cubicTo(QPointF(w * 0.86, h * 0.72), QPointF(w * 0.89, h * 0.90), QPointF(w * 1.03, h * 0.84))
+        contours.append((path, primary, 48, 1.10))
+
+        path = QPainterPath(QPointF(w * 0.55, h * 0.08))
+        path.cubicTo(QPointF(w * 0.69, h * 0.02), QPointF(w * 0.68, h * 0.24), QPointF(w * 0.79, h * 0.28))
+        path.cubicTo(QPointF(w * 0.88, h * 0.31), QPointF(w * 0.88, h * 0.49), QPointF(w * 1.04, h * 0.45))
+        contours.append((path, secondary, 48, 1.15))
+
+        path = QPainterPath(QPointF(-w * 0.04, h * 0.89))
+        path.cubicTo(QPointF(w * 0.18, h * 0.83), QPointF(w * 0.24, h * 1.00), QPointF(w * 0.44, h * 0.93))
+        path.cubicTo(QPointF(w * 0.61, h * 0.87), QPointF(w * 0.78, h * 0.98), QPointF(w * 1.04, h * 0.91))
+        contours.append((path, highlight, 34, 0.95))
+
+        for contour, color, alpha, line_width in contours:
+            draw_light_path(contour, color, alpha, line_width)
+
+        # Restrained glow nodes and tiny particles provide depth. All positions
+        # are deterministic, so the static default never flickers or drifts.
+        node_specs = (
+            (0.115, 0.350, primary, True), (0.265, 0.675, secondary, False),
+            (0.355, 0.390, highlight, True), (0.585, 0.214, secondary, False),
+            (0.680, 0.312, primary, True), (0.792, 0.718, highlight, True),
+            (0.865, 0.286, secondary, False), (0.925, 0.835, primary, True),
+        )
+        p.setPen(Qt.NoPen)
+        for index, (x_ratio, y_ratio, color, strong) in enumerate(node_specs):
+            point = QPointF(w * x_ratio, h * y_ratio)
+            node_pulse = (0.80 + 0.20 * math.sin(phase * 0.21 + index)) if phase else 0.92
+            if strong:
+                radius = 18.0 + 4.0 * node_pulse
+                node_halo = QRadialGradient(point, radius)
+                node_halo.setColorAt(0.0, self._alpha_color(color, int(122 * visual_scale * node_pulse)))
+                node_halo.setColorAt(0.34, self._alpha_color(color, int(44 * visual_scale * node_pulse)))
+                node_halo.setColorAt(1.0, QColor(0, 0, 0, 0))
+                p.setBrush(QBrush(node_halo))
+                p.drawEllipse(point, radius, radius)
+            p.setBrush(self._alpha_color(color, int((170 if strong else 112) * visual_scale)))
+            dot_radius = 2.3 if strong else 1.6
+            p.drawEllipse(point, dot_radius, dot_radius)
+
+        for index in range(28):
+            x = w * (((index * 73 + 19) % 997) / 997.0)
+            y = h * (0.13 + 0.76 * (((index * 151 + 31) % 991) / 991.0))
+            color = primary if index % 3 else secondary
+            alpha = int((18 + (index % 4) * 5) * visual_scale)
+            p.setBrush(self._alpha_color(color, alpha))
+            radius = 0.7 + (index % 3) * 0.25
+            p.drawEllipse(QPointF(x, y), radius, radius)
+
+        # Glass sheen and vignette preserve contrast for the existing title,
+        # cards, buttons, and dial without changing their placement.
+        sheen = QLinearGradient(0, 0, 0, h)
+        sheen.setColorAt(0.0, QColor(255, 255, 255, 13 if not neutral_off else 8))
+        sheen.setColorAt(0.20, QColor(255, 255, 255, 3))
+        sheen.setColorAt(0.56, QColor(255, 255, 255, 0))
+        sheen.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.fillRect(r, sheen)
+
+        vignette = QRadialGradient(QPointF(w * 0.50, h * 0.49), max(w, h) * 0.82)
+        vignette.setColorAt(0.0, QColor(0, 0, 0, 0))
+        vignette.setColorAt(0.57, QColor(0, 0, 0, 0))
+        vignette.setColorAt(1.0, QColor(0, 0, 0, 92 if not neutral_off else 104))
+        p.fillRect(r, vignette)
+
+        p.end()
+        return pixmap
+
     def paintEvent(self, event):
         p = QPainter(self)
-        p.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
+        p.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing | QPainter.SmoothPixmapTransform)
         r = self.rect()
         w = max(1, r.width())
         h = max(1, r.height())
@@ -3621,224 +3889,36 @@ class ThermostatScreen(Page):
         outputs = t.get("outputs") if isinstance(t.get("outputs"), dict) else {}
         safety = str(t.get("safetyMode") or outputs.get("safetyMode") or "").lower()
         neutral_off = str(t.get("mode") or "").lower() == "off" and safety not in {"heat", "cool"}
-        heat_mode = self.active_visual_mode() == "heat"
+        safety_alert = current < low or current > high
+        animated = self.background_animation_enabled()
+        phase = int(getattr(self, "fx_phase", 0) or 0) if animated else 0
 
-        # Circuit-board climate background. This is drawn procedurally, so it
-        # needs no image asset and can change color based on room temperature.
-        # It intentionally matches the direction of a modern PCB / smart-panel
-        # look: dark board, circuit traces, glowing nodes and temp-reactive color.
-        cold_ratio = 0.0
-        if (not neutral_off) and current <= 67.0:
-            # Blue starts at 67° and reaches full dark-blue intensity by 64°.
-            cold_ratio = clamp((67.0 - current) / 3.0, 0.0, 1.0)
-            # Make the change visible right at 67°, then ramp darker as it drops.
-            cold_ratio = max(cold_ratio, 0.18)
-            if current <= 64.0:
-                cold_ratio = 1.0
-
-        hot_ratio = 0.0
-        if (not neutral_off) and current >= 72.0:
-            # Red starts at 72° and reaches full dark-red intensity by 76°.
-            hot_ratio = clamp((current - 72.0) / 4.0, 0.0, 1.0)
-            # Make the change visible right at 72°, then ramp darker as it rises.
-            hot_ratio = max(hot_ratio, 0.18)
-            if current >= 76.0:
-                hot_ratio = 1.0
-
-        if current < low:
-            cold_ratio = max(cold_ratio, 0.90)
-        if current > high:
-            hot_ratio = max(hot_ratio, 0.90)
-
-        if cold_ratio > 0 and hot_ratio > 0:
-            midpoint = (low + high) / 2 if high > low else 69.5
-            if current <= midpoint:
-                hot_ratio = 0.0
-            else:
-                cold_ratio = 0.0
-
-        heat_mode_visual = bool(heat_mode and cold_ratio <= 0 and hot_ratio <= 0)
-        heat_hint = 0.30 if heat_mode_visual and not neutral_off else 0.0
-
-        climate_intensity = max(cold_ratio, hot_ratio, heat_hint)
-        cold_weight = cold_ratio
-        hot_weight = max(hot_ratio, heat_hint)
-
-        def mix_channel(cold_value: int, neutral_value: int, hot_value: int) -> int:
-            value = neutral_value
-            if cold_weight > 0:
-                value = int(value * (1.0 - cold_weight) + cold_value * cold_weight)
-            if hot_weight > 0:
-                value = int(value * (1.0 - hot_weight) + hot_value * hot_weight)
-            return int(clamp(value, 0, 255))
-
-        board_a = QColor(
-            mix_channel(0, 4, 32),
-            mix_channel(8, 18, 7),
-            mix_channel(42, 38, 16),
+        # Quantize only the cache key—not the palette calculation—to prevent
+        # needless redraws from tiny sensor jitter while preserving smooth 0.1°F
+        # visible transitions whenever the reported temperature meaningfully changes.
+        cache_key = (
+            w,
+            h,
+            round(current, 1),
+            round(low, 1),
+            round(high, 1),
+            neutral_off,
+            safety_alert,
+            phase % 10000,
         )
-        board_b = QColor(
-            mix_channel(0, 8, 78),
-            mix_channel(34, 46, 14),
-            mix_channel(125, 78, 34),
-        )
-        trace = QColor(
-            mix_channel(74, 54, 255),
-            mix_channel(210, 224, 130),
-            mix_channel(255, 116, 58),
-            78 if not neutral_off else 50,
-        )
-        trace_dim = QColor(trace.red(), trace.green(), trace.blue(), 34 if not neutral_off else 24)
-        trace_hot = QColor(
-            mix_channel(112, 90, 255),
-            mix_channel(238, 246, 172),
-            mix_channel(255, 196, 94),
-            132 if climate_intensity > 0.01 else 88,
-        )
-        node_col = QColor(trace_hot.red(), trace_hot.green(), trace_hot.blue(), 170 if not neutral_off else 110)
-        glow_col = QColor(trace_hot.red(), trace_hot.green(), trace_hot.blue(), int(64 + 80 * climate_intensity))
+        if self._environment_background_cache_key != cache_key or self._environment_background_cache.isNull():
+            self._environment_background_cache = self._render_environment_background(
+                w,
+                h,
+                current,
+                neutral_off,
+                safety_alert,
+                phase,
+            )
+            self._environment_background_cache_key = cache_key
 
-        base = QLinearGradient(0, 0, w, h)
-        base.setColorAt(0.0, QColor(max(0, board_a.red() - 2), max(0, board_a.green() - 2), max(0, board_a.blue() - 4)))
-        base.setColorAt(0.46, board_a)
-        base.setColorAt(0.74, board_b)
-        base.setColorAt(1.0, QColor(2, 4, 10))
-        p.fillRect(r, base)
-
-        # Broad temperature glow behind the traces.
-        if cold_weight > 0:
-            cold_glow = QRadialGradient(QPointF(w * 0.28, h * 0.42), w * 0.78)
-            cold_glow.setColorAt(0.0, QColor(0, 192, 255, int(98 * cold_weight)))
-            cold_glow.setColorAt(0.46, QColor(0, 58, 210, int(62 * cold_weight)))
-            cold_glow.setColorAt(1.0, QColor(0, 0, 0, 0))
-            p.fillRect(r, cold_glow)
-        if hot_weight > 0:
-            hot_glow = QRadialGradient(QPointF(w * 0.74, h * 0.38), w * 0.78)
-            hot_glow.setColorAt(0.0, QColor(255, 62, 42, int(104 * hot_weight)))
-            hot_glow.setColorAt(0.42, QColor(170, 8, 42, int(62 * hot_weight)))
-            hot_glow.setColorAt(1.0, QColor(0, 0, 0, 0))
-            p.fillRect(r, hot_glow)
-
-        # Avoid large translucent rectangles in the PCB background; they looked
-        # like leftover UI panels behind the thermostat controls.
-
-        phase = int(getattr(self, "fx_phase", 0) or 0)
-
-        def board_point(col: int, row: int, cols: int = 12, rows: int = 8) -> QPointF:
-            return QPointF(w * (0.05 + col * (0.90 / (cols - 1))), h * (0.07 + row * (0.82 / (rows - 1))))
-
-        def draw_trace(points: list[QPointF], *, bright: bool = False, width_scale: float = 1.0):
-            if len(points) < 2:
-                return
-            pen_color = trace_hot if bright else trace
-            path = QPainterPath(points[0])
-            for pt in points[1:]:
-                path.lineTo(pt)
-            p.setBrush(Qt.NoBrush)
-            p.setPen(QPen(QColor(pen_color.red(), pen_color.green(), pen_color.blue(), max(18, int(pen_color.alpha() * 0.28))), 7.5 * width_scale, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
-            p.drawPath(path)
-            p.setPen(QPen(pen_color, 2.0 * width_scale, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
-            p.drawPath(path)
-
-        # Fixed circuit routes. They are deterministic and lightweight, but
-        # look much closer to a PCB than the old generic grid/lines.
-        routes = [
-            [(0, 0), (2, 0), (2, 2), (4, 2), (4, 1), (7, 1), (7, 3), (10, 3), (10, 1), (11, 1)],
-            [(0, 2), (1, 2), (1, 4), (3, 4), (3, 5), (6, 5), (6, 3), (8, 3), (8, 2), (11, 2)],
-            [(0, 5), (2, 5), (2, 6), (5, 6), (5, 4), (7, 4), (7, 6), (10, 6), (10, 7), (11, 7)],
-            [(1, 7), (1, 6), (3, 6), (3, 3), (5, 3), (5, 2), (9, 2), (9, 0), (11, 0)],
-            [(0, 1), (3, 1), (3, 0), (6, 0), (6, 2), (8, 2), (8, 4), (11, 4)],
-            [(0, 6), (2, 6), (2, 4), (4, 4), (4, 6), (6, 6), (6, 7), (9, 7), (9, 5), (11, 5)],
-            [(5, 0), (5, 1), (4, 1), (4, 3), (2, 3), (2, 4), (0, 4)],
-            [(11, 6), (9, 6), (9, 4), (7, 4), (7, 5), (4, 5), (4, 7)],
-            [(6, 1), (6, 2), (5, 2), (5, 4), (3, 4), (3, 6), (1, 6)],
-            [(10, 0), (10, 2), (9, 2), (9, 3), (6, 3), (6, 5), (8, 5), (8, 7)],
-        ]
-        for idx, route in enumerate(routes):
-            bright = ((idx * 7 + phase // 2) % 11) < 2 or (climate_intensity > 0.85 and idx % 3 == 0)
-            pts = [board_point(c, rr) for c, rr in route]
-            draw_trace(pts, bright=bright, width_scale=1.0 if idx % 2 else 1.08)
-
-        # Micro traces: shorter details and branching lines.
-        p.setBrush(Qt.NoBrush)
-        for i in range(34):
-            col = (i * 5 + 2) % 12
-            row = (i * 3 + 1) % 8
-            start_pt = board_point(col, row)
-            direction = -1 if i % 2 else 1
-            length = w * (0.045 + (i % 4) * 0.012)
-            vertical = i % 5 == 0
-            color = trace_dim if i % 6 else QColor(trace.red(), trace.green(), trace.blue(), trace.alpha())
-            p.setPen(QPen(color, 1.25, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
-            if vertical:
-                p.drawLine(start_pt, QPointF(start_pt.x(), start_pt.y() + direction * length))
-            else:
-                mid = QPointF(start_pt.x() + direction * length * 0.55, start_pt.y())
-                end = QPointF(mid.x(), mid.y() + direction * length * 0.36)
-                p.drawLine(start_pt, mid)
-                p.drawLine(mid, end)
-
-        # Nodes and glowing pads.
-        p.setPen(Qt.NoPen)
-        for row in range(8):
-            for col in range(12):
-                include = (col * 3 + row * 5) % 4 != 1
-                if not include:
-                    continue
-                pt = board_point(col, row)
-                pulse = 0.5 + 0.5 * math.sin((phase * 0.12) + col * 0.9 + row * 1.3)
-                strong = ((col + row * 2 + phase // 5) % 17) == 0
-                radius = 3.2 + ((col + row) % 3) * 0.8
-                if strong:
-                    halo = QRadialGradient(pt, 24 + 10 * pulse)
-                    halo.setColorAt(0.0, QColor(glow_col.red(), glow_col.green(), glow_col.blue(), int(90 + 70 * pulse)))
-                    halo.setColorAt(0.45, QColor(glow_col.red(), glow_col.green(), glow_col.blue(), int(30 + 34 * pulse)))
-                    halo.setColorAt(1.0, QColor(0, 0, 0, 0))
-                    p.setBrush(QBrush(halo))
-                    p.drawEllipse(pt, 24 + 10 * pulse, 24 + 10 * pulse)
-                p.setBrush(QColor(node_col.red(), node_col.green(), node_col.blue(), 88 + (42 if strong else 0)))
-                p.drawEllipse(pt, radius, radius)
-
-        # A few larger chip pads for a more intentional circuit-board style.
-        chip_specs = (
-            (0.43, 0.42, 0.18, 0.11),
-            (0.14, 0.50, 0.14, 0.12),
-        )
-        for x_ratio, y_ratio, ww_ratio, hh_ratio in chip_specs:
-            chip = QRectF(w * x_ratio, h * y_ratio, w * ww_ratio, h * hh_ratio)
-            fill = QColor(2, 10, 22, 82)
-            border = QColor(trace_hot.red(), trace_hot.green(), trace_hot.blue(), 76)
-            p.setBrush(fill)
-            p.setPen(QPen(border, 1.35))
-            p.drawRoundedRect(chip, 10, 10)
-            pin_count = 6
-            p.setPen(QPen(QColor(trace.red(), trace.green(), trace.blue(), 66), 1.2, Qt.SolidLine, Qt.RoundCap))
-            for i in range(pin_count):
-                y = chip.top() + chip.height() * ((i + 1) / (pin_count + 1))
-                p.drawLine(QPointF(chip.left() - 14, y), QPointF(chip.left(), y))
-                p.drawLine(QPointF(chip.right(), y), QPointF(chip.right() + 14, y))
-
-        # Final glass and vignette layer to keep labels/buttons readable.
-        sheen = QLinearGradient(0, 0, 0, h)
-        sheen.setColorAt(0.0, QColor(255, 255, 255, 14 if not neutral_off else 8))
-        sheen.setColorAt(0.18, QColor(255, 255, 255, 3))
-        sheen.setColorAt(0.52, QColor(255, 255, 255, 0))
-        sheen.setColorAt(1.0, QColor(0, 0, 0, 0))
-        p.fillRect(r, sheen)
-
-        # Subtle center darkening behind the dial/control area.
-        dial_shadow = QRadialGradient(QPointF(w * 0.50, h * 0.50), min(w, h) * 0.44)
-        dial_shadow.setColorAt(0.0, QColor(0, 0, 0, 44))
-        dial_shadow.setColorAt(0.46, QColor(0, 0, 0, 20))
-        dial_shadow.setColorAt(1.0, QColor(0, 0, 0, 0))
-        p.fillRect(r, dial_shadow)
-
-        vignette = QRadialGradient(QPointF(w * 0.50, h * 0.48), max(w, h) * 0.84)
-        vignette.setColorAt(0.0, QColor(0, 0, 0, 0))
-        vignette.setColorAt(0.56, QColor(0, 0, 0, 0))
-        vignette.setColorAt(1.0, QColor(0, 0, 0, 88 if not neutral_off else 72))
-        p.fillRect(r, vignette)
-
+        p.drawPixmap(0, 0, self._environment_background_cache)
+        p.end()
         super().paintEvent(event)
 
     def format_remaining(self, seconds: float) -> str:
