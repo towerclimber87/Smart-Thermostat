@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from typing import Callable, Iterable
 
-from PyQt5.QtCore import QEvent, QPointF, QRect, QRectF, QSize, Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QEasingCurve, QEvent, QPointF, QRect, QRectF, QSize, Qt, QTimer, QVariantAnimation, pyqtSignal
 from PyQt5.QtGui import QBrush, QColor, QConicalGradient, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QRadialGradient
 from PyQt5.QtWidgets import (
     QApplication,
@@ -135,6 +135,113 @@ class RoundButton(QPushButton):
 
     def refresh(self):
         self.setStyleSheet(button_style(active=self._active, danger=self._kind == "danger", green=self._kind == "green", purple=self._kind == "purple"))
+
+
+class KeypadButton(RoundButton):
+    """Round button with persistent touchscreen press confirmation.
+
+    Qt's normal ``:pressed`` state can be too brief to notice on a touchscreen,
+    especially when there is no haptic feedback. KeypadButton keeps the normal
+    depressed state while the finger is down, then paints a short release pulse
+    after the tap so every accepted key press has a clear visual response.
+    """
+
+    def __init__(self, text: str = "", active: bool = False, kind: str = "normal", min_h: int = 46, parent=None):
+        self._release_feedback = 0.0
+        self._release_animation = None
+        super().__init__(text, active=active, kind=kind, min_h=min_h, parent=parent)
+        self._release_animation = QVariantAnimation(self)
+        self._release_animation.setDuration(180)
+        self._release_animation.setStartValue(1.0)
+        self._release_animation.setEndValue(0.0)
+        self._release_animation.setEasingCurve(QEasingCurve.OutCubic)
+        self._release_animation.valueChanged.connect(self._set_release_feedback)
+        self._release_animation.finished.connect(self._clear_release_feedback)
+        self.refresh()
+
+    def refresh(self):
+        # Make the down-state substantially more obvious than the standard
+        # shared button style: darker face, brighter border, and a visible
+        # downward shift. The post-release pulse is painted separately below.
+        base = button_style(
+            active=self._active,
+            danger=self._kind == "danger",
+            green=self._kind == "green",
+            purple=self._kind == "purple",
+        )
+        if self._kind == "danger":
+            down_bg = "qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #c96535, stop:1 #9d3843)"
+            down_border = "rgba(255,231,208,0.96)"
+            down_color = "#ffffff"
+        elif self._active:
+            down_bg = "qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #147a9b, stop:1 #2255a0)"
+            down_border = "rgba(221,252,255,0.98)"
+            down_color = "#ffffff"
+        else:
+            down_bg = "qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 rgba(39,54,72,0.98), stop:1 rgba(12,19,32,0.98))"
+            down_border = "rgba(205,239,255,0.88)"
+            down_color = "#ffffff"
+        base += f"""
+        QPushButton:pressed {{
+            background:{down_bg};
+            color:{down_color};
+            border:3px solid {down_border};
+            padding-top:13px;
+            padding-bottom:5px;
+        }}
+        """
+        self.setStyleSheet(base)
+
+    def _set_release_feedback(self, value):
+        try:
+            self._release_feedback = float(value)
+        except (TypeError, ValueError):
+            self._release_feedback = 0.0
+        self.update()
+
+    def _clear_release_feedback(self):
+        self._release_feedback = 0.0
+        self.update()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self._release_animation is not None:
+            self._release_animation.stop()
+            self._clear_release_feedback()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        accepted_tap = bool(
+            self.isEnabled()
+            and event.button() == Qt.LeftButton
+            and self.rect().contains(event.pos())
+        )
+        super().mouseReleaseEvent(event)
+        if accepted_tap and self._release_animation is not None:
+            self._release_animation.stop()
+            self._release_animation.setStartValue(1.0)
+            self._release_animation.setEndValue(0.0)
+            self._set_release_feedback(1.0)
+            self._release_animation.start()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        amount = max(0.0, min(1.0, float(self._release_feedback)))
+        if amount <= 0.001:
+            return
+        if self._kind == "danger":
+            accent = QColor(255, 166, 111)
+        elif self._active:
+            accent = QColor(85, 240, 255)
+        else:
+            accent = QColor(203, 231, 255)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(2.5, 2.5, -2.5, -2.5)
+        fill_alpha = int(48 * amount)
+        border_alpha = int(235 * amount)
+        p.setBrush(QColor(accent.red(), accent.green(), accent.blue(), fill_alpha))
+        p.setPen(QPen(QColor(accent.red(), accent.green(), accent.blue(), border_alpha), 1.5 + (2.0 * amount)))
+        p.drawRoundedRect(rect, 19, 19)
 
 
 class IconCircle(QAbstractButton):
@@ -1182,22 +1289,20 @@ class MiniTextKeyboardDialog(QDialog):
             row = QHBoxLayout()
             row.setSpacing(6)
             for ch in row_text:
-                b = QPushButton(ch)
+                b = KeypadButton(ch, active=True, min_h=42)
                 b.setFixedHeight(42)
-                b.setStyleSheet(button_style(False))
                 b.clicked.connect(lambda checked=False, c=ch: self.add_char(c.lower()))
                 row.addWidget(b)
             root.addLayout(row)
 
         bottom = QHBoxLayout()
-        space = QPushButton("Space")
-        back = QPushButton("⌫")
-        clear = QPushButton("Clear")
-        cancel = QPushButton("Cancel")
-        done = QPushButton("Done")
+        space = KeypadButton("Space", active=False, min_h=46)
+        back = KeypadButton("⌫", active=False, min_h=46)
+        clear = KeypadButton("Clear", active=False, min_h=46)
+        cancel = KeypadButton("Cancel", active=False, kind="danger", min_h=46)
+        done = KeypadButton("Done", active=True, min_h=46)
         for b in [space, back, clear, cancel, done]:
             b.setFixedHeight(46)
-            b.setStyleSheet(button_style(b is done))
         space.clicked.connect(lambda: self.add_char(" "))
         back.clicked.connect(self.backspace)
         clear.clicked.connect(self.clear_text)

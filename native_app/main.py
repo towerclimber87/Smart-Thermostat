@@ -131,6 +131,7 @@ from widgets import (
     HoldCard,
     IconCircle,
     LightCard,
+    KeypadButton,
     MiniTextKeyboardDialog,
     NavBar,
     RoomControlCard,
@@ -2233,7 +2234,7 @@ class TextKeyboardDialog(QDialog):
             row.setSpacing(6)
             row.addStretch(1)
             for ch in letters:
-                b = RoundButton(ch.lower(), active=True, min_h=42)
+                b = KeypadButton(ch.lower(), active=True, min_h=42)
                 b.setFixedSize(52, 42)
                 b.pressed.connect(lambda c=ch: self.add_letter(c))
                 self.letter_buttons.append((b, ch))
@@ -2242,12 +2243,12 @@ class TextKeyboardDialog(QDialog):
             root.addLayout(row)
         bottom = QHBoxLayout()
         bottom.setSpacing(8)
-        self.shift = RoundButton("Uppercase", active=False, min_h=46)
-        space = RoundButton("Space", active=False, min_h=46)
-        back = RoundButton("⌫", active=False, min_h=46)
-        clear = RoundButton("Clear", active=False, min_h=46)
-        cancel = RoundButton("Cancel", active=False, kind="danger", min_h=46)
-        done = RoundButton("Done", active=True, min_h=46)
+        self.shift = KeypadButton("Uppercase", active=False, min_h=46)
+        space = KeypadButton("Space", active=False, min_h=46)
+        back = KeypadButton("⌫", active=False, min_h=46)
+        clear = KeypadButton("Clear", active=False, min_h=46)
+        cancel = KeypadButton("Cancel", active=False, kind="danger", min_h=46)
+        done = KeypadButton("Done", active=True, min_h=46)
         self.shift.pressed.connect(self.toggle_uppercase)
         space.pressed.connect(lambda: self.add_char(" "))
         back.pressed.connect(self.backspace)
@@ -7912,7 +7913,7 @@ class CodeKeypadDialog(QDialog):
             ("⌫", 3, 0), ("0", 3, 1), ("Cancel", 3, 2),
         ]
         for label, row, col in keys:
-            b = RoundButton(label, active=(label not in {"⌫", "Cancel"}), min_h=64)
+            b = KeypadButton(label, active=(label not in {"⌫", "Cancel"}), min_h=64)
             if label == "Cancel":
                 b.setKind("danger")
                 b.clicked.connect(self.reject)
@@ -11781,7 +11782,7 @@ class AlarmControlDialog(QDialog):
             ("⌫", 3, 0), ("0", 3, 1), ("Cancel", 3, 2),
         ]
         for label, row, col in keys:
-            b = RoundButton(label, active=(label not in {"⌫", "Cancel"}), min_h=64)
+            b = KeypadButton(label, active=(label not in {"⌫", "Cancel"}), min_h=64)
             b.setMinimumWidth(104)
             if label == "Cancel":
                 b.setKind("danger")
