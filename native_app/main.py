@@ -3202,8 +3202,21 @@ class ThermostatScreen(Page):
         away_lay.addStretch(1)
         self.away_overlay.mousePressEvent = lambda event: self.return_home_from_away()
         self.away_overlay.hide()
-        self.door_card = InfoTile("Doors", "CLOSED", "▯", good=True)
+        # The Doors tile remains a live status card, but also acts as a secure
+        # close/lock action button. A full one-second hold opens assignment;
+        # a normal tap sends the domain-appropriate Home Assistant action.
+        self.door_card = InfoTile(
+            "Doors",
+            "CLOSED",
+            "▯",
+            good=True,
+            hold_ms=1000,
+            press_feedback=True,
+        )
         self.alarm_card = InfoTile("Alarmo", "DISARMED", "盾", good=True)
+        self._door_action_pending = False
+        self.door_card.clicked.connect(self.run_door_action)
+        self.door_card.held.connect(self.choose_door_action_entity)
         self.virtual_panel = VirtualOutputsPanel()
         self.virtual_temp_pending: float | None = None
         self._alarm_dialog_open = False
@@ -4455,6 +4468,188 @@ class ThermostatScreen(Page):
             pass
         return None
 
+    def selected_door_action_entity(self) -> dict | None:
+        """Return the Home Assistant entity used when the Doors tile is tapped.
+
+        This is intentionally separate from ``doorEntity``/``pauseFunction``.
+        The status entry can remain a binary sensor while the action points to a
+        button, switch, lock, or cover that actually secures the opening.
+        """
+        try:
+            ha = self.s.ha()
+            action = ha.get("doorActionEntity") if isinstance(ha, dict) else None
+            if isinstance(action, dict) and str(action.get("entityId") or action.get("entity_id") or "").strip():
+                return action
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def door_action_for_domain(domain: str) -> tuple[str, str]:
+        """Map an assigned entity to a one-way close/secure action.
+
+        Avoid toggling wherever Home Assistant exposes a deterministic command:
+        covers close, locks lock, and switches turn off. Buttons remain a press
+        because Home Assistant defines them as momentary actions.
+        """
+        domain = str(domain or "").strip().lower()
+        if domain == "cover":
+            return "close", "Closing"
+        if domain == "lock":
+            return "lock", "Locking"
+        if domain in {"button", "input_button"}:
+            return "press", "Pressing"
+        return "off", "Turning off"
+
+    def choose_door_action_entity(self):
+        if self.reject_locked_control():
+            return
+
+        allowed_domains = {"switch", "lock", "cover", "button", "input_button"}
+        stored: list[dict] = []
+        ha = self.s.ha()
+        if isinstance(ha, dict):
+            current = ha.get("doorActionEntity")
+            if isinstance(current, dict):
+                stored.append(current)
+            available = ha.get("doorActionAvailableEntities")
+            if isinstance(available, list):
+                stored.extend(item for item in available if isinstance(item, dict))
+
+        fresh: list[dict] = []
+        try:
+            result = self.s.api.post(
+                "/api/ha/entities",
+                self.s.ha_payload({"domains": ["switch", "lock", "cover", "button", "input_button"]}),
+            )
+            fresh = result.get("entities") or [] if isinstance(result, dict) else []
+        except Exception as exc:
+            if not stored:
+                self.requestToast.emit(f"Could not load Home Assistant actions: {exc}")
+                return
+
+        by_id: dict[str, dict] = {}
+        # Saved records provide an offline fallback; fresh HA records overwrite
+        # them so the picker uses current friendly names and domains.
+        for item in list(stored) + list(fresh):
+            if not isinstance(item, dict):
+                continue
+            entity_id = str(item.get("entityId") or item.get("entity_id") or "").strip()
+            if not entity_id:
+                continue
+            domain = str(item.get("domain") or (entity_id.split(".", 1)[0] if "." in entity_id else "")).strip().lower()
+            if domain not in allowed_domains:
+                continue
+            name = str(item.get("friendlyName") or item.get("friendly_name") or item.get("name") or entity_id).strip() or entity_id
+            by_id[entity_id] = {
+                "entityId": entity_id,
+                "name": name,
+                "friendlyName": name,
+                "domain": domain,
+                "state": str(item.get("state") or "unknown"),
+            }
+
+        entities = list(by_id.values())
+        if not entities:
+            QMessageBox.warning(
+                self,
+                "Door Action",
+                "No Home Assistant switch, lock, cover, or button entities were found.",
+            )
+            return
+
+        dlg = EntityPickerDialog("Choose Door Action", entities, self)
+        current_action = self.selected_door_action_entity() or {}
+        current_id = str(current_action.get("entityId") or current_action.get("entity_id") or "").strip()
+        if current_id:
+            for row in range(dlg.list.count()):
+                item = dlg.list.item(row)
+                data = item.data(Qt.UserRole) if item is not None else None
+                if isinstance(data, dict) and str(data.get("entityId") or "") == current_id:
+                    dlg.list.setCurrentItem(item)
+                    dlg.list.scrollToItem(item)
+                    break
+
+        def apply(entity: dict):
+            try:
+                entity_id = str(entity.get("entityId") or entity.get("entity_id") or "").strip()
+                if not entity_id:
+                    return
+                domain = str(entity.get("domain") or (entity_id.split(".", 1)[0] if "." in entity_id else "")).strip().lower()
+                if domain not in allowed_domains:
+                    raise ValueError("Choose a switch, lock, cover, or button entity")
+                name = str(entity.get("friendlyName") or entity.get("friendly_name") or entity.get("name") or entity_id).strip() or entity_id
+                selected = {
+                    "entityId": entity_id,
+                    "name": name,
+                    "friendlyName": name,
+                    "domain": domain,
+                    "state": str(entity.get("state") or by_id.get(entity_id, {}).get("state") or "unknown"),
+                }
+                config_ha = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
+                config_ha["doorActionEntity"] = selected
+                config_ha["doorActionAvailableEntities"] = [selected] + [
+                    item for item in entities if str(item.get("entityId") or "") != entity_id
+                ]
+                self.s.save_config()
+                _action, verb = self.door_action_for_domain(domain)
+                self.requestToast.emit(f"Doors action: {verb.lower()} {name}")
+            except Exception as exc:
+                QMessageBox.warning(self, "Door Action", str(exc))
+
+        dlg.selected.connect(apply)
+        dlg.exec_()
+
+    def run_door_action(self):
+        if self.reject_locked_control():
+            return
+        if self._door_action_pending:
+            self.requestToast.emit("Door action is still being sent…")
+            return
+
+        entity = self.selected_door_action_entity()
+        if not entity:
+            self.requestToast.emit("Press and hold Doors for 1 second to assign an action")
+            return
+
+        entity_id = str(entity.get("entityId") or entity.get("entity_id") or "").strip()
+        domain = str(entity.get("domain") or (entity_id.split(".", 1)[0] if "." in entity_id else "")).strip().lower()
+        if not entity_id or domain not in {"switch", "lock", "cover", "button", "input_button"}:
+            self.requestToast.emit("The assigned door action is no longer valid. Press and hold to reassign it.")
+            return
+
+        action, verb = self.door_action_for_domain(domain)
+        name = str(entity.get("friendlyName") or entity.get("name") or entity_id).strip() or entity_id
+        self._door_action_pending = True
+        self.requestToast.emit(f"{verb} {name}…")
+        payload = self.s.ha_payload({"entityId": entity_id, "action": action})
+
+        def done(result):
+            self._door_action_pending = False
+            control = result.get("control") or {} if isinstance(result, dict) else {}
+            if isinstance(control, dict) and control:
+                entity["state"] = str(control.get("state") or entity.get("state") or "unknown")
+                entity["domain"] = str(control.get("domain") or domain)
+            if action == "press":
+                self.requestToast.emit(f"Pressed {name}")
+            elif action == "close":
+                self.requestToast.emit(f"Close command sent to {name}")
+            elif action == "lock":
+                self.requestToast.emit(f"Lock command sent to {name}")
+            else:
+                self.requestToast.emit(f"Off command sent to {name}")
+
+        def failed(error):
+            self._door_action_pending = False
+            self.requestToast.emit(f"Door action failed: {error}")
+
+        self.run_async(
+            "door-action",
+            lambda: self.s.api.post("/api/ha/room/action", payload),
+            done,
+            failed,
+        )
+
     def update_door_pause_ui(self):
         t = self.thermostat_view()
         pause = t.get("pauseFunction") if isinstance(t.get("pauseFunction"), dict) else {}
@@ -5316,18 +5511,69 @@ class ThermostatScreen(Page):
 
 
 class InfoTile(HoldCard):
-    def __init__(self, title: str, value: str, symbol: str, good: bool = False, parent=None):
-        super().__init__(parent)
+    def __init__(
+        self,
+        title: str,
+        value: str,
+        symbol: str,
+        good: bool = False,
+        parent=None,
+        *,
+        hold_ms: int = 650,
+        press_feedback: bool = False,
+    ):
+        super().__init__(parent, hold_ms=hold_ms)
         self.title = title
         self.value = value
         self.symbol = symbol
         self.good = good
+        self.press_feedback = bool(press_feedback)
+        self._press_visual_down = False
+        self._press_feedback_active = False
+        self._press_feedback_timer = QTimer(self)
+        self._press_feedback_timer.setSingleShot(True)
+        self._press_feedback_timer.setInterval(180)
+        self._press_feedback_timer.timeout.connect(self._clear_press_feedback)
         self.alarm_state = ""
         self.flash_on = False
         self.flash_timer = QTimer(self)
         self.flash_timer.timeout.connect(self._flash_tick)
         self.setMinimumSize(226, 164)
         self.setMaximumWidth(270)
+
+    def _clear_press_feedback(self):
+        self._press_feedback_active = False
+        self.update()
+
+    def _fire_hold(self):
+        if self.press_feedback:
+            # A modal picker can open before the physical touch-release event is
+            # delivered back to this card. Clear the held-down visual first so
+            # the Doors tile cannot remain painted as pressed behind the dialog.
+            self._press_visual_down = False
+            self._press_feedback_active = True
+            self._press_feedback_timer.start()
+            self.update()
+        super()._fire_hold()
+
+    def mousePressEvent(self, event):
+        if self.press_feedback and event.button() == Qt.LeftButton:
+            self._press_feedback_timer.stop()
+            self._press_feedback_active = False
+            self._press_visual_down = True
+            self.update()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        was_held = bool(getattr(self, "_held_fired", False))
+        inside = event.button() == Qt.LeftButton and self.rect().contains(event.pos())
+        super().mouseReleaseEvent(event)
+        if self.press_feedback:
+            self._press_visual_down = False
+            if inside and not was_held:
+                self._press_feedback_active = True
+                self._press_feedback_timer.start()
+            self.update()
 
     def setValue(self, value: str):
         value = str(value)
@@ -5472,6 +5718,11 @@ class InfoTile(HoldCard):
         p = QPainter(self)
         p.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
         r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        pressed = self.press_feedback and (self._press_visual_down or self._press_feedback_active)
+        if pressed:
+            # Match the touchscreen keypad feedback: the card physically sinks
+            # while touched and briefly remains illuminated after release.
+            r = r.adjusted(4, 5, -4, -3)
 
         armed_alarm = "alarm" in self.title.lower() and (
             self.alarm_state.startswith("armed") or self.alarm_state in {"arming", "pending", "triggered"}
@@ -5507,6 +5758,26 @@ class InfoTile(HoldCard):
             g.setColorAt(0.48, QColor(16, 53, 60, 214))
             g.setColorAt(1.0, QColor(12, 23, 39, 232))
             border_color = QColor(80, 245, 202, 136 if self.good else 78)
+        if pressed:
+            # Darken the face and strengthen the border so the response remains
+            # obvious on the wall panel even without haptics.
+            darker = QLinearGradient(r.topLeft(), r.bottomRight())
+            if armed_alarm:
+                darker.setColorAt(0.0, QColor(80, 13, 32, 238))
+                darker.setColorAt(1.0, QColor(17, 8, 23, 244))
+            elif open_door:
+                darker.setColorAt(0.0, QColor(84, 45, 13, 236))
+                darker.setColorAt(1.0, QColor(12, 15, 26, 242))
+            else:
+                darker.setColorAt(0.0, QColor(13, 67, 61, 232))
+                darker.setColorAt(1.0, QColor(8, 17, 29, 242))
+            g = darker
+            border_color = QColor(
+                min(255, border_color.red() + 36),
+                min(255, border_color.green() + 36),
+                min(255, border_color.blue() + 36),
+                min(235, border_color.alpha() + 66),
+            )
         p.setBrush(QBrush(g))
         p.setPen(QPen(border_color, 1.6))
         p.drawRoundedRect(r, 28, 28)
@@ -5515,12 +5786,12 @@ class InfoTile(HoldCard):
 
         p.setFont(font(15, QFont.Black))
         p.setPen(QColor(246, 251, 255))
-        p.drawText(QRectF(16, 100, r.width() - 32, 24), Qt.AlignCenter, self.title)
+        p.drawText(QRectF(r.left() + 16, r.top() + 99, r.width() - 32, 24), Qt.AlignCenter, self.title)
 
         badge_text = str(self.value or "").upper()
         fm = p.fontMetrics()
         badge_w = max(86, min(r.width() - 34, fm.horizontalAdvance(badge_text) + 28))
-        badge = QRectF(r.center().x() - badge_w / 2, 128, badge_w, 24)
+        badge = QRectF(r.center().x() - badge_w / 2, r.top() + 127, badge_w, 24)
         if armed_alarm:
             badge_color = QColor(202, 42, 76, 226)
         elif open_door:
