@@ -102,6 +102,8 @@ _SYNC_ARM_LOCK = threading.RLock()
 _SYNC_ARMED_UNTIL = 0.0
 _SYNC_ARM_SOURCE = ""
 _SYNC_LAST_RESULT: dict = {}
+_SYNC_LAST_REQUEST_SIGNATURE = ""
+_SYNC_LAST_REQUEST_AT = 0.0
 
 
 # Onboard HVAC relay outputs use BCM GPIO numbering. These pins are used when
@@ -1238,9 +1240,11 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
         base["manualAwayPresenceLatch"] = None
     elif base["awaySource"] != "manual":
         base["manualAwayPresenceLatch"] = None
-    if base["away"] or not base.get("autoAwayPeople"):
-        # A manual Home override only makes sense while the thermostat is in
-        # Home mode and Auto Away/Home has configured people to evaluate.
+    override_reason = str((base.get("presenceHomeOverride") or {}).get("reason") or "").strip().lower()
+    if base["away"] or (not base.get("autoAwayPeople") and override_reason != "arriving"):
+        # Indefinite Return Home overrides only matter when Auto Away has people
+        # to evaluate. Arriving is an explicit timed panel state and must remain
+        # visible/toggleable even on a thermostat that has no Auto Away users.
         base["presenceHomeOverride"] = None
     mode_limits = base["limits"].get(base["mode"], {"min": 45, "max": 95})
     if not base["away"] and not base.get("pauseFunction", {}).get("active"):
@@ -4165,6 +4169,11 @@ def _source_is_explicit_home_assistant_command(source: str) -> bool:
         "voice-command",
         "automation",
         "external-command",
+        # Direct peer-to-peer Sync commands are intentional writes, not stale HA
+        # echoes. They must bypass the recent-touch protection on the destination.
+        "peer-sync",
+        "sync-receiver",
+        "thermostat-sync",
     }
 
 
@@ -7553,6 +7562,7 @@ IHA_CLIMATE_DISCOVERY_ATTRS = {
     "iha_api_status_source",
     "iha_api_stale_status_seconds",
     "iha_entity_available_from_cache",
+    "iha_panel_url",
 }
 
 
@@ -7592,6 +7602,7 @@ def _normalize_sync_peer_entry(entry: object) -> dict | None:
         "ihaPanel",
         "syncCapable",
         "serial",
+        "panelUrl",
         "arrivingButtonEntityId",
     ):
         if key in entry:
@@ -7653,6 +7664,12 @@ def _normalize_sync_climate_item(item: dict, arriving_buttons_by_serial: dict[st
         "ihaPanel": _ha_climate_item_is_iha(item),
         "syncCapable": _ha_climate_item_is_iha(item),
         "serial": serial,
+        "panelUrl": str(
+            attrs.get("iha_panel_url")
+            or attrs.get("iha_api_base_url")
+            or attrs.get("panel_url")
+            or ""
+        ).strip(),
     }
     if serial and isinstance(arriving_buttons_by_serial, dict):
         button_id = str(arriving_buttons_by_serial.get(serial) or "").strip()
@@ -7746,6 +7763,103 @@ def _sync_preset_mode_for_ha(value: object) -> str:
     return "arriving" if preset == "arriving" else ""
 
 
+def _normalize_sync_panel_url(value: object) -> str:
+    """Return a safe panel API base URL discovered through Home Assistant."""
+    raw = str(value or "").strip().rstrip("/")
+    if not raw:
+        return ""
+    try:
+        parsed = urlparse(raw if "://" in raw else f"http://{raw}")
+        scheme = str(parsed.scheme or "http").lower()
+        if scheme not in {"http", "https"} or not parsed.hostname:
+            return ""
+        host = parsed.hostname
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        port = parsed.port
+        if port is None:
+            port = 443 if scheme == "https" else 8080
+        return f"{scheme}://{host}:{int(port)}"
+    except (TypeError, ValueError):
+        return ""
+
+
+def _call_direct_iha_peer(
+    panel_url: str,
+    *,
+    mode: object = None,
+    target_temp: object = None,
+    preset_mode: object = None,
+) -> dict:
+    """Deliver one Sync command directly to the destination IHA panel.
+
+    Home Assistant supplies the destination's current address through the IHA
+    climate attributes, but the actual command goes to the panel API. This avoids
+    entity-id rename problems and HA service calls that return successfully while
+    the destination never receives an Arriving or temperature command.
+    """
+    base_url = _normalize_sync_panel_url(panel_url)
+    if not base_url:
+        raise ValueError("Destination thermostat does not expose a valid panel URL")
+
+    hvac_mode = _sync_hvac_mode_for_ha(mode)
+    target = _sync_target_temperature(target_temp)
+    preset = _sync_preset_mode_for_ha(preset_mode)
+    command: dict[str, object] = {
+        "commandSource": "peer-sync",
+        "source": "peer-sync",
+    }
+    if preset == "arriving":
+        command.update({
+            "preset_mode": "arriving",
+            "away": False,
+            "presetChangeSource": "peer-sync",
+        })
+    if hvac_mode:
+        command.update({"mode": hvac_mode, "modeChangeSource": "peer-sync"})
+    if target is not None:
+        command.update({
+            "targetTemp": target,
+            "lastComfortTarget": target,
+            "targetChangeSource": "peer-sync",
+        })
+    if len(command) <= 2:
+        raise ValueError("Nothing to sync")
+
+    data = json.dumps(command).encode("utf-8")
+    req = request.Request(
+        f"{base_url}/api/thermostat/control",
+        data=data,
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "SmartThermostatPeerSync/1.0",
+            "Connection": "close",
+        },
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=max(2.0, HA_REQUEST_TIMEOUT_SECONDS)) as resp:
+            raw = resp.read()
+    except error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")[:500]
+        raise RuntimeError(f"Destination panel returned HTTP {exc.code}: {body}") from exc
+    except error.URLError as exc:
+        raise RuntimeError(f"Could not reach destination panel {base_url}: {exc.reason}") from exc
+
+    if not raw:
+        return {"ok": True}
+    try:
+        result = json.loads(raw.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Destination panel returned invalid JSON") from exc
+    if not isinstance(result, dict):
+        raise RuntimeError("Destination panel returned a non-object response")
+    if result.get("ok", True) is False:
+        raise RuntimeError(str(result.get("error") or "Destination panel rejected the Sync command"))
+    return result
+
+
 def _call_ha_sync_thermostat_services(
     ha_url: str,
     token: str,
@@ -7754,7 +7868,14 @@ def _call_ha_sync_thermostat_services(
     mode: object = None,
     target_temp: object = None,
     preset_mode: object = None,
+    peer_metadata: list[dict] | None = None,
 ) -> dict:
+    """Synchronize selected thermostats, preferring direct IHA panel delivery.
+
+    HA remains the discovery directory and compatibility fallback. Updated IHA
+    climate entities expose ``iha_panel_url`` so the source panel can address the
+    destination directly and receive a real HTTP success/failure response.
+    """
     wanted = _ordered_unique_entity_ids(entity_ids, {"climate"})
     if not wanted:
         return {"ok": True, "synced": [], "skipped": [], "errors": [], "count": 0}
@@ -7765,39 +7886,104 @@ def _call_ha_sync_thermostat_services(
     if not hvac_mode and target is None and not preset:
         return {"ok": False, "error": "Nothing to sync", "synced": [], "skipped": [], "errors": []}
 
-    # Read one fresh HA state table. Besides the selected climate entities, this
-    # finds each IHA device's hidden Arriving receiver button. Using button.press
-    # avoids relying exclusively on climate.set_preset_mode, which may be absent
-    # from HA until a preset-capable climate platform has fully registered.
-    all_states = _ha_json_request(ha_url, token, "GET", "/api/states")
-    if not isinstance(all_states, list):
-        all_states = []
+    saved_by_id = {
+        peer["entityId"]: peer
+        for peer in _normalize_sync_peer_entries(peer_metadata or [])
+        if peer.get("entityId") in wanted
+    }
+
+    all_states: list[dict] = []
+    ha_state_error = ""
+    try:
+        state_result = _ha_json_request(ha_url, token, "GET", "/api/states")
+        if isinstance(state_result, list):
+            all_states = [item for item in state_result if isinstance(item, dict)]
+        else:
+            ha_state_error = "Home Assistant returned an invalid state list"
+    except Exception as exc:  # Direct delivery can still work from saved panel URLs.
+        ha_state_error = str(exc)
+
     state_by_id = {
         str(item.get("entity_id") or ""): item
         for item in all_states
-        if isinstance(item, dict) and str(item.get("entity_id") or "") in wanted
+        if str(item.get("entity_id") or "") in wanted
     }
     arriving_buttons_by_serial = _ha_iha_action_buttons_by_serial(all_states, "arriving-sync-receiver")
 
     errors: list[dict] = []
     skipped: list[dict] = []
-    preset_targets: list[str] = []
+    successful: set[str] = set()
+    direct_transports: list[str] = []
+    fallback_transports: list[str] = []
+    direct_failures: dict[str, str] = {}
+
     arriving_button_by_climate: dict[str, str] = {}
     arriving_preset_fallback_targets: list[str] = []
     mode_targets: list[str] = []
     temp_targets: list[str] = []
-    preset_leaves_away = preset == "arriving"
+
     for entity_id in wanted:
-        item = state_by_id.get(entity_id) or {}
-        attrs = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
-        friendly = attrs.get("friendly_name") or entity_id
+        item = state_by_id.get(entity_id)
+        saved = saved_by_id.get(entity_id, {})
+        attrs = item.get("attributes") if isinstance(item, dict) and isinstance(item.get("attributes"), dict) else {}
+        friendly = attrs.get("friendly_name") or saved.get("name") or saved.get("friendlyName") or entity_id
+        serial = str(attrs.get("iha_serial") or attrs.get("serial") or saved.get("serial") or "").strip()
+        panel_url = _normalize_sync_panel_url(
+            attrs.get("iha_panel_url")
+            or attrs.get("iha_api_base_url")
+            or attrs.get("panel_url")
+            or saved.get("panelUrl")
+            or saved.get("panel_url")
+        )
+        is_iha = bool(panel_url) or bool(saved.get("syncCapable") or saved.get("ihaPanel"))
+        if isinstance(item, dict):
+            is_iha = is_iha or _ha_climate_item_is_iha(item)
+
         current_preset = str(attrs.get("preset_mode") or "").strip().lower()
-        serial = str(attrs.get("iha_serial") or attrs.get("serial") or "").strip()
-        is_away = current_preset == "away" or bool(attrs.get("target_temperature_locked_by_preset"))
-        door_pause_active = bool(attrs.get("door_pause_active"))
+        is_away = current_preset == "away" or bool(attrs.get("target_temperature_locked_by_preset")) or bool(saved.get("away"))
+        door_pause_active = bool(attrs.get("door_pause_active")) or bool(saved.get("doorPauseActive"))
+
+        entity_target = target
+        if target is not None:
+            if is_away and preset != "arriving":
+                skipped.append({"entityId": entity_id, "name": friendly, "reason": "away-target"})
+                entity_target = None
+            elif door_pause_active:
+                skipped.append({"entityId": entity_id, "name": friendly, "reason": "door-pause-target"})
+                entity_target = None
+
+        has_entity_action = bool(preset or hvac_mode or entity_target is not None)
+        if not has_entity_action:
+            continue
+
+        # New IHA entities use a real panel-to-panel request. A saved URL also lets
+        # Sync continue during a transient HA outage after discovery has succeeded.
+        if is_iha and panel_url:
+            try:
+                _call_direct_iha_peer(
+                    panel_url,
+                    mode=hvac_mode,
+                    target_temp=entity_target,
+                    preset_mode=preset,
+                )
+                successful.add(entity_id)
+                direct_transports.append(entity_id)
+                continue
+            except Exception as exc:
+                direct_failures[entity_id] = str(exc)
+
+        # HA fallback requires the selected climate entity to exist in the current
+        # state table. Do not report a stale/missing entity as successfully synced.
+        if not isinstance(item, dict):
+            detail = direct_failures.get(entity_id)
+            if not detail:
+                detail = "Selected climate entity was not found in Home Assistant"
+                if ha_state_error:
+                    detail += f" ({ha_state_error})"
+            errors.append({"entityId": entity_id, "name": friendly, "action": "resolve", "error": detail})
+            continue
 
         if preset:
-            preset_targets.append(entity_id)
             receiver_button = str(arriving_buttons_by_serial.get(serial) or "").strip() if serial else ""
             if preset == "arriving" and receiver_button.startswith("button."):
                 arriving_button_by_climate[entity_id] = receiver_button
@@ -7805,21 +7991,19 @@ def _call_ha_sync_thermostat_services(
                 arriving_preset_fallback_targets.append(entity_id)
         if hvac_mode:
             mode_targets.append(entity_id)
-        if target is not None:
-            if is_away and not preset_leaves_away:
-                skipped.append({"entityId": entity_id, "name": friendly, "reason": "away-target"})
-            elif door_pause_active:
-                skipped.append({"entityId": entity_id, "name": friendly, "reason": "door-pause-target"})
-            else:
-                temp_targets.append(entity_id)
+        if entity_target is not None:
+            temp_targets.append(entity_id)
 
-    successful: set[str] = set()
+    def service_error(entity_list: list[str], action: str, exc: Exception) -> None:
+        for entity_id in entity_list:
+            direct_detail = direct_failures.get(entity_id)
+            detail = str(exc)
+            if direct_detail:
+                detail = f"Direct delivery failed: {direct_detail}; Home Assistant fallback failed: {detail}"
+            errors.append({"entityId": entity_id, "action": action, "error": detail})
 
-    # Arriving first releases Away on each peer. No temperature is copied; the
-    # receiving unit restores its own dedicated pre-Away target. New IHA builds
-    # receive this through a hidden button entity, while older builds retain the
-    # standard climate preset action as a compatibility fallback.
     if preset == "arriving" and arriving_button_by_climate:
+        climate_ids = sorted(arriving_button_by_climate)
         try:
             _ha_json_request(
                 ha_url,
@@ -7828,9 +8012,10 @@ def _call_ha_sync_thermostat_services(
                 "/api/services/button/press",
                 {"entity_id": sorted(set(arriving_button_by_climate.values()))},
             )
-            successful.update(arriving_button_by_climate.keys())
+            successful.update(climate_ids)
+            fallback_transports.extend(climate_ids)
         except Exception as exc:
-            errors.append({"entityId": ",".join(sorted(arriving_button_by_climate)), "action": "arriving", "error": str(exc)})
+            service_error(climate_ids, "arriving", exc)
 
     if preset and arriving_preset_fallback_targets:
         try:
@@ -7842,24 +8027,39 @@ def _call_ha_sync_thermostat_services(
                 {"entity_id": arriving_preset_fallback_targets, "preset_mode": preset},
             )
             successful.update(arriving_preset_fallback_targets)
+            fallback_transports.extend(arriving_preset_fallback_targets)
         except Exception as exc:
-            errors.append({"entityId": ",".join(arriving_preset_fallback_targets), "action": "preset", "error": str(exc)})
+            service_error(arriving_preset_fallback_targets, "preset", exc)
 
     if hvac_mode and mode_targets:
         try:
-            _ha_json_request(ha_url, token, "POST", "/api/services/climate/set_hvac_mode", {"entity_id": mode_targets, "hvac_mode": hvac_mode})
+            _ha_json_request(
+                ha_url,
+                token,
+                "POST",
+                "/api/services/climate/set_hvac_mode",
+                {"entity_id": mode_targets, "hvac_mode": hvac_mode},
+            )
             successful.update(mode_targets)
+            fallback_transports.extend(mode_targets)
         except Exception as exc:
-            errors.append({"entityId": ",".join(mode_targets), "action": "mode", "error": str(exc)})
+            service_error(mode_targets, "mode", exc)
 
     if target is not None and temp_targets:
         try:
-            _ha_json_request(ha_url, token, "POST", "/api/services/climate/set_temperature", {"entity_id": temp_targets, "temperature": target})
+            _ha_json_request(
+                ha_url,
+                token,
+                "POST",
+                "/api/services/climate/set_temperature",
+                {"entity_id": temp_targets, "temperature": target},
+            )
             successful.update(temp_targets)
+            fallback_transports.extend(temp_targets)
         except Exception as exc:
-            errors.append({"entityId": ",".join(temp_targets), "action": "temperature", "error": str(exc)})
+            service_error(temp_targets, "temperature", exc)
 
-    if preset_targets or mode_targets or temp_targets:
+    if arriving_button_by_climate or arriving_preset_fallback_targets or mode_targets or temp_targets:
         _invalidate_ha_state_cache(ha_url, token)
 
     synced_ids = sorted(successful)
@@ -7872,6 +8072,8 @@ def _call_ha_sync_thermostat_services(
         "mode": hvac_mode,
         "targetTemp": target,
         "presetMode": preset,
+        "direct": sorted(set(direct_transports)),
+        "homeAssistantFallback": sorted(set(fallback_transports)),
     }
 
 
@@ -7915,7 +8117,7 @@ def _sync_status_payload() -> dict:
 
 
 def _set_sync_arm(payload: dict | None = None) -> dict:
-    global _SYNC_ARMED_UNTIL, _SYNC_ARM_SOURCE
+    global _SYNC_ARMED_UNTIL, _SYNC_ARM_SOURCE, _SYNC_LAST_REQUEST_SIGNATURE, _SYNC_LAST_REQUEST_AT
     request_payload = payload if isinstance(payload, dict) else {}
     context = _sync_panel_context()
     if not context.get("entityIds"):
@@ -7936,7 +8138,12 @@ def _set_sync_arm(payload: dict | None = None) -> dict:
         if action in {"off", "disable", "disarm", "cancel"} or (action == "toggle" and currently_active):
             _SYNC_ARMED_UNTIL = 0.0
             _SYNC_ARM_SOURCE = ""
+            _SYNC_LAST_REQUEST_SIGNATURE = ""
+            _SYNC_LAST_REQUEST_AT = 0.0
         else:
+            if not currently_active:
+                _SYNC_LAST_REQUEST_SIGNATURE = ""
+                _SYNC_LAST_REQUEST_AT = 0.0
             _SYNC_ARMED_UNTIL = time.monotonic() + duration
             _SYNC_ARM_SOURCE = source
     return _sync_status_payload()
@@ -7985,39 +8192,86 @@ def _sync_changes_from_control_payload(payload: dict, accepted: dict | None = No
 
 
 def _schedule_armed_thermostat_sync(changes: dict) -> dict:
-    """Queue an explicit peer-sync command when the shared window is armed.
+    """Queue one peer Sync operation while the shared window is armed.
 
-    Returning a structured result lets the touchscreen and Home Assistant use
-    the same backend operation without having to infer whether a background
-    worker was actually started. The selected peer list and Home Assistant
-    credentials are snapshotted before the worker starts so a later settings
-    refresh cannot change the in-flight command.
+    Both the thermostat control endpoint and explicit UI/HA dispatch path observe
+    the same command. Suppress the duplicate copy for a brief interval so every
+    user action reaches each destination exactly once.
     """
-    global _SYNC_LAST_RESULT
+    global _SYNC_LAST_RESULT, _SYNC_LAST_REQUEST_SIGNATURE, _SYNC_LAST_REQUEST_AT
     status = _sync_status_payload()
     if not isinstance(changes, dict) or not changes:
         return {"ok": False, "queued": False, "active": bool(status.get("active")), "error": "Nothing to sync"}
     if not status.get("active"):
         return {"ok": True, "queued": False, "active": False, "reason": "sync-not-armed"}
 
+    payload: dict[str, object] = {}
+    mode = _sync_hvac_mode_for_ha(changes.get("mode", changes.get("hvacMode", changes.get("hvac_mode"))))
+    if mode:
+        payload["mode"] = mode
+    preset = _sync_preset_mode_for_ha(changes.get("presetMode", changes.get("preset_mode", changes.get("preset"))))
+    if preset:
+        payload["presetMode"] = preset
+    target = None
+    for key in ("targetTemp", "target_temperature", "temperature", "targetTemperature"):
+        if key in changes:
+            target = _sync_target_temperature(changes.get(key))
+            break
+    if target is not None:
+        payload["targetTemp"] = target
+    if not payload:
+        return {"ok": False, "queued": False, "active": True, "error": "Nothing to sync"}
+
     context = _sync_panel_context()
-    if not context.get("url") or not context.get("token") or not context.get("entityIds"):
+    if not context.get("entityIds"):
         result = {
             "ok": False,
             "queued": False,
             "active": True,
-            "error": "Sync is armed, but Home Assistant connection details or peer thermostats are missing.",
+            "error": "Sync is armed, but no peer thermostats are configured.",
             "at": int(time.time() * 1000),
         }
         with _SYNC_ARM_LOCK:
             _SYNC_LAST_RESULT = result
         return result
 
-    payload = dict(changes)
+    # A direct panel URL can carry Sync through a temporary HA outage. If none of
+    # the selected peers has one yet, HA credentials remain required for discovery
+    # and the compatibility service fallback.
+    peers = list(context.get("peers") or [])
+    has_saved_direct_peer = any(_normalize_sync_panel_url(peer.get("panelUrl")) for peer in peers if isinstance(peer, dict))
+    if (not context.get("url") or not context.get("token")) and not has_saved_direct_peer:
+        result = {
+            "ok": False,
+            "queued": False,
+            "active": True,
+            "error": "Sync is armed, but Home Assistant connection details are missing.",
+            "at": int(time.time() * 1000),
+        }
+        with _SYNC_ARM_LOCK:
+            _SYNC_LAST_RESULT = result
+        return result
+
+    signature = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    now = time.monotonic()
+    with _SYNC_ARM_LOCK:
+        if signature == _SYNC_LAST_REQUEST_SIGNATURE and now - float(_SYNC_LAST_REQUEST_AT or 0.0) <= 1.5:
+            return {
+                "ok": True,
+                "queued": False,
+                "active": True,
+                "reason": "duplicate-suppressed",
+                "configuredCount": len(context.get("entityIds") or []),
+                "requested": payload,
+            }
+        _SYNC_LAST_REQUEST_SIGNATURE = signature
+        _SYNC_LAST_REQUEST_AT = now
+
     context_snapshot = {
         "url": str(context.get("url") or ""),
         "token": str(context.get("token") or ""),
         "entityIds": list(context.get("entityIds") or []),
+        "peers": _deepcopy_json(peers),
     }
 
     def _worker() -> None:
@@ -8030,6 +8284,7 @@ def _schedule_armed_thermostat_sync(changes: dict) -> dict:
                 mode=payload.get("mode"),
                 target_temp=payload.get("targetTemp"),
                 preset_mode=payload.get("presetMode"),
+                peer_metadata=context_snapshot["peers"],
             )
         except Exception as exc:  # noqa: BLE001 - sync must never block local HVAC control
             result = {"ok": False, "error": str(exc), "synced": [], "errors": [{"error": str(exc)}]}
@@ -8047,6 +8302,7 @@ def _schedule_armed_thermostat_sync(changes: dict) -> dict:
         "configuredCount": len(context_snapshot["entityIds"]),
         "requested": payload,
     }
+
 
 def _normalize_weather_item(item: dict) -> dict:
     attrs = item.get("attributes") or {}
@@ -8880,6 +9136,17 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                 return _json(self, 200, {"ok": True, "thermostats": peers, "count": len(peers)})
 
             if path == "/api/sync/dispatch":
+                # The wall screen can be tapped again immediately after Sync. If
+                # its arm request and command arrive on separate server threads,
+                # make the command deterministic by arming here only when needed.
+                if bool(payload.get("ensureArmed")) and not _sync_status_payload().get("active"):
+                    arm_result = _set_sync_arm({
+                        "action": "arm",
+                        "durationSeconds": payload.get("durationSeconds", SYNC_ARM_DURATION_SECONDS),
+                        "source": payload.get("source", "touchscreen"),
+                    })
+                    if not arm_result.get("ok"):
+                        return _json(self, 400, arm_result)
                 raw_changes = payload.get("changes") if isinstance(payload.get("changes"), dict) else payload
                 changes = _sync_changes_from_control_payload(raw_changes, {})
                 result = _schedule_armed_thermostat_sync(changes)
@@ -8893,6 +9160,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                     mode=payload.get("mode", payload.get("hvacMode", payload.get("hvac_mode"))),
                     target_temp=payload.get("targetTemp", payload.get("target_temperature", payload.get("temperature"))),
                     preset_mode=payload.get("presetMode", payload.get("preset_mode", payload.get("preset"))),
+                    peer_metadata=payload.get("peers") if isinstance(payload.get("peers"), list) else None,
                 )
                 return _json(self, 200 if result.get("ok") else 500, result)
 

@@ -1628,8 +1628,14 @@ class AppState:
         away: bool = False,
         hold_seconds: float = 14.0,
         presence_home_override: dict | None = None,
+        clear_presence_home_override: bool = False,
     ):
-        """Hold a just-requested local mode against one stale status refresh."""
+        """Hold a just-requested local mode against stale status refreshes.
+
+        ``None`` historically meant "do not alter the presence override".  The
+        Arriving toggle also needs an explicit clear operation, so keep that
+        compatibility and expose a separate flag for the clear case.
+        """
         mode = str(mode or "").strip().lower()
         if mode not in {"off", "heat", "cool", "away"}:
             return
@@ -1638,7 +1644,9 @@ class AppState:
             "away": bool(away or mode == "away"),
             "awaySource": "manual" if (away or mode == "away") else "",
         }
-        if presence_home_override is not None:
+        if clear_presence_home_override:
+            override["presenceHomeOverride"] = None
+        elif presence_home_override is not None:
             override["presenceHomeOverride"] = copy.deepcopy(presence_home_override)
         self._mode_override = override
         self._mode_override_until = time.monotonic() + max(1.0, float(hold_seconds))
@@ -4596,32 +4604,55 @@ class ThermostatScreen(Page):
         if mode not in {"off", "heat", "cool", "away", "arriving"}:
             return
         before_tap = copy.deepcopy(self.thermostat_view())
+        arriving_was_active = mode == "arriving" and self.arriving_override_active(before_tap)
         if mode == "arriving":
-            arriving_override = self.arriving_override_payload(before_tap)
-            changes = {
-                "away": False,
-                "awaySource": "",
-                "manualAwayPresenceLatch": None,
-                "presenceHomeOverride": arriving_override,
-            }
             resume_mode = str(before_tap.get("mode") or "cool").lower()
             if resume_mode == "auto":
                 resume_mode = str(before_tap.get("autoActiveMode") or before_tap.get("activeMode") or "cool").lower()
             if resume_mode not in {"heat", "cool", "off"}:
                 resume_mode = "cool"
-            self.s.set_mode_override(resume_mode, away=False, presence_home_override=arriving_override)
-            self.s.thermostat["away"] = False
-            self.s.thermostat["awaySource"] = ""
-            self.s.thermostat["manualAwayPresenceLatch"] = None
-            self.s.thermostat["presenceHomeOverride"] = copy.deepcopy(arriving_override)
-            restore_target = before_tap.get("preAwayTargetTemp")
-            if restore_target is None:
-                restore_target = before_tap.get("lastComfortTarget")
-            if restore_target is not None:
-                # Optimistic display only. The backend performs the authoritative
-                # restore and clears preAwayTargetTemp after leaving Away.
-                self.s.thermostat["targetTemp"] = restore_target
-                self.s.thermostat["lastComfortTarget"] = restore_target
+
+            if arriving_was_active:
+                # Arriving is a true screen toggle. A second tap clears only the
+                # temporary two-hour presence bypass and immediately reveals the
+                # underlying Heat/Cool/Off mode. This is intentionally local: it
+                # must not turn into a synced Return Home command.
+                changes = {
+                    "away": False,
+                    "awaySource": "",
+                    "manualAwayPresenceLatch": None,
+                    "presenceHomeOverride": None,
+                }
+                self.s.set_mode_override(
+                    resume_mode,
+                    away=False,
+                    clear_presence_home_override=True,
+                )
+                self.s.thermostat["away"] = False
+                self.s.thermostat["awaySource"] = ""
+                self.s.thermostat["manualAwayPresenceLatch"] = None
+                self.s.thermostat["presenceHomeOverride"] = None
+            else:
+                arriving_override = self.arriving_override_payload(before_tap)
+                changes = {
+                    "away": False,
+                    "awaySource": "",
+                    "manualAwayPresenceLatch": None,
+                    "presenceHomeOverride": arriving_override,
+                }
+                self.s.set_mode_override(resume_mode, away=False, presence_home_override=arriving_override)
+                self.s.thermostat["away"] = False
+                self.s.thermostat["awaySource"] = ""
+                self.s.thermostat["manualAwayPresenceLatch"] = None
+                self.s.thermostat["presenceHomeOverride"] = copy.deepcopy(arriving_override)
+                restore_target = before_tap.get("preAwayTargetTemp")
+                if restore_target is None:
+                    restore_target = before_tap.get("lastComfortTarget")
+                if restore_target is not None:
+                    # Optimistic display only. The backend performs the authoritative
+                    # restore and clears preAwayTargetTemp after leaving Away.
+                    self.s.thermostat["targetTemp"] = restore_target
+                    self.s.thermostat["lastComfortTarget"] = restore_target
         elif mode == "away":
             going_away = not bool(before_tap.get("away"))
             changes = {"away": going_away, "awaySource": "manual" if going_away else ""}
@@ -4663,9 +4694,10 @@ class ThermostatScreen(Page):
                     self.s.thermostat["manualPendingMode"] = ""
                     self.s.thermostat["manualLockoutUntil"] = 0
         self.sync(self.s.config, self.s.thermostat)
-        if mode == "arriving":
+        if mode == "arriving" and not arriving_was_active:
             # Each peer leaves Away and restores its own pre-Away temperature.
-            # Do not send this panel's setpoint with the Arriving command.
+            # Do not send this panel's setpoint with the Arriving command. A
+            # second Arriving tap is local-only because Return Home must not sync.
             self.request_peer_sync({"presetMode": "arriving"})
         elif mode in {"off", "heat", "cool"}:
             # HVAC selection is shared, but Away/Home status remains independent
@@ -7945,6 +7977,9 @@ class ThermostatSyncSelectionDialog(QDialog):
                     "name": str(peer.get("name") or peer.get("friendlyName") or peer.get("friendly_name") or eid),
                     "state": str(peer.get("state") or "unknown"),
                     "domain": "climate",
+                    "serial": str(peer.get("serial") or peer.get("ihaSerial") or ""),
+                    "panelUrl": str(peer.get("panelUrl") or peer.get("panel_url") or ""),
+                    "syncCapable": bool(peer.get("syncCapable", peer.get("ihaPanel", False))),
                     "selected": True,
                 }
         try:
@@ -7961,6 +7996,9 @@ class ThermostatSyncSelectionDialog(QDialog):
                         "domain": "climate",
                         "away": bool(peer.get("away")),
                         "doorPauseActive": bool(peer.get("doorPauseActive")),
+                        "serial": str(peer.get("serial") or peer.get("ihaSerial") or ""),
+                        "panelUrl": str(peer.get("panelUrl") or peer.get("panel_url") or ""),
+                        "syncCapable": bool(peer.get("syncCapable", peer.get("ihaPanel", False))),
                         "selected": eid in self.selected_ids() or bool(peer.get("selected")),
                     }
         except Exception as exc:
@@ -8063,7 +8101,15 @@ class ThermostatSyncSelectionDialog(QDialog):
         if eid in self.selected_ids():
             self.selected_peers = [p for p in self.selected_peers if str(p.get("entityId") or "") != eid]
         else:
-            self.selected_peers.append({"entityId": eid, "name": str(peer.get("name") or eid), "state": str(peer.get("state") or "unknown"), "domain": "climate"})
+            self.selected_peers.append({
+                "entityId": eid,
+                "name": str(peer.get("name") or eid),
+                "state": str(peer.get("state") or "unknown"),
+                "domain": "climate",
+                "serial": str(peer.get("serial") or peer.get("ihaSerial") or ""),
+                "panelUrl": str(peer.get("panelUrl") or peer.get("panel_url") or ""),
+                "syncCapable": bool(peer.get("syncCapable", peer.get("ihaPanel", False))),
+            })
         self.refresh()
 
     def clear_all(self):
@@ -8080,7 +8126,15 @@ class ThermostatSyncSelectionDialog(QDialog):
             if not eid.startswith("climate.") or eid in seen:
                 continue
             seen.add(eid)
-            clean.append({"entityId": eid, "name": str(peer.get("name") or peer.get("friendlyName") or peer.get("friendly_name") or eid), "domain": "climate", "state": str(peer.get("state") or "unknown")})
+            clean.append({
+                "entityId": eid,
+                "name": str(peer.get("name") or peer.get("friendlyName") or peer.get("friendly_name") or eid),
+                "domain": "climate",
+                "state": str(peer.get("state") or "unknown"),
+                "serial": str(peer.get("serial") or peer.get("ihaSerial") or ""),
+                "panelUrl": str(peer.get("panelUrl") or peer.get("panel_url") or ""),
+                "syncCapable": bool(peer.get("syncCapable", peer.get("ihaPanel", False))),
+            })
         self.saved.emit(clean)
         self.accept()
 
@@ -9634,6 +9688,9 @@ class SettingsDialog(QDialog):
                     "available": bool(peer.get("available", True)),
                     "away": bool(peer.get("away", False)),
                     "doorPauseActive": bool(peer.get("doorPauseActive", False)),
+                    "serial": str(peer.get("serial") or peer.get("ihaSerial") or ""),
+                    "panelUrl": str(peer.get("panelUrl") or peer.get("panel_url") or ""),
+                    "syncCapable": bool(peer.get("syncCapable", peer.get("ihaPanel", False))),
                 })
         return clean
 
@@ -9669,6 +9726,9 @@ class SettingsDialog(QDialog):
                         "available": bool(peer.get("available", True)),
                         "away": bool(peer.get("away", False)),
                         "doorPauseActive": bool(peer.get("doorPauseActive", False)),
+                        "serial": str(peer.get("serial") or peer.get("ihaSerial") or ""),
+                        "panelUrl": str(peer.get("panelUrl") or peer.get("panel_url") or ""),
+                        "syncCapable": bool(peer.get("syncCapable", peer.get("ihaPanel", False))),
                     })
                 ha = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
                 ha["syncThermostatEntities"] = copy.deepcopy(clean)
@@ -11688,6 +11748,9 @@ class MainWindow(Background):
                 clean.append({
                     "entityId": entity_id,
                     "name": str(peer.get("name") or peer.get("friendly_name") or entity_id),
+                    "serial": str(peer.get("serial") or peer.get("ihaSerial") or ""),
+                    "panelUrl": str(peer.get("panelUrl") or peer.get("panel_url") or ""),
+                    "syncCapable": bool(peer.get("syncCapable", peer.get("ihaPanel", False))),
                 })
             return clean
         except Exception:
@@ -11770,9 +11833,9 @@ class MainWindow(Background):
             self.update_sync_button_state()
             return
 
-        # Update the touchscreen immediately. The backend receives an atomic
-        # toggle request, so two quick taps always end where the user expects
-        # even if the HTTP responses arrive out of order.
+        # Update the touchscreen immediately, then send the explicit desired
+        # state. Using arm/off instead of a blind backend toggle prevents a stale
+        # local status snapshot from accidentally turning Sync the wrong way.
         turning_on = not self.sync_is_active()
         self._sync_toggle_generation = int(getattr(self, "_sync_toggle_generation", 0) or 0) + 1
         generation = self._sync_toggle_generation
@@ -11808,7 +11871,7 @@ class MainWindow(Background):
             f"sync-toggle-{generation}",
             lambda: self.s.api.post(
                 "/api/sync/arm",
-                {"action": "toggle", "durationSeconds": 30, "source": "touchscreen"},
+                {"action": "arm" if turning_on else "off", "durationSeconds": 30, "source": "touchscreen"},
                 timeout=4.0,
             ),
             done,
@@ -11872,8 +11935,12 @@ class MainWindow(Background):
         if not peers or not changes:
             return
         self._sync_pending_changes = {}
-        payload = {"entityIds": [peer.get("entityId") for peer in peers]}
-        payload.update(changes)
+        payload = {
+            "changes": changes,
+            "ensureArmed": True,
+            "durationSeconds": 30,
+            "source": "touchscreen",
+        }
         self._sync_apply_running = True
 
         def done(result):
@@ -11899,7 +11966,7 @@ class MainWindow(Background):
 
         self.run_async(
             "peer-sync",
-            lambda: self.s.api.post("/api/sync/apply", self.s.ha_payload(payload), timeout=10.0),
+            lambda: self.s.api.post("/api/sync/dispatch", payload, timeout=10.0),
             done,
             failed,
         )
