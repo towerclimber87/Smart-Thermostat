@@ -1192,7 +1192,7 @@ class Page(QWidget):
 
 
 class ScreenLockButton(QAbstractButton):
-    """Top-left page lock pill. Locked mode keeps the panel on Thermostat."""
+    """Top-left control lock pill for the wall-panel guest-safe mode."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.locked = False
@@ -1202,7 +1202,11 @@ class ScreenLockButton(QAbstractButton):
 
     def setLocked(self, locked: bool):
         self.locked = bool(locked)
-        self.setToolTip("Locked to Thermostat" if self.locked else "Tap to lock to Thermostat")
+        self.setToolTip(
+            "Locked: temperature and alarm controls only"
+            if self.locked
+            else "Tap to lock all controls except temperature and alarm"
+        )
         self.update()
 
     def mouseReleaseEvent(self, event):
@@ -1471,10 +1475,12 @@ class Header(QWidget):
 
     def set_locked(self, locked: bool):
         self.lock_button.setLocked(locked)
-        # Keep Thermostat selectable, but grey out the other tabs while the
-        # page lock is engaged. MainWindow still enforces this in set_page().
-        for name, btn in self.nav.buttons.items():
-            btn.setEnabled((not locked) or name == "Thermostat")
+        # The lock pill itself remains available so the owner can unlock. Every
+        # other header action is disabled while the panel is in guest-safe mode.
+        for btn in self.nav.buttons.values():
+            btn.setEnabled(not locked)
+        self.info.setEnabled(not locked)
+        self.gear.setEnabled(not locked)
 
     def update_time(self):
         try:
@@ -3119,6 +3125,7 @@ class PersonPresenceStrip(QWidget):
 class ThermostatScreen(Page):
     def __init__(self, app_state: AppState, parent=None):
         super().__init__(app_state, parent)
+        self._screen_locked = False
         self.dial = ThermostatDial()
         self.dial.setMaximumSize(470, 470)
         self.mode_buttons: dict[str, RoundButton] = {}
@@ -3343,7 +3350,7 @@ class ThermostatScreen(Page):
 
         self.minus.clicked.connect(lambda: self.change_target(-1))
         self.plus.clicked.connect(lambda: self.change_target(1))
-        self.dial.targetChanged.connect(lambda v: self.set_target(v))
+        self.dial.targetChanged.connect(self.set_target_from_dial)
         # Doors already show their live state on the tile; no extra source toast is needed.
         self.alarm_card.clicked.connect(self.show_alarm_dialog)
 
@@ -3371,6 +3378,74 @@ class ThermostatScreen(Page):
         self.fx_timer.start(1000)
         self.notice.hide()
         QTimer.singleShot(0, self.position_alert_banner)
+
+    def screen_control_locked(self) -> bool:
+        return bool(getattr(self, "_screen_locked", False))
+
+    def reject_locked_control(self) -> bool:
+        if not self.screen_control_locked():
+            return False
+        self.requestToast.emit("Screen locked: temperature and alarm controls only")
+        return True
+
+    def set_screen_locked(self, locked: bool):
+        self._screen_locked = bool(locked)
+        self.apply_screen_lock_state()
+
+    def apply_screen_lock_state(self):
+        """Apply guest-safe lockout without disabling +/- or Alarmo.
+
+        This is repeated after each thermostat sync because schedule shortcuts
+        and Away overlays can be recreated or shown from fresh runtime state.
+        """
+        locked = self.screen_control_locked()
+
+        # These controls can change operating mode, fan mode, schedules, pause
+        # behavior, diagnostics, or test values and are therefore unavailable.
+        blocked_widgets = [
+            self.dial,
+            self.schedule_button,
+            self.schedule_shortcuts,
+            self.door_card,
+            self.bypass_pill,
+            self.notice,
+            self.away_home_button,
+            self.away_overlay,
+            self.virtual_panel,
+        ]
+        for widget in blocked_widgets:
+            widget.setEnabled(not locked)
+
+        for button in self.mode_buttons.values():
+            button.setEnabled(not locked)
+        for button in self.fan_buttons.values():
+            button.setEnabled(not locked)
+        if self.fan_status_button is not None:
+            self.fan_status_button.setEnabled(not locked)
+
+        if hasattr(self, "alert_banner"):
+            self.alert_banner.setEnabled(not locked)
+            self.alert_banner.setAttribute(Qt.WA_TransparentForMouseEvents, locked)
+        if hasattr(self, "notice_action_popup"):
+            self.notice_action_popup.setEnabled(not locked)
+            if locked and self.notice_action_popup.isVisible():
+                self.notice_action_popup.hide()
+
+        # Away normally uses a full-page Return Home overlay. Hide that overlay
+        # while locked so the two permitted temperature buttons and Alarmo card
+        # remain reachable. The selected Away mode pill still shows the state.
+        if locked and self.away_overlay.isVisible():
+            self.away_overlay.hide()
+
+        # Temperature +/- and Alarmo are the only thermostat-page actions that
+        # remain usable. Preserve the existing rule that +/- are unavailable
+        # when the thermostat is Off and not in Away.
+        t = self.thermostat_view()
+        mode = str(t.get("mode") or "cool").lower()
+        setpoint_available = mode != "off" or bool(t.get("away"))
+        self.minus.setEnabled(setpoint_available)
+        self.plus.setEnabled(setpoint_available)
+        self.alarm_card.setEnabled(True)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -4204,6 +4279,8 @@ class ThermostatScreen(Page):
             self.notice_action_popup.hide()
 
     def show_auto_switch_menu(self):
+        if self.reject_locked_control():
+            return
         t = self.thermostat_view()
         notice = t.get("autoSwitchNotice") if isinstance(t.get("autoSwitchNotice"), dict) else {}
         hold = t.get("autoSwitchHold") if isinstance(t.get("autoSwitchHold"), dict) else {}
@@ -4226,6 +4303,8 @@ class ThermostatScreen(Page):
             self.set_mode(mode)
 
     def dismiss_auto_switch(self):
+        if self.reject_locked_control():
+            return
         self.hide_notice_action_popup()
         t = self.thermostat_view()
         notice = t.get("autoSwitchNotice") if isinstance(t.get("autoSwitchNotice"), dict) else {}
@@ -4259,6 +4338,8 @@ class ThermostatScreen(Page):
             self.requestToast.emit(f"Dismiss failed: {exc}")
 
     def dismiss_manual_override_notice(self):
+        if self.reject_locked_control():
+            return
         self.hide_notice_action_popup()
         t = self.thermostat_view()
         hold = t.get("autoSwitchHold") if isinstance(t.get("autoSwitchHold"), dict) else {}
@@ -4279,6 +4360,8 @@ class ThermostatScreen(Page):
             self.requestToast.emit(f"Dismiss failed: {exc}")
 
     def revert_auto_switch(self):
+        if self.reject_locked_control():
+            return
         self.hide_notice_action_popup()
         t = self.thermostat_view()
         notice = t.get("autoSwitchNotice") if isinstance(t.get("autoSwitchNotice"), dict) else {}
@@ -4299,6 +4382,8 @@ class ThermostatScreen(Page):
             self.requestToast.emit(f"Revert failed: {exc}")
 
     def bypass_changeover_lockout(self):
+        if self.reject_locked_control():
+            return
         if getattr(self.alert_banner, "kind", "") == "door-pause":
             self.snooze_door_pause()
             return
@@ -4411,6 +4496,8 @@ class ThermostatScreen(Page):
         self.door_countdown.show()
 
     def snooze_door_pause(self):
+        if self.reject_locked_control():
+            return
         pause = self.s.thermostat.setdefault("pauseFunction", {})
         duration_minutes = int(max(1, min(60, round(self.safe_float(pause.get("durationMinutes") if isinstance(pause, dict) else 5, 5.0)))))
         changes = {"pauseFunction": {"action": "resume"}}
@@ -4479,10 +4566,13 @@ class ThermostatScreen(Page):
                 }
             """)
             b.clicked.connect(lambda checked=False, s=copy.deepcopy(sched): self.apply_schedule_now(s))
+            b.setEnabled(not self.screen_control_locked())
             self.schedule_shortcuts_lay.addWidget(b)
         self.schedule_shortcuts_lay.addStretch(1)
 
     def open_schedule_manager(self):
+        if self.reject_locked_control():
+            return
         if getattr(self, "_schedule_dialog_open", False):
             return
         self._schedule_dialog_open = True
@@ -4502,6 +4592,8 @@ class ThermostatScreen(Page):
             self._schedule_dialog_open = False
 
     def apply_schedule_now(self, sched: dict):
+        if self.reject_locked_control():
+            return
         mode = str(self.thermostat_view().get("mode") or "cool").lower()
         active = str(self.thermostat_view().get("autoActiveMode") or "").lower()
         effective = active if mode == "auto" and active in {"heat", "cool"} else mode
@@ -4582,6 +4674,8 @@ class ThermostatScreen(Page):
         return bool(relays.get("cool") or outputs.get("cool") or hvac_action == "cooling" or minimum_runtime_cooling)
 
     def show_fan_menu(self):
+        if self.reject_locked_control():
+            return
         if not self.fan_status_button:
             return
         t = self.thermostat_view()
@@ -4649,6 +4743,8 @@ class ThermostatScreen(Page):
         return until if until > now_ms else 0
 
     def request_peer_sync(self, changes: dict) -> bool:
+        if self.screen_control_locked():
+            return False
         top = self.window()
         if hasattr(top, "request_peer_sync"):
             try:
@@ -4691,6 +4787,8 @@ class ThermostatScreen(Page):
         return expires_at <= 0 or expires_at > time.time() * 1000
 
     def set_mode(self, mode: str):
+        if self.reject_locked_control():
+            return
         mode = str(mode or "").strip().lower()
         if mode not in {"off", "heat", "cool", "away", "arriving"}:
             return
@@ -4808,6 +4906,8 @@ class ThermostatScreen(Page):
         )
 
     def return_home_from_away(self):
+        if self.reject_locked_control():
+            return
         now = time.monotonic()
         if now - getattr(self, "_return_home_requested_at", 0.0) < 0.75:
             return
@@ -4861,6 +4961,8 @@ class ThermostatScreen(Page):
         )
 
     def set_fan(self, fan: str):
+        if self.reject_locked_control():
+            return
         fan = str(fan or "auto").strip().lower()
         if fan not in {"off", "on", "auto"}:
             fan = "auto"
@@ -4894,6 +4996,11 @@ class ThermostatScreen(Page):
         step = 1 if delta >= 0 else -1
         self.set_target(float(t.get("targetTemp", t.get("target_temp", 70))) + step)
 
+    def set_target_from_dial(self, value: float):
+        if self.reject_locked_control():
+            return
+        self.set_target(value)
+
     def set_target(self, value: float):
         try:
             t = self.thermostat_view()
@@ -4917,6 +5024,7 @@ class ThermostatScreen(Page):
         self.sync(self.s.config, self.s.thermostat)
         if not bool(t.get("away")):
             self.request_peer_sync({"targetTemp": val})
+        suppress_peer_sync = self.screen_control_locked()
 
         def done(result):
             if isinstance(result, dict):
@@ -4925,12 +5033,19 @@ class ThermostatScreen(Page):
 
         self.run_async(
             "thermostat-target",
-            lambda: self.s.api.thermostat_update({"targetTemp": val, "lastComfortTarget": val, "targetChangeSource": "panel"}),
+            lambda: self.s.api.thermostat_update({
+                "targetTemp": val,
+                "lastComfortTarget": val,
+                "targetChangeSource": "panel",
+                "suppressPeerSync": suppress_peer_sync,
+            }),
             done,
             lambda err: (self.s.clear_target_override(), self.requestToast.emit(f"Set temp failed: {err}")),
         )
 
     def set_virtual_temp(self, value: float):
+        if self.reject_locked_control():
+            return
         self.virtual_temp_pending = float(value)
         self.s.thermostat["currentTemp"] = float(value)
         self.s.thermostat["currentTempSource"] = "virtual"
@@ -5172,7 +5287,7 @@ class ThermostatScreen(Page):
             self.person_presence_strip.update_people(t.get("people") or [])
         self.notice.hide()
         self.refresh_schedule_shortcuts()
-        if away:
+        if away and not self.screen_control_locked():
             source = str(t.get("awaySource") or "").lower()
             if source == "presence":
                 self.away_body.setText("No assigned Auto Away users are home. Tap Return Home to hold Home until one assigned Auto Away user reports Home again.")
@@ -5192,6 +5307,7 @@ class ThermostatScreen(Page):
         self.alarm_card.setValue(str(alarm.get("state") or "disarmed").upper())
         self.alarm_card.setAlarmState(str(alarm.get("state") or "disarmed"))
         self.virtual_panel.updateData(t)
+        self.apply_screen_lock_state()
 
     def poll(self):
         # Keep thermostat page light. Expensive HA polling is done only for cards with configured entities.
@@ -9495,6 +9611,11 @@ class SettingsDialog(QDialog):
         header.addWidget(self.done)
         root.addLayout(header)
 
+        section_hint = QLabel("Tap a section to view and edit its settings.")
+        section_hint.setFont(font(9, QFont.Bold))
+        section_hint.setStyleSheet("color:#9fb0c8; background:transparent; border:0; padding:1px 3px 4px 3px;")
+        root.addWidget(section_hint)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -9503,12 +9624,21 @@ class SettingsDialog(QDialog):
         body.setStyleSheet("background:transparent;")
         scroll.viewport().setStyleSheet("background:transparent;")
         self.grid = QGridLayout(body)
-        self.grid.setSpacing(4)
-        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setSpacing(8)
+        self.grid.setContentsMargins(4, 2, 4, 6)
         for col in range(4):
             self.grid.setColumnStretch(col, 1)
         scroll.setWidget(body)
         root.addWidget(scroll, 1)
+
+        # The main Comfort Setup screen is intentionally only a section index.
+        # Each section keeps its real controls alive in hidden storage and is
+        # temporarily moved into a centered modal when its header is tapped.
+        # This preserves every existing signal, state reference, and save path.
+        self._section_entries: list[dict] = []
+        self._section_storage = QWidget(self)
+        self._section_storage.hide()
+        self._active_section_dialog: QDialog | None = None
 
         self.controls: dict[str, QLabel] = {}
         self.value_control_widgets: dict[str, dict] = {}
@@ -9524,6 +9654,7 @@ class SettingsDialog(QDialog):
         self.thermostatUpdateCompleted.connect(self.handle_settings_update_completed)
         self.settingsSaveCompleted.connect(self.handle_save_all_completed)
         self.build()
+        self.finalize_section_index()
         self.done.clicked.connect(self.close_settings)
         self.hardware.clicked.connect(self.show_hardware)
         self.history.clicked.connect(self.show_history)
@@ -9675,17 +9806,197 @@ class SettingsDialog(QDialog):
     def add_section_value(self, layout: QGridLayout, key: str, label: str, value, row: int, col: int, low=None, high=None, suffix="°", colspan: int = 1):
         layout.addWidget(self.value_control(key, label, value, low, high, suffix), row, col, 1, colspan)
 
+    def section_header_button(self, title: str) -> QPushButton:
+        button = QPushButton()
+        button.setCursor(Qt.PointingHandCursor)
+        button.setAccessibleName(title)
+        button.setMinimumHeight(54)
+        button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        button.setStyleSheet("""
+            QPushButton {
+                background:qlineargradient(x1:0,y1:0,x2:1,y2:0,
+                    stop:0 rgba(25,39,64,0.98),
+                    stop:0.72 rgba(12,24,44,0.98),
+                    stop:1 rgba(8,18,34,0.98));
+                border:1px solid rgba(111,139,166,0.42);
+                border-radius:14px;
+                padding:0;
+            }
+            QPushButton:hover {
+                border:1px solid rgba(85,240,255,0.72);
+                background:qlineargradient(x1:0,y1:0,x2:1,y2:0,
+                    stop:0 rgba(31,56,86,0.99),
+                    stop:1 rgba(10,27,49,0.99));
+            }
+            QPushButton:pressed {
+                border:2px solid rgba(85,240,255,0.92);
+                background:qlineargradient(x1:0,y1:0,x2:1,y2:0,
+                    stop:0 rgba(26,73,101,0.99),
+                    stop:1 rgba(10,34,58,0.99));
+            }
+        """)
+        row_layout = QHBoxLayout(button)
+        row_layout.setContentsMargins(18, 0, 16, 0)
+        row_layout.setSpacing(10)
+        title_label = QLabel(title)
+        title_label.setFont(font(13, QFont.Black))
+        title_label.setStyleSheet("color:#f7fbff; background:transparent; border:0;")
+        title_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        arrow = QLabel("›")
+        arrow.setAlignment(Qt.AlignCenter)
+        arrow.setFixedWidth(28)
+        arrow.setFont(font(24, QFont.Black))
+        arrow.setStyleSheet("color:#55f0ff; background:transparent; border:0;")
+        arrow.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        row_layout.addWidget(title_label, 1)
+        row_layout.addWidget(arrow)
+        return button
+
     def add_section(self, title: str, row: int, col: int, rowspan: int = 1, colspan: int = 1) -> QFrame:
-        p = self.settings_panel(10)
-        v = QVBoxLayout(p)
-        v.setContentsMargins(7, 4, 7, 5)
-        v.setSpacing(3)
-        lab = QLabel(title)
-        lab.setFont(font(9, QFont.Black))
-        lab.setStyleSheet("color:#ffffff; background:transparent; border:0;")
-        v.addWidget(lab)
-        self.grid.addWidget(p, row, col, rowspan, colspan)
-        return p
+        # Build the section exactly once so all existing widget references and
+        # callbacks remain valid. The panel stays hidden until its header opens.
+        panel = self.settings_panel(14)
+        panel.setParent(self._section_storage)
+        panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        panel.hide()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(14, 12, 14, 14)
+        layout.setSpacing(8)
+
+        header = self.section_header_button(title)
+        header.clicked.connect(lambda checked=False, t=title, p=panel: self.open_section_dialog(t, p))
+        self._section_entries.append({
+            "title": title,
+            "row": int(row),
+            "col": int(col),
+            "rowspan": int(rowspan),
+            "colspan": int(colspan),
+            "header": header,
+            "panel": panel,
+        })
+        return panel
+
+    def finalize_section_index(self):
+        entries = sorted(self._section_entries, key=lambda item: (item["row"], item["col"], item["title"]))
+        # Clear any legacy row stretch left by the old dashboard grid.
+        for row in range(max(20, self.grid.rowCount() + len(entries) + 2)):
+            self.grid.setRowStretch(row, 0)
+        for index, entry in enumerate(entries):
+            self.grid.addWidget(entry["header"], index, 0, 1, 4)
+        self.grid.setRowStretch(len(entries), 1)
+
+    def open_section_dialog(self, title: str, panel: QFrame):
+        if self._active_section_dialog is not None:
+            try:
+                self._active_section_dialog.raise_()
+                self._active_section_dialog.activateWindow()
+            except Exception:
+                pass
+            return
+
+        dlg = QDialog(self)
+        self._active_section_dialog = dlg
+        dlg.setModal(True)
+        dlg.setWindowFlag(Qt.FramelessWindowHint, True)
+        dlg.setStyleSheet("""
+            QDialog {
+                background:qlineargradient(x1:0,y1:0,x2:1,y2:1,
+                    stop:0 #0b172b,
+                    stop:0.58 #081321,
+                    stop:1 #050d18);
+                color:#f7fbff;
+                border:2px solid rgba(85,240,255,0.58);
+                border-radius:24px;
+            }
+            QLabel {
+                color:#f7fbff;
+                font-family:Arial;
+            }
+            QScrollArea {
+                background:transparent;
+                border:0;
+            }
+            QScrollArea > QWidget > QWidget {
+                background:transparent;
+            }
+            QScrollBar:vertical {
+                background:rgba(255,255,255,0.05);
+                width:12px;
+                margin:0;
+                border-radius:6px;
+            }
+            QScrollBar::handle:vertical {
+                background:rgba(70,223,255,0.72);
+                min-height:42px;
+                border-radius:6px;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height:0;
+            }
+        """)
+
+        available_width = max(640, int(self.width()) - 110)
+        available_height = max(430, int(self.height()) - 90)
+        dlg.resize(min(1120, available_width), min(680, available_height))
+
+        root = QVBoxLayout(dlg)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
+
+        modal_header = QHBoxLayout()
+        modal_header.setSpacing(10)
+        heading = QLabel(title)
+        heading.setFont(font(19, QFont.Black))
+        heading.setStyleSheet("color:#ffffff; background:transparent; border:0;")
+        close_button = RoundButton("Done", active=True, min_h=36)
+        close_button.setMinimumWidth(104)
+        close_button.clicked.connect(dlg.accept)
+        modal_header.addWidget(heading, 1)
+        modal_header.addWidget(close_button)
+        root.addLayout(modal_header)
+
+        divider = QFrame()
+        divider.setFixedHeight(1)
+        divider.setStyleSheet("background:rgba(85,240,255,0.28); border:0;")
+        root.addWidget(divider)
+
+        content_scroll = QScrollArea()
+        content_scroll.setWidgetResizable(True)
+        content_scroll.setFrameShape(QFrame.NoFrame)
+        content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        content_scroll.setWidget(panel)
+        panel.show()
+        root.addWidget(content_scroll, 1)
+
+        footer = QLabel("Changes made with plus/minus controls are applied when you tap Save Settings on the main page.")
+        footer.setWordWrap(True)
+        footer.setFont(font(8, QFont.Bold))
+        footer.setStyleSheet("color:#8fa5c2; background:transparent; border:0; padding:2px 4px 0 4px;")
+        root.addWidget(footer)
+
+        def center_dialog():
+            try:
+                center = self.mapToGlobal(self.rect().center())
+                frame = dlg.frameGeometry()
+                frame.moveCenter(center)
+                dlg.move(frame.topLeft())
+            except Exception:
+                pass
+
+        QTimer.singleShot(0, center_dialog)
+        try:
+            dlg.exec_()
+        finally:
+            try:
+                restored = content_scroll.takeWidget()
+                if restored is not None:
+                    restored.hide()
+                    restored.setParent(self._section_storage)
+            except Exception:
+                panel.hide()
+                panel.setParent(self._section_storage)
+            self._active_section_dialog = None
+            dlg.deleteLater()
 
     def masked_code(self, value: str) -> str:
         value = str(value or "")
@@ -10553,7 +10864,7 @@ class SettingsDialog(QDialog):
         note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
         display.layout().addWidget(note)
 
-        self.grid.setRowStretch(8, 1)
+        # Section headers are positioned after all panels have been built.
 
     def val_number(self, key):
         text = self.controls[key].text().split()[0].replace("°", "")
@@ -11919,6 +12230,9 @@ class MainWindow(Background):
             pass
 
     def toggle_sync_mode(self):
+        if getattr(self, "navigation_locked", False):
+            self.toast.show_message("Screen locked: temperature and alarm controls only")
+            return
         peers = self.sync_peer_entities()
         if not peers:
             self.toast.show_message("Choose Sync thermostats in Settings")
@@ -11978,6 +12292,8 @@ class MainWindow(Background):
         user can tap Sync and immediately tap Arriving or a temperature button,
         and the peer command is already queued from the optimistic local state.
         """
+        if getattr(self, "navigation_locked", False):
+            return False
         if not self.sync_is_active() or not isinstance(changes, dict):
             return False
         allowed: dict[str, object] = {}
@@ -12201,7 +12517,9 @@ class MainWindow(Background):
                     return False
                 if now < getattr(self, "_display_wake_block_until", 0.0):
                     return True
-                if self.handle_edge_brightness_event(event_type, event):
+                if getattr(self, "navigation_locked", False):
+                    self._brightness_drag_active = False
+                elif self.handle_edge_brightness_event(event_type, event):
                     return True
         except Exception:
             pass
@@ -12362,6 +12680,9 @@ class MainWindow(Background):
         threading.Thread(target=worker, name="screen-power-command", daemon=True).start()
 
     def enter_display_sleep(self, manual: bool = False):
+        if manual and getattr(self, "navigation_locked", False):
+            self.toast.show_message("Screen locked: temperature and alarm controls only")
+            return
         if getattr(self, "_display_sleeping", False):
             return
         self._display_sleeping = True
@@ -12531,11 +12852,11 @@ class MainWindow(Background):
     def set_page(self, name: str, force: bool = False):
         if name not in self.pages:
             return
-        if getattr(self, "navigation_locked", False) and name != "Thermostat" and not force:
+        if getattr(self, "navigation_locked", False) and name != "Thermostat":
             self.current_name = "Thermostat"
             self.stack.setCurrentWidget(self.pages["Thermostat"])
             self.header.set_page("Thermostat")
-            self.toast.show_message("Locked to Thermostat")
+            self.toast.show_message("Screen locked: temperature and alarm controls only")
             QTimer.singleShot(60, lambda: self.sync_visible_page("Thermostat"))
             return
         previous_name = self.current_name
@@ -12579,17 +12900,46 @@ class MainWindow(Background):
         return str(alarm.get("disarmCode") or "").strip()
 
     def set_navigation_locked(self, locked: bool, *, show_toast: bool = False):
+        was_locked = bool(getattr(self, "navigation_locked", False))
         self.navigation_locked = bool(locked)
         self.header.set_locked(self.navigation_locked)
+        self.sleep_button.setEnabled(not self.navigation_locked)
+        self.sync_button.setEnabled(not self.navigation_locked)
+
+        thermostat_page = self.pages.get("Thermostat")
+        if isinstance(thermostat_page, ThermostatScreen):
+            thermostat_page.set_screen_locked(self.navigation_locked)
+
         if self.navigation_locked:
             if self.current_name != "Thermostat":
                 self.set_page("Thermostat", force=True)
             else:
                 self.header.set_page("Thermostat")
+
+            # Locking cancels an armed Sync session so permitted temperature
+            # changes cannot be copied to peer thermostats behind the lock.
+            self._sync_active_until = 0.0
+            self._sync_pending_changes = {}
+            self.peer_sync_timer.stop()
+            self.sync_button.setActive(False, 0)
+            if not was_locked:
+                self.run_async(
+                    "screen-lock-sync-off",
+                    lambda: self.s.api.post(
+                        "/api/sync/arm",
+                        {"action": "off", "source": "screen-lock"},
+                        timeout=4.0,
+                    ),
+                    lambda result: self.apply_sync_status(result, authoritative=True),
+                    lambda _err: None,
+                )
             if show_toast:
-                self.toast.show_message("Locked to Thermostat")
-        elif show_toast:
-            self.toast.show_message("Page lock released")
+                self.toast.show_message("Screen locked: temperature and alarm controls only")
+        else:
+            if isinstance(thermostat_page, ThermostatScreen):
+                thermostat_page.sync(self.s.config, self.s.thermostat)
+            if show_toast:
+                self.toast.show_message("Screen controls unlocked")
 
     def toggle_navigation_lock(self):
         if not getattr(self, "navigation_locked", False):
@@ -12909,6 +13259,9 @@ class MainWindow(Background):
         dlg.exec_()
 
     def show_settings(self):
+        if getattr(self, "navigation_locked", False):
+            self.toast.show_message("Screen locked: temperature and alarm controls only")
+            return
         now = time.monotonic()
         if getattr(self, "_settings_dialog_open", False):
             return
@@ -12947,6 +13300,9 @@ class MainWindow(Background):
             self._settings_reopen_block_until = time.monotonic() + 2.0
 
     def show_info(self):
+        if getattr(self, "navigation_locked", False):
+            self.toast.show_message("Screen locked: temperature and alarm controls only")
+            return
         now = time.monotonic()
         if now < getattr(self, "_ignore_info_until", 0):
             return
