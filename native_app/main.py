@@ -4549,13 +4549,14 @@ class ThermostatScreen(Page):
         until = int(last_run + delay_minutes * 60000)
         return until if until > now_ms else 0
 
-    def request_peer_sync(self, changes: dict):
+    def request_peer_sync(self, changes: dict) -> bool:
         top = self.window()
         if hasattr(top, "request_peer_sync"):
             try:
-                top.request_peer_sync(changes)
+                return bool(top.request_peer_sync(changes))
             except Exception:
-                pass
+                return False
+        return False
 
     def auto_away_entity_ids(self, snapshot: dict | None = None) -> list[str]:
         t = snapshot if isinstance(snapshot, dict) else self.thermostat_view()
@@ -11525,8 +11526,16 @@ class MainWindow(Background):
         self.sync_button.clicked.connect(self.toggle_sync_mode)
         self._sync_active_until = 0.0
         self._sync_status_poll_running = False
+        self._sync_pending_changes: dict[str, object] = {}
+        self._sync_apply_running = False
+        self._sync_toggle_generation = 0
+        self._sync_toggle_pending_generation = 0
+        self._sync_optimistic_active = False
         self._last_sync_notice_at = 0.0
         self._last_sync_result_at = 0
+        self.peer_sync_timer = QTimer(self)
+        self.peer_sync_timer.setSingleShot(True)
+        self.peer_sync_timer.timeout.connect(self.flush_peer_sync)
         self.sync_button_timer = QTimer(self)
         self.sync_button_timer.timeout.connect(self.update_sync_button_state)
         self.sync_button_timer.start(1000)
@@ -11687,9 +11696,22 @@ class MainWindow(Background):
     def sync_is_active(self) -> bool:
         return bool(self.sync_peer_entities()) and time.monotonic() < float(getattr(self, "_sync_active_until", 0.0) or 0.0)
 
-    def apply_sync_status(self, result: object):
+    def apply_sync_status(self, result: object, *, authoritative: bool = False):
         info = result if isinstance(result, dict) else {}
         active = bool(info.get("active", info.get("armed", False)))
+        pending_generation = int(getattr(self, "_sync_toggle_pending_generation", 0) or 0)
+        current_generation = int(getattr(self, "_sync_toggle_generation", 0) or 0)
+        if (
+            not authoritative
+            and pending_generation > 0
+            and pending_generation == current_generation
+            and active != bool(getattr(self, "_sync_optimistic_active", False))
+        ):
+            # Ignore a status response that was requested before the latest
+            # toggle reached the backend. The toggle callback supplies the first
+            # authoritative state, preventing a stale poll from canceling the
+            # user's immediate Arriving or setpoint tap.
+            return
         try:
             remaining = max(0, int(info.get("remainingSeconds") or 0))
         except Exception:
@@ -11747,32 +11769,85 @@ class MainWindow(Background):
             self.toast.show_message("Choose Sync thermostats in Settings")
             self.update_sync_button_state()
             return
-        was_active = self.sync_is_active()
+
+        # Update the touchscreen immediately. The backend receives an atomic
+        # toggle request, so two quick taps always end where the user expects
+        # even if the HTTP responses arrive out of order.
+        turning_on = not self.sync_is_active()
+        self._sync_toggle_generation = int(getattr(self, "_sync_toggle_generation", 0) or 0) + 1
+        generation = self._sync_toggle_generation
+        self._sync_toggle_pending_generation = generation
+        self._sync_optimistic_active = turning_on
+        if turning_on:
+            self._sync_active_until = time.monotonic() + 30.0
+            self.sync_button.setActive(True, 30)
+            self.toast.show_message(f"Sync armed for 30 seconds · {len(peers)} thermostat{'s' if len(peers) != 1 else ''}")
+        else:
+            self._sync_active_until = 0.0
+            self._sync_pending_changes = {}
+            self.peer_sync_timer.stop()
+            self.sync_button.setActive(False, 0)
+            self.toast.show_message("Sync off")
+        self.position_sleep_controls()
 
         def done(result):
-            self.apply_sync_status(result)
-            if bool((result or {}).get("active")):
-                self.toast.show_message(f"Sync armed for 30 seconds · {len(peers)} thermostat{'s' if len(peers) != 1 else ''}")
-            else:
-                self.toast.show_message("Sync off")
+            # Ignore an older response after the user has tapped the button
+            # again. A fresh status read then confirms the backend's final state.
+            if generation == int(getattr(self, "_sync_toggle_generation", 0) or 0):
+                self._sync_toggle_pending_generation = 0
+                self.apply_sync_status(result, authoritative=True)
+            self.refresh_sync_status()
+
+        def failed(err):
+            if generation == int(getattr(self, "_sync_toggle_generation", 0) or 0):
+                self._sync_toggle_pending_generation = 0
+                self.show_sync_notice(f"Sync failed: {err}", 3000)
+            self.refresh_sync_status()
 
         self.run_async(
-            "sync-toggle",
+            f"sync-toggle-{generation}",
             lambda: self.s.api.post(
                 "/api/sync/arm",
-                {"action": "off" if was_active else "arm", "durationSeconds": 30, "source": "touchscreen"},
+                {"action": "toggle", "durationSeconds": 30, "source": "touchscreen"},
                 timeout=4.0,
             ),
             done,
-            lambda err: self.show_sync_notice(f"Sync failed: {err}", 3000),
+            failed,
         )
 
-    def request_peer_sync(self, changes: dict):
-        # Sync is now owned by the backend so touchscreen and Home Assistant
-        # share one 30-second arm window. The following thermostat control write
-        # is inspected and propagated by the backend; no second UI-side request
-        # is needed here.
-        return
+    def request_peer_sync(self, changes: dict) -> bool:
+        """Queue a direct touchscreen sync while the shared window is active.
+
+        The backend also observes the subsequent thermostat control request.
+        Keeping this explicit touchscreen path removes the arm/control race: the
+        user can tap Sync and immediately tap Arriving or a temperature button,
+        and the peer command is already queued from the optimistic local state.
+        """
+        if not self.sync_is_active() or not isinstance(changes, dict):
+            return False
+        allowed: dict[str, object] = {}
+        mode = str(changes.get("mode") or changes.get("hvacMode") or "").strip().lower()
+        if mode in {"off", "heat", "cool"}:
+            allowed["mode"] = mode
+        preset = str(changes.get("presetMode") or changes.get("preset_mode") or changes.get("preset") or "").strip().lower()
+        if preset == "arriving":
+            allowed["presetMode"] = preset
+        if "targetTemp" in changes:
+            try:
+                allowed["targetTemp"] = int(clamp(round(float(changes.get("targetTemp"))), 45, 95))
+            except Exception:
+                pass
+        if not allowed:
+            return False
+        self._sync_pending_changes.update(allowed)
+        self.peer_sync_timer.start(120)
+        # Do not poll backend status here. This command may be the immediate tap
+        # after Sync, while the arm request is still in flight; the optimistic
+        # local window is intentionally authoritative until that request returns.
+        if hasattr(self, "sync_button"):
+            remaining = max(1, int(math.ceil(self._sync_active_until - time.monotonic())))
+            self.sync_button.setActive(True, remaining)
+        return True
 
     def show_sync_notice(self, message: str, duration: int = 1800):
         now = time.monotonic()
@@ -11785,7 +11860,49 @@ class MainWindow(Background):
             pass
 
     def flush_peer_sync(self):
-        return
+        if getattr(self, "_sync_apply_running", False):
+            self.peer_sync_timer.start(180)
+            return
+        # A queued command was authorized at the exact moment the user tapped
+        # the thermostat control. Send it even if an older status poll briefly
+        # reports the backend arm request as still pending. Pressing Sync again
+        # cancels safely because toggle_sync_mode clears this queue and timer.
+        peers = self.sync_peer_entities()
+        changes = dict(getattr(self, "_sync_pending_changes", {}) or {})
+        if not peers or not changes:
+            return
+        self._sync_pending_changes = {}
+        payload = {"entityIds": [peer.get("entityId") for peer in peers]}
+        payload.update(changes)
+        self._sync_apply_running = True
+
+        def done(result):
+            self._sync_apply_running = False
+            info = result if isinstance(result, dict) else {}
+            skipped = info.get("skipped") if isinstance(info.get("skipped"), list) else []
+            errors = info.get("errors") if isinstance(info.get("errors"), list) else []
+            if errors:
+                detail = errors[0].get("error") if isinstance(errors[0], dict) else errors[0]
+                self.show_sync_notice("Sync issue: " + str(detail or "Unknown error")[:90], 2800)
+            elif skipped:
+                self.show_sync_notice("Sync skipped protected thermostat(s)", 2200)
+            if self._sync_pending_changes and self.sync_is_active():
+                self.peer_sync_timer.start(120)
+            self.update_sync_button_state()
+
+        def failed(err):
+            self._sync_apply_running = False
+            self.show_sync_notice(f"Sync failed: {err}", 3000)
+            if self._sync_pending_changes and self.sync_is_active():
+                self.peer_sync_timer.start(180)
+            self.update_sync_button_state()
+
+        self.run_async(
+            "peer-sync",
+            lambda: self.s.api.post("/api/sync/apply", self.s.ha_payload(payload), timeout=10.0),
+            done,
+            failed,
+        )
 
     def display_input_event_types(self) -> set:
         return {

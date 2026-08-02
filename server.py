@@ -7984,30 +7984,49 @@ def _sync_changes_from_control_payload(payload: dict, accepted: dict | None = No
     return changes
 
 
-def _schedule_armed_thermostat_sync(changes: dict) -> None:
+def _schedule_armed_thermostat_sync(changes: dict) -> dict:
+    """Queue an explicit peer-sync command when the shared window is armed.
+
+    Returning a structured result lets the touchscreen and Home Assistant use
+    the same backend operation without having to infer whether a background
+    worker was actually started. The selected peer list and Home Assistant
+    credentials are snapshotted before the worker starts so a later settings
+    refresh cannot change the in-flight command.
+    """
     global _SYNC_LAST_RESULT
     status = _sync_status_payload()
-    if not status.get("active") or not isinstance(changes, dict) or not changes:
-        return
+    if not isinstance(changes, dict) or not changes:
+        return {"ok": False, "queued": False, "active": bool(status.get("active")), "error": "Nothing to sync"}
+    if not status.get("active"):
+        return {"ok": True, "queued": False, "active": False, "reason": "sync-not-armed"}
+
     context = _sync_panel_context()
     if not context.get("url") or not context.get("token") or not context.get("entityIds"):
+        result = {
+            "ok": False,
+            "queued": False,
+            "active": True,
+            "error": "Sync is armed, but Home Assistant connection details or peer thermostats are missing.",
+            "at": int(time.time() * 1000),
+        }
         with _SYNC_ARM_LOCK:
-            _SYNC_LAST_RESULT = {
-                "ok": False,
-                "error": "Sync is armed, but Home Assistant connection details or peer thermostats are missing.",
-                "at": int(time.time() * 1000),
-            }
-        return
+            _SYNC_LAST_RESULT = result
+        return result
 
     payload = dict(changes)
+    context_snapshot = {
+        "url": str(context.get("url") or ""),
+        "token": str(context.get("token") or ""),
+        "entityIds": list(context.get("entityIds") or []),
+    }
 
     def _worker() -> None:
         global _SYNC_LAST_RESULT
         try:
             result = _call_ha_sync_thermostat_services(
-                context["url"],
-                context["token"],
-                context["entityIds"],
+                context_snapshot["url"],
+                context_snapshot["token"],
+                context_snapshot["entityIds"],
                 mode=payload.get("mode"),
                 target_temp=payload.get("targetTemp"),
                 preset_mode=payload.get("presetMode"),
@@ -8016,10 +8035,18 @@ def _schedule_armed_thermostat_sync(changes: dict) -> None:
             result = {"ok": False, "error": str(exc), "synced": [], "errors": [{"error": str(exc)}]}
         result = dict(result or {})
         result["at"] = int(time.time() * 1000)
+        result["requested"] = dict(payload)
         with _SYNC_ARM_LOCK:
             _SYNC_LAST_RESULT = result
 
     threading.Thread(target=_worker, name="thermostat-peer-sync", daemon=True).start()
+    return {
+        "ok": True,
+        "queued": True,
+        "active": True,
+        "configuredCount": len(context_snapshot["entityIds"]),
+        "requested": payload,
+    }
 
 def _normalize_weather_item(item: dict) -> dict:
     attrs = item.get("attributes") or {}
@@ -8762,7 +8789,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply", "/api/sync/arm"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply", "/api/sync/dispatch", "/api/sync/arm"}:
             self.send_error(404, "Not found")
             return
 
@@ -8851,6 +8878,12 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                     str((_read_thermostat_record().get("thermostat") or {}).get("name") or ""),
                 )
                 return _json(self, 200, {"ok": True, "thermostats": peers, "count": len(peers)})
+
+            if path == "/api/sync/dispatch":
+                raw_changes = payload.get("changes") if isinstance(payload.get("changes"), dict) else payload
+                changes = _sync_changes_from_control_payload(raw_changes, {})
+                result = _schedule_armed_thermostat_sync(changes)
+                return _json(self, 200 if result.get("ok") else 400, result)
 
             if path == "/api/sync/apply":
                 result = _call_ha_sync_thermostat_services(
