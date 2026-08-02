@@ -4621,7 +4621,6 @@ class ThermostatScreen(Page):
         action, verb = self.door_action_for_domain(domain)
         name = str(entity.get("friendlyName") or entity.get("name") or entity_id).strip() or entity_id
         self._door_action_pending = True
-        self.requestToast.emit(f"{verb} {name}…")
         payload = self.s.ha_payload({"entityId": entity_id, "action": action})
 
         def done(result):
@@ -4630,14 +4629,9 @@ class ThermostatScreen(Page):
             if isinstance(control, dict) and control:
                 entity["state"] = str(control.get("state") or entity.get("state") or "unknown")
                 entity["domain"] = str(control.get("domain") or domain)
-            if action == "press":
-                self.requestToast.emit(f"Pressed {name}")
-            elif action == "close":
-                self.requestToast.emit(f"Close command sent to {name}")
-            elif action == "lock":
-                self.requestToast.emit(f"Lock command sent to {name}")
-            else:
-                self.requestToast.emit(f"Off command sent to {name}")
+            # The Doors card already provides immediate press/release feedback,
+            # so a successful Home Assistant acknowledgement does not need a
+            # second toast at the bottom of the screen.
 
         def failed(error):
             self._door_action_pending = False
@@ -4708,8 +4702,6 @@ class ThermostatScreen(Page):
             pause["countdownReason"] = "resumed"
         self.s.status_refresh_paused_until = max(getattr(self.s, "status_refresh_paused_until", 0.0), time.monotonic() + 2.5)
         self.sync(self.s.config, self.s.thermostat)
-        minute_label = "minute" if duration_minutes == 1 else "minutes"
-        self.requestToast.emit(f"Comfort resumed for {duration_minutes} {minute_label}")
 
         def done(result):
             if isinstance(result, dict):
@@ -5319,7 +5311,6 @@ class ThermostatScreen(Page):
         self._alarm_open_generation += 1
         generation = self._alarm_open_generation
         self.mark_alarm_state_checking()
-        self.requestToast.emit("Checking live alarm status")
         trace_runtime(f"alarm control requested entity={eid} cached_state={cached_state}")
 
         def refresh_done(fresh):
@@ -5374,7 +5365,6 @@ class ThermostatScreen(Page):
         def applied(alarm, action):
             if alarm:
                 entity.update(alarm)
-            self.requestToast.emit(f"Alarm {action.replace('_', ' ')} sent")
             self.sync(self.s.config, self.s.thermostat)
 
         dlg.actionDone.connect(applied)
@@ -6182,7 +6172,6 @@ class RoomScreen(Page):
             ctl["state"] = self._room_state_text_for_on(ctl, target_on)
             self._set_room_pending(ctl, target_on, previous_state, previous_on)
             self.sync(self.s.config, self.s.thermostat)
-        self.requestToast.emit(f"{ctl.get('haName') or ctl.get('name')} {action.replace('_', ' ')} sent")
         service_code = entered_code or (self.config.get("alarm") or {}).get("disarmCode", "")
         payload = self.s.ha_payload({"entityId": eid, "action": action, "code": service_code})
 
@@ -6402,7 +6391,6 @@ class LightsScreen(Page):
         for light in lights:
             bright = int(light.get("lastBrightness") or light.get("brightness") or 100)
             self._send_light(light, "on" if turn_on else "off", bright if turn_on else 0)
-        self.requestToast.emit("Room lights updated")
 
     def _open_live_color_dialog(self, lights: list[dict], current: str, title: str):
         """Open a touch-friendly RGB picker and push color changes live.
@@ -6938,7 +6926,6 @@ class BlindsScreen(Page):
         for blind in nested_get(self.config, "blinds", "rooms", active, "blinds", default=[]) or []:
             if blind.get("haEntityId"):
                 self.blind_action(blind, action, quiet=True)
-        self.requestToast.emit(f"Room blinds {action} sent")
 
     def blind_action(self, blind: dict, action: str, quiet: bool = False, position: int | None = None):
         if not blind.get("haEntityId"):
@@ -6964,9 +6951,6 @@ class BlindsScreen(Page):
             blind["pendingPosition"] = desired_position
             blind["pendingPositionUntil"] = time.time() + 18.0
         self.sync(self.s.config, self.s.thermostat)
-        if not quiet:
-            label = f"{int(desired_position)}%" if action == "position" and desired_position is not None else action
-            self.requestToast.emit(f"{blind.get('haName') or blind.get('name')} {label}")
 
         def done(result):
             state = (result or {}).get("state") or {} if isinstance(result, dict) else {}
@@ -7765,8 +7749,6 @@ class AudioScreen(Page):
             self.requestToast.emit(f"{label}: no assigned controls")
             return
 
-        self.requestToast.emit(f"Applying {label}...")
-
         def worker():
             result: dict[str, Any] = {"numbers": {}, "switches": {}, "missing": missing}
             if volume_value is not None and media_player_id:
@@ -7820,7 +7802,8 @@ class AudioScreen(Page):
                     controls[name] = updated
                 self.apply_audio_control_state()
             skipped = ", ".join(dict.fromkeys(missing))
-            self.requestToast.emit(f"{label} applied" + (f"; skipped {skipped}" if skipped else ""))
+            if skipped:
+                self.requestToast.emit(f"{label} skipped unassigned controls: {skipped}")
             QTimer.singleShot(650, self.poll)
 
         self.run_async(
@@ -12565,13 +12548,11 @@ class MainWindow(Background):
         if turning_on:
             self._sync_active_until = time.monotonic() + 30.0
             self.sync_button.setActive(True, 30)
-            self.toast.show_message(f"Sync armed for 30 seconds · {len(peers)} thermostat{'s' if len(peers) != 1 else ''}")
         else:
             self._sync_active_until = 0.0
             self._sync_pending_changes = {}
             self.peer_sync_timer.stop()
             self.sync_button.setActive(False, 0)
-            self.toast.show_message("Sync off")
         self.position_sleep_controls()
 
         def done(result):
