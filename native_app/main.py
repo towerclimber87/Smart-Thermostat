@@ -401,6 +401,17 @@ AUDIO_PRESET_ORDER: list[tuple[str, str, str, str]] = [
 ]
 AUDIO_IDLE_SECONDS = 120.0
 AUDIO_FAST_NAV_POLL_SECONDS = 2.0
+# These Home Assistant media-player states mean the Audio page is no longer
+# actively playing. Track their duration directly so a paused player cannot
+# remain on-screen forever because of unrelated panel activity.
+AUDIO_RETURN_TO_THERMOSTAT_STATES = frozenset({
+    "paused",
+    "idle",
+    "off",
+    "standby",
+    "unavailable",
+    "unknown",
+})
 
 # Display sleep is handled only by the native UI layer. Backend polling, HVAC
 # runtime protection, Home Assistant sync, and alarm logic continue normally.
@@ -9034,7 +9045,7 @@ class AudioSettingsDialog(QDialog):
         self.auto_nav.setChecked(bool(current.get("autoNavigate", False)))
         nav_lay.addWidget(self.auto_nav)
         desc = QLabel(
-            "Real music jumps to Audio quickly. If you leave Audio while music keeps playing, the panel returns after 2 minutes without touch. When music stops, it returns to Thermostat after 2 minutes. TV audio is ignored."
+            "Real music jumps to Audio quickly. If you leave Audio while music keeps playing, the panel returns after 2 minutes without touch. Paused, idle, or stopped audio returns to Thermostat after 2 minutes based on the player state itself. TV audio is ignored."
         )
         desc.setWordWrap(True)
         desc.setFont(font(11, QFont.Black))
@@ -11653,6 +11664,7 @@ class MainWindow(Background):
         self._auto_nav_audio_is_playing = False
         self._auto_nav_audio_previous_is_playing = False
         self._auto_nav_audio_state_at = 0.0
+        self._audio_page_inactive_since = 0.0
         self._last_audio_manual_leave_at = -AUDIO_IDLE_SECONDS
         self._ignore_info_until = 0.0
         self._modal_touch_block_until = 0.0
@@ -12398,6 +12410,33 @@ class MainWindow(Background):
                 return
             now = time.monotonic()
             self.poll_audio_for_auto_navigation(now)
+
+            # Returning from a visible Audio page must be driven by the media
+            # player's state, not only by the panel-wide touch timer. Home
+            # Assistant reports a paused Sonos player as ``paused``; measure how
+            # long that state lasts so unrelated panel input cannot postpone the
+            # return to Thermostat indefinitely.
+            if self.current_name == "Audio":
+                page = self.pages.get("Audio")
+                state_raw = ""
+                if isinstance(page, AudioScreen):
+                    state_raw = str((page.player_state or {}).get("state") or "").strip().lower()
+                if state_raw in AUDIO_RETURN_TO_THERMOSTAT_STATES:
+                    inactive_since = float(getattr(self, "_audio_page_inactive_since", 0.0) or 0.0)
+                    if inactive_since <= 0.0:
+                        inactive_since = now
+                        self._audio_page_inactive_since = inactive_since
+                    if (
+                        now - inactive_since >= AUDIO_IDLE_SECONDS
+                        and now - getattr(self, "_last_auto_nav_at", 0.0) >= 15.0
+                    ):
+                        self._last_auto_nav_at = now
+                        self._audio_page_inactive_since = 0.0
+                        self.set_page("Thermostat", force=True)
+                        return
+                else:
+                    self._audio_page_inactive_since = 0.0
+
             if now - getattr(self, "_last_user_activity_at", now) < AUDIO_IDLE_SECONDS:
                 return
             if now - getattr(self, "_last_auto_nav_at", 0.0) < 15.0:
@@ -12423,6 +12462,14 @@ class MainWindow(Background):
         now = time.monotonic()
         if previous_name == "Audio" and name != "Audio" and not force and self.audio_page_is_music_playing():
             self._last_audio_manual_leave_at = now
+        if name == "Audio" and previous_name != "Audio":
+            page = self.pages.get("Audio")
+            state_raw = ""
+            if isinstance(page, AudioScreen):
+                state_raw = str((page.player_state or {}).get("state") or "").strip().lower()
+            self._audio_page_inactive_since = now if state_raw in AUDIO_RETURN_TO_THERMOSTAT_STATES else 0.0
+        elif name != "Audio":
+            self._audio_page_inactive_since = 0.0
         self.current_name = name
         self._last_page_change_at = now
         # Touchscreens can emit a ghost release after a nav tap. Do not let
