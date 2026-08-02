@@ -9806,11 +9806,33 @@ class SettingsDialog(QDialog):
     def add_section_value(self, layout: QGridLayout, key: str, label: str, value, row: int, col: int, low=None, high=None, suffix="°", colspan: int = 1):
         layout.addWidget(self.value_control(key, label, value, low, high, suffix), row, col, 1, colspan)
 
+    def section_description(self, title: str) -> str:
+        descriptions = {
+            "Auto Away / Home": "Away temperatures and the people used for occupancy changes",
+            "Range": "Minimum and maximum heating and cooling setpoints",
+            "Safety / Mode Switches": "Safety limits, seasonal thresholds, and heat/cool lockouts",
+            "Changeover / Fan": "Mode-change delays, fan run-on time, and fan operation",
+            "Temperature Differential": "Degrees past the setpoint before heating or cooling restarts",
+            "Minimum Runtime": "Minimum equipment on-time and off-time for each cycle",
+            "Internal / External Sources": "Choose onboard hardware or Home Assistant for each function",
+            "Outside Temperature": "Home Assistant source for outdoor temperature and weather",
+            "Sync": "Thermostats that receive temporary copied mode and setpoint changes",
+            "Person Tracking": "People displayed on the main thermostat screen",
+            "Doors / Comfort Pause": "Door sensor and delay before heating or cooling pauses",
+            "Security Codes": "Alarm disarm and settings-access PINs",
+            "Thermostat Unit": "The name used to identify this thermostat",
+            "Screen Rotation": "Upright or upside-down landscape screen orientation",
+        }
+        return descriptions.get(str(title or ""), "Open this section to view its settings")
+
     def section_header_button(self, title: str) -> QPushButton:
+        description = self.section_description(title)
         button = QPushButton()
         button.setCursor(Qt.PointingHandCursor)
         button.setAccessibleName(title)
-        button.setMinimumHeight(54)
+        button.setAccessibleDescription(description)
+        button.setMinimumHeight(62)
+        button.setMaximumHeight(68)
         button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         button.setStyleSheet("""
             QPushButton {
@@ -9836,19 +9858,31 @@ class SettingsDialog(QDialog):
             }
         """)
         row_layout = QHBoxLayout(button)
-        row_layout.setContentsMargins(18, 0, 16, 0)
-        row_layout.setSpacing(10)
+        row_layout.setContentsMargins(16, 7, 13, 7)
+        row_layout.setSpacing(8)
+
+        text_layout = QVBoxLayout()
+        text_layout.setContentsMargins(0, 0, 0, 0)
+        text_layout.setSpacing(1)
         title_label = QLabel(title)
-        title_label.setFont(font(13, QFont.Black))
+        title_label.setFont(font(12, QFont.Black))
         title_label.setStyleSheet("color:#f7fbff; background:transparent; border:0;")
         title_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        subtitle_label = QLabel(f"({description})")
+        subtitle_label.setWordWrap(False)
+        subtitle_label.setFont(font(7, QFont.Bold))
+        subtitle_label.setStyleSheet("color:#93a9c5; background:transparent; border:0;")
+        subtitle_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        text_layout.addWidget(title_label)
+        text_layout.addWidget(subtitle_label)
+
         arrow = QLabel("›")
         arrow.setAlignment(Qt.AlignCenter)
-        arrow.setFixedWidth(28)
-        arrow.setFont(font(24, QFont.Black))
+        arrow.setFixedWidth(24)
+        arrow.setFont(font(23, QFont.Black))
         arrow.setStyleSheet("color:#55f0ff; background:transparent; border:0;")
         arrow.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        row_layout.addWidget(title_label, 1)
+        row_layout.addLayout(text_layout, 1)
         row_layout.addWidget(arrow)
         return button
 
@@ -9878,12 +9912,21 @@ class SettingsDialog(QDialog):
 
     def finalize_section_index(self):
         entries = sorted(self._section_entries, key=lambda item: (item["row"], item["col"], item["title"]))
-        # Clear any legacy row stretch left by the old dashboard grid.
+        # Present the section index as two balanced columns. The source row/column
+        # values still define the logical order, while the compact index avoids a
+        # long single-column list and normally fits without vertical scrolling.
         for row in range(max(20, self.grid.rowCount() + len(entries) + 2)):
             self.grid.setRowStretch(row, 0)
+        self.grid.setColumnStretch(0, 1)
+        self.grid.setColumnStretch(1, 1)
+        self.grid.setColumnStretch(2, 1)
+        self.grid.setColumnStretch(3, 1)
         for index, entry in enumerate(entries):
-            self.grid.addWidget(entry["header"], index, 0, 1, 4)
-        self.grid.setRowStretch(len(entries), 1)
+            grid_row = index // 2
+            grid_col = 0 if index % 2 == 0 else 2
+            self.grid.addWidget(entry["header"], grid_row, grid_col, 1, 2)
+        last_row = (len(entries) + 1) // 2
+        self.grid.setRowStretch(last_row, 1)
 
     def open_section_dialog(self, title: str, panel: QFrame):
         if self._active_section_dialog is not None:
