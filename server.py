@@ -7213,10 +7213,57 @@ def _ha_json_request(ha_url: str, token: str, method: str, path: str, payload: d
 
 
 
+def _normalized_network_ip(value: object) -> str:
+    """Normalize IPv4, IPv6, and IPv4-mapped IPv6 addresses for comparison."""
+    ip = str(value or "").strip().lower()
+    if ip.startswith("::ffff:"):
+        ip = ip[7:]
+    if "%" in ip:
+        ip = ip.split("%", 1)[0]
+    return ip
+
+
+def _configured_home_assistant_server_ips() -> set[str]:
+    """Resolve the configured Home Assistant URL to trusted source addresses.
+
+    The thermostat already stores the Home Assistant server URL. Allowing only
+    that host to invoke the assistant endpoint lets Home Assistant automations
+    trigger JARVIS while the temporary backup/config portal remains closed.
+    """
+    record = _read_panel_config_record()
+    config = record.get("config") if isinstance(record, dict) else {}
+    integrations = config.get("integrations") if isinstance(config, dict) else {}
+    ha = integrations.get("homeAssistant") if isinstance(integrations, dict) else {}
+    ha = ha if isinstance(ha, dict) else {}
+    raw_url = str(ha.get("url") or "").strip()
+    if not raw_url:
+        return set()
+
+    parsed = urlparse(raw_url if "://" in raw_url else f"http://{raw_url}")
+    host = str(parsed.hostname or "").strip().lower()
+    if not host:
+        return set()
+
+    trusted: set[str] = {_normalized_network_ip(host)}
+    try:
+        for info in socket.getaddrinfo(host, None, type=socket.SOCK_STREAM):
+            address = info[4][0] if info and len(info) > 4 and info[4] else ""
+            normalized = _normalized_network_ip(address)
+            if normalized:
+                trusted.add(normalized)
+    except OSError:
+        # A literal IP or temporarily unavailable local DNS should not prevent
+        # the direct host comparison above from working.
+        pass
+    return {item for item in trusted if item}
+
+
 def _assistant_client_access_allowed(client_ip: object) -> bool:
-    """Keep the stored-token assistant bridge local unless the temporary portal is open."""
-    ip = str(client_ip or "").strip().lower()
-    if ip in {"127.0.0.1", "::1", "localhost"} or ip.startswith("::ffff:127."):
+    """Allow local calls, the configured HA server, or the temporary portal."""
+    ip = _normalized_network_ip(client_ip)
+    if ip in {"127.0.0.1", "::1", "localhost"}:
+        return True
+    if ip and ip in _configured_home_assistant_server_ips():
         return True
     return _config_web_portal_active(touch=False)
 
