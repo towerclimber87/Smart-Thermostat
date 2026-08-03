@@ -80,25 +80,98 @@ python3 native_app/main.py
 
 ## Typed JARVIS-style Home Assistant console
 
-Version 11.60 adds an original full-screen AI-core animation and a typed command loop. The Raspberry Pi does not run a language model or speech recognizer. It only displays the animation and forwards text to the Home Assistant conversation API, keeping the panel workload small.
+The native panel displays the AI-core animation and sends typed commands to Home Assistant. The Raspberry Pi does not run an LLM. Home Assistant handles local intents and forwards only broader requests to the configured conversation agent.
 
-The assistant reuses the Home Assistant URL and long-lived token already stored in the thermostat configuration. Replies can be sent to the Sonos/media player already selected on the Audio page, or to a separate media player chosen in the temporary Backup Config web portal. The portal also allows an explicit `conversation.*` agent and `tts.*` entity to be entered. Leaving the conversation agent blank uses Home Assistant's default agent; leaving TTS blank now prefers an available OpenAI TTS entity before Home Assistant Cloud or Piper. For safety, the stored-token assistant endpoint accepts commands only from the thermostat itself unless the temporary Backup Config portal is open.
+The assistant reuses the Home Assistant URL and long-lived token already stored in the thermostat configuration. Replies can be sent to the Sonos/media player selected on the Audio page or to a separate player selected under **Backup Config → JARVIS Voice**. The stored-token assistant endpoint accepts commands only from the thermostat itself unless the temporary Backup Config portal is open.
 
-### Original cinematic voice over Sonos
+### Cost-aware hybrid routing
 
-Version 12.20 adds a direct OpenAI speech mode to the **JARVIS Voice** tab. It does not install ElevenLabs, Piper, HACS, or another voice provider. The thermostat uses the same OpenAI API account you already use with Home Assistant, generates a temporary MP3, and asks Home Assistant to play it as a Sonos announcement. The previous Sonos program and volume are restored by the announcement path when the player supports it.
+Version 12.40 adds one shared routing and personality profile to the same Home Assistant-owned record used by JARVIS knowledge:
 
-One-time setup:
+```text
+.storage/iha.jarvis_knowledge
+```
 
-1. Press **Backup Config** on the thermostat and open the temporary configuration address.
-2. Open **JARVIS Voice**.
-3. Select **OpenAI cinematic voice — recommended**.
-4. Paste an OpenAI API key from the same OpenAI account, keep `gpt-4o-mini-tts`, select a voice, and save.
-5. Run the typed test. The default is **Onyx**, speed **1.08**, with a prefilled original refined British-style household-assistant prompt.
+Every updated IHA panel reads the same profile. The default behavior is:
 
-The API key is stored with the panel configuration but is never returned by the JARVIS configuration/status endpoints. Generated MP3 files use random names, are served only long enough for the LAN speaker to retrieve them, and are removed after approximately ten minutes. The Sonos/media player must be able to reach the thermostat's LAN address on port `8080`.
+- **Conversation routing: Hybrid**
+  - saved multi-room temperature questions are answered directly from the shared IHA knowledge store;
+  - obvious device, area, climate, media, timer, scene, script, and status requests go directly to `conversation.home_assistant`;
+  - explanations, writing, summaries, comparisons, general knowledge, and other broad requests go directly to the configured OpenAI conversation agent;
+  - a local request falls through to OpenAI only when Home Assistant explicitly returns `no_intent_match`;
+  - missing or ambiguous devices stay local errors so the cloud agent cannot guess a different target.
+- **Speech cost policy: Piper/local for every answer**
+  - Piper speaks both local and OpenAI-generated answers;
+  - OpenAI TTS is not called during normal operation;
+  - if the policy is `local_only` and Piper is missing, the thermostat reports the missing local TTS configuration rather than silently creating a paid OpenAI speech request.
+- **Personality**
+  - the default form of address is `sir`;
+  - humor defaults to restrained;
+  - the old goofy spoken prefixes and screen jokes are removed;
+  - acknowledgements are brief, professional, and varied.
 
-The existing **Home Assistant TTS entity** mode remains available. In that mode, voice instructions and speed stay configured in the Home Assistant OpenAI TTS subentry, while the thermostat can pass a supported voice choice to the selected TTS entity.
+The router decides the destination before making the conversation request. A clear home-control command therefore does not wait for an OpenAI probe. The only two-step case is a locally routed phrase that Home Assistant genuinely does not recognize and returns as `no_intent_match`.
+
+Recommended shared settings under **Backup Config → JARVIS Voice → Shared Routing & Personality**:
+
+```text
+Conversation routing: Hybrid
+Local Home Assistant agent: conversation.home_assistant
+OpenAI / broad-question agent: conversation.<your OpenAI agent>
+Speech cost policy: Piper/local speech for every answer
+Local TTS entity: tts.piper
+Form of address: sir
+Humor level: Restrained
+Address me as “sir” when natural: enabled
+```
+
+The **Run Test** result now shows the selected conversation route and speech path. Useful checks:
+
+```text
+Turn on the living room light.
+Tell me the outside temperature and then all inside temperatures.
+Explain how a heat pump works.
+```
+
+The first should show `home_assistant_local`, the second `iha_shared_temperature`, and the third `cloud_conversation`. With the lowest-cost speech policy, all three should show the local speech path.
+
+### Install Piper for free local speech
+
+Piper runs inside Home Assistant and does not add a per-request OpenAI charge.
+
+1. In Home Assistant, install the **Piper** app and start it.
+2. Open **Settings → Devices & services**.
+3. Add the discovered Piper service through the **Wyoming** integration.
+4. Choose the desired English language/voice variant in the Piper configuration.
+5. Return to the thermostat's **JARVIS Voice** page.
+6. Set **Speech cost policy** to **Piper/local speech for every answer**.
+7. Enter the discovered Piper TTS entity, normally `tts.piper`, or leave it blank for Piper-first auto-detection.
+8. Save **Shared Behavior** and run a test.
+
+Piper's available voice names and quality depend on the voice model installed in Home Assistant. Select a calm British English male voice where one is available. This creates the intended refined household-assistant style without attempting to duplicate an actor's exact voice.
+
+### Refined cloud personality
+
+The thermostat adds a restrained spoken acknowledgement and the shared form of address to both local and cloud responses. For broad OpenAI answers to stay in character as well, configure the OpenAI conversation agent's prompt in Home Assistant with wording similar to:
+
+```text
+You are JARVIS, an original refined household computer assistant. Address the user as “sir” when it sounds natural. Be concise, composed, precise, and helpful. Use a polished British manner of speaking, but do not imitate any actor or copyrighted character. Use dry humor only rarely and never become goofy, theatrical, overly chatty, or excessively enthusiastic. For home facts and device state, do not invent values; use only information supplied by Home Assistant and say clearly when information is unavailable.
+```
+
+This prompt controls the content and manner of the OpenAI answer. Piper controls how the final text sounds when spoken.
+
+### Optional premium speech fallback
+
+The existing direct OpenAI speech path remains available under **Premium Speech Fallback**. It can use a selected OpenAI voice, delivery instructions, model, and speed. The API key is stored with the panel configuration but is never returned by the JARVIS configuration or status endpoints. Generated MP3 files use random names and are removed after approximately ten minutes.
+
+Set **Speech cost policy** to one of the following only when premium speech is desired:
+
+- **Hybrid speech**: Piper/local for Home Assistant routes and premium speech for broad OpenAI routes.
+- **Premium only**: premium speech for every answer.
+
+The Home Assistant premium TTS option is also preserved for an existing `tts.*` provider. Sonos playback uses the announcement path where supported so the previous program and volume can resume afterward.
+
+### Console and endpoint tests
 
 Open the continuous typed loop on the Pi:
 
@@ -109,7 +182,7 @@ python3 scripts/jarvis-console.py
 
 Useful console commands:
 
-- `/new` starts a fresh Home Assistant conversation with the next command.
+- `/new` starts a fresh cloud conversation with the next cloud-routed command.
 - `/status` shows the current assistant stage and selected output entities.
 - `/quit` closes the loop.
 
@@ -132,11 +205,11 @@ To configure it from another computer, press **Backup Config** on the thermostat
 
 ### Shared JARVIS home knowledge
 
-Version 12.30 moves learned temperature-source mappings into the IHA Home Assistant integration instead of saving a separate copy on each wall panel. Home Assistant stores the mappings in its internal `.storage/iha.jarvis_knowledge` record, and every IHA thermostat reads the same live record before answering multi-room temperature questions.
+Version 12.30 moved learned temperature-source mappings into the IHA Home Assistant integration instead of saving a separate copy on each wall panel. Version 12.40 adds the shared routing and personality profile to that same record. Every IHA thermostat reads the same live data before answering multi-room temperature questions.
 
-Install the matching `Supporting/iha.zip` files into Home Assistant's `/config/custom_components/iha/` directory and restart Home Assistant before testing this feature. The integration version is 10.9.0.
+Install the matching `Supporting/iha.zip` files into Home Assistant's `/config/custom_components/iha/` directory and restart Home Assistant before testing. The matching integration version is **10.10.0**.
 
-JARVIS can then be taught by speech or by the **Backup Config → JARVIS Voice → Shared Home Knowledge** section. Examples:
+JARVIS can be taught by speech or by **Backup Config → JARVIS Voice → Shared Home Knowledge**:
 
 ```text
 JARVIS, remember that outside temperature comes from sensor.back_porch_temperature.
@@ -147,7 +220,7 @@ JARVIS, what temperature sources do you remember?
 
 When a friendly name matches more than one temperature entity, JARVIS does not guess. It lists the possible entities and asks for the exact entity ID. Climate entities automatically use `current_temperature`, weather entities use `temperature`, and normal temperature sensors use their state unless an attribute override is explicitly saved.
 
-Requests such as the following are answered from the exact stored mappings rather than by asking the conversation model to discover the entities:
+Requests such as these are answered from exact stored mappings rather than asking a conversation model to discover entities:
 
 ```text
 JARVIS, tell me the outside temperature and then all of the inside temperatures.
