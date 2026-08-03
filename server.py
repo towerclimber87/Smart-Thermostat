@@ -401,9 +401,10 @@ DEFAULT_HOME_ASSISTANT_CONFIG = {
     "voiceAssistant": {
         "enabled": True,
         "agentId": "",
-        "ttsEntityId": "",
+        "ttsEntityId": "tts.home_assistant_cloud",
         "ttsMode": "home_assistant",
         "localTtsVoice": "",
+        "haCloudTtsVoice": "JennyNeural",
         "ttsVoice": "onyx",
         "openAiApiKey": "",
         "openAiModel": "gpt-4o-mini-tts",
@@ -2766,6 +2767,9 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
     assistant_local_tts_voice = html.escape(
         str(assistant.get("localTtsVoice") or ""), quote=True
     )
+    assistant_ha_cloud_tts_voice = html.escape(
+        str(assistant.get("haCloudTtsVoice") or "JennyNeural"), quote=True
+    )
     assistant_tts_mode = str(assistant.get("ttsMode") or "home_assistant")
     assistant_tts_mode_ha = "selected" if assistant_tts_mode == "home_assistant" else ""
     assistant_tts_mode_openai = "selected" if assistant_tts_mode == "openai_direct" else ""
@@ -2972,8 +2976,8 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
         <div class="form-grid"><div class="field"><label>OpenAI API key</label><input id="va-openai-key" type="password" autocomplete="new-password" placeholder="Leave blank to keep the saved key"><span class="hint">Only enter a value when adding or replacing the key.</span></div><div class="field"><label>Voice</label><select id="va-voice">{assistant_voice_options}</select><span class="hint">Onyx is the default lower, measured voice. Cedar is a good alternate.</span></div><div class="field"><label>Speech model</label><input id="va-openai-model" type="text" value="{assistant_openai_model}" placeholder="gpt-4o-mini-tts"></div><div class="field"><label>Speech speed</label><input id="va-openai-speed" type="number" min="0.25" max="4" step="0.01" value="{assistant_openai_speed}"></div><div class="field full"><label>Voice delivery instructions</label><textarea id="va-openai-instructions" maxlength="4096">{assistant_openai_instructions}</textarea></div></div>
       </div>
       <div id="va-ha-tts-settings" class="settings-section voice-provider">
-        <h3>Home Assistant Premium TTS</h3><p class="voice-note">Use a Home Assistant TTS entity as the premium fallback instead of the thermostat's direct OpenAI speech path.</p>
-        <div class="form-grid"><div class="field full"><label>Premium text-to-speech entity</label><input id="va-tts" type="text" value="{assistant_tts}" placeholder="tts.openai_tts or blank"><span class="hint">Blank auto-selects an available OpenAI TTS entity, then Home Assistant Cloud, then another available provider.</span></div></div>
+        <h3>Home Assistant Cloud Voice</h3><p class="voice-note">Use Home Assistant Cloud for a more natural voice. Jenny is the selected American English female voice.</p>
+        <div class="form-grid"><div class="field full"><label>Home Assistant TTS entity</label><input id="va-tts" type="text" value="{assistant_tts}" placeholder="tts.home_assistant_cloud"><span class="hint">Use <code>tts.home_assistant_cloud</code> for the Jenny voice selected in Home Assistant Cloud.</span></div><div class="field full"><label>Home Assistant Cloud voice</label><input id="va-ha-cloud-voice" type="text" value="{assistant_ha_cloud_tts_voice}" placeholder="JennyNeural"><span class="hint">Jenny is sent as <code>JennyNeural</code>. This setting is separate from the OpenAI voice below.</span></div></div>
       </div>
       <div class="form-grid"><div class="field"><label>Panel cloud-agent fallback</label><input id="va-agent" type="text" value="{assistant_agent}" placeholder="conversation.openai_conversation or blank"><span class="hint">Used when the shared OpenAI/broad-question agent is blank.</span></div><div class="field"><label>Sonos / media player entity</label><input id="va-media" type="text" value="{assistant_media}" placeholder="Blank follows Audio page selection"><span class="hint">Current effective output: <code>{assistant_effective_media}</code></span></div><div class="field"><label>Language</label><input id="va-language" type="text" value="{assistant_language}" placeholder="en-US"></div><div class="field"><label>Extra screen hold after response (seconds)</label><input id="va-hold" type="number" min="0" max="15" step="0.5" value="{assistant_hold}"></div><div class="field full"><label>Speech volume</label><div class="slider-row"><input id="va-volume" type="range" min="1" max="100" step="1" value="{assistant_volume}"><output id="va-volume-value">{assistant_volume}%</output></div><span class="hint">On Sonos, the response is sent as an announcement so the previous music and volume return automatically when speech finishes.</span></div></div>
       <div class="settings-section voice-provider">
@@ -3058,7 +3062,7 @@ async function saveJarvisKnowledge() {{ const displayName=value('va-knowledge-na
 async function forgetJarvisKnowledge(key,label) {{ if(!confirm('Forget the shared source for '+label+' on every IHA screen?'))return;try{{setBox(qs('va-knowledge-status'),'Removing the shared source...','muted');const response=await fetch('/api/assistant/knowledge',{{method:'POST',headers:{{'Accept':'application/json','Content-Type':'application/json'}},body:JSON.stringify({{action:'forget',key}})}});const data=await response.json().catch(()=>({{}}));if(!response.ok||!data.ok)throw new Error(data.error||'Could not remove shared knowledge.');renderJarvisKnowledge(data);setBox(qs('va-knowledge-status'),data.message||'Shared source removed.','ok');}}catch(err){{setBox(qs('va-knowledge-status'),err.message||String(err),'bad');}} }}
 qs('va-knowledge-name').addEventListener('input',()=>{{const label=value('va-knowledge-name').toLowerCase();if(/\b(outside|outdoor|exterior)\b/.test(label))qs('va-knowledge-inside').value='false';}});
 qs('va-profile-save').addEventListener('click',saveJarvisProfile);qs('va-knowledge-save').addEventListener('click',saveJarvisKnowledge);qs('va-knowledge-reload').addEventListener('click',()=>{{window.jarvisKnowledgeLoaded=false;loadJarvisKnowledge();}});
-function assistantPayload() {{ return {{enabled:qs('va-enabled').checked,speak:qs('va-speak').checked,funMode:qs('va-fun').checked,playfulReplies:qs('va-playful').checked,continueConversation:qs('va-continue').checked,showResponseText:qs('va-show-text').checked,agentId:value('va-agent').trim(),ttsEntityId:value('va-tts').trim(),ttsMode:value('va-tts-mode'),localTtsVoice:value('va-local-tts-voice').trim(),ttsVoice:value('va-voice'),openAiApiKey:value('va-openai-key').trim(),openAiModel:value('va-openai-model').trim(),openAiInstructions:value('va-openai-instructions').trim(),openAiSpeed:Number(value('va-openai-speed')||1.08),mediaPlayerId:value('va-media').trim(),language:value('va-language').trim()||'en-US',responseHoldSeconds:Number(value('va-hold')||2),announcementVolumePercent:Number(value('va-volume')||45)}}; }}
+function assistantPayload() {{ return {{enabled:qs('va-enabled').checked,speak:qs('va-speak').checked,funMode:qs('va-fun').checked,playfulReplies:qs('va-playful').checked,continueConversation:qs('va-continue').checked,showResponseText:qs('va-show-text').checked,agentId:value('va-agent').trim(),ttsEntityId:value('va-tts').trim(),ttsMode:value('va-tts-mode'),localTtsVoice:value('va-local-tts-voice').trim(),haCloudTtsVoice:value('va-ha-cloud-voice').trim()||'JennyNeural',ttsVoice:value('va-voice'),openAiApiKey:value('va-openai-key').trim(),openAiModel:value('va-openai-model').trim(),openAiInstructions:value('va-openai-instructions').trim(),openAiSpeed:Number(value('va-openai-speed')||1.08),mediaPlayerId:value('va-media').trim(),language:value('va-language').trim()||'en-US',responseHoldSeconds:Number(value('va-hold')||2),announcementVolumePercent:Number(value('va-volume')||45)}}; }}
 qs('va-save').addEventListener('click',async()=>{{try{{qs('va-save').disabled=true;setBox(qs('va-status'),'Saving JARVIS settings...','muted');const response=await fetch('/api/assistant/config',{{method:'POST',headers:{{'Accept':'application/json','Content-Type':'application/json'}},body:JSON.stringify(assistantPayload())}});const data=await response.json().catch(()=>({{}}));if(!response.ok||!data.ok)throw new Error(data.error||'Could not save JARVIS settings.');qs('va-openai-key').value='';setBox(qs('va-status'),data.message||'JARVIS settings saved.','ok');}}catch(err){{setBox(qs('va-status'),err.message||String(err),'bad');}}finally{{qs('va-save').disabled=false;}}}});
 qs('va-test').addEventListener('click',async()=>{{const text=value('va-test-text').trim();if(!text){{setBox(qs('va-status'),'Enter a test command first.','bad');return;}}try{{qs('va-test').disabled=true;setBox(qs('va-status'),'Running command. Watch the thermostat screen...','muted');const response=await fetch('/api/assistant/process',{{method:'POST',headers:{{'Accept':'application/json','Content-Type':'application/json'}},body:JSON.stringify({{text}})}});const data=await response.json().catch(()=>({{}}));if(!response.ok||!data.ok)throw new Error(data.error||'Assistant test failed.');const route='\\nRoute: '+(data.route||'unknown')+' · Speech: '+(data.ttsPath||'none')+'.';const suffix=data.speechPlayed?'\\nSpoken on '+data.mediaPlayerId+' at '+(data.announcementVolumePercent||value('va-volume'))+'%.':(data.speechError?'\\nVoice was not played: '+data.speechError:'');setBox(qs('va-status'),'JARVIS: '+data.response+route+suffix,data.speechPlayed?'ok':'muted');}}catch(err){{setBox(qs('va-status'),err.message||String(err),'bad');}}finally{{qs('va-test').disabled=false;}}}});
 </script>
@@ -7966,6 +7970,7 @@ def _assistant_config_payload() -> dict:
     if tts_mode not in {"home_assistant", "openai_direct"}:
         tts_mode = "home_assistant"
     local_tts_voice = str(voice.get("localTtsVoice") or "").strip()[:160]
+    ha_cloud_tts_voice = str(voice.get("haCloudTtsVoice") or "JennyNeural").strip()[:160] or "JennyNeural"
     tts_voice = str(voice.get("ttsVoice") or "onyx").strip().lower()
     if tts_voice not in OPENAI_TTS_VOICES:
         tts_voice = "onyx"
@@ -7981,6 +7986,7 @@ def _assistant_config_payload() -> dict:
         "ttsEntityId": clean_entity(voice.get("ttsEntityId"), "tts"),
         "ttsMode": tts_mode,
         "localTtsVoice": local_tts_voice,
+        "haCloudTtsVoice": ha_cloud_tts_voice,
         "ttsVoice": tts_voice,
         "openAiApiKeyConfigured": bool(str(voice.get("openAiApiKey") or "").strip()),
         "openAiModel": openai_model,
@@ -8051,6 +8057,13 @@ def _assistant_update_config(payload: dict) -> dict:
     if len(local_tts_voice) > 160 or any(ch in local_tts_voice for ch in "\r\n\t"):
         raise ValueError("localTtsVoice must be a single Piper model name")
     voice["localTtsVoice"] = local_tts_voice[:160]
+    ha_cloud_tts_voice = str(
+        payload.get("haCloudTtsVoice", voice.get("haCloudTtsVoice", "JennyNeural"))
+        or "JennyNeural"
+    ).strip()
+    if len(ha_cloud_tts_voice) > 160 or any(ch in ha_cloud_tts_voice for ch in "\r\n\t"):
+        raise ValueError("haCloudTtsVoice must be a single Home Assistant Cloud voice name")
+    voice["haCloudTtsVoice"] = ha_cloud_tts_voice[:160] or "JennyNeural"
     tts_voice = str(payload.get("ttsVoice", voice.get("ttsVoice", "onyx")) or "onyx").strip().lower()
     if tts_voice not in OPENAI_TTS_VOICES:
         raise ValueError("ttsVoice is not a supported OpenAI voice")
@@ -10166,6 +10179,9 @@ def _assistant_process_payload(payload: dict) -> dict:
         tts_mode = str(payload.get("ttsMode") or config.get("ttsMode") or "home_assistant").strip().lower()
         if tts_mode not in {"home_assistant", "openai_direct"}:
             tts_mode = "home_assistant"
+        ha_cloud_tts_voice = str(
+            payload.get("haCloudTtsVoice") or config.get("haCloudTtsVoice") or "JennyNeural"
+        ).strip()[:160] or "JennyNeural"
         tts_voice = str(payload.get("ttsVoice") or config.get("ttsVoice") or "onyx").strip().lower()
         if tts_voice not in OPENAI_TTS_VOICES:
             tts_voice = "onyx"
@@ -10383,8 +10399,20 @@ def _assistant_process_payload(payload: dict) -> dict:
                         tts_entity_id = _assistant_resolve_tts_entity(ha_url, token, configured_tts)
                         tts_path = "premium_home_assistant"
                         _assistant_set_state("speaking", ttsEntityId=tts_entity_id)
+                        home_assistant_voice = (
+                            ha_cloud_tts_voice
+                            if "home_assistant_cloud" in str(tts_entity_id or "").lower()
+                            else ""
+                        )
                         speech_result = _assistant_tts_speak(
-                            ha_url, token, tts_entity_id, media_player_id, spoken_response, language, announcement_volume, tts_voice
+                            ha_url,
+                            token,
+                            tts_entity_id,
+                            media_player_id,
+                            spoken_response,
+                            language,
+                            announcement_volume,
+                            home_assistant_voice,
                         )
                 speech_played = True
             except Exception as exc:
@@ -10456,7 +10484,11 @@ def _assistant_process_payload(payload: dict) -> dict:
             "ttsMode": "home_assistant" if tts_path == "local" else tts_mode,
             "ttsPolicy": tts_policy,
             "ttsPath": tts_path,
-            "ttsVoice": local_tts_voice if tts_path == "local" else tts_voice,
+            "ttsVoice": (
+                local_tts_voice
+                if tts_path == "local"
+                else (ha_cloud_tts_voice if "home_assistant_cloud" in str(tts_entity_id or "").lower() else tts_voice)
+            ),
             "announcementVolumePercent": announcement_volume,
             "speechPlayed": speech_played,
             "speechResult": speech_result,
