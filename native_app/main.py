@@ -1428,7 +1428,12 @@ class ScreenSleepOverlay(QWidget):
 
 
 class AssistantOverlay(QWidget):
-    """Full-screen original AI-core animation driven by backend assistant state."""
+    """Full-screen amber holographic core driven by backend assistant state.
+
+    The rendering intentionally uses lightweight, deterministic QPainter geometry
+    rather than video, shaders, or a large animated asset. That keeps the visual
+    dramatic while preserving CPU/GPU headroom for the thermostat control loop.
+    """
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1444,8 +1449,31 @@ class AssistantOverlay(QWidget):
         self.request_id = 0
         self.phase = 0.0
         self._active = False
+
+        # Precomputed pseudo-random shell debris. Keeping this deterministic
+        # avoids allocating random geometry every frame on the Raspberry Pi.
+        self._spark_specs: list[tuple[float, float, float, float, float, int]] = []
+        seed = 0x51A7C0DE
+        for i in range(78):
+            seed = (1664525 * seed + 1013904223) & 0xFFFFFFFF
+            u1 = ((seed >> 8) & 0xFFFF) / 65535.0
+            seed = (1664525 * seed + 1013904223) & 0xFFFFFFFF
+            u2 = ((seed >> 8) & 0xFFFF) / 65535.0
+            seed = (1664525 * seed + 1013904223) & 0xFFFFFFFF
+            u3 = ((seed >> 8) & 0xFFFF) / 65535.0
+            self._spark_specs.append((
+                u1 * math.tau,
+                0.70 + u2 * 0.42,
+                0.18 + u3 * 0.54,
+                0.12 + (i % 7) * 0.027,
+                1.1 + (i % 5) * 0.55,
+                i % 9,
+            ))
+
         self.animation = QTimer(self)
-        self.animation.setInterval(50)
+        # Roughly 16 FPS is smooth enough for the wall display while leaving the Pi's
+        # primary thermostat work with substantially more headroom than 30/60 FPS.
+        self.animation.setInterval(60)
         self.animation.timeout.connect(self.advance_animation)
         self.hide()
 
@@ -1479,26 +1507,18 @@ class AssistantOverlay(QWidget):
             self.hide()
 
     def advance_animation(self):
-        speed = 0.075 if self.stage == "processing" else (0.052 if self.stage == "speaking" else 0.042)
+        speed = 0.090 if self.stage == "processing" else (0.064 if self.stage == "speaking" else 0.052)
         self.phase = (self.phase + speed) % (math.pi * 200.0)
         self.update()
 
     def stage_color(self) -> QColor:
         if self.stage == "error":
-            return QColor(255, 92, 78)
-        if self.stage == "speaking":
-            return QColor(255, 187, 74)
+            return QColor(255, 78, 42)
         if self.stage == "listening":
-            return QColor(76, 231, 255)
-        return QColor(255, 143, 39)
-
-    def stage_label(self) -> str:
-        return {
-            "listening": "COMMAND LINK",
-            "processing": "HOME ASSISTANT PROCESSING",
-            "speaking": "SONOS RESPONSE",
-            "error": "DIGITAL GREMLIN DETECTED",
-        }.get(self.stage, "JARVIS-ISH MODE")
+            return QColor(255, 190, 75)
+        if self.stage == "speaking":
+            return QColor(255, 171, 46)
+        return QColor(255, 132, 22)
 
     def mousePressEvent(self, event):
         # The animation intentionally owns the screen while a command is active.
@@ -1514,148 +1534,199 @@ class AssistantOverlay(QWidget):
             return text
         return text[: max(1, max_chars - 1)].rstrip() + "…"
 
+    @staticmethod
+    def _draw_arc_plane(p: QPainter, cx: float, cy: float, rx: float, ry: float, rotation: float,
+                        start: float, span: float, color: QColor, width: float = 1.0):
+        p.save()
+        p.translate(cx, cy)
+        p.rotate(rotation)
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(color, width, Qt.SolidLine, Qt.RoundCap))
+        p.drawArc(QRectF(-rx, -ry, rx * 2.0, ry * 2.0), int(start * 16.0), int(span * 16.0))
+        p.restore()
+
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing, True)
         w = max(1, self.width())
         h = max(1, self.height())
-        base = QLinearGradient(0, 0, w, h)
-        base.setColorAt(0.0, QColor(1, 5, 10))
-        base.setColorAt(0.48, QColor(6, 9, 15))
-        base.setColorAt(1.0, QColor(12, 5, 2))
-        p.fillRect(self.rect(), base)
+        p.fillRect(self.rect(), QColor(0, 0, 0))
 
         active = self.stage_color()
-        cyan = QColor(65, 223, 255)
-        amber = QColor(255, 145, 35)
+        orange = QColor(255, 132, 22)
+        gold = QColor(255, 190, 75)
+        pale = QColor(255, 232, 168)
+        phase = self.phase
 
-        # Subtle technical grid and corner brackets.
-        p.setPen(QPen(QColor(active.red(), active.green(), active.blue(), 28), 1))
-        grid = max(44, int(min(w, h) * 0.065))
-        offset = int((self.phase * 9) % grid)
-        for x in range(-grid + offset, w + grid, grid):
-            p.drawLine(x, 0, x, h)
-        for y in range(-grid + offset, h + grid, grid):
-            p.drawLine(0, y, w, y)
-        p.setPen(QPen(QColor(255, 170, 65, 120), 2))
-        bracket = int(min(w, h) * 0.085)
-        margin = 28
-        for sx, sy in ((1, 1), (-1, 1), (1, -1), (-1, -1)):
-            x = margin if sx > 0 else w - margin
-            y = margin if sy > 0 else h - margin
-            p.drawLine(x, y, x + sx * bracket, y)
-            p.drawLine(x, y, x, y + sy * bracket)
-
-        cx = w * 0.5
-        cy = h * 0.43
-        radius = min(w, h) * 0.235
-        pulse = 1.0 + 0.035 * math.sin(self.phase * 1.7)
-
-        glow = QRadialGradient(QPointF(cx, cy), radius * 1.65)
-        glow.setColorAt(0.0, QColor(active.red(), active.green(), active.blue(), 145))
-        glow.setColorAt(0.22, QColor(255, 138, 30, 82))
-        glow.setColorAt(0.58, QColor(255, 105, 10, 24))
-        glow.setColorAt(1.0, QColor(0, 0, 0, 0))
-        p.setPen(Qt.NoPen)
-        p.setBrush(glow)
-        p.drawEllipse(QPointF(cx, cy), radius * 1.65, radius * 1.65)
-
-        # Rotating segmented rings. This is deliberately original rather than a
-        # copy of any movie interface, while retaining the dramatic AI-core feel.
+        # Sparse edge instrumentation patterned after a cinematic amber HUD.
         p.setBrush(Qt.NoBrush)
-        ring_specs = (
-            (1.02, 5.0, 205, active, 1.0),
-            (0.82, 3.0, 145, amber, -1.5),
-            (0.61, 2.2, 110, cyan, 2.1),
-            (0.42, 3.8, 230, QColor(255, 218, 125), -2.7),
-        )
-        for idx, (scale, width, span, color, direction) in enumerate(ring_specs):
-            rr = radius * scale * pulse
-            rect = QRectF(cx - rr, cy - rr, rr * 2, rr * 2)
-            p.setPen(QPen(QColor(color.red(), color.green(), color.blue(), 210 - idx * 28), width, Qt.SolidLine, Qt.RoundCap))
-            start = int((self.phase * direction * 820 + idx * 71) % 5760)
-            for segment in range(4 + idx):
-                seg_start = start + segment * int(5760 / (4 + idx))
-                seg_span = int((span - segment * 8) * 16)
-                p.drawArc(rect, seg_start, seg_span)
+        p.setPen(QPen(QColor(255, 145, 38, 92), 1))
+        edge = max(34, int(min(w, h) * 0.055))
+        p.drawLine(QPointF(48, 22), QPointF(w * 0.67, 22))
+        p.drawLine(QPointF(48, 22), QPointF(48, edge))
+        p.drawLine(QPointF(w - 48, 22), QPointF(w * 0.78, 22))
+        p.drawLine(QPointF(w - 48, 22), QPointF(w - 48, edge * 1.55))
+        p.drawLine(QPointF(38, h - 30), QPointF(w * 0.27, h - 30))
+        p.drawLine(QPointF(w - 38, h - 30), QPointF(w * 0.72, h - 30))
+        p.setPen(QPen(QColor(255, 182, 79, 46), 1))
+        for i in range(5):
+            yy = 40 + i * 10
+            p.drawLine(QPointF(76 + i * 9, yy), QPointF(min(w * 0.34, 390) + i * 4, yy))
+        for i in range(4):
+            yy = h - 72 - i * 9
+            p.drawLine(QPointF(max(w * 0.70, w - 390) - i * 4, yy), QPointF(w - 78 - i * 10, yy))
 
-        # Orbit particles and radial data streaks.
-        for i in range(34):
-            angle = self.phase * (0.35 + (i % 5) * 0.08) + i * 0.733
-            orbit = radius * (0.48 + (i % 11) * 0.055)
-            x = cx + math.cos(angle) * orbit
-            y = cy + math.sin(angle * 1.07) * orbit * 0.77
-            size = 1.5 + (i % 4) * 0.85
-            alpha = 95 + (i % 5) * 28
-            color = cyan if i % 6 == 0 else amber
+        cx = w * 0.50
+        cy = h * 0.485
+        radius = min(w, h) * 0.345
+        pulse = 1.0 + 0.022 * math.sin(phase * 1.55)
+        radius *= pulse
+
+        # Broad, smoky spherical glow.
+        halo = QRadialGradient(QPointF(cx, cy), radius * 1.48)
+        halo.setColorAt(0.0, QColor(255, 165, 47, 112))
+        halo.setColorAt(0.20, QColor(255, 119, 14, 74))
+        halo.setColorAt(0.48, QColor(255, 81, 4, 31))
+        halo.setColorAt(0.78, QColor(150, 43, 0, 12))
+        halo.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.setPen(Qt.NoPen)
+        p.setBrush(halo)
+        p.drawEllipse(QPointF(cx, cy), radius * 1.48, radius * 1.48)
+
+        # Faint glass shell and concentric outer boundaries.
+        p.setBrush(QColor(255, 109, 18, 7))
+        p.setPen(QPen(QColor(255, 151, 51, 44), 1.2))
+        p.drawEllipse(QPointF(cx, cy), radius * 1.05, radius * 1.05)
+        for scale, alpha, width in ((1.13, 25, 1.0), (1.02, 62, 1.5), (0.91, 36, 1.0), (0.70, 31, 1.0)):
+            p.setPen(QPen(QColor(255, 155, 48, alpha), width))
+            p.drawEllipse(QPointF(cx, cy), radius * scale, radius * scale)
+
+        # Rotating latitude/longitude planes create the tangled 3D orb silhouette.
+        plane_specs = (
+            (1.00, 0.35, 18, 290, 0.48, 1.0),
+            (0.97, 0.54, -24, 245, -0.31, 1.4),
+            (0.88, 0.29, 62, 205, 0.71, 1.2),
+            (0.80, 0.68, -58, 185, -0.56, 1.0),
+            (0.72, 0.42, 104, 236, 0.63, 1.4),
+            (0.60, 0.73, -111, 198, -0.82, 1.1),
+            (0.48, 0.34, 147, 260, 0.94, 1.5),
+        )
+        for idx, (scale, squash, rotation, span, speed, width) in enumerate(plane_specs):
+            start = (phase * speed * 96.0 + idx * 47.0) % 360.0
+            alpha = 76 + idx * 13
+            color = QColor(255, 139 + min(42, idx * 7), 30, min(190, alpha))
+            for segment in range(3 + idx % 3):
+                segment_start = start + segment * (360.0 / (3 + idx % 3))
+                segment_span = max(22.0, span / (3.2 + (segment % 2) * 0.8))
+                self._draw_arc_plane(
+                    p, cx, cy, radius * scale, radius * scale * squash,
+                    rotation + math.sin(phase * 0.22 + idx) * 4.5,
+                    segment_start, segment_span, color, width,
+                )
+
+        # Fine rotating arc fragments around the shell.
+        for i in range(32):
+            ring = radius * (0.58 + (i % 11) * 0.043)
+            squash = 0.42 + (i % 7) * 0.075
+            rotation = (i * 37.0 + math.sin(phase * 0.19 + i) * 13.0) % 180.0
+            start = (i * 83.0 + phase * (34.0 + (i % 5) * 7.0)) % 360.0
+            span = 7.0 + (i % 6) * 4.4
+            alpha = 34 + (i % 8) * 17
+            self._draw_arc_plane(
+                p, cx, cy, ring, ring * squash, rotation,
+                start, span, QColor(255, 143 + (i % 4) * 16, 35, min(170, alpha)),
+                0.75 + (i % 3) * 0.45,
+            )
+
+        # Tangled shell sparks and short data streaks. The vertical warp produces
+        # a spherical volume instead of a flat clock-face ring.
+        for base_angle, shell, warp, speed, size, group in self._spark_specs:
+            angle = base_angle + phase * speed * (0.30 if group % 2 else -0.24)
+            wobble = math.sin(phase * 0.47 + base_angle * 2.1) * radius * 0.032
+            rr = radius * shell + wobble
+            vertical = 0.66 + warp * 0.24
+            x = cx + math.cos(angle) * rr
+            y = cy + math.sin(angle * (0.94 + warp * 0.12) + group * 0.17) * rr * vertical
+            shell_depth = 0.45 + 0.55 * abs(math.cos(angle))
+            alpha = int(62 + 166 * shell_depth)
+            color = pale if group in {0, 5} else (gold if group % 3 == 0 else orange)
             p.setPen(Qt.NoPen)
-            p.setBrush(QColor(color.red(), color.green(), color.blue(), min(230, alpha)))
-            p.drawEllipse(QPointF(x, y), size, size)
-            if i % 4 == 0:
-                p.setPen(QPen(QColor(color.red(), color.green(), color.blue(), 50), 1))
+            p.setBrush(QColor(color.red(), color.green(), color.blue(), min(238, alpha)))
+            dot = size * (0.72 + shell_depth * 0.55)
+            p.drawEllipse(QPointF(x, y), dot, dot)
+            if group % 2 == 0:
+                tangent = angle + math.pi / 2.0
+                length = radius * (0.018 + (group % 4) * 0.012)
+                p.setPen(QPen(QColor(255, 143, 37, min(145, alpha)), 0.8 + group % 3 * 0.35))
+                p.drawLine(
+                    QPointF(x - math.cos(tangent) * length, y - math.sin(tangent) * length * 0.65),
+                    QPointF(x + math.cos(tangent) * length, y + math.sin(tangent) * length * 0.65),
+                )
+            if group in {1, 7}:
+                p.setPen(QPen(QColor(255, 113, 18, 34), 0.7))
                 p.drawLine(QPointF(cx, cy), QPointF(x, y))
 
-        core_r = radius * (0.22 + 0.025 * math.sin(self.phase * 2.2))
-        core = QRadialGradient(QPointF(cx, cy), core_r)
-        core.setColorAt(0.0, QColor(255, 248, 202, 255))
-        core.setColorAt(0.23, QColor(255, 188, 70, 245))
-        core.setColorAt(0.68, QColor(255, 95, 9, 155))
-        core.setColorAt(1.0, QColor(255, 65, 0, 0))
+        # Dense, luminous central knot.
+        knot_r = radius * (0.28 + 0.018 * math.sin(phase * 2.2))
+        for i in range(10):
+            rotation = i * 27.7 + phase * (7.0 if i % 2 else -5.0)
+            rx = knot_r * (0.70 + (i % 5) * 0.095)
+            ry = knot_r * (0.20 + (i % 4) * 0.10)
+            start = (phase * (28 + i * 2) + i * 51) % 360
+            self._draw_arc_plane(
+                p, cx, cy, rx, ry, rotation, start, 185 + (i % 3) * 42,
+                QColor(255, 186 + (i % 3) * 19, 74, 105 + (i % 5) * 25),
+                1.1 + (i % 4) * 0.6,
+            )
+
+        core = QRadialGradient(QPointF(cx, cy), knot_r * 1.22)
+        core.setColorAt(0.0, QColor(255, 252, 214, 255))
+        core.setColorAt(0.12, QColor(255, 224, 126, 250))
+        core.setColorAt(0.38, QColor(255, 155, 39, 205))
+        core.setColorAt(0.72, QColor(255, 83, 5, 87))
+        core.setColorAt(1.0, QColor(255, 60, 0, 0))
         p.setPen(Qt.NoPen)
         p.setBrush(core)
-        p.drawEllipse(QPointF(cx, cy), core_r, core_r)
+        p.drawEllipse(QPointF(cx, cy), knot_r * 1.22, knot_r * 1.22)
 
-        # Speaking bars move with independent phases; processing gets a scanning line.
-        if self.stage == "speaking":
-            bar_y = cy + radius * 1.16
-            bar_w = min(w * 0.32, 390)
-            start_x = cx - bar_w / 2
-            count = 27
-            for i in range(count):
-                amp = 9 + 25 * abs(math.sin(self.phase * 2.3 + i * 0.57))
-                x = start_x + (bar_w / max(1, count - 1)) * i
-                p.setPen(QPen(QColor(255, 181, 67, 200), 3, Qt.SolidLine, Qt.RoundCap))
-                p.drawLine(QPointF(x, bar_y - amp / 2), QPointF(x, bar_y + amp / 2))
-        elif self.stage == "processing":
-            scan_y = cy - radius + ((math.sin(self.phase) + 1.0) / 2.0) * radius * 2
-            p.setPen(QPen(QColor(70, 229, 255, 120), 2))
-            p.drawLine(QPointF(cx - radius * 0.88, scan_y), QPointF(cx + radius * 0.88, scan_y))
+        # Stage is communicated visually rather than with large labels or jokes.
+        if self.stage == "processing":
+            sweep = (phase * 64.0) % 360.0
+            self._draw_arc_plane(p, cx, cy, radius * 1.16, radius * 0.24, sweep,
+                                 sweep, 82, QColor(255, 205, 111, 132), 2.0)
+        elif self.stage == "speaking":
+            wave_y = min(h - 36, cy + radius * 1.18)
+            wave_w = min(w * 0.46, radius * 2.0)
+            bars = 37
+            p.setPen(QPen(QColor(255, 178, 65, 178), 2.2, Qt.SolidLine, Qt.RoundCap))
+            for i in range(bars):
+                amp = 3.0 + 12.0 * abs(math.sin(phase * 2.1 + i * 0.52))
+                x = cx - wave_w / 2.0 + wave_w * i / max(1, bars - 1)
+                p.drawLine(QPointF(x, wave_y - amp), QPointF(x, wave_y + amp))
+        elif self.stage == "error":
+            p.setPen(QPen(QColor(255, 72, 36, 180), 2.2))
+            for scale in (1.08, 1.18):
+                p.drawArc(QRectF(cx - radius * scale, cy - radius * scale,
+                                 radius * scale * 2, radius * scale * 2),
+                          int((phase * 130) % 5760), int(72 * 16))
 
-        # Headline and current comic status.
-        p.setPen(QColor(255, 173, 69))
-        p.setFont(font(max(9, int(min(w, h) * 0.018)), QFont.Black, 150))
-        p.drawText(QRectF(38, 28, w - 76, 36), Qt.AlignHCenter | Qt.AlignVCenter, "JARVIS // THERMOSTAT TERMINAL")
-        p.setPen(QColor(236, 245, 255))
-        p.setFont(font(max(15, int(min(w, h) * 0.032)), QFont.Black, 90))
-        p.drawText(QRectF(40, 66, w - 80, 58), Qt.AlignHCenter | Qt.AlignVCenter, self.stage_label())
-        p.setPen(QColor(178, 196, 219))
-        p.setFont(font(max(9, int(min(w, h) * 0.017)), QFont.Bold))
-        p.drawText(QRectF(90, 118, w - 180, 52), Qt.AlignHCenter | Qt.AlignTop | Qt.TextWordWrap, self._fit_text(self.status_text, 150))
-
-        # Command/response cards at the bottom keep the animation useful, not just flashy.
-        card_h = max(105, int(h * 0.17))
-        card_y = h - card_h - 30
-        gap = 16
-        card_w = (w - 76 - gap) / 2
-        cards = (
-            (QRectF(30, card_y, card_w, card_h), "YOU TYPED", self.command or "Waiting for a command...", cyan),
-            (QRectF(30 + card_w + gap, card_y, card_w, card_h), "JARVIS REPLY", self.response or (self.error_text if self.stage == "error" else "Processing..."), amber),
-        )
-        for rect, label, text, color in cards:
-            p.setPen(QPen(QColor(color.red(), color.green(), color.blue(), 105), 1.5))
-            p.setBrush(QColor(3, 8, 15, 218))
-            p.drawRoundedRect(rect, 18, 18)
-            p.setPen(QColor(color.red(), color.green(), color.blue(), 225))
-            p.setFont(font(9, QFont.Black, 110))
-            p.drawText(QRectF(rect.x() + 18, rect.y() + 12, rect.width() - 36, 24), Qt.AlignLeft | Qt.AlignVCenter, label)
-            p.setPen(QColor(242, 247, 255))
-            p.setFont(font(max(10, int(min(w, h) * 0.017)), QFont.Bold))
-            p.drawText(QRectF(rect.x() + 18, rect.y() + 39, rect.width() - 36, rect.height() - 50), Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap, self._fit_text(text, 260))
-
-        if self.error_text and self.stage != "error":
-            p.setPen(QColor(255, 159, 92))
-            p.setFont(font(9, QFont.Bold))
-            p.drawText(QRectF(40, card_y - 28, w - 80, 22), Qt.AlignHCenter | Qt.AlignVCenter, self._fit_text("Voice note: " + self.error_text, 180))
+        # Keep only the useful final reply/error, in a low-profile glass strip.
+        # The former title, stage heading, and rotating comic status line are
+        # intentionally gone so the hologram remains the focus.
+        display_text = self.response or (self.error_text if self.stage == "error" else "")
+        if display_text:
+            panel_h = max(64, min(104, int(h * 0.13)))
+            panel = QRectF(54, h - panel_h - 32, w - 108, panel_h)
+            p.setBrush(QColor(3, 2, 1, 202))
+            p.setPen(QPen(QColor(active.red(), active.green(), active.blue(), 86), 1.2))
+            p.drawRoundedRect(panel, 12, 12)
+            p.setPen(QColor(255, 236, 201) if self.stage != "error" else QColor(255, 174, 145))
+            p.setFont(font(max(10, int(min(w, h) * 0.019)), QFont.Bold))
+            p.drawText(
+                QRectF(panel.x() + 22, panel.y() + 13, panel.width() - 44, panel.height() - 26),
+                Qt.AlignHCenter | Qt.AlignVCenter | Qt.TextWordWrap,
+                self._fit_text(display_text, 330),
+            )
 
 
 class Header(QWidget):

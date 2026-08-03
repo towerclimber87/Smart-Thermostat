@@ -7379,9 +7379,9 @@ def _assistant_stage_quip(stage: str, request_id: int) -> str:
             "Crunching electrons. Please do not feed the Raspberry Pi after midnight.",
         ),
         "speaking": (
-            "Delivering wisdom through the Sonos, because tiny wall speakers are beneath us.",
-            "Broadcasting the answer with maximum theatrical efficiency.",
-            "The house has spoken. I merely added the glowing circles.",
+            "Sending the answer to the selected speaker.",
+            "Response ready for playback.",
+            "The house has answered.",
         ),
         "error": (
             "Well, that went about as smoothly as a shopping cart with one bad wheel.",
@@ -7433,18 +7433,19 @@ def _assistant_playful_spoken_text(text: str, request_id: int, enabled: bool, re
     clean = str(text or "").strip()
     if not clean or not enabled:
         return clean
-    # Keep the useful Home Assistant response intact; add only a brief local quip.
+    # Keep the useful response intact and keep the joke short. Shorter prefixes
+    # reduce TTS synthesis/playback time without making the assistant sterile.
     action_prefixes = (
-        "At once, boss. ",
-        "Done, with only a modest amount of unnecessary drama. ",
-        "Consider it handled by the glowing orange department. ",
-        "Your wish has been routed through the house bureaucracy. ",
+        "Naturally. ",
+        "Done. Try to look surprised. ",
+        "Handled. No cape required. ",
+        "The house bureaucracy approves. ",
     )
     info_prefixes = (
-        "The silicon oracle reports: ",
-        "After consulting several highly opinionated electrons: ",
-        "The unnecessarily dramatic answer is: ",
-        "According to the house, which insists it is never wrong: ",
+        "The house says: ",
+        "Tiny electronic drumroll: ",
+        "Officially unnecessary drama: ",
+        "The electrons agree: ",
     )
     pool = action_prefixes if response_type == "action_done" else info_prefixes
     return pool[max(0, int(request_id)) % len(pool)] + clean
@@ -7466,7 +7467,9 @@ def _assistant_tts_speak(ha_url: str, token: str, tts_entity_id: str, media_play
         "entity_id": tts_entity_id,
         "media_player_entity_id": media_player_id,
         "message": message,
-        "cache": False,
+        # Allow Home Assistant to reuse identical generated audio. Dynamic
+        # answers still generate normally, while repeated tests start faster.
+        "cache": True,
     }
     return _ha_json_request(
         ha_url,
@@ -7484,7 +7487,68 @@ def _assistant_estimated_hold_seconds(message: str, extra_seconds: float = 0.0) 
     return max(4.0, min(28.0, (words / 2.45) + 2.8 + max(0.0, float(extra_seconds or 0.0))))
 
 
+
+def _assistant_format_temperature(value: object) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return ""
+    if not (-40.0 <= number <= 130.0):
+        return ""
+    rounded = round(number, 1)
+    return str(int(rounded)) if float(rounded).is_integer() else f"{rounded:.1f}"
+
+
+def _assistant_local_fast_response(text: str) -> tuple[str, str, str] | None:
+    """Answer a narrow set of read-only thermostat questions without an LLM.
+
+    This deliberately does not interpret control commands. It only handles short,
+    unambiguous status questions already available in the thermostat's RAM, so it
+    cannot interfere with Home Assistant automations or equipment safety logic.
+    """
+    normalized = " ".join(re.sub(r"[^a-z0-9.]+", " ", str(text or "").lower()).split())
+    words = normalized.split()
+    if not normalized or len(words) > 18:
+        return None
+    blocked = (
+        " and ", " then ", " also ", "introduce", "explain", "why ", "forecast",
+        "outside", "bedroom", "office", "weather", "change ", "raise ",
+        "lower ", "turn ", "switch ", "make ",
+    )
+    padded = f" {normalized} "
+    if any(marker in padded for marker in blocked):
+        return None
+
+    thermostat = (_read_thermostat_record().get("thermostat") or {})
+    if not isinstance(thermostat, dict):
+        return None
+    location = str(thermostat.get("name") or "living room").strip() or "living room"
+    if location.lower().endswith(" test"):
+        location = location[:-5].strip() or "living room"
+    if location.lower().replace(" ", "") in {"livingroom", "livingroomclimate"}:
+        location = "living room"
+
+    asks_temperature = any(term in normalized for term in ("temperature", "temp", "degrees"))
+    asks_current = any(term in normalized for term in ("current", "currently", "right now", "what is", "whats", "how warm", "how cold"))
+    if asks_temperature and asks_current:
+        current = _assistant_format_temperature(thermostat.get("currentTemp"))
+        if current:
+            return f"The {location} is currently {current} degrees.", "query_answer", "local_thermostat_temperature"
+
+    asks_target = any(term in normalized for term in ("setpoint", "target", "set to", "thermostat setting"))
+    if asks_target and any(term in normalized for term in ("what", "current", "currently")):
+        target = _assistant_format_temperature(thermostat.get("targetTemp"))
+        if target:
+            return f"The thermostat is set to {target} degrees.", "query_answer", "local_thermostat_target"
+
+    asks_mode = "mode" in words or "running" in words
+    if asks_mode and any(term in normalized for term in ("what", "current", "currently")):
+        mode = str(thermostat.get("mode") or "off").strip().lower() or "off"
+        return f"The thermostat is currently in {mode} mode.", "query_answer", "local_thermostat_mode"
+    return None
+
 def _assistant_process_payload(payload: dict) -> dict:
+    request_started = time.monotonic()
     payload = payload if isinstance(payload, dict) else {}
     text = str(payload.get("text") or payload.get("command") or "").strip()
     if not text:
@@ -7519,12 +7583,12 @@ def _assistant_process_payload(payload: dict) -> dict:
             conversation_id = previous_conversation_id
 
         _assistant_set_state(
-            "listening",
+            "processing",
             requestId=request_id,
             command=text,
             response="",
             spokenResponse="",
-            statusText=_assistant_stage_quip("listening", request_id) if fun_mode else "Command received.",
+            statusText=_assistant_stage_quip("processing", request_id) if fun_mode else "Processing...",
             error="",
             startedAt=int(time.time() * 1000),
             clearAtMonotonic=0.0,
@@ -7532,28 +7596,33 @@ def _assistant_process_payload(payload: dict) -> dict:
             ttsEntityId=configured_tts,
             speechPlayed=False,
         )
-        time.sleep(0.45)
-        _assistant_set_state(
-            "processing",
-            statusText=_assistant_stage_quip("processing", request_id) if fun_mode else "Processing with Home Assistant...",
-        )
 
-        conversation_payload = {"text": text, "language": language}
-        if agent_id:
-            conversation_payload["agent_id"] = agent_id
-        if conversation_id:
-            conversation_payload["conversation_id"] = conversation_id
-        raw = _ha_json_request(
-            ha_url,
-            token,
-            "POST",
-            "/api/conversation/process",
-            conversation_payload,
-            timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
-        )
-        response_text, response_type, returned_conversation_id, continue_conversation = _assistant_extract_response(raw)
-        if not response_text:
-            response_text = "Home Assistant completed the request but did not return a spoken response."
+        conversation_started = time.monotonic()
+        quick = _assistant_local_fast_response(text)
+        route = "home_assistant_conversation"
+        returned_conversation_id = ""
+        continue_conversation = False
+        if quick:
+            response_text, response_type, route = quick
+        else:
+            conversation_payload = {"text": text, "language": language}
+            if agent_id:
+                conversation_payload["agent_id"] = agent_id
+            if conversation_id:
+                conversation_payload["conversation_id"] = conversation_id
+            raw = _ha_json_request(
+                ha_url,
+                token,
+                "POST",
+                "/api/conversation/process",
+                conversation_payload,
+                timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
+            )
+            response_text, response_type, returned_conversation_id, continue_conversation = _assistant_extract_response(raw)
+            if not response_text:
+                response_text = "Home Assistant completed the request but did not return a spoken response."
+        conversation_ms = int((time.monotonic() - conversation_started) * 1000)
+
         saved_conversation_id = returned_conversation_id if config.get("continueConversation") else ""
         spoken_response = _assistant_playful_spoken_text(response_text, request_id, playful_replies, response_type)
         tts_entity_id = ""
@@ -7564,10 +7633,11 @@ def _assistant_process_payload(payload: dict) -> dict:
             "speaking",
             response=response_text if config.get("showResponseText") else "",
             spokenResponse=spoken_response,
-            statusText=_assistant_stage_quip("speaking", request_id) if fun_mode else "Sending the reply to the selected speaker...",
+            statusText="Response ready.",
             conversationId=saved_conversation_id,
             mediaPlayerId=media_player_id,
         )
+        tts_started = time.monotonic()
         if speak:
             try:
                 tts_entity_id = _assistant_resolve_tts_entity(ha_url, token, configured_tts)
@@ -7576,8 +7646,16 @@ def _assistant_process_payload(payload: dict) -> dict:
                 speech_played = True
             except Exception as exc:
                 speech_error = str(exc)
+        tts_ms = int((time.monotonic() - tts_started) * 1000) if speak else 0
+        total_ms = int((time.monotonic() - request_started) * 1000)
+        timings = {
+            "conversationMs": conversation_ms,
+            "ttsRequestMs": tts_ms,
+            "totalMs": total_ms,
+        }
+
         hold_seconds = _assistant_estimated_hold_seconds(spoken_response if speech_played else response_text, config.get("responseHoldSeconds", 2.0))
-        status_text = _assistant_stage_quip("speaking", request_id) if fun_mode else "Response ready."
+        status_text = "Response ready."
         if speak and speech_error:
             status_text = "The answer is ready, but Sonos/TTS needs configuration."
         state = _assistant_set_state(
@@ -7597,6 +7675,7 @@ def _assistant_process_payload(payload: dict) -> dict:
             "response": response_text,
             "spokenResponse": spoken_response,
             "responseType": response_type,
+            "route": route,
             "conversationId": returned_conversation_id,
             "continueConversation": continue_conversation,
             "agentId": agent_id or "home_assistant/default",
@@ -7604,6 +7683,7 @@ def _assistant_process_payload(payload: dict) -> dict:
             "ttsEntityId": tts_entity_id or configured_tts,
             "speechPlayed": speech_played,
             "speechError": speech_error,
+            "timings": timings,
             "assistant": state,
         }
     except Exception as exc:
@@ -7611,14 +7691,19 @@ def _assistant_process_payload(payload: dict) -> dict:
             request_id = int(_ASSISTANT_STATE.get("requestId") or 0)
         state = _assistant_set_state(
             "error",
-            statusText=_assistant_stage_quip("error", request_id),
+            statusText="Assistant request failed.",
             error=str(exc),
             response="",
             spokenResponse="",
             speechPlayed=False,
             clearAtMonotonic=time.monotonic() + 10.0,
         )
-        return {"ok": False, "error": str(exc), "assistant": state}
+        return {
+            "ok": False,
+            "error": str(exc),
+            "timings": {"totalMs": int((time.monotonic() - request_started) * 1000)},
+            "assistant": state,
+        }
     finally:
         _ASSISTANT_PROCESS_LOCK.release()
 

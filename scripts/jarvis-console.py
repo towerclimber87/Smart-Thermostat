@@ -97,6 +97,13 @@ def run_command(base_url: str, text: str, *, speak: bool, new_conversation: bool
         else:
             detail = str(result.get("speechError") or "TTS did not report successful playback.")
             print(f"         Voice warning: {detail}")
+    timings = result.get("timings") if isinstance(result.get("timings"), dict) else {}
+    if timings:
+        route = str(result.get("route") or "unknown").replace("_", " ")
+        conversation = float(timings.get("conversationMs") or 0) / 1000.0
+        tts_request = float(timings.get("ttsRequestMs") or 0) / 1000.0
+        total = float(timings.get("totalMs") or 0) / 1000.0
+        print(f"         Timing: {route} {conversation:.2f}s | TTS {tts_request:.2f}s | total {total:.2f}s")
     return True
 
 
