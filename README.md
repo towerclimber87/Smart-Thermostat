@@ -84,6 +84,17 @@ The native panel displays the AI-core animation and sends typed commands to Home
 
 The assistant reuses the Home Assistant URL and long-lived token already stored in the thermostat configuration. Replies can be sent to the Sonos/media player selected on the Audio page or to a separate player selected under **Backup Config → JARVIS Voice**. The stored-token assistant endpoint accepts commands only from the thermostat itself unless the temporary Backup Config portal is open.
 
+### Direct-title spoken responses
+
+Version 12.70 removes the extra spoken ceremony before answers. When the shared title is enabled, replies begin directly with the configured form of address:
+
+```text
+Sir, tomorrow's forecast is partly cloudy...
+Sir, the living room light is off.
+```
+
+The panel strips leading phrases such as `Done`, `Certainly`, `Of course`, `Right away`, and `As requested`, including cases where Home Assistant or the cloud agent already placed `sir` after the phrase. Errors are also normalized to begin with the title instead of an apology. The answer's factual content is otherwise preserved.
+
 ### Cost-aware hybrid routing
 
 Version 12.60 makes hybrid mode conversational without turning every home request into a paid AI call:
@@ -121,7 +132,7 @@ Every updated IHA panel reads the same profile. The default behavior is:
   - the default form of address is `sir`;
   - humor defaults to restrained;
   - the old goofy spoken prefixes and screen jokes are removed;
-  - acknowledgements are brief, professional, and varied.
+  - spoken replies begin directly with `Sir, ...` without an extra acknowledgement.
 
 The router decides the destination before making the conversation request. A clear home-control command therefore does not wait for an OpenAI probe. A two-step request occurs only for a read-only question that local Assist cannot resolve; the cloud agent then receives the question and can summarize the relevant exposed entities.
 
@@ -135,7 +146,7 @@ Speech cost policy: Piper/local speech for every answer
 Local TTS entity: tts.piper
 Form of address: sir
 Humor level: Restrained
-Address me as “sir” when natural: enabled
+Begin spoken replies with “sir”: enabled
 ```
 
 The **Run Test** result now shows the selected conversation route and speech path. Useful checks:
@@ -167,10 +178,10 @@ Piper's available voice names and quality depend on the voice model installed in
 
 ### Refined cloud personality
 
-The thermostat adds a restrained spoken acknowledgement and the shared form of address to both local and cloud responses. For broad OpenAI answers to stay in character as well, configure the OpenAI conversation agent's prompt in Home Assistant with wording similar to:
+The thermostat places the shared form of address at the beginning of both local and cloud spoken responses without adding a preliminary acknowledgement. For broad OpenAI answers to stay in character as well, configure the OpenAI conversation agent's prompt in Home Assistant with wording similar to:
 
 ```text
-You are JARVIS, an original refined household computer assistant. Address the user as “sir” when it sounds natural. Be concise, composed, precise, and helpful. Use a polished British manner of speaking, but do not imitate any actor or copyrighted character. Use dry humor only rarely and never become goofy, theatrical, overly chatty, or excessively enthusiastic. For home facts and device state, do not invent values; use only information supplied by Home Assistant and say clearly when information is unavailable. When a read-only request matches several exposed entities, inspect all relevant matches and summarize each state instead of asking the user to choose one. For current external information such as weather, use web search when it is enabled and Home Assistant does not provide the answer.
+You are JARVIS, an original refined household computer assistant. Begin spoken answers directly with “Sir,” and then the useful answer. Do not begin with acknowledgements such as “Of course,” “Certainly,” “Done,” or “Right away.” Be concise, composed, precise, and helpful. Use a polished British manner of speaking, but do not imitate any actor or copyrighted character. Use dry humor only rarely and never become goofy, theatrical, overly chatty, or excessively enthusiastic. For home facts and device state, do not invent values; use only information supplied by Home Assistant and say clearly when information is unavailable. When a read-only request matches several exposed entities, inspect all relevant matches and summarize each state instead of asking the user to choose one. For current external information such as weather, use web search when it is enabled and Home Assistant does not provide the answer.
 ```
 
 This prompt controls the content and manner of the OpenAI answer. Piper controls how the final text sounds when spoken.

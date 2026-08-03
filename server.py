@@ -70,9 +70,10 @@ OPENAI_TTS_VOICES = ("onyx", "cedar", "marin", "alloy", "ash", "ballad", "coral"
 JARVIS_TTS_INSTRUCTIONS = (
     "Speak as an original, highly capable British household computer assistant. "
     "Use a refined British-style accent, calm lower-pitched male delivery, precise diction, "
-    "measured confidence, and restrained warmth. Address the user as sir when it sounds natural. "
-    "Be concise, professional, and composed. Use only very occasional understated dry wit; never "
-    "sound goofy, theatrical, or overly enthusiastic. Do not imitate any actor or copyrighted character."
+    "measured confidence, and restrained warmth. Begin directly with the supplied words and do not "
+    "insert acknowledgements such as certainly, of course, done, or right away. Be concise, professional, "
+    "and composed. Use only very occasional understated dry wit; never sound goofy, theatrical, or overly "
+    "enthusiastic. Do not imitate any actor or copyrighted character."
 )
 DEFAULT_SHARED_JARVIS_PROFILE = {
     "name": "JARVIS",
@@ -2938,7 +2939,7 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
     <div class="card">
       <div class="eyebrow">JARVIS Voice</div><h2>Assistant &amp; Sonos</h2>
       <p class="muted">JARVIS now uses cost-aware hybrid routing. Clear household commands and saved home-temperature questions go straight to Home Assistant. Broader questions use the configured OpenAI conversation agent. Piper can speak every answer locally so OpenAI speech charges are avoided.</p>
-      <div class="checks"><label class="check"><input id="va-enabled" type="checkbox" {assistant_enabled}>Assistant enabled</label><label class="check"><input id="va-speak" type="checkbox" {assistant_speak}>Speak on Sonos</label><label class="check"><input id="va-fun" type="checkbox" {assistant_fun}>Show processing status phrases</label><label class="check"><input id="va-playful" type="checkbox" {assistant_playful}>Use brief JARVIS acknowledgements</label><label class="check"><input id="va-continue" type="checkbox" {assistant_continue}>Continue cloud conversation</label><label class="check"><input id="va-show-text" type="checkbox" {assistant_show_text}>Show response text</label></div>
+      <div class="checks"><label class="check"><input id="va-enabled" type="checkbox" {assistant_enabled}>Assistant enabled</label><label class="check"><input id="va-speak" type="checkbox" {assistant_speak}>Speak on Sonos</label><label class="check"><input id="va-fun" type="checkbox" {assistant_fun}>Show processing status phrases</label><label class="check"><input id="va-playful" type="checkbox" {assistant_playful}>Use JARVIS form of address</label><label class="check"><input id="va-continue" type="checkbox" {assistant_continue}>Continue cloud conversation</label><label class="check"><input id="va-show-text" type="checkbox" {assistant_show_text}>Show response text</label></div>
       <div class="settings-section voice-provider">
         <h3>Shared Routing &amp; Personality</h3>
         <p class="voice-note">Saved once in Home Assistant and used by every updated IHA panel. Clear home commands go directly to Home Assistant. Read-only questions that local Assist cannot resolve may fall through to OpenAI, but device-control commands never do.</p>
@@ -2950,7 +2951,7 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
           <div class="field"><label>Local TTS entity</label><input id="va-local-tts" type="text" placeholder="tts.piper"><span class="hint">Blank auto-detects Piper first. Install and configure Piper in Home Assistant for free local speech.</span></div>
           <div class="field"><label>Form of address</label><input id="va-address" type="text" maxlength="32" placeholder="sir"></div>
           <div class="field"><label>Humor level</label><select id="va-humor"><option value="0">None</option><option value="1">Restrained — recommended</option><option value="2">Occasional dry wit</option></select></div>
-          <div class="field"><label class="check"><input id="va-use-title" type="checkbox" checked>Address me as “sir” when natural</label></div>
+          <div class="field"><label class="check"><input id="va-use-title" type="checkbox" checked>Begin spoken replies with “sir”</label></div>
         </div>
         <div class="button-row"><button id="va-profile-save" type="button">Save Shared Behavior</button></div>
         <div id="va-profile-status" class="status muted">Open this tab to load the shared routing and personality profile.</div>
@@ -8266,39 +8267,62 @@ def _assistant_playful_spoken_text(
     response_type: str = "",
     profile: dict | None = None,
 ) -> str:
-    """Apply a composed JARVIS-style address without changing the answer's facts."""
+    """Begin spoken replies with the shared title and remove needless ceremony."""
     clean = " ".join(str(text or "").strip().split())
     if not clean:
         return clean
+
     settings = _assistant_normalize_shared_profile(profile or {})
     use_title = bool(settings.get("use_title")) and enabled
     address = str(settings.get("address") or "sir").strip(" ,.!?") or "sir"
-    try:
-        humor_level = max(0, min(2, int(settings.get("humor_level", 1))))
-    except (TypeError, ValueError):
-        humor_level = 1
-    if not use_title or re.search(rf"\b{re.escape(address)}\b", clean, flags=re.IGNORECASE):
+    if not use_title:
         return clean
 
-    if response_type == "error":
-        body = re.sub(r"^(?:i(?:'|’)m sorry|sorry)[,.:;! -]*", "", clean, flags=re.IGNORECASE).strip()
-        return f"I am afraid, {address}. {body}" if body else f"I am afraid I could not complete that, {address}."
+    # Home Assistant or a cloud agent may already have added a conversational
+    # preamble. Remove it so speech begins immediately with the configured title.
+    ceremonial = (
+        r"done|okay|ok|certainly|of course|right away|very good|as requested|"
+        r"absolutely|sure|no problem|all right|alright|i am afraid|"
+        r"i(?:'|’)m afraid|sorry|i(?:'|’)m sorry"
+    )
+    title_pattern = rf"{re.escape(address)}"
+    body = clean
+    for _ in range(3):
+        previous = body
+        body = re.sub(
+            rf"^(?:(?:{ceremonial})\b[\s,.:;!—-]*)+",
+            "",
+            body,
+            flags=re.IGNORECASE,
+        ).strip()
+        body = re.sub(
+            rf"^(?:{title_pattern})\b[\s,.:;!—-]*",
+            "",
+            body,
+            flags=re.IGNORECASE,
+        ).strip()
+        if body == previous:
+            break
 
-    index = max(0, int(request_id))
-    if response_type == "action_done":
-        acknowledgements = ("Certainly", "Right away", "Very good")
-        prefix = acknowledgements[index % len(acknowledgements)]
-        if humor_level >= 2 and index % 9 == 0:
-            return f"Very good, {address}. The house remains cooperative. {clean}"
-        return f"{prefix}, {address}. {clean}"
+    # Avoid a second title at the end when an upstream agent answered
+    # "The garage is closed, sir."
+    body = re.sub(
+        rf"[\s,;:-]+(?:{title_pattern})([.!?]*)$",
+        r"\1",
+        body,
+        flags=re.IGNORECASE,
+    ).strip()
 
-    # Keep factual answers professional and vary the acknowledgement enough to
-    # avoid sounding repetitive. Dry wit is opt-in and deliberately uncommon.
-    acknowledgements = ("Certainly", "Of course", "As requested")
-    prefix = acknowledgements[index % len(acknowledgements)]
-    if humor_level >= 2 and index % 11 == 0:
-        return f"{prefix}, {address}. I have spared you the unnecessary ceremony. {clean}"
-    return f"{prefix}, {address}. {clean}"
+    if not body:
+        if response_type == "error":
+            body = "I could not complete that request."
+        elif response_type == "action_done":
+            body = "The request is complete."
+        else:
+            body = "The response is ready."
+
+    lead_address = address[:1].upper() + address[1:]
+    return f"{lead_address}, {body}"
 
 
 def _assistant_cleanup_audio_files() -> None:
