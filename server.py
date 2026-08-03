@@ -403,7 +403,7 @@ DEFAULT_HOME_ASSISTANT_CONFIG = {
         "agentId": "",
         "ttsEntityId": "",
         "ttsMode": "home_assistant",
-        "localTtsVoice": "en_US-Jarvis_Real-medium",
+        "localTtsVoice": "",
         "ttsVoice": "onyx",
         "openAiApiKey": "",
         "openAiModel": "gpt-4o-mini-tts",
@@ -2764,7 +2764,7 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
     assistant_agent = html.escape(str(assistant.get("agentId") or ""), quote=True)
     assistant_tts = html.escape(str(assistant.get("ttsEntityId") or ""), quote=True)
     assistant_local_tts_voice = html.escape(
-        str(assistant.get("localTtsVoice") or "en_US-Jarvis_Real-medium"), quote=True
+        str(assistant.get("localTtsVoice") or ""), quote=True
     )
     assistant_tts_mode = str(assistant.get("ttsMode") or "home_assistant")
     assistant_tts_mode_ha = "selected" if assistant_tts_mode == "home_assistant" else ""
@@ -2963,8 +2963,8 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
       </div>
       <div class="settings-section voice-provider">
         <h3>Local Piper Voice</h3>
-        <p class="voice-note">The assistant pipeline does not control direct JARVIS announcements. This panel must request the custom model on every Piper call.</p>
-        <div class="form-grid"><div class="field full"><label>Local Piper voice model</label><input id="va-local-tts-voice" type="text" value="{assistant_local_tts_voice}" placeholder="en_US-Jarvis_Real-medium"><span class="hint">Exact model name from Home Assistant. Saved with the main Save JARVIS Settings button below.</span></div></div>
+        <p class="voice-note">Leave the voice override blank to use Piper's configured default voice. This is recommended for normal announcements and keeps the thermostat in sync with Piper.</p>
+        <div class="form-grid"><div class="field full"><label>Optional Piper voice override</label><input id="va-local-tts-voice" type="text" value="{assistant_local_tts_voice}" placeholder="Leave blank to use Piper default"><span class="hint">Only enter a model name when intentionally overriding Piper for this thermostat. Blank uses the voice selected in the Piper add-on.</span></div></div>
       </div>
       <div class="settings-section voice-provider"><h3>Premium Speech Fallback</h3><div class="form-grid"><div class="field full"><label>Premium text-to-speech path</label><select id="va-tts-mode"><option value="openai_direct" {assistant_tts_mode_openai}>OpenAI cinematic voice</option><option value="home_assistant" {assistant_tts_mode_ha}>Home Assistant premium TTS entity</option></select><span class="hint">Used only when the shared speech policy requires premium speech, or temporarily when no local TTS entity is available.</span></div></div></div>
       <div id="va-openai-settings" class="settings-section voice-provider">
@@ -7965,7 +7965,7 @@ def _assistant_config_payload() -> dict:
     tts_mode = str(voice.get("ttsMode") or "home_assistant").strip().lower()
     if tts_mode not in {"home_assistant", "openai_direct"}:
         tts_mode = "home_assistant"
-    local_tts_voice = str(voice.get("localTtsVoice") or "en_US-Jarvis_Real-medium").strip()[:160]
+    local_tts_voice = str(voice.get("localTtsVoice") or "").strip()[:160]
     tts_voice = str(voice.get("ttsVoice") or "onyx").strip().lower()
     if tts_voice not in OPENAI_TTS_VOICES:
         tts_voice = "onyx"
@@ -8045,7 +8045,7 @@ def _assistant_update_config(payload: dict) -> dict:
         raise ValueError("ttsMode must be home_assistant or openai_direct")
     voice["ttsMode"] = tts_mode
     local_tts_voice = str(
-        payload.get("localTtsVoice", voice.get("localTtsVoice", "en_US-Jarvis_Real-medium"))
+        payload.get("localTtsVoice", voice.get("localTtsVoice", ""))
         or ""
     ).strip()
     if len(local_tts_voice) > 160 or any(ch in local_tts_voice for ch in "\r\n\t"):
@@ -8840,7 +8840,7 @@ def _assistant_tts_speak(
     base_get_url: dict[str, object] = {
         "engine_id": tts_entity_id,
         "message": message,
-        "cache": True,
+        "cache": False,
     }
     get_url_payloads: list[dict[str, object]] = []
     if options:
@@ -8893,7 +8893,7 @@ def _assistant_tts_speak(
         "entity_id": tts_entity_id,
         "media_player_entity_id": media_player_id,
         "message": message,
-        "cache": True,
+        "cache": False,
     }
     service_payloads: list[dict[str, object]] = []
     if options:
@@ -10159,7 +10159,7 @@ def _assistant_process_payload(payload: dict) -> dict:
             media_baseline_ready.set()
         configured_tts = str(payload.get("ttsEntityId") or config.get("ttsEntityId") or "").strip()
         local_tts_voice = str(
-            payload.get("localTtsVoice") or config.get("localTtsVoice") or "en_US-Jarvis_Real-medium"
+            payload.get("localTtsVoice") or config.get("localTtsVoice") or ""
         ).strip()[:160]
         local_tts_configured = str(shared_profile.get("local_tts_entity_id") or "").strip()
         tts_policy = str(shared_profile.get("tts_policy") or "local_only").strip().lower()
