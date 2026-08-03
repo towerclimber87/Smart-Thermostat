@@ -403,6 +403,7 @@ DEFAULT_HOME_ASSISTANT_CONFIG = {
         "agentId": "",
         "ttsEntityId": "",
         "ttsMode": "home_assistant",
+        "localTtsVoice": "en_US-Jarvis_Real-medium",
         "ttsVoice": "onyx",
         "openAiApiKey": "",
         "openAiModel": "gpt-4o-mini-tts",
@@ -2762,6 +2763,9 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
     assistant = _assistant_config_payload()
     assistant_agent = html.escape(str(assistant.get("agentId") or ""), quote=True)
     assistant_tts = html.escape(str(assistant.get("ttsEntityId") or ""), quote=True)
+    assistant_local_tts_voice = html.escape(
+        str(assistant.get("localTtsVoice") or "en_US-Jarvis_Real-medium"), quote=True
+    )
     assistant_tts_mode = str(assistant.get("ttsMode") or "home_assistant")
     assistant_tts_mode_ha = "selected" if assistant_tts_mode == "home_assistant" else ""
     assistant_tts_mode_openai = "selected" if assistant_tts_mode == "openai_direct" else ""
@@ -2957,6 +2961,11 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
         <div class="button-row"><button id="va-profile-save" type="button">Save Shared Behavior</button></div>
         <div id="va-profile-status" class="status muted">Open this tab to load the shared routing and personality profile.</div>
       </div>
+      <div class="settings-section voice-provider">
+        <h3>Local Piper Voice</h3>
+        <p class="voice-note">The assistant pipeline does not control direct JARVIS announcements. This panel must request the custom model on every Piper call.</p>
+        <div class="form-grid"><div class="field full"><label>Local Piper voice model</label><input id="va-local-tts-voice" type="text" value="{assistant_local_tts_voice}" placeholder="en_US-Jarvis_Real-medium"><span class="hint">Exact model name from Home Assistant. Saved with the main Save JARVIS Settings button below.</span></div></div>
+      </div>
       <div class="settings-section voice-provider"><h3>Premium Speech Fallback</h3><div class="form-grid"><div class="field full"><label>Premium text-to-speech path</label><select id="va-tts-mode"><option value="openai_direct" {assistant_tts_mode_openai}>OpenAI cinematic voice</option><option value="home_assistant" {assistant_tts_mode_ha}>Home Assistant premium TTS entity</option></select><span class="hint">Used only when the shared speech policy requires premium speech, or temporarily when no local TTS entity is available.</span></div></div></div>
       <div id="va-openai-settings" class="settings-section voice-provider">
         <h3>OpenAI Cinematic Voice</h3><p class="voice-note">This remains available as a premium fallback. The saved key is not displayed or returned by the JARVIS settings endpoint. {assistant_openai_key_status}</p>
@@ -3049,7 +3058,7 @@ async function saveJarvisKnowledge() {{ const displayName=value('va-knowledge-na
 async function forgetJarvisKnowledge(key,label) {{ if(!confirm('Forget the shared source for '+label+' on every IHA screen?'))return;try{{setBox(qs('va-knowledge-status'),'Removing the shared source...','muted');const response=await fetch('/api/assistant/knowledge',{{method:'POST',headers:{{'Accept':'application/json','Content-Type':'application/json'}},body:JSON.stringify({{action:'forget',key}})}});const data=await response.json().catch(()=>({{}}));if(!response.ok||!data.ok)throw new Error(data.error||'Could not remove shared knowledge.');renderJarvisKnowledge(data);setBox(qs('va-knowledge-status'),data.message||'Shared source removed.','ok');}}catch(err){{setBox(qs('va-knowledge-status'),err.message||String(err),'bad');}} }}
 qs('va-knowledge-name').addEventListener('input',()=>{{const label=value('va-knowledge-name').toLowerCase();if(/\b(outside|outdoor|exterior)\b/.test(label))qs('va-knowledge-inside').value='false';}});
 qs('va-profile-save').addEventListener('click',saveJarvisProfile);qs('va-knowledge-save').addEventListener('click',saveJarvisKnowledge);qs('va-knowledge-reload').addEventListener('click',()=>{{window.jarvisKnowledgeLoaded=false;loadJarvisKnowledge();}});
-function assistantPayload() {{ return {{enabled:qs('va-enabled').checked,speak:qs('va-speak').checked,funMode:qs('va-fun').checked,playfulReplies:qs('va-playful').checked,continueConversation:qs('va-continue').checked,showResponseText:qs('va-show-text').checked,agentId:value('va-agent').trim(),ttsEntityId:value('va-tts').trim(),ttsMode:value('va-tts-mode'),ttsVoice:value('va-voice'),openAiApiKey:value('va-openai-key').trim(),openAiModel:value('va-openai-model').trim(),openAiInstructions:value('va-openai-instructions').trim(),openAiSpeed:Number(value('va-openai-speed')||1.08),mediaPlayerId:value('va-media').trim(),language:value('va-language').trim()||'en-US',responseHoldSeconds:Number(value('va-hold')||2),announcementVolumePercent:Number(value('va-volume')||45)}}; }}
+function assistantPayload() {{ return {{enabled:qs('va-enabled').checked,speak:qs('va-speak').checked,funMode:qs('va-fun').checked,playfulReplies:qs('va-playful').checked,continueConversation:qs('va-continue').checked,showResponseText:qs('va-show-text').checked,agentId:value('va-agent').trim(),ttsEntityId:value('va-tts').trim(),ttsMode:value('va-tts-mode'),localTtsVoice:value('va-local-tts-voice').trim(),ttsVoice:value('va-voice'),openAiApiKey:value('va-openai-key').trim(),openAiModel:value('va-openai-model').trim(),openAiInstructions:value('va-openai-instructions').trim(),openAiSpeed:Number(value('va-openai-speed')||1.08),mediaPlayerId:value('va-media').trim(),language:value('va-language').trim()||'en-US',responseHoldSeconds:Number(value('va-hold')||2),announcementVolumePercent:Number(value('va-volume')||45)}}; }}
 qs('va-save').addEventListener('click',async()=>{{try{{qs('va-save').disabled=true;setBox(qs('va-status'),'Saving JARVIS settings...','muted');const response=await fetch('/api/assistant/config',{{method:'POST',headers:{{'Accept':'application/json','Content-Type':'application/json'}},body:JSON.stringify(assistantPayload())}});const data=await response.json().catch(()=>({{}}));if(!response.ok||!data.ok)throw new Error(data.error||'Could not save JARVIS settings.');qs('va-openai-key').value='';setBox(qs('va-status'),data.message||'JARVIS settings saved.','ok');}}catch(err){{setBox(qs('va-status'),err.message||String(err),'bad');}}finally{{qs('va-save').disabled=false;}}}});
 qs('va-test').addEventListener('click',async()=>{{const text=value('va-test-text').trim();if(!text){{setBox(qs('va-status'),'Enter a test command first.','bad');return;}}try{{qs('va-test').disabled=true;setBox(qs('va-status'),'Running command. Watch the thermostat screen...','muted');const response=await fetch('/api/assistant/process',{{method:'POST',headers:{{'Accept':'application/json','Content-Type':'application/json'}},body:JSON.stringify({{text}})}});const data=await response.json().catch(()=>({{}}));if(!response.ok||!data.ok)throw new Error(data.error||'Assistant test failed.');const route='\\nRoute: '+(data.route||'unknown')+' · Speech: '+(data.ttsPath||'none')+'.';const suffix=data.speechPlayed?'\\nSpoken on '+data.mediaPlayerId+' at '+(data.announcementVolumePercent||value('va-volume'))+'%.':(data.speechError?'\\nVoice was not played: '+data.speechError:'');setBox(qs('va-status'),'JARVIS: '+data.response+route+suffix,data.speechPlayed?'ok':'muted');}}catch(err){{setBox(qs('va-status'),err.message||String(err),'bad');}}finally{{qs('va-test').disabled=false;}}}});
 </script>
@@ -7945,6 +7954,7 @@ def _assistant_config_payload() -> dict:
     tts_mode = str(voice.get("ttsMode") or "home_assistant").strip().lower()
     if tts_mode not in {"home_assistant", "openai_direct"}:
         tts_mode = "home_assistant"
+    local_tts_voice = str(voice.get("localTtsVoice") or "en_US-Jarvis_Real-medium").strip()[:160]
     tts_voice = str(voice.get("ttsVoice") or "onyx").strip().lower()
     if tts_voice not in OPENAI_TTS_VOICES:
         tts_voice = "onyx"
@@ -7959,6 +7969,7 @@ def _assistant_config_payload() -> dict:
         "agentId": clean_entity(voice.get("agentId"), "conversation"),
         "ttsEntityId": clean_entity(voice.get("ttsEntityId"), "tts"),
         "ttsMode": tts_mode,
+        "localTtsVoice": local_tts_voice,
         "ttsVoice": tts_voice,
         "openAiApiKeyConfigured": bool(str(voice.get("openAiApiKey") or "").strip()),
         "openAiModel": openai_model,
@@ -8022,6 +8033,13 @@ def _assistant_update_config(payload: dict) -> dict:
     if tts_mode not in {"home_assistant", "openai_direct"}:
         raise ValueError("ttsMode must be home_assistant or openai_direct")
     voice["ttsMode"] = tts_mode
+    local_tts_voice = str(
+        payload.get("localTtsVoice", voice.get("localTtsVoice", "en_US-Jarvis_Real-medium"))
+        or ""
+    ).strip()
+    if len(local_tts_voice) > 160 or any(ch in local_tts_voice for ch in "\r\n\t"):
+        raise ValueError("localTtsVoice must be a single Piper model name")
+    voice["localTtsVoice"] = local_tts_voice[:160]
     tts_voice = str(payload.get("ttsVoice", voice.get("ttsVoice", "onyx")) or "onyx").strip().lower()
     if tts_voice not in OPENAI_TTS_VOICES:
         raise ValueError("ttsVoice is not a supported OpenAI voice")
@@ -8748,10 +8766,9 @@ def _assistant_openai_direct_speak(
 
 
 def _assistant_tts_request_options(ha_url: str, token: str, tts_entity_id: str, voice: str) -> dict:
-    options: dict[str, object] = {"preferred_format": "mp3"}
-    voice = str(voice or "").strip().lower()
-    if not voice:
-        return options
+    exact_voice = str(voice or "").strip()
+    if not exact_voice:
+        return {}
     supported: set[str] = set()
     friendly = ""
     try:
@@ -8764,9 +8781,10 @@ def _assistant_tts_request_options(ha_url: str, token: str, tts_entity_id: str, 
         friendly = str(attrs.get("friendly_name") or "").lower()
     except Exception:
         pass
-    if "voice" in supported or "openai" in str(tts_entity_id or "").lower() or "openai" in friendly:
-        options["voice"] = voice
-    return options
+    entity_key = str(tts_entity_id or "").lower()
+    if "voice" in supported or "openai" in entity_key or "openai" in friendly or "piper" in entity_key or "piper" in friendly:
+        return {"voice": exact_voice}
+    return {}
 
 
 def _assistant_reachable_media_url(ha_url: str, media_url: str) -> str:
@@ -8803,27 +8821,28 @@ def _assistant_tts_speak(
     voice = str(tts_voice or "").strip()
     options = _assistant_tts_request_options(ha_url, token, tts_entity_id, voice) if voice else {}
 
-    # Local providers such as Piper already have their language and voice saved
-    # on the TTS entity. Passing the panel's generic en-US value to an en-GB
-    # Piper entity causes Home Assistant to return HTTP 500. Start with the
-    # provider defaults, exactly like a successful Developer Tools tts.speak
-    # action, and only add optional overrides for providers that need them.
-    get_url_payloads: list[dict[str, object]] = [
-        {
-            "engine_id": tts_entity_id,
-            "message": message,
-            "cache": True,
-        }
-    ]
-    if voice or language:
-        enhanced: dict[str, object] = dict(get_url_payloads[0])
-        if language:
-            enhanced["language"] = language
+    # A custom Piper voice must be requested explicitly on every call. The
+    # Home Assistant assistant pipeline selection does not change the default
+    # voice used by direct tts.piper service calls from this thermostat. Match
+    # the verified Developer Tools request first (options.voice only), then fall
+    # back to provider defaults if a provider does not accept per-call voices.
+    base_get_url: dict[str, object] = {
+        "engine_id": tts_entity_id,
+        "message": message,
+        "cache": True,
+    }
+    get_url_payloads: list[dict[str, object]] = []
+    if options:
+        voice_payload = dict(base_get_url)
+        voice_payload["options"] = options
+        get_url_payloads.append(voice_payload)
+    get_url_payloads.append(base_get_url)
+    if language and "piper" not in str(tts_entity_id or "").lower():
+        language_payload = dict(base_get_url)
+        language_payload["language"] = language
         if options:
-            enhanced["options"] = options
-        # Keep the provider-default request first. The enhanced request is a
-        # fallback for premium TTS entities that accept per-call controls.
-        get_url_payloads.append(enhanced)
+            language_payload["options"] = options
+        get_url_payloads.append(language_payload)
 
     generation_errors: list[str] = []
     for tts_payload in get_url_payloads:
@@ -8859,21 +8878,24 @@ def _assistant_tts_speak(
 
     # Match the action that was verified manually in Developer Tools. The TTS
     # entity is the service target, while the Sonos entity is service data.
-    service_payloads: list[dict[str, object]] = [
-        {
-            "entity_id": tts_entity_id,
-            "media_player_entity_id": media_player_id,
-            "message": message,
-            "cache": True,
-        }
-    ]
-    if voice or language:
-        enhanced_service: dict[str, object] = dict(service_payloads[0])
-        if language:
-            enhanced_service["language"] = language
+    base_service: dict[str, object] = {
+        "entity_id": tts_entity_id,
+        "media_player_entity_id": media_player_id,
+        "message": message,
+        "cache": True,
+    }
+    service_payloads: list[dict[str, object]] = []
+    if options:
+        voice_service = dict(base_service)
+        voice_service["options"] = options
+        service_payloads.append(voice_service)
+    service_payloads.append(base_service)
+    if language and "piper" not in str(tts_entity_id or "").lower():
+        language_service = dict(base_service)
+        language_service["language"] = language
         if options:
-            enhanced_service["options"] = options
-        service_payloads.append(enhanced_service)
+            language_service["options"] = options
+        service_payloads.append(language_service)
 
     service_errors: list[str] = []
     for service_payload in service_payloads:
@@ -9994,6 +10016,9 @@ def _assistant_process_payload(payload: dict) -> dict:
         )
         media_player_id = str(payload.get("mediaPlayerId") or config.get("effectiveMediaPlayerId") or "").strip()
         configured_tts = str(payload.get("ttsEntityId") or config.get("ttsEntityId") or "").strip()
+        local_tts_voice = str(
+            payload.get("localTtsVoice") or config.get("localTtsVoice") or "en_US-Jarvis_Real-medium"
+        ).strip()[:160]
         local_tts_configured = str(shared_profile.get("local_tts_entity_id") or "").strip()
         tts_policy = str(shared_profile.get("tts_policy") or "local_only").strip().lower()
         tts_mode = str(payload.get("ttsMode") or config.get("ttsMode") or "home_assistant").strip().lower()
@@ -10182,7 +10207,7 @@ def _assistant_process_payload(payload: dict) -> dict:
                             spoken_response,
                             language,
                             announcement_volume,
-                            "",
+                            local_tts_voice,
                         )
                     else:
                         if tts_policy == "local_only":
@@ -10265,7 +10290,7 @@ def _assistant_process_payload(payload: dict) -> dict:
             "ttsMode": "home_assistant" if tts_path == "local" else tts_mode,
             "ttsPolicy": tts_policy,
             "ttsPath": tts_path,
-            "ttsVoice": "" if tts_path == "local" else tts_voice,
+            "ttsVoice": local_tts_voice if tts_path == "local" else tts_voice,
             "announcementVolumePercent": announcement_volume,
             "speechPlayed": speech_played,
             "speechResult": speech_result,
