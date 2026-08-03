@@ -14,7 +14,7 @@ From the repo folder:
 
 ```bash
 cd ~/Smart-Thermostat-Development
-chmod +x scripts/*.sh
+chmod +x scripts/*.sh scripts/jarvis-console.py
 sudo ./scripts/install-native.sh
 ```
 
@@ -77,3 +77,39 @@ Native UI from an existing X session:
 cd ~/Smart-Thermostat-Development
 python3 native_app/main.py
 ```
+
+## Typed JARVIS-style Home Assistant console
+
+Version 11.60 adds an original full-screen AI-core animation and a typed command loop. The Raspberry Pi does not run a language model or speech recognizer. It only displays the animation and forwards text to the Home Assistant conversation API, keeping the panel workload small.
+
+The assistant reuses the Home Assistant URL and long-lived token already stored in the thermostat configuration. Replies can be sent to the Sonos/media player already selected on the Audio page, or to a separate media player chosen in the temporary Backup Config web portal. The portal also allows an explicit `conversation.*` agent and `tts.*` entity to be entered. Leaving the conversation agent blank uses Home Assistant's default agent; leaving TTS blank makes the thermostat select an available TTS entity automatically. For safety, the stored-token assistant endpoint accepts commands only from the thermostat itself unless the temporary Backup Config portal is open.
+
+Open the continuous typed loop on the Pi:
+
+```bash
+cd ~/Smart-Thermostat-Development
+python3 scripts/jarvis-console.py
+```
+
+Useful console commands:
+
+- `/new` starts a fresh Home Assistant conversation with the next command.
+- `/status` shows the current assistant stage and selected output entities.
+- `/quit` closes the loop.
+
+Run one command without opening the loop:
+
+```bash
+python3 scripts/jarvis-console.py "What is the living room temperature?"
+```
+
+Test the local endpoint directly:
+
+```bash
+curl -sS -X POST \
+  -H 'Content-Type: application/json' \
+  --data '{"text":"Turn on the living room light"}' \
+  http://127.0.0.1:8080/api/assistant/process | python3 -m json.tool
+```
+
+To configure it from another computer, press **Backup Config** on the thermostat, open the temporary web address shown on the panel, and use the **Voice Assistant & Sonos** section. This page does not display or transmit the saved Home Assistant token to the browser.

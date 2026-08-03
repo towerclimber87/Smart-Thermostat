@@ -48,6 +48,7 @@ APP_STARTED_AT = time.time()
 HA_STATES_CACHE_TTL_SECONDS = float(os.environ.get("SMART_THERMOSTAT_HA_STATES_CACHE_TTL_SECONDS", "8.0"))
 HA_ENTITY_STATE_CACHE_TTL_SECONDS = float(os.environ.get("SMART_THERMOSTAT_HA_ENTITY_STATE_CACHE_TTL_SECONDS", "8.0"))
 HA_REQUEST_TIMEOUT_SECONDS = max(0.5, float(os.environ.get("SMART_THERMOSTAT_HA_REQUEST_TIMEOUT_SECONDS", "3.0") or "3.0"))
+ASSISTANT_HA_TIMEOUT_SECONDS = max(5.0, float(os.environ.get("SMART_THERMOSTAT_ASSISTANT_HA_TIMEOUT_SECONDS", "45") or "45"))
 HA_REQUEST_CONCURRENCY = max(1, int(float(os.environ.get("SMART_THERMOSTAT_HA_REQUEST_CONCURRENCY", "4") or "4")))
 EXTERNAL_HA_AIR_VERIFY_INTERVAL_SECONDS = max(5.0, float(os.environ.get("SMART_THERMOSTAT_EXTERNAL_AIR_VERIFY_SECONDS", "30") or "30"))
 ACCESS_LOGS_ENABLED = os.environ.get("SMART_THERMOSTAT_ACCESS_LOGS", "0").strip().lower() in {"1", "true", "yes", "on"}
@@ -84,6 +85,26 @@ _CONFIG_WEB_PORTAL_LOCK = threading.RLock()
 _CONFIG_WEB_PORTAL_ENABLED_UNTIL = 0.0
 _CONFIG_WEB_PORTAL_STARTED_AT = 0.0
 _CONFIG_WEB_PORTAL_LAST_ACTIVITY_AT = 0.0
+_ASSISTANT_LOCK = threading.RLock()
+_ASSISTANT_PROCESS_LOCK = threading.Lock()
+_ASSISTANT_REQUEST_SEQ = 0
+_ASSISTANT_STATE = {
+    "active": False,
+    "stage": "idle",
+    "requestId": 0,
+    "command": "",
+    "response": "",
+    "spokenResponse": "",
+    "statusText": "Standing by.",
+    "error": "",
+    "startedAt": 0,
+    "updatedAt": 0,
+    "clearAtMonotonic": 0.0,
+    "conversationId": "",
+    "mediaPlayerId": "",
+    "ttsEntityId": "",
+    "speechPlayed": False,
+}
 _HA_STATES_CACHE_LOCK = threading.Lock()
 _HA_STATES_CACHE: dict[tuple[str, str], tuple[float, list[dict]]] = {}
 _HA_ENTITY_STATE_CACHE_LOCK = threading.Lock()
@@ -343,6 +364,19 @@ DEFAULT_HOME_ASSISTANT_CONFIG = {
     "pauseFunctionAvailableEntities": [],
     "syncThermostatEntities": [],
     "syncAvailableThermostatEntities": [],
+    "voiceAssistant": {
+        "enabled": True,
+        "agentId": "",
+        "ttsEntityId": "",
+        "mediaPlayerId": "",
+        "language": "en",
+        "speak": True,
+        "funMode": True,
+        "playfulReplies": True,
+        "continueConversation": True,
+        "showResponseText": True,
+        "responseHoldSeconds": 2.0,
+    },
 }
 
 
@@ -2188,6 +2222,19 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
     host = html.escape(str(info.get("host") or "--"))
     updated = html.escape(str(config_record.get("updatedAt") or "--"))
     cfg_version = html.escape(str(config_record.get("version") or "--"))
+    assistant = _assistant_config_payload()
+    assistant_agent = html.escape(str(assistant.get("agentId") or ""), quote=True)
+    assistant_tts = html.escape(str(assistant.get("ttsEntityId") or ""), quote=True)
+    assistant_media = html.escape(str(assistant.get("mediaPlayerId") or ""), quote=True)
+    assistant_effective_media = html.escape(str(assistant.get("effectiveMediaPlayerId") or "not selected"), quote=True)
+    assistant_language = html.escape(str(assistant.get("language") or "en"), quote=True)
+    assistant_hold = html.escape(str(assistant.get("responseHoldSeconds") or 2.0), quote=True)
+    assistant_enabled = "checked" if assistant.get("enabled") else ""
+    assistant_speak = "checked" if assistant.get("speak") else ""
+    assistant_fun = "checked" if assistant.get("funMode") else ""
+    assistant_playful = "checked" if assistant.get("playfulReplies") else ""
+    assistant_continue = "checked" if assistant.get("continueConversation") else ""
+    assistant_show_text = "checked" if assistant.get("showResponseText") else ""
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -2213,10 +2260,23 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
     button, .button {{ border: 0; border-radius: 18px; min-height: 56px; padding: 0 22px; display: inline-flex; align-items: center; justify-content: center; text-decoration: none; font-weight: 1000; font-size: 16px; color: white; cursor: pointer; background: linear-gradient(135deg, #14b8ff, #7c3aed); box-shadow: 0 12px 36px rgba(20,184,255,.22); }}
     button.secondary {{ background: rgba(255,255,255,.10); box-shadow: none; border: 1px solid rgba(255,255,255,.15); }}
     input[type=file] {{ width: 100%; padding: 14px; border-radius: 16px; color: #dce8ff; border: 1px dashed rgba(255,255,255,.28); background: rgba(0,0,0,.18); }}
-    .status {{ min-height: 48px; padding: 12px 14px; border-radius: 16px; color: #e9f4ff; background: rgba(0,0,0,.20); border: 1px solid rgba(255,255,255,.10); }}
+    input[type=text], input[type=number] {{ width:100%; min-height:48px; border-radius:14px; border:1px solid rgba(255,255,255,.16); background:rgba(0,0,0,.24); color:#f7fbff; padding:0 14px; font-size:15px; }}
+    input:focus {{ outline:2px solid rgba(70,232,255,.45); border-color:#46e8ff; }}
+    .assistant-card {{ margin-top:18px; }}
+    .form-grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; margin-top:14px; }}
+    .field label {{ display:block; color:#9fb0c8; font-size:12px; font-weight:900; letter-spacing:1px; margin:0 0 7px; }}
+    .hint {{ display:block; margin-top:7px; color:#8294ae; font-size:12px; line-height:1.35; }}
+    .checks {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin:14px 0; }}
+    .check {{ display:flex; gap:9px; align-items:center; min-height:45px; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,.12); background:rgba(0,0,0,.18); color:#dce8ff; font-weight:800; }}
+    .check input {{ width:18px; height:18px; accent-color:#46e8ff; }}
+    .test-row {{ display:grid; grid-template-columns:1fr auto; gap:10px; margin-top:14px; }}
+    .assistant-actions {{ display:flex; gap:10px; flex-wrap:wrap; margin-top:12px; }}
+    .assistant-actions button {{ min-height:50px; }}
+    code {{ color:#8ff4ff; }}
+    .status {{ min-height:48px; padding:12px 14px; border-radius:16px; color:#e9f4ff; background:rgba(0,0,0,.20); border:1px solid rgba(255,255,255,.10); white-space:pre-wrap; }}
     .ok {{ color: #76ffc4; }} .bad {{ color: #ff8a8a; }}
-    @media (max-width: 760px) {{ .hero, .actions {{ grid-template-columns: 1fr; display: grid; }} .grid {{ grid-template-columns: 1fr 1fr; }} .pill {{ white-space: normal; }} }}
-    @media (max-width: 480px) {{ .grid {{ grid-template-columns: 1fr; }} }}
+    @media (max-width: 760px) {{ .hero, .actions {{ grid-template-columns:1fr; display:grid; }} .grid {{ grid-template-columns:1fr 1fr; }} .pill {{ white-space:normal; }} .form-grid {{ grid-template-columns:1fr; }} .checks {{ grid-template-columns:1fr 1fr; }} }}
+    @media (max-width: 480px) {{ .grid {{ grid-template-columns:1fr; }} .checks {{ grid-template-columns:1fr; }} .test-row {{ grid-template-columns:1fr; }} }}
   </style>
 </head>
 <body>
@@ -2256,6 +2316,38 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
         <div id="status" class="status muted">Choose a Smart Thermostat config backup, then press Upload Config.</div>
       </div>
     </section>
+
+    <section class="card assistant-card">
+      <div class="eyebrow">JARVIS-ISH TERMINAL LINK</div>
+      <h2 style="margin:8px 0 6px;font-size:30px">Voice Assistant &amp; Sonos</h2>
+      <p class="muted">This uses the Home Assistant address and long-lived token already saved on the thermostat. The conversation agent handles the command; the selected TTS entity sends the answer to Sonos. Blank Agent uses Home Assistant's default conversation agent. Blank TTS automatically chooses an available <code>tts.*</code> entity.</p>
+
+      <div class="checks">
+        <label class="check"><input id="va-enabled" type="checkbox" {assistant_enabled}>Assistant enabled</label>
+        <label class="check"><input id="va-speak" type="checkbox" {assistant_speak}>Speak on Sonos</label>
+        <label class="check"><input id="va-fun" type="checkbox" {assistant_fun}>Goofy screen quips</label>
+        <label class="check"><input id="va-playful" type="checkbox" {assistant_playful}>Playful spoken prefix</label>
+        <label class="check"><input id="va-continue" type="checkbox" {assistant_continue}>Continue conversation</label>
+        <label class="check"><input id="va-show-text" type="checkbox" {assistant_show_text}>Show response text</label>
+      </div>
+
+      <div class="form-grid">
+        <div class="field"><label for="va-agent">Conversation agent entity</label><input id="va-agent" type="text" value="{assistant_agent}" placeholder="conversation.openai_conversation or blank"></div>
+        <div class="field"><label for="va-tts">Text-to-speech entity</label><input id="va-tts" type="text" value="{assistant_tts}" placeholder="tts.home_assistant_cloud, tts.piper, or blank"></div>
+        <div class="field"><label for="va-media">Sonos / media player entity</label><input id="va-media" type="text" value="{assistant_media}" placeholder="Blank follows the Audio page selection"><span class="hint">Leave blank to follow the Sonos/media player selected on the thermostat Audio page. Current effective output: <code>{assistant_effective_media}</code></span></div>
+        <div class="field"><label for="va-language">Language</label><input id="va-language" type="text" value="{assistant_language}" placeholder="en"></div>
+        <div class="field"><label for="va-hold">Extra screen hold after response (seconds)</label><input id="va-hold" type="number" min="0" max="15" step="0.5" value="{assistant_hold}"></div>
+      </div>
+
+      <div class="assistant-actions">
+        <button id="va-save" type="button">Save Assistant Settings</button>
+      </div>
+      <div class="test-row">
+        <input id="va-test-text" type="text" value="Tell me the current thermostat temperature in one short sentence." placeholder="Type the same command you will later say after Hey Jarvis">
+        <button id="va-test" type="button" class="secondary">Run Test</button>
+      </div>
+      <div id="va-status" class="status muted">Save the settings, then run a typed test. The wall screen will animate while Home Assistant processes it.</div>
+    </section>
   </main>
 <script>
 const fileInput = document.getElementById('file');
@@ -2286,6 +2378,58 @@ uploadButton.addEventListener('click', async () => {{
   }} catch (err) {{
     setStatus(err && err.message ? err.message : String(err), 'bad');
   }}
+}});
+
+const vaStatus = document.getElementById('va-status');
+const vaSave = document.getElementById('va-save');
+const vaTest = document.getElementById('va-test');
+function setVaStatus(text, kind) {{
+  vaStatus.textContent = text;
+  vaStatus.className = 'status ' + (kind || 'muted');
+}}
+function assistantPayload() {{
+  return {{
+    enabled: document.getElementById('va-enabled').checked,
+    speak: document.getElementById('va-speak').checked,
+    funMode: document.getElementById('va-fun').checked,
+    playfulReplies: document.getElementById('va-playful').checked,
+    continueConversation: document.getElementById('va-continue').checked,
+    showResponseText: document.getElementById('va-show-text').checked,
+    agentId: document.getElementById('va-agent').value.trim(),
+    ttsEntityId: document.getElementById('va-tts').value.trim(),
+    mediaPlayerId: document.getElementById('va-media').value.trim(),
+    language: document.getElementById('va-language').value.trim() || 'en',
+    responseHoldSeconds: Number(document.getElementById('va-hold').value || 2)
+  }};
+}}
+vaSave.addEventListener('click', async () => {{
+  try {{
+    vaSave.disabled = true;
+    setVaStatus('Saving assistant settings...', 'muted');
+    const response = await fetch('/api/assistant/config', {{
+      method: 'POST', headers: {{'Accept':'application/json','Content-Type':'application/json'}}, body: JSON.stringify(assistantPayload())
+    }});
+    const data = await response.json().catch(() => ({{}}));
+    if (!response.ok || !data.ok) throw new Error(data.error || 'Could not save assistant settings.');
+    setVaStatus(data.message || 'Assistant settings saved.', 'ok');
+  }} catch (err) {{ setVaStatus(err && err.message ? err.message : String(err), 'bad'); }}
+  finally {{ vaSave.disabled = false; }}
+}});
+vaTest.addEventListener('click', async () => {{
+  const text = document.getElementById('va-test-text').value.trim();
+  if (!text) {{ setVaStatus('Enter a test command first.', 'bad'); return; }}
+  try {{
+    vaTest.disabled = true;
+    setVaStatus('Running command. Watch the thermostat screen...', 'muted');
+    const response = await fetch('/api/assistant/process', {{
+      method:'POST', headers:{{'Accept':'application/json','Content-Type':'application/json'}}, body:JSON.stringify({{text}})
+    }});
+    const data = await response.json().catch(() => ({{}}));
+    if (!response.ok || !data.ok) throw new Error(data.error || 'Assistant test failed.');
+    const suffix = data.speechPlayed ? '\\nSpoken on ' + data.mediaPlayerId + ' using ' + data.ttsEntityId : (data.speechError ? '\\nVoice was not played: ' + data.speechError : '');
+    setVaStatus('JARVIS: ' + data.response + suffix, data.speechPlayed ? 'ok' : 'muted');
+  }} catch (err) {{ setVaStatus(err && err.message ? err.message : String(err), 'bad'); }}
+  finally {{ vaTest.disabled = false; }}
 }});
 </script>
 </body>
@@ -7025,7 +7169,7 @@ def _fetch_ha_cover_states_for_entities(ha_url: str, token: str, entity_ids: lis
     return [by_id[entity_id] for entity_id in wanted if entity_id in by_id]
 
 
-def _ha_json_request(ha_url: str, token: str, method: str, path: str, payload: dict | None = None) -> object:
+def _ha_json_request(ha_url: str, token: str, method: str, path: str, payload: dict | None = None, *, timeout: float | None = None) -> object:
     ha_url = _normalize_ha_url(ha_url)
     token = (token or "").strip()
     if not token:
@@ -7043,11 +7187,13 @@ def _ha_json_request(ha_url: str, token: str, method: str, path: str, payload: d
         headers["Content-Type"] = "application/json"
 
     req = request.Request(f"{ha_url}{path}", data=data, headers=headers, method=method)
-    acquired = _HA_REQUEST_SEMAPHORE.acquire(timeout=HA_REQUEST_TIMEOUT_SECONDS)
+    request_timeout = max(0.5, float(timeout if timeout is not None else HA_REQUEST_TIMEOUT_SECONDS))
+    queue_timeout = max(0.5, min(request_timeout, HA_REQUEST_TIMEOUT_SECONDS))
+    acquired = _HA_REQUEST_SEMAPHORE.acquire(timeout=queue_timeout)
     if not acquired:
         raise RuntimeError("Home Assistant requests are backed up; try again in a moment")
     try:
-        with request.urlopen(req, timeout=HA_REQUEST_TIMEOUT_SECONDS) as resp:
+        with request.urlopen(req, timeout=request_timeout) as resp:
             raw = resp.read()
     except error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[:500]
@@ -7063,6 +7209,413 @@ def _ha_json_request(ha_url: str, token: str, method: str, path: str, payload: d
         return json.loads(raw.decode("utf-8"))
     except json.JSONDecodeError:
         return {"raw": raw.decode("utf-8", errors="replace")}
+
+
+
+
+def _assistant_client_access_allowed(client_ip: object) -> bool:
+    """Keep the stored-token assistant bridge local unless the temporary portal is open."""
+    ip = str(client_ip or "").strip().lower()
+    if ip in {"127.0.0.1", "::1", "localhost"} or ip.startswith("::ffff:127."):
+        return True
+    return _config_web_portal_active(touch=False)
+
+
+def _assistant_bool(value: object, fallback: bool = False) -> bool:
+    if value is None:
+        return bool(fallback)
+    return _boolish(value)
+
+
+def _assistant_config_payload() -> dict:
+    """Return normalized, token-free voice-assistant settings."""
+    record = _read_panel_config_record()
+    config = record.get("config") if isinstance(record, dict) else {}
+    integrations = config.get("integrations") if isinstance(config, dict) else {}
+    ha = integrations.get("homeAssistant") if isinstance(integrations, dict) else {}
+    ha = ha if isinstance(ha, dict) else {}
+    defaults = DEFAULT_HOME_ASSISTANT_CONFIG.get("voiceAssistant") or {}
+    raw = ha.get("voiceAssistant") if isinstance(ha.get("voiceAssistant"), dict) else {}
+    voice = _merge_missing_defaults(defaults, raw)
+
+    def clean_entity(value: object, domain: str = "") -> str:
+        entity_id = str(value or "").strip()
+        if not entity_id:
+            return ""
+        if domain and not entity_id.startswith(domain + "."):
+            return ""
+        return entity_id[:255]
+
+    media_player_id = clean_entity(voice.get("mediaPlayerId"), "media_player")
+    legacy_media = ha.get("mediaPlayerEntity") if isinstance(ha.get("mediaPlayerEntity"), dict) else {}
+    fallback_media_player_id = clean_entity(
+        ha.get("selectedMediaPlayerId") or legacy_media.get("entityId") or legacy_media.get("entity_id"),
+        "media_player",
+    )
+    language = str(voice.get("language") or "en").strip().replace("_", "-")[:16] or "en"
+    try:
+        response_hold = max(0.0, min(15.0, float(voice.get("responseHoldSeconds", 2.0) or 0.0)))
+    except (TypeError, ValueError):
+        response_hold = 2.0
+    return {
+        "enabled": _assistant_bool(voice.get("enabled"), True),
+        "agentId": clean_entity(voice.get("agentId"), "conversation"),
+        "ttsEntityId": clean_entity(voice.get("ttsEntityId"), "tts"),
+        "mediaPlayerId": media_player_id,
+        "effectiveMediaPlayerId": media_player_id or fallback_media_player_id,
+        "language": language,
+        "speak": _assistant_bool(voice.get("speak"), True),
+        "funMode": _assistant_bool(voice.get("funMode"), True),
+        "playfulReplies": _assistant_bool(voice.get("playfulReplies"), True),
+        "continueConversation": _assistant_bool(voice.get("continueConversation"), True),
+        "showResponseText": _assistant_bool(voice.get("showResponseText"), True),
+        "responseHoldSeconds": response_hold,
+        "homeAssistantConfigured": bool(str(ha.get("url") or "").strip() and str(ha.get("token") or "").strip()),
+    }
+
+
+def _assistant_update_config(payload: dict) -> dict:
+    if not _config_web_portal_active(touch=True):
+        return {"ok": False, "error": "The temporary config portal is closed."}
+    payload = payload if isinstance(payload, dict) else {}
+    record = _read_panel_config_record()
+    config = _deepcopy_json(record.get("config") if isinstance(record, dict) else {})
+    if not isinstance(config, dict):
+        config = {}
+    integrations = config.setdefault("integrations", {})
+    if not isinstance(integrations, dict):
+        integrations = {}
+        config["integrations"] = integrations
+    ha = integrations.setdefault("homeAssistant", {})
+    if not isinstance(ha, dict):
+        ha = {}
+        integrations["homeAssistant"] = ha
+    current = ha.get("voiceAssistant") if isinstance(ha.get("voiceAssistant"), dict) else {}
+    defaults = DEFAULT_HOME_ASSISTANT_CONFIG.get("voiceAssistant") or {}
+    voice = _merge_missing_defaults(defaults, current)
+
+    def entity_value(key: str, domain: str) -> str:
+        text = str(payload.get(key, voice.get(key, "")) or "").strip()
+        if text and not text.startswith(domain + "."):
+            raise ValueError(f"{key} must be a {domain}. entity ID or blank")
+        return text[:255]
+
+    voice.update({
+        "enabled": _assistant_bool(payload.get("enabled"), voice.get("enabled", True)),
+        "agentId": entity_value("agentId", "conversation"),
+        "ttsEntityId": entity_value("ttsEntityId", "tts"),
+        "mediaPlayerId": entity_value("mediaPlayerId", "media_player"),
+        "language": str(payload.get("language", voice.get("language", "en")) or "en").strip().replace("_", "-")[:16] or "en",
+        "speak": _assistant_bool(payload.get("speak"), voice.get("speak", True)),
+        "funMode": _assistant_bool(payload.get("funMode"), voice.get("funMode", True)),
+        "playfulReplies": _assistant_bool(payload.get("playfulReplies"), voice.get("playfulReplies", True)),
+        "continueConversation": _assistant_bool(payload.get("continueConversation"), voice.get("continueConversation", True)),
+        "showResponseText": _assistant_bool(payload.get("showResponseText"), voice.get("showResponseText", True)),
+    })
+    try:
+        voice["responseHoldSeconds"] = max(0.0, min(15.0, float(payload.get("responseHoldSeconds", voice.get("responseHoldSeconds", 2.0)) or 0.0)))
+    except (TypeError, ValueError):
+        voice["responseHoldSeconds"] = 2.0
+    ha["voiceAssistant"] = voice
+    saved = _write_panel_config_record(config)
+    return {
+        "ok": True,
+        "message": "Voice assistant settings saved.",
+        "version": saved.get("version"),
+        "updatedAt": saved.get("updatedAt"),
+        "assistant": _assistant_config_payload(),
+    }
+
+
+def _assistant_public_state_locked() -> dict:
+    state = _deepcopy_json(_ASSISTANT_STATE)
+    state.pop("clearAtMonotonic", None)
+    return state
+
+
+def _assistant_status_payload(include_config: bool = False) -> dict:
+    now = time.monotonic()
+    with _ASSISTANT_LOCK:
+        clear_at = float(_ASSISTANT_STATE.get("clearAtMonotonic") or 0.0)
+        if clear_at > 0 and now >= clear_at and str(_ASSISTANT_STATE.get("stage") or "") in {"speaking", "complete", "error"}:
+            _ASSISTANT_STATE.update({
+                "active": False,
+                "stage": "idle",
+                "statusText": "Standing by.",
+                "error": "",
+                "clearAtMonotonic": 0.0,
+                "updatedAt": int(time.time() * 1000),
+                "speechPlayed": False,
+            })
+        payload = {"ok": True, "assistant": _assistant_public_state_locked()}
+    if include_config:
+        payload["config"] = _assistant_config_payload()
+    return payload
+
+
+def _assistant_set_state(stage: str, **changes) -> dict:
+    stage = str(stage or "idle").strip().lower() or "idle"
+    with _ASSISTANT_LOCK:
+        _ASSISTANT_STATE.update(changes)
+        _ASSISTANT_STATE["stage"] = stage
+        _ASSISTANT_STATE["active"] = stage != "idle"
+        _ASSISTANT_STATE["updatedAt"] = int(time.time() * 1000)
+        return _assistant_public_state_locked()
+
+
+def _assistant_stage_quip(stage: str, request_id: int) -> str:
+    options = {
+        "listening": (
+            "Terminal link established. Pretending this keyboard is a microphone.",
+            "Command channel open. No dramatic cape required.",
+            "I heard the keyboard. Close enough for government automation.",
+            "JARVIS-ish mode engaged. Legal says the '-ish' is important.",
+        ),
+        "processing": (
+            "Consulting the silicon committee...",
+            "Thinking very hard in several billion tiny yes-or-no decisions...",
+            "Asking the house nicely. It responds better to flattery.",
+            "Routing this through the unnecessarily dramatic glowing orb...",
+            "Crunching electrons. Please do not feed the Raspberry Pi after midnight.",
+        ),
+        "speaking": (
+            "Delivering wisdom through the Sonos, because tiny wall speakers are beneath us.",
+            "Broadcasting the answer with maximum theatrical efficiency.",
+            "The house has spoken. I merely added the glowing circles.",
+        ),
+        "error": (
+            "Well, that went about as smoothly as a shopping cart with one bad wheel.",
+            "A small digital gremlin has filed an objection.",
+            "The electrons have unionized. Reviewing their demands now.",
+        ),
+    }
+    choices = options.get(stage, ("Standing by.",))
+    return choices[max(0, int(request_id)) % len(choices)]
+
+
+def _assistant_extract_response(data: object) -> tuple[str, str, str, bool]:
+    obj = data if isinstance(data, dict) else {}
+    response = obj.get("response") if isinstance(obj.get("response"), dict) else {}
+    speech = response.get("speech") if isinstance(response.get("speech"), dict) else {}
+    plain = speech.get("plain") if isinstance(speech.get("plain"), dict) else {}
+    ssml = speech.get("ssml") if isinstance(speech.get("ssml"), dict) else {}
+    text = str(plain.get("speech") or "").strip()
+    if not text and ssml.get("speech"):
+        # Home Assistant may return SSML. The configured TTS provider receives
+        # normal text here, so remove markup while preserving the spoken words.
+        text = html.unescape(re.sub(r"<[^>]+>", " ", str(ssml.get("speech") or "")))
+        text = " ".join(text.split())
+    if not text:
+        text = str(response.get("text") or obj.get("speech") or obj.get("response_text") or "").strip()
+    response_type = str(response.get("response_type") or obj.get("response_type") or "").strip()
+    conversation_id = str(obj.get("conversation_id") or "").strip()
+    continue_conversation = _assistant_bool(obj.get("continue_conversation"), False)
+    return text, response_type, conversation_id, continue_conversation
+
+
+def _assistant_resolve_tts_entity(ha_url: str, token: str, configured: str) -> str:
+    configured = str(configured or "").strip()
+    if configured:
+        return configured
+    states = _ha_all_states_cached(ha_url, token)
+    available = sorted(
+        str(item.get("entity_id") or "").strip()
+        for item in states
+        if isinstance(item, dict) and str(item.get("entity_id") or "").startswith("tts.")
+    )
+    for preferred in ("tts.home_assistant_cloud", "tts.openai", "tts.piper"):
+        if preferred in available:
+            return preferred
+    return available[0] if available else ""
+
+
+def _assistant_playful_spoken_text(text: str, request_id: int, enabled: bool, response_type: str = "") -> str:
+    clean = str(text or "").strip()
+    if not clean or not enabled:
+        return clean
+    # Keep the useful Home Assistant response intact; add only a brief local quip.
+    action_prefixes = (
+        "At once, boss. ",
+        "Done, with only a modest amount of unnecessary drama. ",
+        "Consider it handled by the glowing orange department. ",
+        "Your wish has been routed through the house bureaucracy. ",
+    )
+    info_prefixes = (
+        "The silicon oracle reports: ",
+        "After consulting several highly opinionated electrons: ",
+        "The unnecessarily dramatic answer is: ",
+        "According to the house, which insists it is never wrong: ",
+    )
+    pool = action_prefixes if response_type == "action_done" else info_prefixes
+    return pool[max(0, int(request_id)) % len(pool)] + clean
+
+
+def _assistant_tts_speak(ha_url: str, token: str, tts_entity_id: str, media_player_id: str, message: str, language: str) -> object:
+    if not tts_entity_id:
+        raise ValueError("No Home Assistant TTS entity is configured or available")
+    if not media_player_id:
+        raise ValueError("No Sonos/media player entity is configured")
+    payload = {
+        "entity_id": tts_entity_id,
+        "media_player_entity_id": media_player_id,
+        "message": message,
+        "cache": True,
+        "language": language,
+        "options": {"preferred_format": "mp3"},
+    }
+    return _ha_json_request(
+        ha_url,
+        token,
+        "POST",
+        "/api/services/tts/speak",
+        payload,
+        timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
+    )
+
+
+def _assistant_estimated_hold_seconds(message: str, extra_seconds: float = 0.0) -> float:
+    words = max(1, len(str(message or "").split()))
+    # Natural TTS commonly lands around 145-175 WPM. Add startup/announcement time.
+    return max(4.0, min(28.0, (words / 2.45) + 2.8 + max(0.0, float(extra_seconds or 0.0))))
+
+
+def _assistant_process_payload(payload: dict) -> dict:
+    payload = payload if isinstance(payload, dict) else {}
+    text = str(payload.get("text") or payload.get("command") or "").strip()
+    if not text:
+        return {"ok": False, "error": "Enter a command in the text field."}
+    if len(text) > 1200:
+        return {"ok": False, "error": "Command is too long (maximum 1200 characters)."}
+    config = _assistant_config_payload()
+    if not config.get("enabled") and not _assistant_bool(payload.get("force"), False):
+        return {"ok": False, "error": "The thermostat voice assistant is disabled in the config portal."}
+    ha_url, token = _ha_credentials_from_panel_config()
+    if not ha_url or not token:
+        return {"ok": False, "error": "Home Assistant URL/token are not configured on this thermostat."}
+    if not _ASSISTANT_PROCESS_LOCK.acquire(blocking=False):
+        return {"ok": False, "busy": True, "error": "JARVIS is already handling another command.", "assistant": _assistant_status_payload().get("assistant")}
+
+    global _ASSISTANT_REQUEST_SEQ
+    try:
+        with _ASSISTANT_LOCK:
+            _ASSISTANT_REQUEST_SEQ += 1
+            request_id = _ASSISTANT_REQUEST_SEQ
+            previous_conversation_id = str(_ASSISTANT_STATE.get("conversationId") or "").strip()
+        speak = _assistant_bool(payload.get("speak"), config.get("speak", True))
+        fun_mode = _assistant_bool(payload.get("funMode"), config.get("funMode", True))
+        playful_replies = _assistant_bool(payload.get("playfulReplies"), config.get("playfulReplies", True)) and fun_mode
+        language = str(payload.get("language") or config.get("language") or "en").strip()[:16] or "en"
+        agent_id = str(payload.get("agentId") or config.get("agentId") or "").strip()
+        media_player_id = str(payload.get("mediaPlayerId") or config.get("effectiveMediaPlayerId") or "").strip()
+        configured_tts = str(payload.get("ttsEntityId") or config.get("ttsEntityId") or "").strip()
+        new_conversation = _assistant_bool(payload.get("newConversation"), False)
+        conversation_id = str(payload.get("conversationId") or "").strip()
+        if not conversation_id and config.get("continueConversation") and not new_conversation:
+            conversation_id = previous_conversation_id
+
+        _assistant_set_state(
+            "listening",
+            requestId=request_id,
+            command=text,
+            response="",
+            spokenResponse="",
+            statusText=_assistant_stage_quip("listening", request_id) if fun_mode else "Command received.",
+            error="",
+            startedAt=int(time.time() * 1000),
+            clearAtMonotonic=0.0,
+            mediaPlayerId=media_player_id,
+            ttsEntityId=configured_tts,
+            speechPlayed=False,
+        )
+        time.sleep(0.45)
+        _assistant_set_state(
+            "processing",
+            statusText=_assistant_stage_quip("processing", request_id) if fun_mode else "Processing with Home Assistant...",
+        )
+
+        conversation_payload = {"text": text, "language": language}
+        if agent_id:
+            conversation_payload["agent_id"] = agent_id
+        if conversation_id:
+            conversation_payload["conversation_id"] = conversation_id
+        raw = _ha_json_request(
+            ha_url,
+            token,
+            "POST",
+            "/api/conversation/process",
+            conversation_payload,
+            timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
+        )
+        response_text, response_type, returned_conversation_id, continue_conversation = _assistant_extract_response(raw)
+        if not response_text:
+            response_text = "Home Assistant completed the request but did not return a spoken response."
+        saved_conversation_id = returned_conversation_id if config.get("continueConversation") else ""
+        spoken_response = _assistant_playful_spoken_text(response_text, request_id, playful_replies, response_type)
+        tts_entity_id = ""
+        speech_played = False
+        speech_error = ""
+
+        _assistant_set_state(
+            "speaking",
+            response=response_text if config.get("showResponseText") else "",
+            spokenResponse=spoken_response,
+            statusText=_assistant_stage_quip("speaking", request_id) if fun_mode else "Sending the reply to the selected speaker...",
+            conversationId=saved_conversation_id,
+            mediaPlayerId=media_player_id,
+        )
+        if speak:
+            try:
+                tts_entity_id = _assistant_resolve_tts_entity(ha_url, token, configured_tts)
+                _assistant_set_state("speaking", ttsEntityId=tts_entity_id)
+                _assistant_tts_speak(ha_url, token, tts_entity_id, media_player_id, spoken_response, language)
+                speech_played = True
+            except Exception as exc:
+                speech_error = str(exc)
+        hold_seconds = _assistant_estimated_hold_seconds(spoken_response if speech_played else response_text, config.get("responseHoldSeconds", 2.0))
+        status_text = _assistant_stage_quip("speaking", request_id) if fun_mode else "Response ready."
+        if speak and speech_error:
+            status_text = "The answer is ready, but Sonos/TTS needs configuration."
+        state = _assistant_set_state(
+            "speaking",
+            response=response_text if config.get("showResponseText") else "",
+            spokenResponse=spoken_response,
+            statusText=status_text,
+            error=speech_error,
+            ttsEntityId=tts_entity_id or configured_tts,
+            speechPlayed=speech_played,
+            clearAtMonotonic=time.monotonic() + hold_seconds,
+        )
+        return {
+            "ok": True,
+            "requestId": request_id,
+            "command": text,
+            "response": response_text,
+            "spokenResponse": spoken_response,
+            "responseType": response_type,
+            "conversationId": returned_conversation_id,
+            "continueConversation": continue_conversation,
+            "agentId": agent_id or "home_assistant/default",
+            "mediaPlayerId": media_player_id,
+            "ttsEntityId": tts_entity_id or configured_tts,
+            "speechPlayed": speech_played,
+            "speechError": speech_error,
+            "assistant": state,
+        }
+    except Exception as exc:
+        with _ASSISTANT_LOCK:
+            request_id = int(_ASSISTANT_STATE.get("requestId") or 0)
+        state = _assistant_set_state(
+            "error",
+            statusText=_assistant_stage_quip("error", request_id),
+            error=str(exc),
+            response="",
+            spokenResponse="",
+            speechPlayed=False,
+            clearAtMonotonic=time.monotonic() + 10.0,
+        )
+        return {"ok": False, "error": str(exc), "assistant": state}
+    finally:
+        _ASSISTANT_PROCESS_LOCK.release()
 
 
 def _ha_state_cached(ha_url: str, token: str, entity_id: str, ttl: float | None = None) -> dict:
@@ -9027,6 +9580,15 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
             return _json(self, 200, _sync_status_payload())
         if path == "/api/discovery":
             return _json(self, 200, _discovery_payload())
+        if path == "/api/assistant/status":
+            if not _assistant_client_access_allowed(self.client_address[0] if self.client_address else ""):
+                return _json(self, 403, {"ok": False, "error": "Assistant status is local-only unless the temporary config portal is open."})
+            include_config = str((query.get("include_config") or [""])[0]).strip().lower() in {"1", "true", "yes", "on"}
+            return _json(self, 200, _assistant_status_payload(include_config=include_config))
+        if path == "/api/assistant/config":
+            if not _config_web_portal_active(touch=True):
+                return _json(self, 403, {"ok": False, "error": "The temporary config portal is closed."})
+            return _json(self, 200, {"ok": True, "assistant": _assistant_config_payload()})
 
         file_path = _safe_join_public(path)
         if not file_path or not file_path.exists() or not file_path.is_file():
@@ -9045,13 +9607,27 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply", "/api/sync/dispatch", "/api/sync/arm"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/config"}:
             self.send_error(404, "Not found")
             return
 
         try:
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+
+            if path == "/api/assistant/process":
+                if not _assistant_client_access_allowed(self.client_address[0] if self.client_address else ""):
+                    return _json(self, 403, {"ok": False, "error": "Assistant commands are local-only unless the temporary config portal is open."})
+                result = _assistant_process_payload(payload)
+                status = 200 if result.get("ok") else (409 if result.get("busy") else 400)
+                return _json(self, status, result)
+
+            if path == "/api/assistant/config":
+                try:
+                    result = _assistant_update_config(payload)
+                except ValueError as exc:
+                    result = {"ok": False, "error": str(exc)}
+                return _json(self, 200 if result.get("ok") else 400, result)
 
             if path == "/api/config":
                 config_payload = payload.get("config", payload) if isinstance(payload, dict) else {}

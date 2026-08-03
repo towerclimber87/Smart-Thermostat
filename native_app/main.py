@@ -1426,6 +1426,238 @@ class ScreenSleepOverlay(QWidget):
 
 
 
+
+class AssistantOverlay(QWidget):
+    """Full-screen original AI-core animation driven by backend assistant state."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_OpaquePaintEvent, True)
+        self.setAttribute(Qt.WA_StyledBackground, False)
+        self.setAttribute(Qt.WA_AcceptTouchEvents, True)
+        self.setMouseTracking(True)
+        self.stage = "idle"
+        self.command = ""
+        self.response = ""
+        self.status_text = "Standing by."
+        self.error_text = ""
+        self.request_id = 0
+        self.phase = 0.0
+        self._active = False
+        self.animation = QTimer(self)
+        self.animation.setInterval(50)
+        self.animation.timeout.connect(self.advance_animation)
+        self.hide()
+
+    def is_active(self) -> bool:
+        return bool(self._active and self.stage != "idle")
+
+    def set_status(self, payload: object):
+        data = payload if isinstance(payload, dict) else {}
+        if isinstance(data.get("assistant"), dict):
+            data = data.get("assistant") or {}
+        stage = str(data.get("stage") or "idle").strip().lower()
+        active = bool(data.get("active", stage != "idle")) and stage != "idle"
+        self.stage = stage
+        self.command = str(data.get("command") or "")
+        self.response = str(data.get("response") or "")
+        self.status_text = str(data.get("statusText") or "")
+        self.error_text = str(data.get("error") or "")
+        try:
+            self.request_id = int(data.get("requestId") or 0)
+        except Exception:
+            self.request_id = 0
+        self._active = active
+        if active:
+            if not self.animation.isActive():
+                self.animation.start()
+            self.show()
+            self.raise_()
+            self.update()
+        else:
+            self.animation.stop()
+            self.hide()
+
+    def advance_animation(self):
+        speed = 0.075 if self.stage == "processing" else (0.052 if self.stage == "speaking" else 0.042)
+        self.phase = (self.phase + speed) % (math.pi * 200.0)
+        self.update()
+
+    def stage_color(self) -> QColor:
+        if self.stage == "error":
+            return QColor(255, 92, 78)
+        if self.stage == "speaking":
+            return QColor(255, 187, 74)
+        if self.stage == "listening":
+            return QColor(76, 231, 255)
+        return QColor(255, 143, 39)
+
+    def stage_label(self) -> str:
+        return {
+            "listening": "COMMAND LINK",
+            "processing": "HOME ASSISTANT PROCESSING",
+            "speaking": "SONOS RESPONSE",
+            "error": "DIGITAL GREMLIN DETECTED",
+        }.get(self.stage, "JARVIS-ISH MODE")
+
+    def mousePressEvent(self, event):
+        # The animation intentionally owns the screen while a command is active.
+        event.accept()
+
+    def touchEvent(self, event):
+        event.accept()
+
+    @staticmethod
+    def _fit_text(text: str, max_chars: int) -> str:
+        text = " ".join(str(text or "").split())
+        if len(text) <= max_chars:
+            return text
+        return text[: max(1, max_chars - 1)].rstrip() + "…"
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        w = max(1, self.width())
+        h = max(1, self.height())
+        base = QLinearGradient(0, 0, w, h)
+        base.setColorAt(0.0, QColor(1, 5, 10))
+        base.setColorAt(0.48, QColor(6, 9, 15))
+        base.setColorAt(1.0, QColor(12, 5, 2))
+        p.fillRect(self.rect(), base)
+
+        active = self.stage_color()
+        cyan = QColor(65, 223, 255)
+        amber = QColor(255, 145, 35)
+
+        # Subtle technical grid and corner brackets.
+        p.setPen(QPen(QColor(active.red(), active.green(), active.blue(), 28), 1))
+        grid = max(44, int(min(w, h) * 0.065))
+        offset = int((self.phase * 9) % grid)
+        for x in range(-grid + offset, w + grid, grid):
+            p.drawLine(x, 0, x, h)
+        for y in range(-grid + offset, h + grid, grid):
+            p.drawLine(0, y, w, y)
+        p.setPen(QPen(QColor(255, 170, 65, 120), 2))
+        bracket = int(min(w, h) * 0.085)
+        margin = 28
+        for sx, sy in ((1, 1), (-1, 1), (1, -1), (-1, -1)):
+            x = margin if sx > 0 else w - margin
+            y = margin if sy > 0 else h - margin
+            p.drawLine(x, y, x + sx * bracket, y)
+            p.drawLine(x, y, x, y + sy * bracket)
+
+        cx = w * 0.5
+        cy = h * 0.43
+        radius = min(w, h) * 0.235
+        pulse = 1.0 + 0.035 * math.sin(self.phase * 1.7)
+
+        glow = QRadialGradient(QPointF(cx, cy), radius * 1.65)
+        glow.setColorAt(0.0, QColor(active.red(), active.green(), active.blue(), 145))
+        glow.setColorAt(0.22, QColor(255, 138, 30, 82))
+        glow.setColorAt(0.58, QColor(255, 105, 10, 24))
+        glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.setPen(Qt.NoPen)
+        p.setBrush(glow)
+        p.drawEllipse(QPointF(cx, cy), radius * 1.65, radius * 1.65)
+
+        # Rotating segmented rings. This is deliberately original rather than a
+        # copy of any movie interface, while retaining the dramatic AI-core feel.
+        p.setBrush(Qt.NoBrush)
+        ring_specs = (
+            (1.02, 5.0, 205, active, 1.0),
+            (0.82, 3.0, 145, amber, -1.5),
+            (0.61, 2.2, 110, cyan, 2.1),
+            (0.42, 3.8, 230, QColor(255, 218, 125), -2.7),
+        )
+        for idx, (scale, width, span, color, direction) in enumerate(ring_specs):
+            rr = radius * scale * pulse
+            rect = QRectF(cx - rr, cy - rr, rr * 2, rr * 2)
+            p.setPen(QPen(QColor(color.red(), color.green(), color.blue(), 210 - idx * 28), width, Qt.SolidLine, Qt.RoundCap))
+            start = int((self.phase * direction * 820 + idx * 71) % 5760)
+            for segment in range(4 + idx):
+                seg_start = start + segment * int(5760 / (4 + idx))
+                seg_span = int((span - segment * 8) * 16)
+                p.drawArc(rect, seg_start, seg_span)
+
+        # Orbit particles and radial data streaks.
+        for i in range(34):
+            angle = self.phase * (0.35 + (i % 5) * 0.08) + i * 0.733
+            orbit = radius * (0.48 + (i % 11) * 0.055)
+            x = cx + math.cos(angle) * orbit
+            y = cy + math.sin(angle * 1.07) * orbit * 0.77
+            size = 1.5 + (i % 4) * 0.85
+            alpha = 95 + (i % 5) * 28
+            color = cyan if i % 6 == 0 else amber
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(color.red(), color.green(), color.blue(), min(230, alpha)))
+            p.drawEllipse(QPointF(x, y), size, size)
+            if i % 4 == 0:
+                p.setPen(QPen(QColor(color.red(), color.green(), color.blue(), 50), 1))
+                p.drawLine(QPointF(cx, cy), QPointF(x, y))
+
+        core_r = radius * (0.22 + 0.025 * math.sin(self.phase * 2.2))
+        core = QRadialGradient(QPointF(cx, cy), core_r)
+        core.setColorAt(0.0, QColor(255, 248, 202, 255))
+        core.setColorAt(0.23, QColor(255, 188, 70, 245))
+        core.setColorAt(0.68, QColor(255, 95, 9, 155))
+        core.setColorAt(1.0, QColor(255, 65, 0, 0))
+        p.setPen(Qt.NoPen)
+        p.setBrush(core)
+        p.drawEllipse(QPointF(cx, cy), core_r, core_r)
+
+        # Speaking bars move with independent phases; processing gets a scanning line.
+        if self.stage == "speaking":
+            bar_y = cy + radius * 1.16
+            bar_w = min(w * 0.32, 390)
+            start_x = cx - bar_w / 2
+            count = 27
+            for i in range(count):
+                amp = 9 + 25 * abs(math.sin(self.phase * 2.3 + i * 0.57))
+                x = start_x + (bar_w / max(1, count - 1)) * i
+                p.setPen(QPen(QColor(255, 181, 67, 200), 3, Qt.SolidLine, Qt.RoundCap))
+                p.drawLine(QPointF(x, bar_y - amp / 2), QPointF(x, bar_y + amp / 2))
+        elif self.stage == "processing":
+            scan_y = cy - radius + ((math.sin(self.phase) + 1.0) / 2.0) * radius * 2
+            p.setPen(QPen(QColor(70, 229, 255, 120), 2))
+            p.drawLine(QPointF(cx - radius * 0.88, scan_y), QPointF(cx + radius * 0.88, scan_y))
+
+        # Headline and current comic status.
+        p.setPen(QColor(255, 173, 69))
+        p.setFont(font(max(9, int(min(w, h) * 0.018)), QFont.Black, 150))
+        p.drawText(QRectF(38, 28, w - 76, 36), Qt.AlignHCenter | Qt.AlignVCenter, "JARVIS // THERMOSTAT TERMINAL")
+        p.setPen(QColor(236, 245, 255))
+        p.setFont(font(max(15, int(min(w, h) * 0.032)), QFont.Black, 90))
+        p.drawText(QRectF(40, 66, w - 80, 58), Qt.AlignHCenter | Qt.AlignVCenter, self.stage_label())
+        p.setPen(QColor(178, 196, 219))
+        p.setFont(font(max(9, int(min(w, h) * 0.017)), QFont.Bold))
+        p.drawText(QRectF(90, 118, w - 180, 52), Qt.AlignHCenter | Qt.AlignTop | Qt.TextWordWrap, self._fit_text(self.status_text, 150))
+
+        # Command/response cards at the bottom keep the animation useful, not just flashy.
+        card_h = max(105, int(h * 0.17))
+        card_y = h - card_h - 30
+        gap = 16
+        card_w = (w - 76 - gap) / 2
+        cards = (
+            (QRectF(30, card_y, card_w, card_h), "YOU TYPED", self.command or "Waiting for a command...", cyan),
+            (QRectF(30 + card_w + gap, card_y, card_w, card_h), "JARVIS REPLY", self.response or (self.error_text if self.stage == "error" else "Processing..."), amber),
+        )
+        for rect, label, text, color in cards:
+            p.setPen(QPen(QColor(color.red(), color.green(), color.blue(), 105), 1.5))
+            p.setBrush(QColor(3, 8, 15, 218))
+            p.drawRoundedRect(rect, 18, 18)
+            p.setPen(QColor(color.red(), color.green(), color.blue(), 225))
+            p.setFont(font(9, QFont.Black, 110))
+            p.drawText(QRectF(rect.x() + 18, rect.y() + 12, rect.width() - 36, 24), Qt.AlignLeft | Qt.AlignVCenter, label)
+            p.setPen(QColor(242, 247, 255))
+            p.setFont(font(max(10, int(min(w, h) * 0.017)), QFont.Bold))
+            p.drawText(QRectF(rect.x() + 18, rect.y() + 39, rect.width() - 36, rect.height() - 50), Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap, self._fit_text(text, 260))
+
+        if self.error_text and self.stage != "error":
+            p.setPen(QColor(255, 159, 92))
+            p.setFont(font(9, QFont.Bold))
+            p.drawText(QRectF(40, card_y - 28, w - 80, 22), Qt.AlignHCenter | Qt.AlignVCenter, self._fit_text("Voice note: " + self.error_text, 180))
+
+
 class Header(QWidget):
     navChanged = pyqtSignal(str)
     infoClicked = pyqtSignal()
@@ -12265,6 +12497,7 @@ class AlarmControlDialog(QDialog):
 class MainWindow(Background):
     statusRefreshCompleted = pyqtSignal(object)
     alarmRefreshCompleted = pyqtSignal(object)
+    assistantStatusCompleted = pyqtSignal(object)
     mainAsyncCompleted = pyqtSignal(object)
     screenBrightnessCompleted = pyqtSignal(object)
 
@@ -12280,6 +12513,8 @@ class MainWindow(Background):
         self._display_wake_block_until = 0.0
         self._last_user_activity_at = time.monotonic()
         self.sleep_overlay = ScreenSleepOverlay(self)
+        self.assistant_overlay = AssistantOverlay(self)
+        self._assistant_status_running = False
         self.sleep_button = SleepButton(self)
         self.sleep_button.clicked.connect(lambda: self.enter_display_sleep(manual=True))
         self.sync_button = SyncButton(self)
@@ -12364,10 +12599,14 @@ class MainWindow(Background):
         self._main_async_jobs: dict[str, tuple[Callable | None, Callable | None]] = {}
         self.statusRefreshCompleted.connect(self._handle_status_refresh_completed)
         self.alarmRefreshCompleted.connect(self._handle_alarm_refresh_completed)
+        self.assistantStatusCompleted.connect(self._handle_assistant_status_completed)
         self.mainAsyncCompleted.connect(self._handle_main_async_completed)
         self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self.refresh_status)
         self.status_timer.start(4000)
+        self.assistant_status_timer = QTimer(self)
+        self.assistant_status_timer.timeout.connect(self.refresh_assistant_status)
+        self.assistant_status_timer.start(350)
         self.alarm_timer = QTimer(self)
         self.alarm_timer.timeout.connect(self.refresh_alarm_state)
         self.alarm_timer.start(int(max(5.0, ALARM_STATE_POLL_SECONDS) * 1000))
@@ -12395,6 +12634,7 @@ class MainWindow(Background):
             self.sync_runtime_only()
             self.sync_visible_page(self.current_name)
             self.position_sleep_controls()
+            QTimer.singleShot(0, self.refresh_assistant_status)
             self.toast.show_message("Native panel ready")
         except Exception as exc:
             self.toast.show_message(f"Startup problem: {exc}", 6000)
@@ -12409,18 +12649,25 @@ class MainWindow(Background):
 
     def position_sleep_controls(self):
         try:
+            assistant_active = bool(
+                hasattr(self, "assistant_overlay")
+                and self.assistant_overlay.is_active()
+            )
             if hasattr(self, "sleep_overlay"):
                 self.sleep_overlay.setGeometry(self.rect())
-                if self.sleep_overlay.isVisible():
-                    self.sleep_overlay.raise_()
+            if hasattr(self, "assistant_overlay"):
+                self.assistant_overlay.setGeometry(self.rect())
+
             margin = 22
             sleep_x = max(0, self.width() - self.sleep_button.width() - margin) if hasattr(self, "sleep_button") else 0
             sleep_y = max(0, self.height() - self.sleep_button.height() - margin) if hasattr(self, "sleep_button") else 0
             if hasattr(self, "sleep_button"):
                 self.sleep_button.move(sleep_x, sleep_y)
+                self.sleep_button.setVisible(not assistant_active and not getattr(self, "_display_sleeping", False))
             if hasattr(self, "sync_button"):
                 show_sync = (
-                    not getattr(self, "_display_sleeping", False)
+                    not assistant_active
+                    and not getattr(self, "_display_sleeping", False)
                     and self.current_name == "Thermostat"
                     and bool(self.sync_peer_entities())
                 )
@@ -12428,7 +12675,16 @@ class MainWindow(Background):
                 if show_sync:
                     self.sync_button.move(sleep_x, max(0, sleep_y - self.sync_button.height() - 10))
                     self.sync_button.raise_()
-            if hasattr(self, "sleep_button") and not getattr(self, "_display_sleeping", False):
+
+            # Sleep shield is above the normal UI, but the active assistant screen
+            # is deliberately top-most so a terminal command can wake the display
+            # and immediately show the listening/processing animation.
+            if hasattr(self, "sleep_overlay") and self.sleep_overlay.isVisible():
+                self.sleep_overlay.raise_()
+            if assistant_active and hasattr(self, "assistant_overlay"):
+                self.assistant_overlay.show()
+                self.assistant_overlay.raise_()
+            elif hasattr(self, "sleep_button") and not getattr(self, "_display_sleeping", False):
                 self.sleep_button.raise_()
         except Exception:
             pass
@@ -13021,6 +13277,8 @@ class MainWindow(Background):
         try:
             if getattr(self, "_display_sleeping", False):
                 return
+            if hasattr(self, "assistant_overlay") and self.assistant_overlay.is_active():
+                return
             if SCREEN_SLEEP_IDLE_SECONDS <= 0:
                 return
             if QApplication.activeModalWidget() is not None:
@@ -13346,6 +13604,40 @@ class MainWindow(Background):
             page.apply_alarm_state_refresh(fresh)
         if self.current_name == "Thermostat":
             self.sync_visible_page("Thermostat")
+
+    def refresh_assistant_status(self):
+        """Poll the local backend only; no Home Assistant work occurs in this timer."""
+        if getattr(self, "_assistant_status_running", False):
+            return
+        self._assistant_status_running = True
+        api = self.api
+
+        def worker():
+            try:
+                data = api.get("/api/assistant/status")
+                self.assistantStatusCompleted.emit({"data": data, "error": None})
+            except Exception as exc:
+                self.assistantStatusCompleted.emit({"data": None, "error": str(exc)})
+
+        threading.Thread(target=worker, name="assistant-status-refresh", daemon=True).start()
+
+    def _handle_assistant_status_completed(self, info: object):
+        self._assistant_status_running = False
+        data = info if isinstance(info, dict) else {}
+        if data.get("error"):
+            return
+        result = data.get("data") if isinstance(data.get("data"), dict) else {}
+        assistant = result.get("assistant") if isinstance(result.get("assistant"), dict) else {}
+        active = bool(assistant.get("active")) and str(assistant.get("stage") or "idle").lower() != "idle"
+        if active:
+            # A command entered from SSH should wake a sleeping panel just like a
+            # physical touch, then let the animation own the screen until done.
+            if getattr(self, "_display_sleeping", False):
+                self.wake_display_screen()
+            self._last_user_activity_at = time.monotonic()
+        if hasattr(self, "assistant_overlay"):
+            self.assistant_overlay.set_status(assistant)
+        self.position_sleep_controls()
 
     def refresh_status(self):
         if getattr(self, "_status_refresh_running", False):
