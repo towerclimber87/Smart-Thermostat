@@ -25,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib import request, error
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, urlunparse
 
 ROOT = Path(__file__).resolve().parent
 PUBLIC = ROOT / "public"
@@ -376,6 +376,7 @@ DEFAULT_HOME_ASSISTANT_CONFIG = {
         "continueConversation": True,
         "showResponseText": True,
         "responseHoldSeconds": 2.0,
+        "announcementVolumePercent": 45,
     },
 }
 
@@ -2211,6 +2212,502 @@ def _config_web_portal_payload(server_port: int | str | None = None) -> dict:
     }
 
 
+
+def _settings_entity_id(value: object) -> str:
+    if isinstance(value, dict):
+        value = value.get("entityId") or value.get("entity_id")
+    return str(value or "").strip()
+
+
+def _settings_entity_from_item(item: object) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    entity_id = _settings_entity_id(item)
+    if not entity_id or "." not in entity_id:
+        return None
+    attributes = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
+    domain = str(item.get("domain") or entity_id.split(".", 1)[0]).strip().lower()
+    name = str(
+        item.get("name")
+        or item.get("friendlyName")
+        or item.get("friendly_name")
+        or attributes.get("friendly_name")
+        or entity_id
+    ).strip() or entity_id
+    unit = str(
+        item.get("unitOfMeasurement")
+        or item.get("unit_of_measurement")
+        or attributes.get("unit_of_measurement")
+        or ""
+    ).strip()
+    payload = {
+        "entityId": entity_id,
+        "name": name[:160],
+        "domain": domain,
+        "state": item.get("state"),
+        "unitOfMeasurement": unit[:32],
+    }
+    # Preserve the IHA peer metadata used by the existing Sync path. Generic
+    # sensor/door/person fields stay small, while selected thermostat peers keep
+    # their direct panel route and capability markers.
+    for key in ("serial", "panelUrl", "panel_url", "syncCapable", "ihaPanel", "available", "away", "doorPauseActive"):
+        if key in item:
+            payload[key] = item.get(key)
+    return payload
+
+
+def _settings_entity_catalog() -> tuple[dict[str, list[dict]], dict[str, dict], list[str]]:
+    """Build a token-free entity catalog for the temporary settings portal."""
+    record = _read_panel_config_record()
+    config = record.get("config") if isinstance(record, dict) else {}
+    integrations = config.get("integrations") if isinstance(config, dict) else {}
+    ha = integrations.get("homeAssistant") if isinstance(integrations, dict) else {}
+    ha = ha if isinstance(ha, dict) else {}
+    thermostat = _read_thermostat_record().get("thermostat") or {}
+    warnings: list[str] = []
+    by_id: dict[str, dict] = {}
+    sync_allowed: set[str] = set()
+
+    def add(item: object) -> None:
+        clean = _settings_entity_from_item(item)
+        if clean:
+            by_id[clean["entityId"]] = clean
+
+    # Keep every currently selected or previously discovered option available,
+    # even if Home Assistant is temporarily offline while the portal is open.
+    for key in (
+        "currentTempEntity", "outdoorTempEntity", "weatherEntity",
+        "externalHeatControlEntity", "externalCoolControlEntity", "externalFanControlEntity",
+        "doorEntity",
+    ):
+        add(ha.get(key))
+    for key in (
+        "currentTempAvailableEntities", "weatherAvailableEntities",
+        "externalAirControlAvailableEntities", "doorAvailableEntities",
+        "pauseFunctionAvailableEntities", "personAvailableEntities",
+    ):
+        values = ha.get(key)
+        if isinstance(values, list):
+            for item in values:
+                add(item)
+    for key in ("syncThermostatEntities", "syncAvailableThermostatEntities"):
+        values = ha.get(key)
+        if isinstance(values, list):
+            for item in values:
+                add(item)
+                entity_id = _settings_entity_id(item)
+                if entity_id:
+                    sync_allowed.add(entity_id)
+    for key in ("autoAwayPeople", "people"):
+        values = thermostat.get(key) if isinstance(thermostat, dict) else []
+        if isinstance(values, list):
+            for item in values:
+                add(item)
+    for key in ("externalHeatEntity", "externalCoolEntity", "externalFanEntity"):
+        add(thermostat.get(key) if isinstance(thermostat, dict) else None)
+    pause = thermostat.get("pauseFunction") if isinstance(thermostat, dict) else {}
+    if isinstance(pause, dict) and isinstance(pause.get("entries"), list):
+        for item in pause.get("entries") or []:
+            add(item)
+
+    ha_url, token = _ha_credentials_from_panel_config()
+    if ha_url and token:
+        try:
+            for item in _ha_all_states_cached(ha_url, token):
+                add(item)
+        except Exception as exc:
+            warnings.append(f"Home Assistant entities could not be refreshed: {exc}")
+        try:
+            saved_sync = ha.get("syncThermostatEntities") if isinstance(ha.get("syncThermostatEntities"), list) else []
+            local_name = str(thermostat.get("name") or "") if isinstance(thermostat, dict) else ""
+            for item in _fetch_ha_sync_thermostats(ha_url, token, saved_sync, local_name):
+                add(item)
+                entity_id = _settings_entity_id(item)
+                if entity_id:
+                    sync_allowed.add(entity_id)
+        except Exception as exc:
+            warnings.append(f"IHA sync thermostats could not be refreshed: {exc}")
+    else:
+        warnings.append("Home Assistant is not configured; only saved entity selections are available.")
+
+    groups: dict[str, list[dict]] = {
+        "temperature": [],
+        "outdoor": [],
+        "airControls": [],
+        "doors": [],
+        "people": [],
+        "syncThermostats": [],
+    }
+    for item in by_id.values():
+        domain = item.get("domain")
+        if domain in {"sensor", "climate"}:
+            groups["temperature"].append(item)
+        if domain in {"sensor", "weather"}:
+            groups["outdoor"].append(item)
+        if domain in {"switch", "input_boolean"}:
+            groups["airControls"].append(item)
+        if domain in {"binary_sensor", "cover"}:
+            groups["doors"].append(item)
+        if domain == "person":
+            groups["people"].append(item)
+        if domain == "climate" and item.get("entityId") in sync_allowed:
+            groups["syncThermostats"].append(item)
+    for values in groups.values():
+        values.sort(key=lambda item: (str(item.get("name") or "").lower(), item.get("entityId") or ""))
+    return groups, by_id, warnings
+
+
+def _settings_source_mode(value: object) -> str:
+    return "external" if str(value or "").strip().lower() in {"external", "home-assistant", "ha", "remote"} else "internal"
+
+
+def _config_settings_current() -> dict:
+    thermostat = _read_thermostat_record().get("thermostat") or {}
+    thermostat = thermostat if isinstance(thermostat, dict) else {}
+    record = _read_panel_config_record()
+    config = record.get("config") if isinstance(record, dict) else {}
+    config = config if isinstance(config, dict) else {}
+    integrations = config.get("integrations") if isinstance(config.get("integrations"), dict) else {}
+    ha = integrations.get("homeAssistant") if isinstance(integrations.get("homeAssistant"), dict) else {}
+    display = config.get("display") if isinstance(config.get("display"), dict) else {}
+    alarm = config.get("alarm") if isinstance(config.get("alarm"), dict) else {}
+    security = config.get("security") if isinstance(config.get("security"), dict) else {}
+    limits = thermostat.get("limits") if isinstance(thermostat.get("limits"), dict) else {}
+    cool_limits = limits.get("cool") if isinstance(limits.get("cool"), dict) else {}
+    heat_limits = limits.get("heat") if isinstance(limits.get("heat"), dict) else {}
+    pause = thermostat.get("pauseFunction") if isinstance(thermostat.get("pauseFunction"), dict) else {}
+    pause_entries = pause.get("entries") if isinstance(pause.get("entries"), list) else []
+
+    def first_entity(value: object) -> str:
+        return _settings_entity_id(value)
+
+    return {
+        "name": str(thermostat.get("name") or "IHA Thermostat"),
+        "fan": str(thermostat.get("fan") or "auto"),
+        "screenOrientation": str(display.get("screenOrientation") or "upright"),
+        "awayHeat": thermostat.get("awayHeat", 55),
+        "awayCool": thermostat.get("awayCool", 85),
+        "autoAwayPersonIds": [first_entity(x) for x in (thermostat.get("autoAwayPeople") or []) if first_entity(x)],
+        "coolMin": cool_limits.get("min", 65),
+        "coolMax": cool_limits.get("max", 80),
+        "heatMin": heat_limits.get("min", 60),
+        "heatMax": heat_limits.get("max", 78),
+        "safetyLow": thermostat.get("safetyLow", 55),
+        "safetyHigh": thermostat.get("safetyHigh", 85),
+        "autoCoolOutdoorTarget": thermostat.get("autoCoolOutdoorTarget", 70),
+        "autoHeatOutdoorTarget": thermostat.get("autoHeatOutdoorTarget", 65),
+        "heatLocked": bool(thermostat.get("heatLocked")),
+        "coolLocked": bool(thermostat.get("coolLocked")),
+        "autoChangeoverHours": round(float(thermostat.get("autoChangeoverLockoutMinutes", 120) or 0) / 60.0, 2),
+        "manualChangeoverMinutes": thermostat.get("manualChangeoverLockoutMinutes", 10),
+        "coolFanRemainOnMinutes": thermostat.get("coolFanRemainOnMinutes", 2),
+        "temperatureDifferential": thermostat.get("temperatureDifferential", 0),
+        "heatMinimumRuntimeMinutes": thermostat.get("heatMinimumRuntimeMinutes", 2),
+        "coolMinimumRuntimeMinutes": thermostat.get("coolMinimumRuntimeMinutes", 2),
+        "roomTempControlMode": _settings_source_mode(thermostat.get("roomTempControlMode")),
+        "heatControlMode": _settings_source_mode(thermostat.get("heatControlMode", thermostat.get("airControlMode"))),
+        "coolControlMode": _settings_source_mode(thermostat.get("coolControlMode", thermostat.get("airControlMode"))),
+        "fanControlMode": _settings_source_mode(thermostat.get("fanControlMode")),
+        "currentTempEntityId": first_entity(ha.get("currentTempEntity")),
+        "externalHeatEntityId": first_entity(thermostat.get("externalHeatEntity") or ha.get("externalHeatControlEntity")),
+        "externalCoolEntityId": first_entity(thermostat.get("externalCoolEntity") or ha.get("externalCoolControlEntity")),
+        "externalFanEntityId": first_entity(thermostat.get("externalFanEntity") or ha.get("externalFanControlEntity")),
+        "outdoorTempEntityId": first_entity(ha.get("outdoorTempEntity") or ha.get("weatherEntity")),
+        "syncThermostatIds": [first_entity(x) for x in (ha.get("syncThermostatEntities") or []) if first_entity(x)],
+        "trackedPersonIds": [first_entity(x) for x in (thermostat.get("people") or []) if first_entity(x)],
+        "doorEntityId": first_entity(pause_entries[0] if pause_entries else ha.get("doorEntity")),
+        "doorPauseDurationMinutes": pause.get("durationMinutes", 5),
+        "disarmCode": str(alarm.get("disarmCode") or ""),
+        "settingsCode": str(security.get("settingsCode") or ""),
+    }
+
+
+def _config_settings_payload() -> dict:
+    groups, _lookup, warnings = _settings_entity_catalog()
+    return {
+        "ok": True,
+        "settings": _config_settings_current(),
+        "entities": groups,
+        "warnings": warnings,
+    }
+
+
+def _settings_number(payload: dict, key: str, default: float, low: float, high: float, *, integer: bool = True) -> int | float:
+    raw = payload.get(key, default)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"{key} must be a number")
+    value = max(low, min(high, value))
+    return int(round(value)) if integer else round(value, 2)
+
+
+def _settings_code(payload: dict, key: str, current: str) -> str:
+    value = str(payload.get(key, current) or "").strip()
+    if value and not re.fullmatch(r"\d{4}", value):
+        raise ValueError(f"{key} must be blank or exactly four digits")
+    return value
+
+
+def _settings_selected_ids(payload: dict, key: str, domain: str) -> list[str]:
+    values = payload.get(key, [])
+    if not isinstance(values, list):
+        raise ValueError(f"{key} must be a list")
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        entity_id = str(value or "").strip()
+        if not entity_id:
+            continue
+        if not entity_id.startswith(domain + "."):
+            raise ValueError(f"{key} contains an invalid {domain} entity")
+        if entity_id not in seen:
+            seen.add(entity_id)
+            result.append(entity_id)
+    return result
+
+
+def _settings_entity_for_id(entity_id: str, allowed_domains: set[str], lookup: dict[str, dict]) -> dict | None:
+    entity_id = str(entity_id or "").strip()
+    if not entity_id:
+        return None
+    domain = entity_id.split(".", 1)[0] if "." in entity_id else ""
+    if domain not in allowed_domains:
+        raise ValueError(f"{entity_id} is not an allowed {'/'.join(sorted(allowed_domains))} entity")
+    existing = lookup.get(entity_id)
+    if existing:
+        return _deepcopy_json(existing)
+    return {"entityId": entity_id, "name": entity_id, "domain": domain, "state": "unknown", "unitOfMeasurement": ""}
+
+
+def _settings_prepend_entity(existing: object, selected: dict | None) -> list[dict]:
+    clean: list[dict] = []
+    seen: set[str] = set()
+    for item in ([selected] if selected else []) + (existing if isinstance(existing, list) else []):
+        normalized = _settings_entity_from_item(item)
+        if not normalized:
+            continue
+        entity_id = normalized["entityId"]
+        if entity_id in seen:
+            continue
+        seen.add(entity_id)
+        clean.append(normalized)
+    return clean
+
+
+def _apply_saved_screen_orientation(orientation: str) -> tuple[bool, str]:
+    orientation = "upside_down" if str(orientation or "").strip().lower() == "upside_down" else "upright"
+    script = ROOT / "scripts" / "apply-screen-orientation.sh"
+    if not script.exists():
+        return False, "Screen orientation helper is missing; the saved orientation will apply after restart."
+    env = os.environ.copy()
+    env.setdefault("SMART_THERMOSTAT_DISPLAY_OUTPUT", "DSI-1")
+    try:
+        result = subprocess.run(
+            [str(script), orientation], cwd=str(ROOT), env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            timeout=8, check=False,
+        )
+    except Exception as exc:
+        return False, str(exc)
+    detail = (result.stdout or "").strip()
+    return result.returncode == 0, detail
+
+
+def _config_settings_save(payload: dict) -> dict:
+    if not _config_web_portal_active(touch=True):
+        return {"ok": False, "error": "The temporary config portal is closed."}
+    values = payload.get("settings", payload) if isinstance(payload, dict) else {}
+    if not isinstance(values, dict):
+        raise ValueError("settings must be an object")
+
+    current_thermostat = _read_thermostat_record().get("thermostat") or {}
+    current_settings = _config_settings_current()
+    old_record = _read_panel_config_record()
+    old_config = _deepcopy_json(old_record.get("config") or {})
+    config = _deepcopy_json(old_config)
+    if not isinstance(config, dict):
+        config = {}
+    groups, lookup, warnings = _settings_entity_catalog()
+    del groups
+
+    name = str(values.get("name", current_settings.get("name") or "IHA Thermostat") or "").strip()[:80]
+    if not name:
+        raise ValueError("Thermostat name cannot be blank")
+    fan = str(values.get("fan", current_settings.get("fan") or "auto") or "auto").strip().lower()
+    if fan not in {"off", "on", "auto"}:
+        raise ValueError("fan must be off, on, or auto")
+    orientation = str(values.get("screenOrientation", current_settings.get("screenOrientation") or "upright") or "upright").strip().lower()
+    if orientation not in {"upright", "upside_down"}:
+        raise ValueError("screenOrientation must be upright or upside_down")
+
+    cool_min = _settings_number(values, "coolMin", current_settings["coolMin"], 50, 90)
+    cool_max = _settings_number(values, "coolMax", current_settings["coolMax"], 50, 90)
+    heat_min = _settings_number(values, "heatMin", current_settings["heatMin"], 40, 80)
+    heat_max = _settings_number(values, "heatMax", current_settings["heatMax"], 40, 85)
+    if cool_min > cool_max:
+        raise ValueError("Cool Low cannot be higher than Cool High")
+    if heat_min > heat_max:
+        raise ValueError("Heat Low cannot be higher than Heat High")
+
+    room_mode = _settings_source_mode(values.get("roomTempControlMode", current_settings["roomTempControlMode"]))
+    heat_mode = _settings_source_mode(values.get("heatControlMode", current_settings["heatControlMode"]))
+    cool_mode = _settings_source_mode(values.get("coolControlMode", current_settings["coolControlMode"]))
+    fan_mode = _settings_source_mode(values.get("fanControlMode", current_settings["fanControlMode"]))
+    current_temp_entity = _settings_entity_for_id(values.get("currentTempEntityId", ""), {"sensor", "climate"}, lookup)
+    external_heat = _settings_entity_for_id(values.get("externalHeatEntityId", ""), {"switch", "input_boolean"}, lookup)
+    external_cool = _settings_entity_for_id(values.get("externalCoolEntityId", ""), {"switch", "input_boolean"}, lookup)
+    external_fan = _settings_entity_for_id(values.get("externalFanEntityId", ""), {"switch", "input_boolean"}, lookup)
+    if room_mode == "external" and not current_temp_entity:
+        raise ValueError("Select a room temperature entity before using External room temperature")
+    if heat_mode == "external" and not external_heat:
+        raise ValueError("Select an external Heat entity before using External heat control")
+    if cool_mode == "external" and not external_cool:
+        raise ValueError("Select an external Cool entity before using External cool control")
+    if fan_mode == "external" and not external_fan:
+        raise ValueError("Select an external Fan entity before using External fan control")
+
+    outdoor = _settings_entity_for_id(values.get("outdoorTempEntityId", ""), {"sensor", "weather"}, lookup)
+    door = _settings_entity_for_id(values.get("doorEntityId", ""), {"binary_sensor", "cover"}, lookup)
+    auto_away_ids = _settings_selected_ids(values, "autoAwayPersonIds", "person")
+    tracked_ids = _settings_selected_ids(values, "trackedPersonIds", "person")
+    sync_ids = _settings_selected_ids(values, "syncThermostatIds", "climate")
+    auto_away_people = [_settings_entity_for_id(x, {"person"}, lookup) for x in auto_away_ids]
+    tracked_people = [_settings_entity_for_id(x, {"person"}, lookup) for x in tracked_ids]
+    sync_peers = [_settings_entity_for_id(x, {"climate"}, lookup) for x in sync_ids]
+
+    integrations = config.setdefault("integrations", {})
+    if not isinstance(integrations, dict):
+        integrations = {}
+        config["integrations"] = integrations
+    ha = integrations.setdefault("homeAssistant", {})
+    if not isinstance(ha, dict):
+        ha = {}
+        integrations["homeAssistant"] = ha
+    alarm = config.setdefault("alarm", {})
+    if not isinstance(alarm, dict):
+        alarm = {}
+        config["alarm"] = alarm
+    security = config.setdefault("security", {})
+    if not isinstance(security, dict):
+        security = {}
+        config["security"] = security
+    display = config.setdefault("display", {})
+    if not isinstance(display, dict):
+        display = {}
+        config["display"] = display
+
+    old_orientation = str(display.get("screenOrientation") or "upright")
+    display["screenOrientation"] = orientation
+    display["xrandrRotation"] = "inverted" if orientation == "upside_down" else "normal"
+    alarm["disarmCode"] = _settings_code(values, "disarmCode", str(alarm.get("disarmCode") or ""))
+    security["settingsCode"] = _settings_code(values, "settingsCode", str(security.get("settingsCode") or ""))
+
+    if current_temp_entity:
+        ha["currentTempEntity"] = current_temp_entity
+        ha["currentTempAvailableEntities"] = _settings_prepend_entity(ha.get("currentTempAvailableEntities"), current_temp_entity)
+    elif room_mode == "internal":
+        ha["currentTempEntity"] = None
+    for selected_key, available_key, entity in (
+        ("externalHeatControlEntity", "externalAirControlAvailableEntities", external_heat),
+        ("externalCoolControlEntity", "externalAirControlAvailableEntities", external_cool),
+        ("externalFanControlEntity", "externalAirControlAvailableEntities", external_fan),
+    ):
+        ha[selected_key] = entity
+        ha[available_key] = _settings_prepend_entity(ha.get(available_key), entity)
+    ha["outdoorTempEntity"] = outdoor
+    if outdoor and outdoor.get("domain") == "weather":
+        ha["weatherEntity"] = outdoor
+    elif outdoor is None:
+        ha["weatherEntity"] = None
+    ha["weatherAvailableEntities"] = _settings_prepend_entity(ha.get("weatherAvailableEntities"), outdoor)
+    ha["doorEntity"] = door
+    ha["doorAvailableEntities"] = _settings_prepend_entity(ha.get("doorAvailableEntities"), door)
+    ha["pauseFunctionAvailableEntities"] = _settings_prepend_entity(ha.get("pauseFunctionAvailableEntities"), door)
+    ha["syncThermostatEntities"] = sync_peers
+    ha["syncAvailableThermostatEntities"] = sync_peers
+    person_available = ha.get("personAvailableEntities")
+    for person in auto_away_people + tracked_people:
+        person_available = _settings_prepend_entity(person_available, person)
+    ha["personAvailableEntities"] = person_available if isinstance(person_available, list) else []
+
+    room_source_name = (current_temp_entity or {}).get("name") or "Onboard HDC2080 Sensors"
+    pause_existing = current_thermostat.get("pauseFunction") if isinstance(current_thermostat.get("pauseFunction"), dict) else {}
+    thermostat_changes = {
+        "name": name,
+        "fan": fan,
+        "awayHeat": _settings_number(values, "awayHeat", current_settings["awayHeat"], 40, 75),
+        "awayCool": _settings_number(values, "awayCool", current_settings["awayCool"], 75, 100),
+        "autoAwayPeople": auto_away_people,
+        "people": tracked_people,
+        "limits": {
+            "cool": {"min": cool_min, "max": cool_max},
+            "heat": {"min": heat_min, "max": heat_max},
+            "auto": {"min": min(cool_min, heat_min), "max": max(cool_max, heat_max)},
+        },
+        "safetyLow": _settings_number(values, "safetyLow", current_settings["safetyLow"], 40, 75),
+        "safetyHigh": _settings_number(values, "safetyHigh", current_settings["safetyHigh"], 75, 100),
+        "autoCoolOutdoorTarget": _settings_number(values, "autoCoolOutdoorTarget", current_settings["autoCoolOutdoorTarget"], 40, 100),
+        "autoHeatOutdoorTarget": _settings_number(values, "autoHeatOutdoorTarget", current_settings["autoHeatOutdoorTarget"], 40, 100),
+        "heatLocked": _assistant_bool(values.get("heatLocked"), current_settings["heatLocked"]),
+        "coolLocked": _assistant_bool(values.get("coolLocked"), current_settings["coolLocked"]),
+        "autoChangeoverLockoutMinutes": _settings_number(values, "autoChangeoverHours", current_settings["autoChangeoverHours"], 0, 8, integer=False) * 60,
+        "manualChangeoverLockoutMinutes": _settings_number(values, "manualChangeoverMinutes", current_settings["manualChangeoverMinutes"], 0, 60),
+        "coolFanRemainOnMinutes": _settings_number(values, "coolFanRemainOnMinutes", current_settings["coolFanRemainOnMinutes"], 0, 15),
+        "temperatureDifferential": _settings_number(values, "temperatureDifferential", current_settings["temperatureDifferential"], 0, 5),
+        "heatMinimumRuntimeMinutes": _settings_number(values, "heatMinimumRuntimeMinutes", current_settings["heatMinimumRuntimeMinutes"], 1, 30),
+        "coolMinimumRuntimeMinutes": _settings_number(values, "coolMinimumRuntimeMinutes", current_settings["coolMinimumRuntimeMinutes"], 1, 30),
+        "roomTempControlMode": room_mode,
+        "heatControlMode": heat_mode,
+        "coolControlMode": cool_mode,
+        "fanControlMode": fan_mode,
+        "airControlMode": "external" if heat_mode == "external" and cool_mode == "external" else "internal",
+        "currentTempSource": "home-assistant" if room_mode == "external" else "onboard",
+        "currentTempSourceName": room_source_name,
+        "runtimeTempSource": "home-assistant" if room_mode == "external" else "onboard",
+        "runtimeTempSourceName": room_source_name,
+        "externalHeatEntity": external_heat,
+        "externalCoolEntity": external_cool,
+        "externalFanEntity": external_fan,
+        "outdoorTempSource": "home-assistant" if outdoor else "",
+        "outdoorTempSourceName": (outdoor or {}).get("name") or "",
+        "pauseFunction": {
+            "durationMinutes": _settings_number(values, "doorPauseDurationMinutes", current_settings["doorPauseDurationMinutes"], 1, 60),
+            "entries": [door] if door else [],
+            "active": False,
+            "pausedAt": 0,
+            "previousTargetTemp": None,
+            "previousLastComfortTarget": None,
+            "activeEntityIds": [],
+            "snoozeUntil": 0,
+        },
+    }
+
+    # Validate and commit only after every field has been normalized. If the
+    # thermostat write unexpectedly fails, restore the prior config record.
+    saved_config = _write_panel_config_record(config)
+    try:
+        thermostat_result = _handle_thermostat_update(thermostat_changes)
+    except Exception:
+        _write_panel_config_record(old_config)
+        raise
+
+    if orientation != old_orientation:
+        ok, detail = _apply_saved_screen_orientation(orientation)
+        if not ok:
+            warnings.append(detail or "Screen orientation was saved and will apply after restart.")
+
+    return {
+        "ok": True,
+        "message": "Thermostat settings saved. Close Backup Config when finished so the panel reloads every config-backed selection.",
+        "version": saved_config.get("version"),
+        "updatedAt": saved_config.get("updatedAt"),
+        "settings": _config_settings_current(),
+        "thermostat": thermostat_result.get("thermostat") if isinstance(thermostat_result, dict) else thermostat_result,
+        "warnings": warnings,
+    }
+
+
 def _config_transfer_html(server_port: int | str | None = None) -> str:
     info = _system_info_payload(server_port)
     config_record = _panel_config_payload()
@@ -2229,6 +2726,7 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
     assistant_effective_media = html.escape(str(assistant.get("effectiveMediaPlayerId") or "not selected"), quote=True)
     assistant_language = html.escape(str(assistant.get("language") or "en"), quote=True)
     assistant_hold = html.escape(str(assistant.get("responseHoldSeconds") or 2.0), quote=True)
+    assistant_volume = int(assistant.get("announcementVolumePercent") or 45)
     assistant_enabled = "checked" if assistant.get("enabled") else ""
     assistant_speak = "checked" if assistant.get("speak") else ""
     assistant_fun = "checked" if assistant.get("funMode") else ""
@@ -2240,200 +2738,154 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{name} Config Backup</title>
+  <title>{name} Configuration</title>
   <style>
-    :root {{ color-scheme: dark; font-family: Arial, Helvetica, sans-serif; }}
-    * {{ box-sizing: border-box; }}
-    body {{ margin: 0; min-height: 100vh; color: #f7fbff; background: radial-gradient(circle at 15% 0%, rgba(70,232,255,.24), transparent 28%), linear-gradient(135deg, #071222, #101d35 52%, #050913); }}
-    .wrap {{ width: min(980px, calc(100% - 36px)); margin: 0 auto; padding: 34px 0 46px; }}
-    .hero {{ display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; margin-bottom: 18px; }}
-    .eyebrow {{ color: #46e8ff; font-size: 12px; font-weight: 900; letter-spacing: 4px; text-transform: uppercase; }}
-    h1 {{ margin: 7px 0 8px; font-size: clamp(32px, 5vw, 58px); line-height: .95; }}
-    .muted {{ color: #a8b6cf; line-height: 1.45; }}
-    .pill {{ border: 1px solid rgba(255,255,255,.16); border-radius: 999px; padding: 10px 14px; color: #dce8ff; background: rgba(255,255,255,.07); white-space: nowrap; }}
-    .grid {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 20px 0; }}
-    .card {{ border: 1px solid rgba(255,255,255,.13); border-radius: 24px; padding: 18px; background: rgba(255,255,255,.075); box-shadow: 0 18px 55px rgba(0,0,0,.28); backdrop-filter: blur(14px); }}
-    .label {{ color: #8fa1be; font-size: 11px; font-weight: 900; letter-spacing: 2.5px; text-transform: uppercase; margin-bottom: 8px; }}
-    .value {{ font-size: 18px; font-weight: 900; overflow-wrap: anywhere; }}
-    .actions {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 18px; }}
-    .action-card {{ min-height: 240px; display: flex; flex-direction: column; gap: 12px; }}
-    button, .button {{ border: 0; border-radius: 18px; min-height: 56px; padding: 0 22px; display: inline-flex; align-items: center; justify-content: center; text-decoration: none; font-weight: 1000; font-size: 16px; color: white; cursor: pointer; background: linear-gradient(135deg, #14b8ff, #7c3aed); box-shadow: 0 12px 36px rgba(20,184,255,.22); }}
-    button.secondary {{ background: rgba(255,255,255,.10); box-shadow: none; border: 1px solid rgba(255,255,255,.15); }}
-    input[type=file] {{ width: 100%; padding: 14px; border-radius: 16px; color: #dce8ff; border: 1px dashed rgba(255,255,255,.28); background: rgba(0,0,0,.18); }}
-    input[type=text], input[type=number] {{ width:100%; min-height:48px; border-radius:14px; border:1px solid rgba(255,255,255,.16); background:rgba(0,0,0,.24); color:#f7fbff; padding:0 14px; font-size:15px; }}
-    input:focus {{ outline:2px solid rgba(70,232,255,.45); border-color:#46e8ff; }}
-    .assistant-card {{ margin-top:18px; }}
-    .form-grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; margin-top:14px; }}
-    .field label {{ display:block; color:#9fb0c8; font-size:12px; font-weight:900; letter-spacing:1px; margin:0 0 7px; }}
+    :root {{ color-scheme:dark; font-family:Arial,Helvetica,sans-serif; }}
+    * {{ box-sizing:border-box; }}
+    body {{ margin:0; min-height:100vh; color:#f7fbff; background:radial-gradient(circle at 15% 0%,rgba(70,232,255,.24),transparent 28%),linear-gradient(135deg,#071222,#101d35 52%,#050913); }}
+    .wrap {{ width:min(1180px,calc(100% - 30px)); margin:0 auto; padding:28px 0 48px; }}
+    .hero {{ display:flex; justify-content:space-between; gap:18px; align-items:flex-start; margin-bottom:16px; }}
+    .eyebrow {{ color:#46e8ff; font-size:12px; font-weight:900; letter-spacing:4px; text-transform:uppercase; }}
+    h1 {{ margin:7px 0 8px; font-size:clamp(32px,5vw,58px); line-height:.95; }}
+    h2 {{ margin:6px 0 8px; font-size:28px; }}
+    h3 {{ margin:0 0 14px; font-size:19px; }}
+    .muted {{ color:#a8b6cf; line-height:1.45; }}
+    .pill {{ border:1px solid rgba(255,255,255,.16); border-radius:999px; padding:10px 14px; color:#dce8ff; background:rgba(255,255,255,.07); white-space:nowrap; }}
+    .summary-grid {{ display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:10px; margin:16px 0; }}
+    .card {{ border:1px solid rgba(255,255,255,.13); border-radius:22px; padding:18px; background:rgba(255,255,255,.075); box-shadow:0 18px 55px rgba(0,0,0,.25); backdrop-filter:blur(14px); }}
+    .label {{ color:#8fa1be; font-size:11px; font-weight:900; letter-spacing:2px; text-transform:uppercase; margin-bottom:7px; }}
+    .value {{ font-size:17px; font-weight:900; overflow-wrap:anywhere; }}
+    .tabs {{ display:flex; gap:8px; flex-wrap:wrap; margin:18px 0; padding:6px; border:1px solid rgba(255,255,255,.12); background:rgba(0,0,0,.18); border-radius:18px; }}
+    .tab-button {{ min-height:46px; border-radius:13px; padding:0 20px; background:transparent; border:1px solid transparent; box-shadow:none; color:#b9c8de; }}
+    .tab-button.active {{ color:white; background:linear-gradient(135deg,#14b8ff,#7c3aed); box-shadow:0 10px 28px rgba(20,184,255,.20); }}
+    .tab-panel {{ display:none; }} .tab-panel.active {{ display:block; }}
+    .actions {{ display:grid; grid-template-columns:1fr 1fr; gap:16px; }}
+    .action-card {{ min-height:230px; display:flex; flex-direction:column; gap:12px; }}
+    button,.button {{ border:0; border-radius:16px; min-height:52px; padding:0 20px; display:inline-flex; align-items:center; justify-content:center; text-decoration:none; font-weight:1000; font-size:15px; color:white; cursor:pointer; background:linear-gradient(135deg,#14b8ff,#7c3aed); box-shadow:0 12px 36px rgba(20,184,255,.22); }}
+    button.secondary {{ background:rgba(255,255,255,.10); box-shadow:none; border:1px solid rgba(255,255,255,.15); }}
+    button:disabled {{ opacity:.55; cursor:wait; }}
+    input[type=file] {{ width:100%; padding:14px; border-radius:15px; color:#dce8ff; border:1px dashed rgba(255,255,255,.28); background:rgba(0,0,0,.18); }}
+    input[type=text],input[type=number],input[type=password],select {{ width:100%; min-height:46px; border-radius:13px; border:1px solid rgba(255,255,255,.16); background:#0a1425; color:#f7fbff; padding:0 12px; font-size:14px; }}
+    select[multiple] {{ min-height:170px; padding:8px; }}
+    input:focus,select:focus {{ outline:2px solid rgba(70,232,255,.45); border-color:#46e8ff; }}
+    .form-grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:13px; }}
+    .field label {{ display:block; color:#b8c6da; font-size:12px; font-weight:900; letter-spacing:.5px; margin:0 0 7px; }}
     .hint {{ display:block; margin-top:7px; color:#8294ae; font-size:12px; line-height:1.35; }}
+    .section-grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; margin-top:14px; }}
+    .settings-section {{ border:1px solid rgba(255,255,255,.11); border-radius:18px; padding:16px; background:rgba(0,0,0,.16); }}
+    .full {{ grid-column:1/-1; }}
     .checks {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin:14px 0; }}
-    .check {{ display:flex; gap:9px; align-items:center; min-height:45px; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,.12); background:rgba(0,0,0,.18); color:#dce8ff; font-weight:800; }}
+    .check {{ display:flex; gap:9px; align-items:center; min-height:44px; padding:10px 12px; border-radius:13px; border:1px solid rgba(255,255,255,.12); background:rgba(0,0,0,.18); color:#dce8ff; font-weight:800; }}
     .check input {{ width:18px; height:18px; accent-color:#46e8ff; }}
+    .slider-row {{ display:grid; grid-template-columns:1fr 76px; gap:12px; align-items:center; }}
+    input[type=range] {{ width:100%; accent-color:#46e8ff; }}
     .test-row {{ display:grid; grid-template-columns:1fr auto; gap:10px; margin-top:14px; }}
-    .assistant-actions {{ display:flex; gap:10px; flex-wrap:wrap; margin-top:12px; }}
-    .assistant-actions button {{ min-height:50px; }}
+    .button-row {{ display:flex; gap:10px; flex-wrap:wrap; margin-top:14px; }}
     code {{ color:#8ff4ff; }}
-    .status {{ min-height:48px; padding:12px 14px; border-radius:16px; color:#e9f4ff; background:rgba(0,0,0,.20); border:1px solid rgba(255,255,255,.10); white-space:pre-wrap; }}
-    .ok {{ color: #76ffc4; }} .bad {{ color: #ff8a8a; }}
-    @media (max-width: 760px) {{ .hero, .actions {{ grid-template-columns:1fr; display:grid; }} .grid {{ grid-template-columns:1fr 1fr; }} .pill {{ white-space:normal; }} .form-grid {{ grid-template-columns:1fr; }} .checks {{ grid-template-columns:1fr 1fr; }} }}
-    @media (max-width: 480px) {{ .grid {{ grid-template-columns:1fr; }} .checks {{ grid-template-columns:1fr; }} .test-row {{ grid-template-columns:1fr; }} }}
+    .status {{ min-height:48px; padding:12px 14px; border-radius:15px; color:#e9f4ff; background:rgba(0,0,0,.20); border:1px solid rgba(255,255,255,.10); white-space:pre-wrap; margin-top:12px; }}
+    .ok {{ color:#76ffc4; }} .bad {{ color:#ff8a8a; }}
+    @media(max-width:900px) {{ .summary-grid {{ grid-template-columns:repeat(3,1fr); }} .section-grid {{ grid-template-columns:1fr; }} .full {{ grid-column:auto; }} }}
+    @media(max-width:720px) {{ .hero,.actions {{ display:grid; grid-template-columns:1fr; }} .form-grid {{ grid-template-columns:1fr; }} .checks {{ grid-template-columns:1fr 1fr; }} .pill {{ white-space:normal; }} }}
+    @media(max-width:480px) {{ .summary-grid {{ grid-template-columns:1fr 1fr; }} .checks {{ grid-template-columns:1fr; }} .test-row {{ grid-template-columns:1fr; }} }}
   </style>
 </head>
 <body>
-  <main class="wrap">
-    <section class="hero">
-      <div>
-        <div class="eyebrow">Smart Thermostat Backup</div>
-        <h1>{name}</h1>
-        <div class="muted">Download a backup into this browser or upload a saved backup to restore this panel. No USB drive is required.</div>
-      </div>
-      <div class="pill">{address}</div>
-    </section>
+<main class="wrap">
+  <section class="hero">
+    <div><div class="eyebrow">Smart Thermostat Configuration</div><h1>{name}</h1><div class="muted">The portal is temporary and closes when Backup Config is closed on the thermostat.</div></div>
+    <div class="pill">{address}</div>
+  </section>
+  <section class="summary-grid">
+    <div class="card"><div class="label">Version</div><div class="value">{version}</div></div>
+    <div class="card"><div class="label">Host</div><div class="value">{host}</div></div>
+    <div class="card"><div class="label">Thermal</div><div class="value">{thermal}</div></div>
+    <div class="card"><div class="label">Uptime</div><div class="value">{uptime}</div></div>
+    <div class="card"><div class="label">Config Version</div><div class="value">{cfg_version}</div></div>
+    <div class="card"><div class="label">Updated</div><div class="value">{updated}</div></div>
+  </section>
+  <nav class="tabs" aria-label="Configuration tabs">
+    <button class="tab-button active" data-tab="backup" type="button">Backup &amp; Restore</button>
+    <button class="tab-button" data-tab="thermostat" type="button">Thermostat Settings</button>
+    <button class="tab-button" data-tab="jarvis" type="button">JARVIS Voice</button>
+  </nav>
 
-    <section class="grid">
-      <div class="card"><div class="label">Version</div><div class="value">{version}</div></div>
-      <div class="card"><div class="label">Host</div><div class="value">{host}</div></div>
-      <div class="card"><div class="label">Thermal</div><div class="value">{thermal}</div></div>
-      <div class="card"><div class="label">Uptime</div><div class="value">{uptime}</div></div>
-      <div class="card"><div class="label">Config Version</div><div class="value">{cfg_version}</div></div>
-      <div class="card"><div class="label">Config Updated</div><div class="value">{updated}</div></div>
-      <div class="card"><div class="label">Backup Name</div><div class="value">Device + date</div></div>
-      <div class="card"><div class="label">Backup Portal</div><div class="value">Open</div></div>
-    </section>
+  <section id="tab-backup" class="tab-panel active">
+    <div class="actions">
+      <div class="card action-card"><div class="label">Download</div><div class="value">Save this panel's full config</div><p class="muted">The backup remains compatible with the existing restore process.</p><a class="button" href="/api/system/config-export">Download Config</a></div>
+      <div class="card action-card"><div class="label">Upload</div><div class="value">Restore from a config file</div><input id="file" type="file" accept="application/json,.json" /><button id="upload" type="button">Upload Config</button><div id="status" class="status muted">Choose a Smart Thermostat config backup, then press Upload Config.</div></div>
+    </div>
+  </section>
 
-    <section class="actions">
-      <div class="card action-card">
-        <div class="label">Download</div>
-        <div class="value">Save this panel's config</div>
-        <p class="muted">The filename includes the thermostat name and current date/time.</p>
-        <a class="button" href="/api/system/config-export">Download Config</a>
+  <section id="tab-thermostat" class="tab-panel">
+    <div class="card">
+      <div class="eyebrow">Comfort Setup</div><h2>Thermostat Settings</h2>
+      <p class="muted">These are the same thermostat settings available on the wall panel. Saving uses the existing thermostat control path and does not replace unrelated configuration.</p>
+      <div id="thermostat-sections" class="section-grid">
+        <div class="settings-section"><h3>Thermostat Unit</h3><div class="form-grid"><div class="field"><label>Thermostat name</label><input id="ts-name" type="text" maxlength="80"></div><div class="field"><label>Fan mode</label><select id="ts-fan"><option value="auto">Auto</option><option value="on">On</option><option value="off">Off</option></select></div><div class="field full"><label>Screen rotation</label><select id="ts-orientation"><option value="upright">Upright</option><option value="upside_down">Upside Down</option></select></div></div></div>
+        <div class="settings-section"><h3>Auto Away / Home</h3><div class="form-grid"><div class="field"><label>Heat Away</label><input id="ts-away-heat" type="number" min="40" max="75" step="1"></div><div class="field"><label>Cool Away</label><input id="ts-away-cool" type="number" min="75" max="100" step="1"></div><div class="field full"><label>Auto Away users</label><select id="ts-auto-away-people" multiple></select><span class="hint">Hold Ctrl while clicking to select more than one person.</span></div></div></div>
+        <div class="settings-section"><h3>Range</h3><div class="form-grid"><div class="field"><label>Cool Low</label><input id="ts-cool-min" type="number" min="50" max="90"></div><div class="field"><label>Cool High</label><input id="ts-cool-max" type="number" min="50" max="90"></div><div class="field"><label>Heat Low</label><input id="ts-heat-min" type="number" min="40" max="80"></div><div class="field"><label>Heat High</label><input id="ts-heat-max" type="number" min="40" max="85"></div></div></div>
+        <div class="settings-section"><h3>Safety / Mode Switches</h3><div class="form-grid"><div class="field"><label>Low Safety</label><input id="ts-safety-low" type="number" min="40" max="75"></div><div class="field"><label>High Safety</label><input id="ts-safety-high" type="number" min="75" max="100"></div><div class="field"><label>Cool Mode Switch</label><input id="ts-cool-switch" type="number" min="40" max="100"></div><div class="field"><label>Heat Mode Switch</label><input id="ts-heat-switch" type="number" min="40" max="100"></div></div><div class="checks"><label class="check"><input id="ts-heat-lock" type="checkbox">Heat lockout</label><label class="check"><input id="ts-cool-lock" type="checkbox">Cool lockout</label></div></div>
+        <div class="settings-section"><h3>Changeover / Fan</h3><div class="form-grid"><div class="field"><label>Auto delay (hours)</label><input id="ts-auto-delay" type="number" min="0" max="8" step="1"></div><div class="field"><label>Manual delay (minutes)</label><input id="ts-manual-delay" type="number" min="0" max="60"></div><div class="field full"><label>Cool fan remain on (minutes)</label><input id="ts-cool-fan" type="number" min="0" max="15"></div></div></div>
+        <div class="settings-section"><h3>Differential / Minimum Runtime</h3><div class="form-grid"><div class="field"><label>Temperature differential</label><input id="ts-differential" type="number" min="0" max="5"></div><div class="field"><label>Heat minimum runtime (minutes)</label><input id="ts-heat-runtime" type="number" min="1" max="30"></div><div class="field"><label>Cool minimum runtime (minutes)</label><input id="ts-cool-runtime" type="number" min="1" max="30"></div></div></div>
+        <div class="settings-section full"><h3>Internal / External Sources</h3><p class="muted">Each source remains independent, matching the wall-panel settings.</p><div class="form-grid">
+          <div class="field"><label>Room temperature source</label><select id="ts-room-mode"><option value="internal">Internal</option><option value="external">External</option></select></div><div class="field"><label>Room temperature HA entity</label><input id="ts-room-entity" type="text" list="temperature-entities" placeholder="sensor... or climate..."></div>
+          <div class="field"><label>Heat control source</label><select id="ts-heat-mode"><option value="internal">Internal</option><option value="external">External</option></select></div><div class="field"><label>External Heat entity</label><input id="ts-heat-entity" type="text" list="air-control-entities" placeholder="switch... or input_boolean..."></div>
+          <div class="field"><label>Cool control source</label><select id="ts-cool-mode"><option value="internal">Internal</option><option value="external">External</option></select></div><div class="field"><label>External Cool entity</label><input id="ts-cool-entity" type="text" list="air-control-entities"></div>
+          <div class="field"><label>Fan control source</label><select id="ts-fan-mode"><option value="internal">Internal</option><option value="external">External</option></select></div><div class="field"><label>External Fan entity</label><input id="ts-fan-entity" type="text" list="air-control-entities"></div>
+        </div></div>
+        <div class="settings-section"><h3>Outside Temperature</h3><div class="field"><label>Home Assistant sensor/weather entity</label><input id="ts-outdoor-entity" type="text" list="outdoor-entities" placeholder="sensor... or weather..."></div></div>
+        <div class="settings-section"><h3>Sync</h3><div class="field"><label>Thermostats to sync</label><select id="ts-sync" multiple></select><span class="hint">Sync remains inactive until the main thermostat Sync button is armed.</span></div></div>
+        <div class="settings-section"><h3>Person Tracking</h3><div class="field"><label>People shown on the main screen</label><select id="ts-tracked-people" multiple></select></div></div>
+        <div class="settings-section"><h3>Doors / Comfort Pause</h3><div class="form-grid"><div class="field"><label>Door/contact/cover entity</label><input id="ts-door-entity" type="text" list="door-entities"></div><div class="field"><label>Door delay (minutes)</label><input id="ts-door-delay" type="number" min="1" max="60"></div></div></div>
+        <div class="settings-section"><h3>Security Codes</h3><div class="form-grid"><div class="field"><label>Alarm disarm code</label><input id="ts-disarm-code" type="password" inputmode="numeric" maxlength="4"></div><div class="field"><label>Settings access code</label><input id="ts-settings-code" type="password" inputmode="numeric" maxlength="4"></div></div></div>
       </div>
-      <div class="card action-card">
-        <div class="label">Upload</div>
-        <div class="value">Restore from a config file</div>
-        <input id="file" type="file" accept="application/json,.json" />
-        <button id="upload" type="button">Upload Config</button>
-        <div id="status" class="status muted">Choose a Smart Thermostat config backup, then press Upload Config.</div>
-      </div>
-    </section>
+      <datalist id="temperature-entities"></datalist><datalist id="outdoor-entities"></datalist><datalist id="air-control-entities"></datalist><datalist id="door-entities"></datalist>
+      <div class="button-row"><button id="ts-save" type="button">Save Thermostat Settings</button><button id="ts-reload" type="button" class="secondary">Reload Values</button></div>
+      <div id="ts-status" class="status muted">Open this tab to load current thermostat values and Home Assistant choices.</div>
+    </div>
+  </section>
 
-    <section class="card assistant-card">
-      <div class="eyebrow">JARVIS-ISH TERMINAL LINK</div>
-      <h2 style="margin:8px 0 6px;font-size:30px">Voice Assistant &amp; Sonos</h2>
-      <p class="muted">This uses the Home Assistant address and long-lived token already saved on the thermostat. The conversation agent handles the command; the selected TTS entity sends the answer to Sonos. Blank Agent uses Home Assistant's default conversation agent. Blank TTS automatically chooses an available <code>tts.*</code> entity.</p>
-
-      <div class="checks">
-        <label class="check"><input id="va-enabled" type="checkbox" {assistant_enabled}>Assistant enabled</label>
-        <label class="check"><input id="va-speak" type="checkbox" {assistant_speak}>Speak on Sonos</label>
-        <label class="check"><input id="va-fun" type="checkbox" {assistant_fun}>Goofy screen quips</label>
-        <label class="check"><input id="va-playful" type="checkbox" {assistant_playful}>Playful spoken prefix</label>
-        <label class="check"><input id="va-continue" type="checkbox" {assistant_continue}>Continue conversation</label>
-        <label class="check"><input id="va-show-text" type="checkbox" {assistant_show_text}>Show response text</label>
-      </div>
-
-      <div class="form-grid">
-        <div class="field"><label for="va-agent">Conversation agent entity</label><input id="va-agent" type="text" value="{assistant_agent}" placeholder="conversation.openai_conversation or blank"></div>
-        <div class="field"><label for="va-tts">Text-to-speech entity</label><input id="va-tts" type="text" value="{assistant_tts}" placeholder="tts.home_assistant_cloud, tts.piper, or blank"></div>
-        <div class="field"><label for="va-media">Sonos / media player entity</label><input id="va-media" type="text" value="{assistant_media}" placeholder="Blank follows the Audio page selection"><span class="hint">Leave blank to follow the Sonos/media player selected on the thermostat Audio page. Current effective output: <code>{assistant_effective_media}</code></span></div>
-        <div class="field"><label for="va-language">Language</label><input id="va-language" type="text" value="{assistant_language}" placeholder="en"></div>
-        <div class="field"><label for="va-hold">Extra screen hold after response (seconds)</label><input id="va-hold" type="number" min="0" max="15" step="0.5" value="{assistant_hold}"></div>
-      </div>
-
-      <div class="assistant-actions">
-        <button id="va-save" type="button">Save Assistant Settings</button>
-      </div>
-      <div class="test-row">
-        <input id="va-test-text" type="text" value="Tell me the current thermostat temperature in one short sentence." placeholder="Type the same command you will later say after Hey Jarvis">
-        <button id="va-test" type="button" class="secondary">Run Test</button>
-      </div>
-      <div id="va-status" class="status muted">Save the settings, then run a typed test. The wall screen will animate while Home Assistant processes it.</div>
-    </section>
-  </main>
+  <section id="tab-jarvis" class="tab-panel">
+    <div class="card">
+      <div class="eyebrow">JARVIS Voice</div><h2>Assistant &amp; Sonos</h2>
+      <p class="muted">The selected announcement volume is remembered. On Sonos, the response is sent as an announcement so the previous music and volume return automatically when speech finishes.</p>
+      <div class="checks"><label class="check"><input id="va-enabled" type="checkbox" {assistant_enabled}>Assistant enabled</label><label class="check"><input id="va-speak" type="checkbox" {assistant_speak}>Speak on Sonos</label><label class="check"><input id="va-fun" type="checkbox" {assistant_fun}>Goofy screen quips</label><label class="check"><input id="va-playful" type="checkbox" {assistant_playful}>Playful spoken prefix</label><label class="check"><input id="va-continue" type="checkbox" {assistant_continue}>Continue conversation</label><label class="check"><input id="va-show-text" type="checkbox" {assistant_show_text}>Show response text</label></div>
+      <div class="form-grid"><div class="field"><label>Conversation agent entity</label><input id="va-agent" type="text" value="{assistant_agent}" placeholder="conversation.openai_conversation or blank"></div><div class="field"><label>Text-to-speech entity</label><input id="va-tts" type="text" value="{assistant_tts}" placeholder="tts.openai_tts or blank"></div><div class="field"><label>Sonos / media player entity</label><input id="va-media" type="text" value="{assistant_media}" placeholder="Blank follows Audio page selection"><span class="hint">Current effective output: <code>{assistant_effective_media}</code></span></div><div class="field"><label>Language</label><input id="va-language" type="text" value="{assistant_language}" placeholder="en"></div><div class="field"><label>Extra screen hold after response (seconds)</label><input id="va-hold" type="number" min="0" max="15" step="0.5" value="{assistant_hold}"></div><div class="field"><label>Speech volume</label><div class="slider-row"><input id="va-volume" type="range" min="1" max="100" step="1" value="{assistant_volume}"><output id="va-volume-value">{assistant_volume}%</output></div><span class="hint">This volume applies only to the JARVIS announcement. Sonos restores its previous volume afterward.</span></div></div>
+      <div class="button-row"><button id="va-save" type="button">Save JARVIS Settings</button></div>
+      <div class="test-row"><input id="va-test-text" type="text" value="Tell me the current thermostat temperature in one short sentence."><button id="va-test" type="button" class="secondary">Run Test</button></div>
+      <div id="va-status" class="status muted">Save the settings, then run a typed test.</div>
+    </div>
+  </section>
+</main>
 <script>
-const fileInput = document.getElementById('file');
-const uploadButton = document.getElementById('upload');
-const statusBox = document.getElementById('status');
-function setStatus(text, kind) {{
-  statusBox.textContent = text;
-  statusBox.className = 'status ' + (kind || 'muted');
-}}
-uploadButton.addEventListener('click', async () => {{
-  const file = fileInput.files && fileInput.files[0];
-  if (!file) {{ setStatus('Select a config JSON file first.', 'bad'); return; }}
-  try {{
-    setStatus('Reading file...', 'muted');
-    const text = await file.text();
-    const payload = JSON.parse(text);
-    setStatus('Uploading config...', 'muted');
-    const response = await fetch('/api/system/config-import', {{
-      method: 'POST',
-      headers: {{ 'Accept': 'application/json', 'Content-Type': 'application/json' }},
-      body: JSON.stringify(payload)
-    }});
-    const data = await response.json().catch(() => ({{}}));
-    if (!response.ok || !data.ok) {{
-      throw new Error(data.error || data.message || 'Upload failed.');
-    }}
-    setStatus(data.message || 'Config uploaded. Close the Backup Config popup on the thermostat to apply it immediately.', 'ok');
-  }} catch (err) {{
-    setStatus(err && err.message ? err.message : String(err), 'bad');
-  }}
-}});
+const qs = (id) => document.getElementById(id);
+function setBox(box,text,kind) {{ box.textContent=text; box.className='status '+(kind||'muted'); }}
+for (const button of document.querySelectorAll('.tab-button')) {{ button.addEventListener('click',()=>{{ document.querySelectorAll('.tab-button').forEach(x=>x.classList.toggle('active',x===button)); document.querySelectorAll('.tab-panel').forEach(x=>x.classList.toggle('active',x.id==='tab-'+button.dataset.tab)); if(button.dataset.tab==='thermostat'&&!window.thermostatSettingsLoaded) loadThermostatSettings(); }}); }}
 
-const vaStatus = document.getElementById('va-status');
-const vaSave = document.getElementById('va-save');
-const vaTest = document.getElementById('va-test');
-function setVaStatus(text, kind) {{
-  vaStatus.textContent = text;
-  vaStatus.className = 'status ' + (kind || 'muted');
+qs('upload').addEventListener('click',async()=>{{ const file=qs('file').files&&qs('file').files[0]; if(!file){{setBox(qs('status'),'Select a config JSON file first.','bad');return;}} try{{setBox(qs('status'),'Uploading config...','muted'); const payload=JSON.parse(await file.text()); const response=await fetch('/api/system/config-import',{{method:'POST',headers:{{'Accept':'application/json','Content-Type':'application/json'}},body:JSON.stringify(payload)}}); const data=await response.json().catch(()=>({{}})); if(!response.ok||!data.ok)throw new Error(data.error||data.message||'Upload failed.'); setBox(qs('status'),data.message||'Config uploaded.','ok');}}catch(err){{setBox(qs('status'),err.message||String(err),'bad');}} }});
+
+function value(id) {{ return qs(id).value; }} function numberValue(id) {{ return Number(qs(id).value); }}
+function selectedValues(id) {{ return Array.from(qs(id).selectedOptions).map(x=>x.value); }}
+function fillDatalist(id,items) {{ qs(id).replaceChildren(...items.map(item=>{{const option=document.createElement('option');option.value=item.entityId;option.label=(item.name||item.entityId)+' — '+item.entityId;return option;}})); }}
+function fillMulti(id,items,selected) {{ const chosen=new Set(selected||[]); qs(id).replaceChildren(...items.map(item=>{{const option=document.createElement('option');option.value=item.entityId;option.textContent=(item.name||item.entityId)+' — '+item.entityId;option.selected=chosen.has(item.entityId);return option;}})); }}
+function setThermostatForm(s,e) {{
+  qs('ts-name').value=s.name||''; qs('ts-fan').value=s.fan||'auto'; qs('ts-orientation').value=s.screenOrientation||'upright'; qs('ts-away-heat').value=s.awayHeat; qs('ts-away-cool').value=s.awayCool;
+  qs('ts-cool-min').value=s.coolMin; qs('ts-cool-max').value=s.coolMax; qs('ts-heat-min').value=s.heatMin; qs('ts-heat-max').value=s.heatMax; qs('ts-safety-low').value=s.safetyLow; qs('ts-safety-high').value=s.safetyHigh; qs('ts-cool-switch').value=s.autoCoolOutdoorTarget; qs('ts-heat-switch').value=s.autoHeatOutdoorTarget; qs('ts-heat-lock').checked=!!s.heatLocked; qs('ts-cool-lock').checked=!!s.coolLocked;
+  qs('ts-auto-delay').value=s.autoChangeoverHours; qs('ts-manual-delay').value=s.manualChangeoverMinutes; qs('ts-cool-fan').value=s.coolFanRemainOnMinutes; qs('ts-differential').value=s.temperatureDifferential; qs('ts-heat-runtime').value=s.heatMinimumRuntimeMinutes; qs('ts-cool-runtime').value=s.coolMinimumRuntimeMinutes;
+  qs('ts-room-mode').value=s.roomTempControlMode||'internal'; qs('ts-heat-mode').value=s.heatControlMode||'internal'; qs('ts-cool-mode').value=s.coolControlMode||'internal'; qs('ts-fan-mode').value=s.fanControlMode||'internal'; qs('ts-room-entity').value=s.currentTempEntityId||''; qs('ts-heat-entity').value=s.externalHeatEntityId||''; qs('ts-cool-entity').value=s.externalCoolEntityId||''; qs('ts-fan-entity').value=s.externalFanEntityId||''; qs('ts-outdoor-entity').value=s.outdoorTempEntityId||''; qs('ts-door-entity').value=s.doorEntityId||''; qs('ts-door-delay').value=s.doorPauseDurationMinutes; qs('ts-disarm-code').value=s.disarmCode||''; qs('ts-settings-code').value=s.settingsCode||'';
+  fillDatalist('temperature-entities',e.temperature||[]); fillDatalist('outdoor-entities',e.outdoor||[]); fillDatalist('air-control-entities',e.airControls||[]); fillDatalist('door-entities',e.doors||[]); fillMulti('ts-auto-away-people',e.people||[],s.autoAwayPersonIds); fillMulti('ts-tracked-people',e.people||[],s.trackedPersonIds); fillMulti('ts-sync',e.syncThermostats||[],s.syncThermostatIds);
 }}
-function assistantPayload() {{
-  return {{
-    enabled: document.getElementById('va-enabled').checked,
-    speak: document.getElementById('va-speak').checked,
-    funMode: document.getElementById('va-fun').checked,
-    playfulReplies: document.getElementById('va-playful').checked,
-    continueConversation: document.getElementById('va-continue').checked,
-    showResponseText: document.getElementById('va-show-text').checked,
-    agentId: document.getElementById('va-agent').value.trim(),
-    ttsEntityId: document.getElementById('va-tts').value.trim(),
-    mediaPlayerId: document.getElementById('va-media').value.trim(),
-    language: document.getElementById('va-language').value.trim() || 'en',
-    responseHoldSeconds: Number(document.getElementById('va-hold').value || 2)
-  }};
-}}
-vaSave.addEventListener('click', async () => {{
-  try {{
-    vaSave.disabled = true;
-    setVaStatus('Saving assistant settings...', 'muted');
-    const response = await fetch('/api/assistant/config', {{
-      method: 'POST', headers: {{'Accept':'application/json','Content-Type':'application/json'}}, body: JSON.stringify(assistantPayload())
-    }});
-    const data = await response.json().catch(() => ({{}}));
-    if (!response.ok || !data.ok) throw new Error(data.error || 'Could not save assistant settings.');
-    setVaStatus(data.message || 'Assistant settings saved.', 'ok');
-  }} catch (err) {{ setVaStatus(err && err.message ? err.message : String(err), 'bad'); }}
-  finally {{ vaSave.disabled = false; }}
-}});
-vaTest.addEventListener('click', async () => {{
-  const text = document.getElementById('va-test-text').value.trim();
-  if (!text) {{ setVaStatus('Enter a test command first.', 'bad'); return; }}
-  try {{
-    vaTest.disabled = true;
-    setVaStatus('Running command. Watch the thermostat screen...', 'muted');
-    const response = await fetch('/api/assistant/process', {{
-      method:'POST', headers:{{'Accept':'application/json','Content-Type':'application/json'}}, body:JSON.stringify({{text}})
-    }});
-    const data = await response.json().catch(() => ({{}}));
-    if (!response.ok || !data.ok) throw new Error(data.error || 'Assistant test failed.');
-    const suffix = data.speechPlayed ? '\\nSpoken on ' + data.mediaPlayerId + ' using ' + data.ttsEntityId : (data.speechError ? '\\nVoice was not played: ' + data.speechError : '');
-    setVaStatus('JARVIS: ' + data.response + suffix, data.speechPlayed ? 'ok' : 'muted');
-  }} catch (err) {{ setVaStatus(err && err.message ? err.message : String(err), 'bad'); }}
-  finally {{ vaTest.disabled = false; }}
-}});
+async function loadThermostatSettings() {{ try{{setBox(qs('ts-status'),'Loading current thermostat settings...','muted'); const response=await fetch('/api/settings/web'); const data=await response.json().catch(()=>({{}})); if(!response.ok||!data.ok)throw new Error(data.error||'Could not load settings.'); window.lastThermostatEntities=data.entities||{{}}; setThermostatForm(data.settings||{{}},window.lastThermostatEntities); window.thermostatSettingsLoaded=true; const warning=(data.warnings||[]).join('\\n'); setBox(qs('ts-status'),warning||'Current values loaded. Changes are not applied until Save Thermostat Settings is pressed.',warning?'muted':'ok');}}catch(err){{setBox(qs('ts-status'),err.message||String(err),'bad');}} }}
+function thermostatPayload() {{ return {{settings:{{ name:value('ts-name').trim(),fan:value('ts-fan'),screenOrientation:value('ts-orientation'),awayHeat:numberValue('ts-away-heat'),awayCool:numberValue('ts-away-cool'),autoAwayPersonIds:selectedValues('ts-auto-away-people'),coolMin:numberValue('ts-cool-min'),coolMax:numberValue('ts-cool-max'),heatMin:numberValue('ts-heat-min'),heatMax:numberValue('ts-heat-max'),safetyLow:numberValue('ts-safety-low'),safetyHigh:numberValue('ts-safety-high'),autoCoolOutdoorTarget:numberValue('ts-cool-switch'),autoHeatOutdoorTarget:numberValue('ts-heat-switch'),heatLocked:qs('ts-heat-lock').checked,coolLocked:qs('ts-cool-lock').checked,autoChangeoverHours:numberValue('ts-auto-delay'),manualChangeoverMinutes:numberValue('ts-manual-delay'),coolFanRemainOnMinutes:numberValue('ts-cool-fan'),temperatureDifferential:numberValue('ts-differential'),heatMinimumRuntimeMinutes:numberValue('ts-heat-runtime'),coolMinimumRuntimeMinutes:numberValue('ts-cool-runtime'),roomTempControlMode:value('ts-room-mode'),heatControlMode:value('ts-heat-mode'),coolControlMode:value('ts-cool-mode'),fanControlMode:value('ts-fan-mode'),currentTempEntityId:value('ts-room-entity').trim(),externalHeatEntityId:value('ts-heat-entity').trim(),externalCoolEntityId:value('ts-cool-entity').trim(),externalFanEntityId:value('ts-fan-entity').trim(),outdoorTempEntityId:value('ts-outdoor-entity').trim(),syncThermostatIds:selectedValues('ts-sync'),trackedPersonIds:selectedValues('ts-tracked-people'),doorEntityId:value('ts-door-entity').trim(),doorPauseDurationMinutes:numberValue('ts-door-delay'),disarmCode:value('ts-disarm-code').trim(),settingsCode:value('ts-settings-code').trim()}} }}; }}
+qs('ts-save').addEventListener('click',async()=>{{ try{{qs('ts-save').disabled=true;setBox(qs('ts-status'),'Validating and saving thermostat settings...','muted'); const response=await fetch('/api/settings/web',{{method:'POST',headers:{{'Accept':'application/json','Content-Type':'application/json'}},body:JSON.stringify(thermostatPayload())}}); const data=await response.json().catch(()=>({{}})); if(!response.ok||!data.ok)throw new Error(data.error||'Could not save thermostat settings.'); if(data.settings)setThermostatForm(data.settings,window.lastThermostatEntities||{{}}); const warning=(data.warnings||[]).join('\\n'); setBox(qs('ts-status'),(data.message||'Settings saved.')+(warning?'\\n'+warning:''),warning?'muted':'ok');}}catch(err){{setBox(qs('ts-status'),err.message||String(err),'bad');}}finally{{qs('ts-save').disabled=false;}} }});
+qs('ts-reload').addEventListener('click',()=>{{window.thermostatSettingsLoaded=false;loadThermostatSettings();}});
+
+qs('va-volume').addEventListener('input',()=>{{qs('va-volume-value').textContent=qs('va-volume').value+'%';}});
+function assistantPayload() {{ return {{enabled:qs('va-enabled').checked,speak:qs('va-speak').checked,funMode:qs('va-fun').checked,playfulReplies:qs('va-playful').checked,continueConversation:qs('va-continue').checked,showResponseText:qs('va-show-text').checked,agentId:value('va-agent').trim(),ttsEntityId:value('va-tts').trim(),mediaPlayerId:value('va-media').trim(),language:value('va-language').trim()||'en',responseHoldSeconds:Number(value('va-hold')||2),announcementVolumePercent:Number(value('va-volume')||45)}}; }}
+qs('va-save').addEventListener('click',async()=>{{try{{qs('va-save').disabled=true;setBox(qs('va-status'),'Saving JARVIS settings...','muted');const response=await fetch('/api/assistant/config',{{method:'POST',headers:{{'Accept':'application/json','Content-Type':'application/json'}},body:JSON.stringify(assistantPayload())}});const data=await response.json().catch(()=>({{}}));if(!response.ok||!data.ok)throw new Error(data.error||'Could not save JARVIS settings.');setBox(qs('va-status'),data.message||'JARVIS settings saved.','ok');}}catch(err){{setBox(qs('va-status'),err.message||String(err),'bad');}}finally{{qs('va-save').disabled=false;}}}});
+qs('va-test').addEventListener('click',async()=>{{const text=value('va-test-text').trim();if(!text){{setBox(qs('va-status'),'Enter a test command first.','bad');return;}}try{{qs('va-test').disabled=true;setBox(qs('va-status'),'Running command. Watch the thermostat screen...','muted');const response=await fetch('/api/assistant/process',{{method:'POST',headers:{{'Accept':'application/json','Content-Type':'application/json'}},body:JSON.stringify({{text}})}});const data=await response.json().catch(()=>({{}}));if(!response.ok||!data.ok)throw new Error(data.error||'Assistant test failed.');const suffix=data.speechPlayed?'\\nSpoken on '+data.mediaPlayerId+' at '+(data.announcementVolumePercent||value('va-volume'))+'%.':(data.speechError?'\\nVoice was not played: '+data.speechError:'');setBox(qs('va-status'),'JARVIS: '+data.response+suffix,data.speechPlayed?'ok':'muted');}}catch(err){{setBox(qs('va-status'),err.message||String(err),'bad');}}finally{{qs('va-test').disabled=false;}}}});
 </script>
-</body>
-</html>"""
+</body></html>"""
 
 
 def _decode_proc_mount_field(value: str) -> str:
@@ -7304,6 +7756,10 @@ def _assistant_config_payload() -> dict:
         response_hold = max(0.0, min(15.0, float(voice.get("responseHoldSeconds", 2.0) or 0.0)))
     except (TypeError, ValueError):
         response_hold = 2.0
+    try:
+        announcement_volume = int(max(1, min(100, round(float(voice.get("announcementVolumePercent", 45) or 45)))))
+    except (TypeError, ValueError):
+        announcement_volume = 45
     return {
         "enabled": _assistant_bool(voice.get("enabled"), True),
         "agentId": clean_entity(voice.get("agentId"), "conversation"),
@@ -7317,6 +7773,7 @@ def _assistant_config_payload() -> dict:
         "continueConversation": _assistant_bool(voice.get("continueConversation"), True),
         "showResponseText": _assistant_bool(voice.get("showResponseText"), True),
         "responseHoldSeconds": response_hold,
+        "announcementVolumePercent": announcement_volume,
         "homeAssistantConfigured": bool(str(ha.get("url") or "").strip() and str(ha.get("token") or "").strip()),
     }
 
@@ -7363,6 +7820,10 @@ def _assistant_update_config(payload: dict) -> dict:
         voice["responseHoldSeconds"] = max(0.0, min(15.0, float(payload.get("responseHoldSeconds", voice.get("responseHoldSeconds", 2.0)) or 0.0)))
     except (TypeError, ValueError):
         voice["responseHoldSeconds"] = 2.0
+    try:
+        voice["announcementVolumePercent"] = int(max(1, min(100, round(float(payload.get("announcementVolumePercent", voice.get("announcementVolumePercent", 45)) or 45)))))
+    except (TypeError, ValueError):
+        voice["announcementVolumePercent"] = 45
     ha["voiceAssistant"] = voice
     saved = _write_panel_config_record(config)
     return {
@@ -7498,34 +7959,91 @@ def _assistant_playful_spoken_text(text: str, request_id: int, enabled: bool, re
     return pool[max(0, int(request_id)) % len(pool)] + clean
 
 
-def _assistant_tts_speak(ha_url: str, token: str, tts_entity_id: str, media_player_id: str, message: str, language: str) -> object:
+def _assistant_reachable_media_url(ha_url: str, media_url: str) -> str:
+    media_url = str(media_url or "").strip()
+    if not media_url:
+        return ""
+    base = urlparse(str(ha_url or "").strip())
+    parsed = urlparse(media_url)
+    if not parsed.scheme:
+        path = media_url if media_url.startswith("/") else "/" + media_url
+        return urlunparse((base.scheme or "http", base.netloc, path, "", "", ""))
+    if parsed.hostname in {"127.0.0.1", "localhost", "::1"} and base.netloc:
+        return urlunparse((base.scheme or parsed.scheme, base.netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+    return media_url
+
+
+def _assistant_tts_speak(
+    ha_url: str,
+    token: str,
+    tts_entity_id: str,
+    media_player_id: str,
+    message: str,
+    language: str,
+    announcement_volume_percent: int = 45,
+) -> object:
     if not tts_entity_id:
         raise ValueError("No Home Assistant TTS entity is configured or available")
     if not media_player_id:
         raise ValueError("No Sonos/media player entity is configured")
+    volume = int(max(1, min(100, round(float(announcement_volume_percent or 45)))))
 
-    # Keep this request deliberately provider-neutral. Home Assistant TTS
-    # entities already store their own language, voice, speed, and audio-format
-    # options. Passing generic language/format overrides caused OpenAI TTS to
-    # raise HTTP 500 even though the same entity worked from Developer Tools.
-    # This is the minimal tts.speak payload Home Assistant accepts and matches
-    # the action that was verified directly on the selected Sonos speaker.
-    payload = {
-        "entity_id": tts_entity_id,
-        "media_player_entity_id": media_player_id,
-        "message": message,
-        # Allow Home Assistant to reuse identical generated audio. Dynamic
-        # answers still generate normally, while repeated tests start faster.
-        "cache": True,
-    }
-    return _ha_json_request(
-        ha_url,
-        token,
-        "POST",
-        "/api/services/tts/speak",
-        payload,
-        timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
-    )
+    # Sonos supports announcement overlays with a dedicated volume in
+    # media_player.play_media. The speaker restores its prior playback and
+    # volume after the announcement, so we never have to guess when speech ends
+    # or leave the user's music at the JARVIS volume.
+    try:
+        tts_payload = {
+            "engine_id": tts_entity_id,
+            "message": message,
+            "cache": True,
+        }
+        generated = _ha_json_request(
+            ha_url, token, "POST", "/api/tts_get_url", tts_payload,
+            timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
+        )
+        media_url = _assistant_reachable_media_url(ha_url, str((generated or {}).get("url") or (generated or {}).get("path") or ""))
+        if not media_url:
+            raise ValueError("Home Assistant did not return a TTS media URL")
+        result = _ha_json_request(
+            ha_url,
+            token,
+            "POST",
+            "/api/services/media_player/play_media",
+            {
+                "entity_id": media_player_id,
+                "media_content_id": media_url,
+                "media_content_type": "music",
+                "announce": True,
+                "extra": {"volume": volume},
+            },
+            timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
+        )
+        return {"method": "sonos_announcement", "volumeManaged": True, "volumePercent": volume, "result": result}
+    except Exception as announcement_error:
+        # Preserve compatibility with non-Sonos players or older Sonos
+        # firmware. This fallback speaks normally but cannot promise a separate
+        # announcement volume.
+        fallback = _ha_json_request(
+            ha_url,
+            token,
+            "POST",
+            "/api/services/tts/speak",
+            {
+                "entity_id": tts_entity_id,
+                "media_player_entity_id": media_player_id,
+                "message": message,
+                "cache": True,
+            },
+            timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
+        )
+        return {
+            "method": "tts_speak_fallback",
+            "volumeManaged": False,
+            "volumePercent": volume,
+            "announcementError": str(announcement_error),
+            "result": fallback,
+        }
 
 
 def _assistant_estimated_hold_seconds(message: str, extra_seconds: float = 0.0) -> float:
@@ -7624,6 +8142,10 @@ def _assistant_process_payload(payload: dict) -> dict:
         agent_id = str(payload.get("agentId") or config.get("agentId") or "").strip()
         media_player_id = str(payload.get("mediaPlayerId") or config.get("effectiveMediaPlayerId") or "").strip()
         configured_tts = str(payload.get("ttsEntityId") or config.get("ttsEntityId") or "").strip()
+        try:
+            announcement_volume = int(max(1, min(100, round(float(payload.get("announcementVolumePercent", config.get("announcementVolumePercent", 45)) or 45)))))
+        except (TypeError, ValueError):
+            announcement_volume = int(config.get("announcementVolumePercent") or 45)
         new_conversation = _assistant_bool(payload.get("newConversation"), False)
         conversation_id = str(payload.get("conversationId") or "").strip()
         if not conversation_id and config.get("continueConversation") and not new_conversation:
@@ -7689,7 +8211,7 @@ def _assistant_process_payload(payload: dict) -> dict:
             try:
                 tts_entity_id = _assistant_resolve_tts_entity(ha_url, token, configured_tts)
                 _assistant_set_state("speaking", ttsEntityId=tts_entity_id)
-                _assistant_tts_speak(ha_url, token, tts_entity_id, media_player_id, spoken_response, language)
+                _assistant_tts_speak(ha_url, token, tts_entity_id, media_player_id, spoken_response, language, announcement_volume)
                 speech_played = True
             except Exception as exc:
                 speech_error = str(exc)
@@ -7728,6 +8250,7 @@ def _assistant_process_payload(payload: dict) -> dict:
             "agentId": agent_id or "home_assistant/default",
             "mediaPlayerId": media_player_id,
             "ttsEntityId": tts_entity_id or configured_tts,
+            "announcementVolumePercent": announcement_volume,
             "speechPlayed": speech_played,
             "speechError": speech_error,
             "timings": timings,
@@ -9722,6 +10245,10 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                 return _json(self, 403, {"ok": False, "error": "Assistant status is local-only unless the temporary config portal is open."})
             include_config = str((query.get("include_config") or [""])[0]).strip().lower() in {"1", "true", "yes", "on"}
             return _json(self, 200, _assistant_status_payload(include_config=include_config))
+        if path == "/api/settings/web":
+            if not _config_web_portal_active(touch=True):
+                return _json(self, 403, {"ok": False, "error": "The temporary config portal is closed."})
+            return _json(self, 200, _config_settings_payload())
         if path == "/api/assistant/config":
             if not _config_web_portal_active(touch=True):
                 return _json(self, 403, {"ok": False, "error": "The temporary config portal is closed."})
@@ -9744,7 +10271,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/config"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/config", "/api/settings/web"}:
             self.send_error(404, "Not found")
             return
 
@@ -9758,6 +10285,13 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                 result = _assistant_process_payload(payload)
                 status = 200 if result.get("ok") else (409 if result.get("busy") else 400)
                 return _json(self, status, result)
+
+            if path == "/api/settings/web":
+                try:
+                    result = _config_settings_save(payload)
+                except ValueError as exc:
+                    result = {"ok": False, "error": str(exc)}
+                return _json(self, 200 if result.get("ok") else 400, result)
 
             if path == "/api/assistant/config":
                 try:
