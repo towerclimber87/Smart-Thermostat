@@ -129,3 +129,29 @@ curl -sS -X POST \
 ```
 
 To configure it from another computer, press **Backup Config** on the thermostat, open the temporary web address shown on the panel, and use the **JARVIS Voice** tab. This page does not display or transmit the saved Home Assistant token to the browser.
+
+### Shared JARVIS home knowledge
+
+Version 12.30 moves learned temperature-source mappings into the IHA Home Assistant integration instead of saving a separate copy on each wall panel. Home Assistant stores the mappings in its internal `.storage/iha.jarvis_knowledge` record, and every IHA thermostat reads the same live record before answering multi-room temperature questions.
+
+Install the matching `Supporting/iha.zip` files into Home Assistant's `/config/custom_components/iha/` directory and restart Home Assistant before testing this feature. The integration version is 10.9.0.
+
+JARVIS can then be taught by speech or by the **Backup Config → JARVIS Voice → Shared Home Knowledge** section. Examples:
+
+```text
+JARVIS, remember that outside temperature comes from sensor.back_porch_temperature.
+JARVIS, use climate.bedroom_thermostat for the bedroom temperature.
+JARVIS, forget the office temperature.
+JARVIS, what temperature sources do you remember?
+```
+
+When a friendly name matches more than one temperature entity, JARVIS does not guess. It lists the possible entities and asks for the exact entity ID. Climate entities automatically use `current_temperature`, weather entities use `temperature`, and normal temperature sensors use their state unless an attribute override is explicitly saved.
+
+Requests such as the following are answered from the exact stored mappings rather than by asking the conversation model to discover the entities:
+
+```text
+JARVIS, tell me the outside temperature and then all of the inside temperatures.
+JARVIS, what are the bedroom, living room, and office temperatures?
+```
+
+The IHA integration converts mapped temperature values to Home Assistant's configured temperature unit, reports unavailable sources honestly, and never substitutes a different entity when a requested mapping is missing.

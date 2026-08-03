@@ -2822,6 +2822,12 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
     .voice-provider h3 {{ margin-bottom:7px; }}
     .voice-provider[hidden] {{ display:none; }}
     .voice-note {{ margin:0 0 13px; padding:11px 13px; border-radius:13px; border:1px solid rgba(70,232,255,.24); background:rgba(70,232,255,.07); color:#cfefff; line-height:1.45; }}
+    .knowledge-list {{ display:grid; gap:9px; margin-top:12px; }}
+    .knowledge-item {{ display:grid; grid-template-columns:minmax(0,1fr) auto; gap:12px; align-items:center; padding:12px 13px; border-radius:14px; border:1px solid rgba(255,255,255,.11); background:rgba(0,0,0,.20); }}
+    .knowledge-title {{ font-weight:900; color:#f4fbff; }}
+    .knowledge-source {{ margin-top:4px; color:#91a6c3; font-size:12px; overflow-wrap:anywhere; }}
+    .knowledge-value {{ color:#7fffd4; font-weight:900; margin-top:4px; }}
+    .knowledge-item button {{ min-height:38px; padding:0 13px; border-radius:11px; background:rgba(255,84,110,.17); border:1px solid rgba(255,84,110,.35); box-shadow:none; }}
 
     /* Thermostat settings are intentionally denser than the backup and voice
        tabs. Natural-height cards prevent a short section from being stretched
@@ -2926,6 +2932,14 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
         <div class="form-grid"><div class="field full"><label>Text-to-speech entity</label><input id="va-tts" type="text" value="{assistant_tts}" placeholder="tts.openai_tts or blank"><span class="hint">Blank now prefers an available OpenAI TTS entity before Home Assistant Cloud or Piper.</span></div></div>
       </div>
       <div class="form-grid"><div class="field"><label>Conversation agent entity</label><input id="va-agent" type="text" value="{assistant_agent}" placeholder="conversation.openai_conversation or blank"></div><div class="field"><label>Sonos / media player entity</label><input id="va-media" type="text" value="{assistant_media}" placeholder="Blank follows Audio page selection"><span class="hint">Current effective output: <code>{assistant_effective_media}</code></span></div><div class="field"><label>Language</label><input id="va-language" type="text" value="{assistant_language}" placeholder="en-US"></div><div class="field"><label>Extra screen hold after response (seconds)</label><input id="va-hold" type="number" min="0" max="15" step="0.5" value="{assistant_hold}"></div><div class="field full"><label>Speech volume</label><div class="slider-row"><input id="va-volume" type="range" min="1" max="100" step="1" value="{assistant_volume}"><output id="va-volume-value">{assistant_volume}%</output></div><span class="hint">On Sonos, the response is sent as an announcement so the previous music and volume return automatically when speech finishes.</span></div></div>
+      <div class="settings-section voice-provider">
+        <h3>Shared Home Knowledge</h3>
+        <p class="voice-note">These mappings are saved once inside Home Assistant and are shared by every IHA thermostat and screen. JARVIS reads the exact entity and attribute instead of asking the conversation model to guess. You can also teach it verbally, for example: <strong>“JARVIS, remember that outside temperature comes from sensor.back_porch_temperature.”</strong></p>
+        <div class="form-grid"><div class="field"><label>Knowledge name</label><input id="va-knowledge-name" type="text" placeholder="Outside temperature or Office temperature"></div><div class="field"><label>Home Assistant temperature entity</label><input id="va-knowledge-entity" type="text" list="va-temperature-entities" placeholder="sensor... climate... or weather..."><datalist id="va-temperature-entities"></datalist></div><div class="field"><label>Attribute override</label><input id="va-knowledge-attribute" type="text" placeholder="Blank auto-detects current_temperature or temperature"></div><div class="field"><label>Location group</label><select id="va-knowledge-inside"><option value="true">Inside temperature</option><option value="false">Outside temperature</option></select></div></div>
+        <div class="button-row"><button id="va-knowledge-save" type="button">Save Shared Source</button><button id="va-knowledge-reload" type="button" class="secondary">Reload Shared Sources</button></div>
+        <div id="va-knowledge-list" class="knowledge-list"></div>
+        <div id="va-knowledge-status" class="status muted">Open this tab to load the shared Home Assistant knowledge file.</div>
+      </div>
       <div class="button-row"><button id="va-save" type="button">Save JARVIS Settings</button></div>
       <div class="test-row"><input id="va-test-text" type="text" value="Tell me the current thermostat temperature in one short sentence."><button id="va-test" type="button" class="secondary">Run Test</button></div>
       <div id="va-status" class="status muted">Save the settings, then run a typed test.</div>
@@ -2935,7 +2949,7 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
 <script>
 const qs = (id) => document.getElementById(id);
 function setBox(box,text,kind) {{ box.textContent=text; box.className='status '+(kind||'muted'); }}
-for (const button of document.querySelectorAll('.tab-button')) {{ button.addEventListener('click',()=>{{ document.querySelectorAll('.tab-button').forEach(x=>x.classList.toggle('active',x===button)); document.querySelectorAll('.tab-panel').forEach(x=>x.classList.toggle('active',x.id==='tab-'+button.dataset.tab)); if(button.dataset.tab==='thermostat'&&!window.thermostatSettingsLoaded) loadThermostatSettings(); }}); }}
+for (const button of document.querySelectorAll('.tab-button')) {{ button.addEventListener('click',()=>{{ document.querySelectorAll('.tab-button').forEach(x=>x.classList.toggle('active',x===button)); document.querySelectorAll('.tab-panel').forEach(x=>x.classList.toggle('active',x.id==='tab-'+button.dataset.tab)); if(button.dataset.tab==='thermostat'&&!window.thermostatSettingsLoaded) loadThermostatSettings(); if(button.dataset.tab==='jarvis'&&!window.jarvisKnowledgeLoaded) loadJarvisKnowledge(); }}); }}
 
 qs('upload').addEventListener('click',async()=>{{ const file=qs('file').files&&qs('file').files[0]; if(!file){{setBox(qs('status'),'Select a config JSON file first.','bad');return;}} try{{setBox(qs('status'),'Uploading config...','muted'); const payload=JSON.parse(await file.text()); const response=await fetch('/api/system/config-import',{{method:'POST',headers:{{'Accept':'application/json','Content-Type':'application/json'}},body:JSON.stringify(payload)}}); const data=await response.json().catch(()=>({{}})); if(!response.ok||!data.ok)throw new Error(data.error||data.message||'Upload failed.'); setBox(qs('status'),data.message||'Config uploaded.','ok');}}catch(err){{setBox(qs('status'),err.message||String(err),'bad');}} }});
 
@@ -2958,6 +2972,28 @@ qs('ts-reload').addEventListener('click',()=>{{window.thermostatSettingsLoaded=f
 qs('va-volume').addEventListener('input',()=>{{qs('va-volume-value').textContent=qs('va-volume').value+'%';}});
 function updateTtsMode() {{ const direct=value('va-tts-mode')==='openai_direct'; qs('va-openai-settings').hidden=!direct; qs('va-ha-tts-settings').hidden=direct; }}
 qs('va-tts-mode').addEventListener('change',updateTtsMode); updateTtsMode();
+function knowledgeValue(item) {{ if(!item.available)return 'Unavailable'; const value=Number(item.value); const shown=Number.isFinite(value)?(Math.abs(value-Math.round(value))<0.05?String(Math.round(value)):value.toFixed(1)):String(item.value); return shown+(item.unit?' '+item.unit:''); }}
+function renderJarvisKnowledge(data) {{
+  const box=qs('va-knowledge-list'); const knowledge=data&&data.knowledge||{{}}; const items=Array.isArray(knowledge.items)?knowledge.items:[];
+  const entities=Array.isArray(data&&data.temperatureEntities)?data.temperatureEntities:[];
+  qs('va-temperature-entities').replaceChildren(...entities.map(item=>{{const option=document.createElement('option');option.value=item.entityId;option.label=(item.name||item.entityId)+(item.attribute?' — '+item.attribute:'');return option;}}));
+  if(!items.length){{box.innerHTML='<div class="muted">No shared temperature sources are saved yet.</div>';return;}}
+  box.replaceChildren(...items.map(item=>{{
+    const row=document.createElement('div');row.className='knowledge-item';
+    const detail=document.createElement('div');
+    const title=document.createElement('div');title.className='knowledge-title';title.textContent=item.display_name||item.key;
+    const source=document.createElement('div');source.className='knowledge-source';source.textContent=(item.source_name||item.entity_id)+' — '+item.entity_id+(item.attribute?' / '+item.attribute:' / state');
+    const live=document.createElement('div');live.className='knowledge-value';live.textContent=knowledgeValue(item)+(item.inside?' · Inside':' · Outside');
+    detail.append(title,source,live);
+    const remove=document.createElement('button');remove.type='button';remove.textContent='Forget';remove.addEventListener('click',()=>forgetJarvisKnowledge(item.key,item.display_name||item.key));
+    row.append(detail,remove);return row;
+  }}));
+}}
+async function loadJarvisKnowledge() {{ try{{setBox(qs('va-knowledge-status'),'Loading the shared Home Assistant knowledge file...','muted');const response=await fetch('/api/assistant/knowledge');const data=await response.json().catch(()=>({{}}));if(!response.ok||!data.ok)throw new Error(data.error||'Could not load shared knowledge.');renderJarvisKnowledge(data);window.jarvisKnowledgeLoaded=true;setBox(qs('va-knowledge-status'),'Shared sources loaded from Home Assistant. Every IHA screen uses this same data.','ok');}}catch(err){{setBox(qs('va-knowledge-status'),err.message||String(err),'bad');}} }}
+async function saveJarvisKnowledge() {{ const displayName=value('va-knowledge-name').trim();const entityId=value('va-knowledge-entity').trim();if(!displayName||!entityId){{setBox(qs('va-knowledge-status'),'Enter a knowledge name and select a Home Assistant entity.','bad');return;}}try{{qs('va-knowledge-save').disabled=true;setBox(qs('va-knowledge-status'),'Saving the shared source in Home Assistant...','muted');const response=await fetch('/api/assistant/knowledge',{{method:'POST',headers:{{'Accept':'application/json','Content-Type':'application/json'}},body:JSON.stringify({{action:'remember',displayName,entityId,attribute:value('va-knowledge-attribute').trim(),inside:value('va-knowledge-inside')==='true'}})}});const data=await response.json().catch(()=>({{}}));if(!response.ok||!data.ok)throw new Error(data.error||'Could not save shared knowledge.');renderJarvisKnowledge(data);window.jarvisKnowledgeLoaded=true;qs('va-knowledge-name').value='';qs('va-knowledge-entity').value='';qs('va-knowledge-attribute').value='';setBox(qs('va-knowledge-status'),data.message||'Shared source saved.','ok');}}catch(err){{setBox(qs('va-knowledge-status'),err.message||String(err),'bad');}}finally{{qs('va-knowledge-save').disabled=false;}} }}
+async function forgetJarvisKnowledge(key,label) {{ if(!confirm('Forget the shared source for '+label+' on every IHA screen?'))return;try{{setBox(qs('va-knowledge-status'),'Removing the shared source...','muted');const response=await fetch('/api/assistant/knowledge',{{method:'POST',headers:{{'Accept':'application/json','Content-Type':'application/json'}},body:JSON.stringify({{action:'forget',key}})}});const data=await response.json().catch(()=>({{}}));if(!response.ok||!data.ok)throw new Error(data.error||'Could not remove shared knowledge.');renderJarvisKnowledge(data);setBox(qs('va-knowledge-status'),data.message||'Shared source removed.','ok');}}catch(err){{setBox(qs('va-knowledge-status'),err.message||String(err),'bad');}} }}
+qs('va-knowledge-name').addEventListener('input',()=>{{const label=value('va-knowledge-name').toLowerCase();if(/\b(outside|outdoor|exterior)\b/.test(label))qs('va-knowledge-inside').value='false';}});
+qs('va-knowledge-save').addEventListener('click',saveJarvisKnowledge);qs('va-knowledge-reload').addEventListener('click',()=>{{window.jarvisKnowledgeLoaded=false;loadJarvisKnowledge();}});
 function assistantPayload() {{ return {{enabled:qs('va-enabled').checked,speak:qs('va-speak').checked,funMode:qs('va-fun').checked,playfulReplies:qs('va-playful').checked,continueConversation:qs('va-continue').checked,showResponseText:qs('va-show-text').checked,agentId:value('va-agent').trim(),ttsEntityId:value('va-tts').trim(),ttsMode:value('va-tts-mode'),ttsVoice:value('va-voice'),openAiApiKey:value('va-openai-key').trim(),openAiModel:value('va-openai-model').trim(),openAiInstructions:value('va-openai-instructions').trim(),openAiSpeed:Number(value('va-openai-speed')||1.08),mediaPlayerId:value('va-media').trim(),language:value('va-language').trim()||'en-US',responseHoldSeconds:Number(value('va-hold')||2),announcementVolumePercent:Number(value('va-volume')||45)}}; }}
 qs('va-save').addEventListener('click',async()=>{{try{{qs('va-save').disabled=true;setBox(qs('va-status'),'Saving JARVIS settings...','muted');const response=await fetch('/api/assistant/config',{{method:'POST',headers:{{'Accept':'application/json','Content-Type':'application/json'}},body:JSON.stringify(assistantPayload())}});const data=await response.json().catch(()=>({{}}));if(!response.ok||!data.ok)throw new Error(data.error||'Could not save JARVIS settings.');qs('va-openai-key').value='';setBox(qs('va-status'),data.message||'JARVIS settings saved.','ok');}}catch(err){{setBox(qs('va-status'),err.message||String(err),'bad');}}finally{{qs('va-save').disabled=false;}}}});
 qs('va-test').addEventListener('click',async()=>{{const text=value('va-test-text').trim();if(!text){{setBox(qs('va-status'),'Enter a test command first.','bad');return;}}try{{qs('va-test').disabled=true;setBox(qs('va-status'),'Running command. Watch the thermostat screen...','muted');const response=await fetch('/api/assistant/process',{{method:'POST',headers:{{'Accept':'application/json','Content-Type':'application/json'}},body:JSON.stringify({{text}})}});const data=await response.json().catch(()=>({{}}));if(!response.ok||!data.ok)throw new Error(data.error||'Assistant test failed.');const suffix=data.speechPlayed?'\\nSpoken on '+data.mediaPlayerId+' at '+(data.announcementVolumePercent||value('va-volume'))+'%.':(data.speechError?'\\nVoice was not played: '+data.speechError:'');setBox(qs('va-status'),'JARVIS: '+data.response+suffix,data.speechPlayed?'ok':'muted');}}catch(err){{setBox(qs('va-status'),err.message||String(err),'bad');}}finally{{qs('va-test').disabled=false;}}}});
@@ -8525,6 +8561,481 @@ def _assistant_local_fast_response(text: str) -> tuple[str, str, str] | None:
         return f"The thermostat is currently in {mode} mode.", "query_answer", "local_thermostat_mode"
     return None
 
+def _assistant_normalize_phrase(value: object) -> str:
+    """Normalize spoken entity labels for matching without punctuation noise."""
+    text = str(value or "").strip().lower().replace("°", " degrees ")
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", text).split())
+
+
+def _assistant_knowledge_key(label: object, category: str = "temperature") -> tuple[str, str, bool, list[str]]:
+    """Return a stable key, display label, inside flag, and aliases."""
+    raw = _assistant_normalize_phrase(label)
+    raw = re.sub(r"\b(the|a|an|reading|source|sensor|thermostat|current)\b", " ", raw)
+    raw = " ".join(raw.split())
+    if category == "temperature":
+        location = re.sub(r"\b(temperature|temp|degrees)\b", " ", raw)
+        location = " ".join(location.split()) or "temperature"
+        if location in {"outside", "outdoor", "outdoors", "exterior"}:
+            location = "outside"
+        display = "Outside temperature" if location == "outside" else f"{location.title()} temperature"
+        key_base = location
+        key = re.sub(r"[^a-z0-9]+", "_", key_base).strip("_")
+        if not key:
+            raise ValueError("Tell JARVIS which temperature this source represents.")
+        key = f"{key}_temperature" if not key.endswith("temperature") else key
+        inside = location != "outside"
+        aliases = [display, f"{location} temperature", location]
+        return key[:96], display[:120], inside, aliases
+    key = re.sub(r"[^a-z0-9]+", "_", raw).strip("_")
+    if not key:
+        raise ValueError("Knowledge name cannot be blank.")
+    return key[:96], raw.title()[:120], True, [raw]
+
+
+def _assistant_iha_service_response(
+    ha_url: str,
+    token: str,
+    service: str,
+    payload: dict | None = None,
+) -> dict:
+    """Call one response-capable IHA action and unwrap its response data."""
+    raw = _ha_json_request(
+        ha_url,
+        token,
+        "POST",
+        f"/api/services/iha/{service}?return_response",
+        payload or {},
+        timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
+    )
+    if not isinstance(raw, dict):
+        raise RuntimeError(f"Home Assistant returned an invalid response for iha.{service}.")
+    response = raw.get("service_response")
+    if isinstance(response, dict):
+        return response
+    # Keep compatibility with direct internal callers and older response wrappers.
+    if any(key in raw for key in ("items", "key", "removed", "entity_id")):
+        return raw
+    raise RuntimeError(
+        f"The updated IHA shared-knowledge actions are not available. Install Supporting/iha.zip in Home Assistant and restart Home Assistant."
+    )
+
+
+def _assistant_get_shared_knowledge(
+    ha_url: str,
+    token: str,
+    *,
+    category: str = "",
+    keys: list[str] | None = None,
+    inside: bool | None = None,
+) -> dict:
+    payload: dict = {}
+    if category:
+        payload["category"] = category
+    if keys:
+        payload["keys"] = keys
+    if inside is not None:
+        payload["inside"] = bool(inside)
+    return _assistant_iha_service_response(ha_url, token, "get_knowledge", payload)
+
+
+def _assistant_remember_shared_knowledge(
+    ha_url: str,
+    token: str,
+    *,
+    key: str,
+    entity_id: str,
+    attribute: str = "",
+    display_name: str = "",
+    category: str = "temperature",
+    inside: bool | None = None,
+    aliases: list[str] | None = None,
+) -> dict:
+    payload: dict = {
+        "key": key,
+        "entity_id": entity_id,
+        "attribute": attribute,
+        "display_name": display_name,
+        "category": category,
+        "aliases": aliases or [],
+    }
+    if inside is not None:
+        payload["inside"] = bool(inside)
+    return _assistant_iha_service_response(ha_url, token, "remember_knowledge", payload)
+
+
+def _assistant_forget_shared_knowledge(ha_url: str, token: str, key: str) -> dict:
+    return _assistant_iha_service_response(ha_url, token, "forget_knowledge", {"key": key})
+
+
+def _assistant_temperature_entity_candidates(ha_url: str, token: str) -> list[dict]:
+    """Return only Home Assistant entities that expose a usable temperature."""
+    candidates: list[dict] = []
+    for item in _ha_all_states_cached(ha_url, token):
+        if not isinstance(item, dict):
+            continue
+        entity_id = str(item.get("entity_id") or "").strip()
+        if "." not in entity_id:
+            continue
+        domain = entity_id.split(".", 1)[0]
+        attrs = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
+        attribute = ""
+        raw_value: object = item.get("state")
+        if domain == "climate" and attrs.get("current_temperature") is not None:
+            attribute = "current_temperature"
+            raw_value = attrs.get(attribute)
+        elif domain == "weather" and attrs.get("temperature") is not None:
+            attribute = "temperature"
+            raw_value = attrs.get(attribute)
+        elif domain == "sensor":
+            device_class = str(attrs.get("device_class") or "").lower()
+            unit = str(attrs.get("unit_of_measurement") or "").lower()
+            if device_class != "temperature" and not any(marker in unit for marker in ("°c", "°f", "celsius", "fahrenheit")):
+                continue
+        else:
+            for possible in ("current_temperature", "temperature"):
+                if attrs.get(possible) is not None:
+                    attribute = possible
+                    raw_value = attrs.get(possible)
+                    break
+            if not attribute:
+                continue
+        try:
+            float(str(raw_value).strip())
+        except (TypeError, ValueError):
+            # Keep unavailable temperature entities selectable if their metadata is correct.
+            if str(item.get("state") or "").lower() not in {"unknown", "unavailable"}:
+                continue
+        friendly = str(attrs.get("friendly_name") or entity_id).strip()
+        candidates.append(
+            {
+                "entityId": entity_id,
+                "name": friendly,
+                "attribute": attribute,
+                "domain": domain,
+                "state": item.get("state"),
+                "unit": attrs.get("temperature_unit") or attrs.get("unit_of_measurement") or "",
+            }
+        )
+    candidates.sort(key=lambda x: (str(x.get("name") or "").casefold(), str(x.get("entityId") or "")))
+    return candidates
+
+
+def _assistant_temperature_candidate_score(source_text: str, candidate: dict) -> float:
+    source = _assistant_normalize_phrase(source_text)
+    if not source:
+        return 0.0
+    entity_id = str(candidate.get("entityId") or "")
+    friendly = str(candidate.get("name") or entity_id)
+    entity_norm = _assistant_normalize_phrase(entity_id.replace(".", " ").replace("_", " "))
+    friendly_norm = _assistant_normalize_phrase(friendly)
+    source_core = " ".join(
+        word for word in source.split()
+        if word not in {"the", "temperature", "temp", "sensor", "thermostat", "entity", "reading", "from"}
+    ) or source
+    explicit = re.search(r"\b(?:sensor|climate|weather)\.[a-z0-9_]+\b", source_text.lower())
+    if explicit:
+        return 1000.0 if explicit.group(0) == entity_id.lower() else 0.0
+    score = 0.0
+    if source == friendly_norm or source_core == friendly_norm:
+        score += 250.0
+    if source == entity_norm or source_core == entity_norm:
+        score += 240.0
+    if source_core and source_core in friendly_norm:
+        score += 120.0 + min(30.0, len(source_core))
+    if source_core and source_core in entity_norm:
+        score += 110.0 + min(30.0, len(source_core))
+    tokens = [word for word in source_core.split() if len(word) > 1]
+    if tokens:
+        friendly_tokens = set(friendly_norm.split())
+        entity_tokens = set(entity_norm.split())
+        overlap = sum(1 for word in tokens if word in friendly_tokens or word in entity_tokens)
+        score += overlap * 24.0
+        if overlap == len(tokens):
+            score += 70.0
+    return score
+
+
+def _assistant_resolve_temperature_source(ha_url: str, token: str, source_text: str) -> tuple[dict | None, list[dict]]:
+    candidates = _assistant_temperature_entity_candidates(ha_url, token)
+    ranked = sorted(
+        (( _assistant_temperature_candidate_score(source_text, item), item) for item in candidates),
+        key=lambda pair: (-pair[0], str(pair[1].get("name") or "").casefold()),
+    )
+    ranked = [pair for pair in ranked if pair[0] >= 60.0]
+    if not ranked:
+        return None, []
+    top_score = ranked[0][0]
+    close = [item for score, item in ranked[:8] if score >= top_score - 12.0]
+    if len(close) > 1 and top_score < 1000.0:
+        return None, close[:5]
+    return ranked[0][1], []
+
+
+def _assistant_learning_command(text: str, ha_url: str, token: str) -> tuple[str, str, str] | None:
+    """Handle explicit remember/forget/list commands before the conversation LLM."""
+    original = " ".join(str(text or "").strip().split())
+    lowered = original.lower().strip()
+    lowered = re.sub(r"^(?:hey\s+)?jarvis[,:]?\s*", "", lowered).strip()
+    if not lowered:
+        return None
+
+    if re.search(r"\b(?:what|which|show|list)\b.*\b(?:remember|knowledge|sources?)\b", lowered) and re.search(r"\b(?:temperature|temp)\b", lowered):
+        snapshot = _assistant_get_shared_knowledge(ha_url, token, category="temperature")
+        items = snapshot.get("items") if isinstance(snapshot.get("items"), list) else []
+        if not items:
+            return "I do not have any shared temperature sources saved yet.", "query_answer", "iha_shared_knowledge_list"
+        descriptions = [
+            f"{item.get('display_name') or item.get('key')} uses {item.get('source_name') or item.get('entity_id')}"
+            for item in items
+        ]
+        if len(descriptions) == 1:
+            answer = descriptions[0] + "."
+        else:
+            answer = "; ".join(descriptions[:-1]) + "; and " + descriptions[-1] + "."
+        return "I currently remember that " + answer, "query_answer", "iha_shared_knowledge_list"
+
+    forget_match = re.match(r"^(?:forget|remove|delete|stop using)\s+(?:that\s+)?(.+)$", lowered)
+    if forget_match and re.search(r"\b(?:temperature|temp)\b", forget_match.group(1)):
+        key, display, _, _ = _assistant_knowledge_key(forget_match.group(1), "temperature")
+        try:
+            _assistant_forget_shared_knowledge(ha_url, token, key)
+            return f"Understood. I forgot the shared source for {display.lower()} on every IHA screen.", "action_done", "iha_shared_knowledge_forget"
+        except Exception as exc:
+            return f"I could not forget {display.lower()}: {exc}", "error", "iha_shared_knowledge_forget"
+
+    target_text = ""
+    source_text = ""
+    patterns = (
+        r"^(?:remember|learn)(?:\s+that)?\s+(.+?)\s+(?:comes from|is from|should use|uses|is provided by|is)\s+(.+)$",
+        r"^(?:use|remember|learn)\s+(.+?)\s+(?:for|as)\s+(?:the\s+)?(.+)$",
+    )
+    first = re.match(patterns[0], lowered)
+    if first:
+        target_text, source_text = first.group(1), first.group(2)
+    else:
+        second = re.match(patterns[1], lowered)
+        if second:
+            source_text, target_text = second.group(1), second.group(2)
+    if not target_text or not source_text:
+        return None
+    if not re.search(r"\b(?:temperature|temp|outside|outdoor|bedroom|office|living room)\b", target_text):
+        return None
+
+    key, display, inside, aliases = _assistant_knowledge_key(target_text, "temperature")
+    candidate, ambiguous = _assistant_resolve_temperature_source(ha_url, token, source_text)
+    if ambiguous:
+        choices = ", ".join(f"{item.get('name')} ({item.get('entityId')})" for item in ambiguous)
+        return (
+            f"I found more than one possible temperature source: {choices}. Please repeat the command using the exact entity ID.",
+            "query_answer",
+            "iha_shared_knowledge_ambiguous",
+        )
+    if not candidate:
+        return (
+            f"I could not find a Home Assistant temperature entity matching {source_text}. Use its exact entity ID, such as sensor.outside_temperature.",
+            "query_answer",
+            "iha_shared_knowledge_not_found",
+        )
+    try:
+        saved = _assistant_remember_shared_knowledge(
+            ha_url,
+            token,
+            key=key,
+            entity_id=str(candidate.get("entityId") or ""),
+            attribute=str(candidate.get("attribute") or ""),
+            display_name=display,
+            category="temperature",
+            inside=inside,
+            aliases=aliases,
+        )
+    except Exception as exc:
+        return f"I found the source, but Home Assistant could not save it: {exc}", "error", "iha_shared_knowledge_remember"
+    source_name = str(saved.get("source_name") or candidate.get("name") or candidate.get("entityId") or "the selected entity")
+    entity_id = str(saved.get("entity_id") or candidate.get("entityId") or "")
+    return (
+        f"Understood. I will use {source_name}, {entity_id}, for {display.lower()} on every IHA screen.",
+        "action_done",
+        "iha_shared_knowledge_remember",
+    )
+
+
+def _assistant_join_spoken(parts: list[str]) -> str:
+    parts = [str(part).strip().rstrip(".") for part in parts if str(part).strip()]
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return parts[0] + "."
+    if len(parts) == 2:
+        return parts[0] + ", and " + parts[1] + "."
+    return ", ".join(parts[:-1]) + ", and " + parts[-1] + "."
+
+
+def _assistant_temperature_item_location(item: dict) -> str:
+    label = str(item.get("display_name") or item.get("key") or "temperature").strip()
+    label = re.sub(r"\s+temperature$", "", label, flags=re.IGNORECASE).strip()
+    return label or "the room"
+
+
+def _assistant_shared_temperature_response(text: str, ha_url: str, token: str) -> tuple[str, str, str] | None:
+    """Answer multi-room temperature requests from exact shared HA mappings."""
+    normalized = _assistant_normalize_phrase(text)
+    if not normalized or not re.search(r"\b(?:temperature|temp|degrees|inside ones)\b", normalized):
+        return None
+    if re.search(r"\b(?:set|raise|lower|change|turn|switch|make)\b", normalized):
+        return None
+    shared_scope = any(
+        phrase in normalized
+        for phrase in (
+            "outside", "outdoor", "bedroom", "office", "living room", "inside", "all room",
+            "all temperature", "temperatures", "inside ones", "other room",
+        )
+    )
+    if not shared_scope:
+        return None
+    try:
+        snapshot = _assistant_get_shared_knowledge(ha_url, token, category="temperature")
+    except Exception as exc:
+        return (
+            f"Shared household knowledge is not available yet. {exc}",
+            "error",
+            "iha_shared_temperature_unavailable",
+        )
+    items = snapshot.get("items") if isinstance(snapshot.get("items"), list) else []
+    by_key = {str(item.get("key") or ""): item for item in items if isinstance(item, dict)}
+    selected: list[dict] = []
+    selected_keys: set[str] = set()
+
+    def add(item: dict | None) -> None:
+        if not isinstance(item, dict):
+            return
+        key = str(item.get("key") or "")
+        if key and key not in selected_keys:
+            selected_keys.add(key)
+            selected.append(item)
+
+    wants_all = "all temperature" in normalized or "all room" in normalized
+    wants_inside = any(phrase in normalized for phrase in ("inside", "inside ones", "other room", "all room"))
+    wants_outside = any(word in normalized.split() for word in ("outside", "outdoor", "outdoors", "exterior"))
+    if wants_outside:
+        add(by_key.get("outside_temperature"))
+    if wants_all:
+        for item in items:
+            add(item)
+    elif wants_inside:
+        for item in items:
+            if bool(item.get("inside")):
+                add(item)
+
+    for item in items:
+        phrases = [
+            str(item.get("display_name") or ""),
+            str(item.get("key") or "").replace("_", " "),
+            *[str(alias) for alias in (item.get("aliases") or [])],
+        ]
+        if any(_assistant_normalize_phrase(phrase) in normalized for phrase in phrases if _assistant_normalize_phrase(phrase)):
+            add(item)
+
+    requested_missing: list[str] = []
+    common = {
+        "outside": "outside_temperature",
+        "bedroom": "bedroom_temperature",
+        "office": "office_temperature",
+        "living room": "living_room_temperature",
+    }
+    for phrase, key in common.items():
+        if phrase in normalized and key not in by_key:
+            requested_missing.append(phrase)
+    if wants_outside and "outside_temperature" not in by_key and "outside" not in requested_missing:
+        requested_missing.append("outside")
+
+    if not selected:
+        if requested_missing:
+            missing = _assistant_join_spoken([f"I do not have a saved source for the {name}" for name in requested_missing])
+            return missing, "query_answer", "iha_shared_temperature_missing"
+        if wants_inside:
+            return "I do not have any inside temperature sources saved yet.", "query_answer", "iha_shared_temperature_missing"
+        return None
+
+    outside_parts: list[str] = []
+    inside_parts: list[str] = []
+    unavailable_parts: list[str] = []
+    for item in selected:
+        location = _assistant_temperature_item_location(item)
+        is_inside = bool(item.get("inside"))
+        if item.get("available") and item.get("value") is not None:
+            value = _assistant_format_temperature(item.get("value"))
+            if is_inside:
+                inside_parts.append(f"the {location.lower()} is {value} degrees")
+            else:
+                outside_parts.append(f"The {location.lower()} temperature is {value} degrees")
+        else:
+            unavailable_parts.append(f"the {location.lower()} temperature is currently unavailable")
+
+    sentences: list[str] = []
+    if outside_parts:
+        sentences.append(_assistant_join_spoken(outside_parts))
+    if inside_parts:
+        sentences.append("Inside, " + _assistant_join_spoken(inside_parts))
+    if unavailable_parts:
+        sentences.append(_assistant_join_spoken(unavailable_parts))
+    if requested_missing:
+        sentences.append(_assistant_join_spoken([f"I do not have a saved source for the {name}" for name in requested_missing]))
+    return " ".join(sentence.strip() for sentence in sentences if sentence.strip()), "query_answer", "iha_shared_temperature"
+
+
+def _assistant_knowledge_admin_payload() -> dict:
+    """Return shared mappings and selectable temperature sources for the portal."""
+    ha_url, token = _ha_credentials_from_panel_config()
+    if not ha_url or not token:
+        return {"ok": False, "error": "Home Assistant URL/token are not configured on this thermostat."}
+    try:
+        knowledge = _assistant_get_shared_knowledge(ha_url, token, category="temperature")
+        candidates = _assistant_temperature_entity_candidates(ha_url, token)
+        return {"ok": True, "knowledge": knowledge, "temperatureEntities": candidates}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def _assistant_knowledge_admin_update(payload: dict) -> dict:
+    """Save or remove a central mapping from the temporary config portal."""
+    if not _config_web_portal_active(touch=True):
+        return {"ok": False, "error": "The temporary config portal is closed."}
+    ha_url, token = _ha_credentials_from_panel_config()
+    if not ha_url or not token:
+        return {"ok": False, "error": "Home Assistant URL/token are not configured on this thermostat."}
+    payload = payload if isinstance(payload, dict) else {}
+    action = str(payload.get("action") or "remember").strip().lower()
+    try:
+        if action == "forget":
+            key = str(payload.get("key") or "").strip()
+            if not key:
+                raise ValueError("Select a knowledge entry to remove.")
+            result = _assistant_forget_shared_knowledge(ha_url, token, key)
+            return {"ok": True, "message": "Shared JARVIS knowledge removed.", "result": result, **_assistant_knowledge_admin_payload()}
+        label = str(payload.get("displayName") or payload.get("key") or "").strip()
+        entity_id = str(payload.get("entityId") or "").strip()
+        if not label or not entity_id:
+            raise ValueError("Knowledge name and Home Assistant entity are required.")
+        key, display, inferred_inside, aliases = _assistant_knowledge_key(label, "temperature")
+        attribute = str(payload.get("attribute") or "").strip()
+        inside = _assistant_bool(payload.get("inside"), inferred_inside)
+        result = _assistant_remember_shared_knowledge(
+            ha_url,
+            token,
+            key=key,
+            entity_id=entity_id,
+            attribute=attribute,
+            display_name=display,
+            category="temperature",
+            inside=inside,
+            aliases=aliases,
+        )
+        return {"ok": True, "message": "Shared JARVIS knowledge saved for every IHA screen.", "result": result, **_assistant_knowledge_admin_payload()}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+
 def _assistant_process_payload(payload: dict) -> dict:
     request_started = time.monotonic()
     payload = payload if isinstance(payload, dict) else {}
@@ -8596,7 +9107,11 @@ def _assistant_process_payload(payload: dict) -> dict:
         )
 
         conversation_started = time.monotonic()
-        quick = _assistant_local_fast_response(text)
+        quick = _assistant_learning_command(text, ha_url, token)
+        if quick is None:
+            quick = _assistant_shared_temperature_response(text, ha_url, token)
+        if quick is None:
+            quick = _assistant_local_fast_response(text)
         route = "home_assistant_conversation"
         returned_conversation_id = ""
         continue_conversation = False
@@ -10707,6 +11222,11 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
             if not _config_web_portal_active(touch=True):
                 return _json(self, 403, {"ok": False, "error": "The temporary config portal is closed."})
             return _json(self, 200, {"ok": True, "assistant": _assistant_config_payload()})
+        if path == "/api/assistant/knowledge":
+            if not _config_web_portal_active(touch=True):
+                return _json(self, 403, {"ok": False, "error": "The temporary config portal is closed."})
+            result = _assistant_knowledge_admin_payload()
+            return _json(self, 200 if result.get("ok") else 502, result)
 
         file_path = _safe_join_public(path)
         if not file_path or not file_path.exists() or not file_path.is_file():
@@ -10732,7 +11252,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/config", "/api/settings/web"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/config", "/api/assistant/knowledge", "/api/settings/web"}:
             self.send_error(404, "Not found")
             return
 
@@ -10759,6 +11279,10 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                     result = _assistant_update_config(payload)
                 except ValueError as exc:
                     result = {"ok": False, "error": str(exc)}
+                return _json(self, 200 if result.get("ok") else 400, result)
+
+            if path == "/api/assistant/knowledge":
+                result = _assistant_knowledge_admin_update(payload)
                 return _json(self, 200 if result.get("ok") else 400, result)
 
             if path == "/api/config":
