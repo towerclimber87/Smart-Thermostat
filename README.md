@@ -84,6 +84,18 @@ The native panel displays the AI-core animation and sends typed commands to Home
 
 The assistant reuses the Home Assistant URL and long-lived token already stored in the thermostat configuration. Replies can be sent to the Sonos/media player selected on the Audio page or to a separate player selected under **Backup Config → JARVIS Voice**. The stored-token assistant endpoint accepts commands only from the thermostat itself unless the temporary Backup Config portal is open.
 
+### Local automation execution and controlled OpenAI fallback
+
+Version 13.00 fixes JARVIS requests started from Home Assistant automations and adds a reliable local-first path for running household automations:
+
+- explicit requests such as “Run the Welcome Home automation,” “Trigger the bedtime routine,” and “Activate Movie Night scene” first match exact `automation.*`, `script.*`, and `scene.*` entities and call the corresponding Home Assistant service directly;
+- if local matching and built-in Assist cannot resolve an explicitly named automation, script, or scene, hybrid mode may send that same request to the configured OpenAI conversation agent;
+- unrelated device-control commands remain local-only so OpenAI cannot guess a different target;
+- when no OpenAI conversation agent is configured, JARVIS now reports that configuration problem instead of silently sending the request back to Home Assistant's default local agent;
+- `iha.ask_jarvis` now continues the saved cloud conversation by default. Set **Start new conversation** only when an automation intentionally needs a clean session.
+
+This preserves the intended order: deterministic local execution first, Home Assistant Assist second, and OpenAI only for an unresolved eligible request.
+
 ### Misspelling-resistant weather fallback
 
 Version 12.80 ensures that a weather question always reaches the OpenAI conversation agent when Home Assistant cannot supply a usable local forecast. The router recognizes common speech-to-text variants such as `forecast`, `forcast`, `forcat`, and `forcest`. Because the exact Home Assistant weather handler runs first, a valid local forecast remains free and fast; only an unresolved weather request uses OpenAI and its enabled web-search tool.

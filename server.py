@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+from difflib import SequenceMatcher
 import html
 import json
 import mimetypes
@@ -8202,12 +8203,175 @@ def _assistant_is_weather_query(text: str) -> bool:
     return bool(re.search(r"\bfor(?:e)?c(?:a|e)?s?t(?:ing|ed)?\b", normalized))
 
 
+def _assistant_automation_request(text: str) -> tuple[str, set[str]] | None:
+    """Return an explicit automation/script/scene request and permitted domains.
+
+    These phrases are safe to resolve deterministically against exact Home
+    Assistant entity names before involving a conversation agent. Generic
+    device commands are intentionally excluded from this path.
+    """
+    normalized = _assistant_normalize_phrase(text)
+    normalized = re.sub(r"^(?:hey )?jarvis ", "", normalized).strip()
+    normalized = re.sub(r"^(?:please\s+)?(?:can|could|would|will) you\s+", "", normalized).strip()
+    normalized = re.sub(r"^please ", "", normalized).strip()
+    if not normalized:
+        return None
+
+    domain_words = {
+        "automation": "automation",
+        "automations": "automation",
+        "routine": "automation",
+        "routines": "automation",
+        "script": "script",
+        "scripts": "script",
+        "scene": "scene",
+        "scenes": "scene",
+    }
+    action_words = r"turn on|run|trigger|activate|execute|launch|start|play"
+    words = normalized.split()
+    domains: set[str] = set()
+    for word in words:
+        if word in {"routine", "routines"}:
+            domains.update({"automation", "script", "scene"})
+        elif word in domain_words:
+            domains.add(domain_words[word])
+
+    if domains:
+        request_name = re.sub(rf"^(?:{action_words})\s+", "", normalized).strip()
+        request_name = re.sub(r"^(?:the|my)\s+", "", request_name).strip()
+        request_name = re.sub(
+            r"\b(?:automation|automations|routine|routines|script|scripts|scene|scenes)\b",
+            " ",
+            request_name,
+        )
+    else:
+        # Without an explicit domain word, only strong execution verbs qualify.
+        # This keeps phrases such as "play music" out of automation matching.
+        match = re.match(r"^(?:run|trigger|activate|execute|launch)\s+(?:the\s+|my\s+)?(.+)$", normalized)
+        if not match:
+            return None
+        request_name = match.group(1)
+        domains = {"automation", "script", "scene"}
+
+    request_name = re.sub(r"\b(?:for me|right now|now|please)\b$", "", request_name).strip()
+    request_name = " ".join(request_name.split())
+    if not request_name or request_name in domain_words:
+        return None
+    return request_name, domains
+
+
+def _assistant_is_explicit_automation_action(text: str) -> bool:
+    return _assistant_automation_request(text) is not None
+
+
+def _assistant_automation_match_score(requested: str, candidate: str) -> float:
+    requested = _assistant_normalize_phrase(requested)
+    candidate = _assistant_normalize_phrase(candidate)
+    candidate = re.sub(r"\b(?:automation|script|scene|routine)\b", " ", candidate)
+    candidate = " ".join(candidate.split())
+    if not requested or not candidate:
+        return 0.0
+    if requested == candidate:
+        return 1.0
+    if requested in candidate:
+        return 0.94
+    if candidate in requested:
+        return 0.90
+    requested_tokens = set(requested.split())
+    candidate_tokens = set(candidate.split())
+    overlap = len(requested_tokens & candidate_tokens) / max(len(requested_tokens), len(candidate_tokens), 1)
+    sequence = SequenceMatcher(None, requested, candidate).ratio()
+    return max(sequence, overlap * 0.92)
+
+
+def _assistant_local_automation_response(text: str, ha_url: str, token: str) -> tuple[str, str, str] | None:
+    """Run an explicitly named HA automation, script, or scene locally."""
+    parsed = _assistant_automation_request(text)
+    if parsed is None:
+        return None
+    requested, domains = parsed
+    candidates: list[tuple[float, str, str, str]] = []
+    try:
+        states = _ha_all_states_cached(ha_url, token)
+    except Exception:
+        return None
+    for item in states:
+        if not isinstance(item, dict):
+            continue
+        entity_id = str(item.get("entity_id") or "").strip()
+        domain = entity_id.split(".", 1)[0] if "." in entity_id else ""
+        if domain not in domains:
+            continue
+        attrs = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
+        friendly = str(attrs.get("friendly_name") or "").strip()
+        object_name = entity_id.split(".", 1)[-1].replace("_", " ")
+        score = max(
+            _assistant_automation_match_score(requested, friendly),
+            _assistant_automation_match_score(requested, object_name),
+        )
+        if score > 0:
+            candidates.append((score, entity_id, domain, friendly or object_name.title()))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (-item[0], item[1]))
+    best = candidates[0]
+    second_score = candidates[1][0] if len(candidates) > 1 else 0.0
+    if best[0] < 0.74 or (second_score >= best[0] - 0.05 and second_score >= 0.74):
+        return None
+
+    _, entity_id, domain, display_name = best
+    service = "trigger" if domain == "automation" else "turn_on"
+    try:
+        _ha_json_request(
+            ha_url,
+            token,
+            "POST",
+            f"/api/services/{domain}/{service}",
+            {"entity_id": entity_id},
+            timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
+        )
+    except Exception:
+        # Let built-in Assist and the controlled OpenAI fallback have a chance
+        # when the direct service path is unavailable.
+        return None
+    _invalidate_ha_state_cache(ha_url, token)
+    noun = {"automation": "automation", "script": "script", "scene": "scene"}[domain]
+    verb = "activated" if domain == "scene" else "ran"
+    suffix = "" if _assistant_normalize_phrase(display_name).endswith(noun) else f" {noun}"
+    return f"I {verb} the {display_name}{suffix}.", "action_done", "home_assistant_automation"
+
+
+def _assistant_resolve_cloud_agent_id(ha_url: str, token: str, configured: str) -> str:
+    """Resolve the configured OpenAI agent, with a conservative HA discovery fallback."""
+    configured = str(configured or "").strip()
+    if configured.startswith("conversation.") and configured != "conversation.home_assistant":
+        return configured
+    matches: list[str] = []
+    try:
+        states = _ha_all_states_cached(ha_url, token)
+    except Exception:
+        return ""
+    for item in states:
+        if not isinstance(item, dict):
+            continue
+        entity_id = str(item.get("entity_id") or "").strip()
+        if not entity_id.startswith("conversation.") or entity_id == "conversation.home_assistant":
+            continue
+        attrs = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
+        friendly = str(attrs.get("friendly_name") or "")
+        searchable = f"{entity_id} {friendly}".lower()
+        if any(marker in searchable for marker in ("openai", "chatgpt", "gpt")):
+            matches.append(entity_id)
+    return sorted(set(matches))[0] if matches else ""
+
+
 def _assistant_route_command(text: str, profile: dict, *, has_cloud_conversation: bool = False) -> str:
     """Choose the local Home Assistant agent or the configured cloud agent.
 
     Clear household commands are routed directly, so they do not pay the cost
-    or latency of probing OpenAI first. A failed read-only query may fall through
-    to the cloud agent, but a device-control command never does.
+    or latency of probing OpenAI first. Failed read-only requests and explicitly
+    named automation/script/scene actions may use the configured cloud fallback;
+    other device-control commands remain local-only.
     """
     settings = _assistant_normalize_shared_profile(profile)
     mode = str(settings.get("routing_mode") or "hybrid")
@@ -8246,15 +8410,16 @@ def _assistant_route_command(text: str, profile: dict, *, has_cloud_conversation
         " turn ", " switch ", " open ", " close ", " lock ", " unlock ",
         " set ", " raise ", " lower ", " increase ", " decrease ", " dim ",
         " brighten ", " start ", " stop ", " pause ", " resume ", " play ",
-        " arm ", " disarm ", " activate ", " run ", " cancel ",
+        " arm ", " disarm ", " activate ", " run ", " trigger ",
+        " execute ", " launch ", " cancel ",
     )
     home_terms = (
         " light", " lamp", " thermostat", " temperature", " climate", " fan", " heat",
         " air condition", " ac ", " door", " garage", " blind", " shade", " cover",
         " curtain", " lock", " alarm", " media", " speaker", " sonos", " television",
-        " tv ", " projector", " volume", " room", " bedroom", " office", " living room",
+        " tv ", " projector", " volume", " music", " room", " bedroom", " office", " living room",
         " kitchen", " bathroom", " hallway", " outside", " weather", " scene", " script",
-        " automation", " timer", " shopping list", " todo", " vacuum", " switch",
+        " automation", " routine", " timer", " shopping list", " todo", " vacuum", " switch",
     )
     if any(action in padded for action in local_actions) and any(term in padded for term in home_terms):
         return "local"
@@ -9188,6 +9353,7 @@ def _assistant_local_query_needs_cloud(response_text: str, response_type: str, e
         for phrase in (
             "more than one", "multiple entries", "multiple devices", "which one",
             "not aware of any device", "could not find", "couldn t find",
+            "cannot understand", "can t understand", "did not understand", "didn t understand",
         )
     )
 
@@ -9820,7 +9986,11 @@ def _assistant_process_payload(payload: dict) -> dict:
             language = "en-US"
         panel_cloud_agent_id = str(payload.get("agentId") or config.get("agentId") or "").strip()
         local_agent_id = str(shared_profile.get("local_agent_id") or "conversation.home_assistant").strip()
-        cloud_agent_id = str(shared_profile.get("cloud_agent_id") or panel_cloud_agent_id).strip()
+        cloud_agent_id = _assistant_resolve_cloud_agent_id(
+            ha_url,
+            token,
+            str(shared_profile.get("cloud_agent_id") or panel_cloud_agent_id).strip(),
+        )
         media_player_id = str(payload.get("mediaPlayerId") or config.get("effectiveMediaPlayerId") or "").strip()
         configured_tts = str(payload.get("ttsEntityId") or config.get("ttsEntityId") or "").strip()
         local_tts_configured = str(shared_profile.get("local_tts_entity_id") or "").strip()
@@ -9866,6 +10036,8 @@ def _assistant_process_payload(payload: dict) -> dict:
         conversation_started = time.monotonic()
         quick = _assistant_learning_command(text, ha_url, token)
         if quick is None:
+            quick = _assistant_local_automation_response(text, ha_url, token)
+        if quick is None:
             quick = _assistant_shared_temperature_response(text, ha_url, token)
         if quick is None:
             quick = _assistant_weather_response(text, ha_url, token)
@@ -9888,53 +10060,70 @@ def _assistant_process_payload(payload: dict) -> dict:
                 has_cloud_conversation=bool(conversation_id),
             )
             selected_agent_id = local_agent_id if desired_route == "local" else cloud_agent_id
-            conversation_payload = {"text": text, "language": language}
-            if selected_agent_id:
-                conversation_payload["agent_id"] = selected_agent_id
-            if desired_route == "cloud" and conversation_id:
-                conversation_payload["conversation_id"] = conversation_id
-            raw = _ha_json_request(
-                ha_url,
-                token,
-                "POST",
-                "/api/conversation/process",
-                conversation_payload,
-                timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
-            )
-            response_text, response_type, returned_conversation_id, continue_conversation, error_code = _assistant_extract_response(raw)
-            route = "home_assistant_local" if desired_route == "local" else "cloud_conversation"
-
-            # Device-control commands never fall through to an LLM. Read-only
-            # questions may fall through when built-in Assist cannot resolve a
-            # target or asks the user to choose one. This preserves safety while
-            # allowing the cloud agent to inspect exposed entities and provide a
-            # useful summary instead of repeating a rigid intent error.
-            can_fallback = (
-                desired_route == "local"
-                and str(shared_profile.get("routing_mode") or "hybrid") == "hybrid"
-                and (_assistant_is_read_only_query(text) or _assistant_is_weather_query(text))
-                and _assistant_local_query_needs_cloud(response_text, response_type, error_code)
-                and cloud_agent_id
-                and cloud_agent_id != local_agent_id
-            )
-            if can_fallback:
-                fallback_reason = error_code or "ambiguous_local_query"
-                selected_agent_id = cloud_agent_id
-                cloud_payload = {"text": text, "language": language, "agent_id": cloud_agent_id}
-                if conversation_id:
-                    cloud_payload["conversation_id"] = conversation_id
+            if desired_route == "cloud" and not cloud_agent_id:
+                response_text = (
+                    "The OpenAI conversation agent is not configured. "
+                    "Save it under Shared Routing and Personality, then try again."
+                )
+                response_type = "error"
+                error_code = "cloud_agent_not_configured"
+                route = "cloud_unavailable"
+            else:
+                conversation_payload = {"text": text, "language": language, "agent_id": selected_agent_id}
+                if desired_route == "cloud" and conversation_id:
+                    conversation_payload["conversation_id"] = conversation_id
                 raw = _ha_json_request(
                     ha_url,
                     token,
                     "POST",
                     "/api/conversation/process",
-                    cloud_payload,
+                    conversation_payload,
                     timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
                 )
                 response_text, response_type, returned_conversation_id, continue_conversation, error_code = _assistant_extract_response(raw)
-                route = "cloud_fallback_read_only"
-            if not response_text:
-                response_text = "Home Assistant completed the request but did not return a spoken response."
+                route = "home_assistant_local" if desired_route == "local" else "cloud_conversation"
+
+                # Read-only questions and explicitly named automation/script/scene
+                # actions may use the configured OpenAI agent after local Assist
+                # fails. Other device-control commands remain local-only so an LLM
+                # cannot guess a different target.
+                fallback_kind = ""
+                if (
+                    desired_route == "local"
+                    and str(shared_profile.get("routing_mode") or "hybrid") == "hybrid"
+                    and _assistant_local_query_needs_cloud(response_text, response_type, error_code)
+                ):
+                    if _assistant_is_weather_query(text) or _assistant_is_read_only_query(text):
+                        fallback_kind = "read_only"
+                    elif _assistant_is_explicit_automation_action(text):
+                        fallback_kind = "automation"
+                if fallback_kind:
+                    fallback_reason = error_code or f"unresolved_local_{fallback_kind}"
+                    if cloud_agent_id and cloud_agent_id != local_agent_id:
+                        selected_agent_id = cloud_agent_id
+                        cloud_payload = {"text": text, "language": language, "agent_id": cloud_agent_id}
+                        if conversation_id:
+                            cloud_payload["conversation_id"] = conversation_id
+                        raw = _ha_json_request(
+                            ha_url,
+                            token,
+                            "POST",
+                            "/api/conversation/process",
+                            cloud_payload,
+                            timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
+                        )
+                        response_text, response_type, returned_conversation_id, continue_conversation, error_code = _assistant_extract_response(raw)
+                        route = "cloud_fallback_automation" if fallback_kind == "automation" else "cloud_fallback_read_only"
+                    else:
+                        response_text = (
+                            "The local Home Assistant agent could not match that request, and the OpenAI "
+                            "conversation agent is not configured for fallback."
+                        )
+                        response_type = "error"
+                        error_code = "cloud_agent_not_configured"
+                        route = "cloud_unavailable"
+                if not response_text:
+                    response_text = "Home Assistant completed the request but did not return a spoken response."
         conversation_ms = int((time.monotonic() - conversation_started) * 1000)
 
         if config.get("continueConversation") and _assistant_is_cloud_route(route):
