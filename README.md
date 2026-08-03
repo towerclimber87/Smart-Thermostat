@@ -84,6 +84,24 @@ The native panel displays the AI-core animation and sends typed commands to Home
 
 The assistant reuses the Home Assistant URL and long-lived token already stored in the thermostat configuration. Replies can be sent to the Sonos/media player selected on the Audio page or to a separate player selected under **Backup Config → JARVIS Voice**. The stored-token assistant endpoint accepts commands only from the thermostat itself unless the temporary Backup Config portal is open.
 
+### Misspelling-resistant weather fallback
+
+Version 12.80 ensures that a weather question always reaches the OpenAI conversation agent when Home Assistant cannot supply a usable local forecast. The router recognizes common speech-to-text variants such as `forecast`, `forcast`, `forcat`, and `forcest`. Because the exact Home Assistant weather handler runs first, a valid local forecast remains free and fast; only an unresolved weather request uses OpenAI and its enabled web-search tool.
+
+A request such as:
+
+```text
+What is the weather forcat for tomorrow?
+```
+
+now follows this order:
+
+1. try the configured Home Assistant `weather.*` entity;
+2. if no usable forecast is returned, send the original request to `conversation.openai_conversation`;
+3. speak the final answer through local Piper.
+
+The same cloud fallback is also enforced when Home Assistant returns `no_valid_targets` for a read-only weather request. Device-control commands remain local-only and never use this fallback.
+
 ### Direct-title spoken responses
 
 Version 12.70 removes the extra spoken ceremony before answers. When the shared title is enabled, replies begin directly with the configured form of address:

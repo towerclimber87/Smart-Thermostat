@@ -8183,6 +8183,25 @@ def _assistant_resolve_local_tts_entity(ha_url: str, token: str, configured: str
     return ""
 
 
+def _assistant_is_weather_query(text: str) -> bool:
+    """Recognize weather questions even when "forecast" is misspelled.
+
+    The exact Home Assistant weather handler runs before the hybrid router. If
+    that handler cannot produce a usable answer, any remaining weather query
+    should go to the configured cloud agent rather than being interpreted as a
+    Home Assistant device name.
+    """
+    normalized = _assistant_normalize_phrase(text)
+    if not normalized:
+        return False
+    padded = f" {normalized} "
+    if " weather " in padded:
+        return True
+    # Covers forecast, forcast, forcat, forcest, forecasting, and similar
+    # speech-to-text variants without broadly matching unrelated words.
+    return bool(re.search(r"\bfor(?:e)?c(?:a|e)?s?t(?:ing|ed)?\b", normalized))
+
+
 def _assistant_route_command(text: str, profile: dict, *, has_cloud_conversation: bool = False) -> str:
     """Choose the local Home Assistant agent or the configured cloud agent.
 
@@ -8202,6 +8221,12 @@ def _assistant_route_command(text: str, profile: dict, *, has_cloud_conversation
     padded = f" {normalized} "
     if not normalized:
         return "local"
+
+    # Home Assistant weather was already attempted before this router. If it
+    # could not answer, route every remaining weather question to OpenAI. This
+    # also catches speech-to-text misspellings such as "forcat".
+    if _assistant_is_weather_query(text):
+        return "cloud"
 
     cloud_markers = (
         " ask openai ", " use openai ", " search the web ", " look online ",
@@ -9887,7 +9912,7 @@ def _assistant_process_payload(payload: dict) -> dict:
             can_fallback = (
                 desired_route == "local"
                 and str(shared_profile.get("routing_mode") or "hybrid") == "hybrid"
-                and _assistant_is_read_only_query(text)
+                and (_assistant_is_read_only_query(text) or _assistant_is_weather_query(text))
                 and _assistant_local_query_needs_cloud(response_text, response_type, error_code)
                 and cloud_agent_id
                 and cloud_agent_id != local_agent_id
