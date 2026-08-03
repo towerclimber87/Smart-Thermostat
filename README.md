@@ -86,6 +86,16 @@ The assistant reuses the Home Assistant URL and long-lived token already stored 
 
 ### Cost-aware hybrid routing
 
+Version 12.60 makes hybrid mode conversational without turning every home request into a paid AI call:
+
+- current weather and forecasts are read directly from the configured Home Assistant `weather.*` entity through `weather.get_forecasts`;
+- common multi-entity questions such as “Is the garage open?” and “What lights are on?” are summarized locally from exact Home Assistant states;
+- a read-only local question can fall through to the OpenAI agent when built-in Assist returns an unresolved or ambiguous-target error;
+- device-control commands never fall through to OpenAI, so a vague command cannot be reinterpreted against a different device;
+- the test result includes `fallbackReason` when a read-only question uses the cloud fallback.
+
+If the Home Assistant weather entity cannot supply a forecast, hybrid routing sends the question to the OpenAI conversation agent. To permit a real internet lookup, enable **Web search** and **Include home location** in the OpenAI Conversation subentry. Web search is a paid OpenAI tool, so use a small search-context setting when cost matters.
+
 Version 12.50 fixes local Piper playback from JARVIS test automations and thermostat requests. Local TTS now uses the language and voice already configured on the Home Assistant TTS entity instead of forcing the panel's generic language value. It first requests a Sonos-compatible announcement URL with provider defaults and then falls back to the same minimal `tts.speak` payload verified in Home Assistant Developer Tools.
 
 Version 12.40 adds one shared routing and personality profile to the same Home Assistant-owned record used by JARVIS knowledge:
@@ -100,8 +110,9 @@ Every updated IHA panel reads the same profile. The default behavior is:
   - saved multi-room temperature questions are answered directly from the shared IHA knowledge store;
   - obvious device, area, climate, media, timer, scene, script, and status requests go directly to `conversation.home_assistant`;
   - explanations, writing, summaries, comparisons, general knowledge, and other broad requests go directly to the configured OpenAI conversation agent;
-  - a local request falls through to OpenAI only when Home Assistant explicitly returns `no_intent_match`;
-  - missing or ambiguous devices stay local errors so the cloud agent cannot guess a different target.
+  - common read-only home summaries and weather forecasts are answered locally from exact Home Assistant data;
+  - unresolved read-only questions may fall through to OpenAI for a more natural summary;
+  - device-control commands and ambiguous actions stay local errors so the cloud agent cannot guess a different target.
 - **Speech cost policy: Piper/local for every answer**
   - Piper speaks both local and OpenAI-generated answers;
   - OpenAI TTS is not called during normal operation;
@@ -112,7 +123,7 @@ Every updated IHA panel reads the same profile. The default behavior is:
   - the old goofy spoken prefixes and screen jokes are removed;
   - acknowledgements are brief, professional, and varied.
 
-The router decides the destination before making the conversation request. A clear home-control command therefore does not wait for an OpenAI probe. The only two-step case is a locally routed phrase that Home Assistant genuinely does not recognize and returns as `no_intent_match`.
+The router decides the destination before making the conversation request. A clear home-control command therefore does not wait for an OpenAI probe. A two-step request occurs only for a read-only question that local Assist cannot resolve; the cloud agent then receives the question and can summarize the relevant exposed entities.
 
 Recommended shared settings under **Backup Config → JARVIS Voice → Shared Routing & Personality**:
 
@@ -131,11 +142,13 @@ The **Run Test** result now shows the selected conversation route and speech pat
 
 ```text
 Turn on the living room light.
+Is the garage open?
+What is tomorrow's weather forecast?
 Tell me the outside temperature and then all inside temperatures.
 Explain how a heat pump works.
 ```
 
-The first should show `home_assistant_local`, the second `iha_shared_temperature`, and the third `cloud_conversation`. With the lowest-cost speech policy, all three should show the local speech path.
+The light command should show `home_assistant_local`. Garage and light-status summaries should show `home_assistant_status_summary`. A Home Assistant forecast should show `home_assistant_weather`; if no usable local forecast exists, it should show a cloud route. The saved temperature request should show `iha_shared_temperature`, and the general explanation should show `cloud_conversation`. With the lowest-cost speech policy, every answer should still show the local Piper speech path.
 
 ### Install Piper for free local speech
 
@@ -157,7 +170,7 @@ Piper's available voice names and quality depend on the voice model installed in
 The thermostat adds a restrained spoken acknowledgement and the shared form of address to both local and cloud responses. For broad OpenAI answers to stay in character as well, configure the OpenAI conversation agent's prompt in Home Assistant with wording similar to:
 
 ```text
-You are JARVIS, an original refined household computer assistant. Address the user as “sir” when it sounds natural. Be concise, composed, precise, and helpful. Use a polished British manner of speaking, but do not imitate any actor or copyrighted character. Use dry humor only rarely and never become goofy, theatrical, overly chatty, or excessively enthusiastic. For home facts and device state, do not invent values; use only information supplied by Home Assistant and say clearly when information is unavailable.
+You are JARVIS, an original refined household computer assistant. Address the user as “sir” when it sounds natural. Be concise, composed, precise, and helpful. Use a polished British manner of speaking, but do not imitate any actor or copyrighted character. Use dry humor only rarely and never become goofy, theatrical, overly chatty, or excessively enthusiastic. For home facts and device state, do not invent values; use only information supplied by Home Assistant and say clearly when information is unavailable. When a read-only request matches several exposed entities, inspect all relevant matches and summarize each state instead of asking the user to choose one. For current external information such as weather, use web search when it is enabled and Home Assistant does not provide the answer.
 ```
 
 This prompt controls the content and manner of the OpenAI answer. Piper controls how the final text sounds when spoken.

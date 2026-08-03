@@ -2941,7 +2941,7 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
       <div class="checks"><label class="check"><input id="va-enabled" type="checkbox" {assistant_enabled}>Assistant enabled</label><label class="check"><input id="va-speak" type="checkbox" {assistant_speak}>Speak on Sonos</label><label class="check"><input id="va-fun" type="checkbox" {assistant_fun}>Show processing status phrases</label><label class="check"><input id="va-playful" type="checkbox" {assistant_playful}>Use brief JARVIS acknowledgements</label><label class="check"><input id="va-continue" type="checkbox" {assistant_continue}>Continue cloud conversation</label><label class="check"><input id="va-show-text" type="checkbox" {assistant_show_text}>Show response text</label></div>
       <div class="settings-section voice-provider">
         <h3>Shared Routing &amp; Personality</h3>
-        <p class="voice-note">Saved once in Home Assistant and used by every updated IHA panel. The router selects the destination before making a request, so clear home commands do not wait for an OpenAI probe. Only a true Home Assistant <code>no_intent_match</code> can fall through to OpenAI.</p>
+        <p class="voice-note">Saved once in Home Assistant and used by every updated IHA panel. Clear home commands go directly to Home Assistant. Read-only questions that local Assist cannot resolve may fall through to OpenAI, but device-control commands never do.</p>
         <div class="form-grid">
           <div class="field"><label>Conversation routing</label><select id="va-routing-mode"><option value="hybrid">Hybrid — Home Assistant first for home commands</option><option value="local_only">Home Assistant only</option><option value="cloud_only">OpenAI agent only</option></select></div>
           <div class="field"><label>Local Home Assistant agent</label><input id="va-local-agent" type="text" placeholder="conversation.home_assistant"><span class="hint">The built-in Home Assistant agent handles devices, areas, timers, and supported local intents.</span></div>
@@ -8186,8 +8186,8 @@ def _assistant_route_command(text: str, profile: dict, *, has_cloud_conversation
     """Choose the local Home Assistant agent or the configured cloud agent.
 
     Clear household commands are routed directly, so they do not pay the cost
-    or latency of probing OpenAI first. Only a local no-intent-match may fall
-    through to the cloud agent.
+    or latency of probing OpenAI first. A failed read-only query may fall through
+    to the cloud agent, but a device-control command never does.
     """
     settings = _assistant_normalize_shared_profile(profile)
     mode = str(settings.get("routing_mode") or "hybrid")
@@ -8207,6 +8207,11 @@ def _assistant_route_command(text: str, profile: dict, *, has_cloud_conversation
         " explain ", " summarize ", " write ", " draft ", " brainstorm ",
         " who is ", " who was ", " what year ", " history of ", " tell me about ",
         " compare ", " recommend ", " recipe ", " calculate ", " translate ",
+        # Weather is answered from Home Assistant before this router runs. If
+        # that local forecast source is unavailable, these phrases should use
+        # the cloud agent instead of being mistaken for a device name.
+        " forecast ", " forcast ", " weather tomorrow ", " weather tonight ",
+        " will it rain ", " will it snow ", " going to rain ", " going to snow ",
     )
     if any(marker in padded for marker in cloud_markers):
         return "cloud"
@@ -8232,7 +8237,7 @@ def _assistant_route_command(text: str, profile: dict, *, has_cloud_conversation
         " what is the temperature", " what s the temperature", " how warm", " how cold",
         " is the ", " are the ", " which lights", " status of", " state of",
         " what is on", " what s on", " what is open", " what s open",
-        " current temperature", " outside temperature", " forecast", " weather",
+        " current temperature", " outside temperature",
         " how much time", " timer", " what time", " date today",
     )
     if any(marker in padded for marker in local_questions) and any(term in padded for term in home_terms):
@@ -8251,7 +8256,7 @@ def _assistant_route_command(text: str, profile: dict, *, has_cloud_conversation
 
 def _assistant_is_cloud_route(route: str) -> bool:
     value = str(route or "").lower()
-    return value.startswith("openai") or value in {"cloud_conversation", "cloud_fallback"}
+    return value.startswith("openai") or value.startswith("cloud_")
 
 
 def _assistant_playful_spoken_text(
@@ -8702,6 +8707,440 @@ def _assistant_format_temperature(value: object) -> str:
     rounded = round(number, 1)
     return str(int(rounded)) if float(rounded).is_integer() else f"{rounded:.1f}"
 
+
+
+def _assistant_is_read_only_query(text: str) -> bool:
+    """Return True only when a phrase is asking for information, not an action.
+
+    This guard is used before allowing a failed built-in Assist query to fall
+    through to the cloud agent. Commands never use this path, which prevents a
+    vague device-control request from being reinterpreted by an LLM.
+    """
+    normalized = _assistant_normalize_phrase(text)
+    if not normalized:
+        return False
+    padded = f" {normalized} "
+    action_prefixes = (
+        "turn ", "switch ", "open ", "close ", "lock ", "unlock ",
+        "set ", "raise ", "lower ", "increase ", "decrease ", "dim ",
+        "brighten ", "start ", "stop ", "pause ", "resume ", "play ",
+        "arm ", "disarm ", "activate ", "run ", "cancel ", "toggle ",
+    )
+    polite_action_prefixes = tuple(f"please {prefix}" for prefix in action_prefixes)
+    if normalized.startswith(action_prefixes) or normalized.startswith(polite_action_prefixes):
+        return False
+    if any(marker in padded for marker in (" please turn ", " please open ", " please close ", " please set ")):
+        return False
+    question_prefixes = (
+        "is ", "are ", "was ", "were ", "what ", "which ", "who ",
+        "when ", "where ", "why ", "how ", "do i ", "does ", "did ",
+        "has ", "have ", "can you tell me ", "tell me ", "check ",
+    )
+    if normalized.startswith(question_prefixes):
+        return True
+    return any(
+        marker in padded
+        for marker in (
+            " status ", " currently ", " right now ", " on or off ",
+            " open or closed ", " locked or unlocked ", " forecast ",
+            " forcast ", " weather ", " temperature ",
+        )
+    )
+
+
+def _assistant_natural_join(values: list[str]) -> str:
+    cleaned = [" ".join(str(value or "").split()) for value in values if str(value or "").strip()]
+    if not cleaned:
+        return ""
+    if len(cleaned) == 1:
+        return cleaned[0]
+    if len(cleaned) == 2:
+        return f"{cleaned[0]} and {cleaned[1]}"
+    return f"{', '.join(cleaned[:-1])}, and {cleaned[-1]}"
+
+
+def _assistant_spoken_entity_name(item: dict) -> str:
+    attrs = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
+    entity_id = str(item.get("entity_id") or "").strip()
+    name = str(attrs.get("friendly_name") or entity_id.split(".", 1)[-1].replace("_", " ")).strip()
+    # Common integration suffixes make spoken summaries needlessly robotic.
+    name = re.sub(r"\s+(?:basic|contact sensor|sensor)$", "", name, flags=re.IGNORECASE).strip()
+    return name or entity_id
+
+
+def _assistant_home_status_response(text: str, ha_url: str, token: str) -> tuple[str, str, str] | None:
+    """Summarize common multi-entity home questions locally and deterministically.
+
+    The built-in Home Assistant agent is intentionally strict and can ask the
+    user to choose one target. For read-only questions such as "is the garage
+    open?", it is more useful and still safe to inspect every matching state and
+    summarize the result. No LLM or paid call is involved.
+    """
+    if not _assistant_is_read_only_query(text):
+        return None
+    normalized = _assistant_normalize_phrase(text)
+    padded = f" {normalized} "
+    states = _ha_all_states_cached(ha_url, token)
+
+    asks_lights = "light" in normalized and any(
+        marker in padded
+        for marker in (" what ", " which ", " are ", " is ", " on ", " status ", " currently ")
+    )
+    if asks_lights:
+        lights_on: list[str] = []
+        for item in states:
+            if not isinstance(item, dict) or not str(item.get("entity_id") or "").startswith("light."):
+                continue
+            if str(item.get("state") or "").lower() == "on":
+                lights_on.append(_assistant_spoken_entity_name(item))
+        lights_on = sorted(set(lights_on), key=str.lower)
+        if not lights_on:
+            return "All monitored lights are off.", "query_answer", "home_assistant_status_summary"
+        if len(lights_on) <= 7:
+            return (
+                f"{len(lights_on)} {'light is' if len(lights_on) == 1 else 'lights are'} on: "
+                f"{_assistant_natural_join(lights_on)}.",
+                "query_answer",
+                "home_assistant_status_summary",
+            )
+        shown = lights_on[:6]
+        remaining = len(lights_on) - len(shown)
+        return (
+            f"{len(lights_on)} lights are on. They include {_assistant_natural_join(shown)}, "
+            f"plus {remaining} {'other' if remaining == 1 else 'others'}.",
+            "query_answer",
+            "home_assistant_status_summary",
+        )
+
+    asks_access = any(term in normalized for term in ("garage", "door", "gate", "entry")) and any(
+        marker in padded
+        for marker in (
+            " is ", " are ", " what ", " which ", " open ", " closed ",
+            " locked ", " unlocked ", " status ", " currently ",
+        )
+    )
+    if not asks_access:
+        return None
+
+    wants_garage = "garage" in normalized
+    access_items: list[tuple[str, str]] = []
+    for item in states:
+        if not isinstance(item, dict):
+            continue
+        entity_id = str(item.get("entity_id") or "").strip()
+        domain = entity_id.split(".", 1)[0] if "." in entity_id else ""
+        if domain not in {"cover", "binary_sensor", "lock"}:
+            continue
+        attrs = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
+        device_class = str(attrs.get("device_class") or "").lower().replace("-", "_")
+        name = _assistant_spoken_entity_name(item)
+        searchable = _assistant_normalize_phrase(f"{name} {entity_id} {device_class}")
+
+        if wants_garage:
+            relevant = "garage" in searchable or device_class in {"garage", "garage_door"}
+        else:
+            relevant = (
+                device_class in {"door", "garage", "garage_door", "gate", "opening"}
+                or " door " in f" {searchable} "
+                or " gate " in f" {searchable} "
+                or " entry " in f" {searchable} "
+            )
+        if not relevant:
+            continue
+
+        state = str(item.get("state") or "unknown").strip().lower()
+        if domain == "cover":
+            if state in {"open", "opening"}:
+                spoken_state = "open"
+            elif state in {"closed", "closing"}:
+                spoken_state = "closed"
+            elif state in {"unavailable", "unknown", ""}:
+                spoken_state = "unavailable"
+            else:
+                spoken_state = state.replace("_", " ")
+        elif domain == "binary_sensor":
+            if state == "on":
+                spoken_state = "open"
+            elif state == "off":
+                spoken_state = "closed"
+            elif state in {"unavailable", "unknown", ""}:
+                spoken_state = "unavailable"
+            else:
+                spoken_state = state.replace("_", " ")
+        else:
+            if state in {"locked", "locking"}:
+                spoken_state = "locked"
+            elif state in {"unlocked", "unlocking", "jammed", "open"}:
+                spoken_state = "unlocked" if state != "open" else "open"
+            elif state in {"unavailable", "unknown", ""}:
+                spoken_state = "unavailable"
+            else:
+                spoken_state = state.replace("_", " ")
+        access_items.append((name, spoken_state))
+
+    # Deduplicate aliases that point to the same friendly name/state pair.
+    unique: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for name, state in sorted(access_items, key=lambda pair: pair[0].lower()):
+        key = (name.lower(), state)
+        if key not in seen:
+            seen.add(key)
+            unique.append((name, state))
+    access_items = unique
+    if not access_items:
+        return None
+
+    states_present = {state for _, state in access_items}
+    subject = "garage entries" if wants_garage else "doors and entries"
+    if len(states_present) == 1:
+        only_state = next(iter(states_present))
+        names = _assistant_natural_join([name for name, _ in access_items])
+        if len(access_items) == 1:
+            return f"The {names} is {only_state}.", "query_answer", "home_assistant_status_summary"
+        return (
+            f"All {len(access_items)} monitored {subject} are {only_state}: {names}.",
+            "query_answer",
+            "home_assistant_status_summary",
+        )
+
+    details = [f"the {name} is {state}" for name, state in access_items]
+    return (
+        f"{_assistant_natural_join(details).capitalize()}.",
+        "query_answer",
+        "home_assistant_status_summary",
+    )
+
+
+def _assistant_selected_weather_entity_id(ha_url: str, token: str) -> str:
+    record = _read_panel_config_record()
+    config = record.get("config") if isinstance(record, dict) else {}
+    integrations = config.get("integrations") if isinstance(config, dict) else {}
+    ha = integrations.get("homeAssistant") if isinstance(integrations, dict) else {}
+    ha = ha if isinstance(ha, dict) else {}
+    for key in ("weatherEntity", "outdoorTempEntity", "outsideTempEntity"):
+        value = ha.get(key)
+        if isinstance(value, dict):
+            entity_id = str(value.get("entityId") or value.get("entity_id") or "").strip()
+        else:
+            entity_id = str(value or "").strip()
+        if entity_id.startswith("weather."):
+            return entity_id
+    states = _ha_all_states_cached(ha_url, token)
+    available = [
+        str(item.get("entity_id") or "").strip()
+        for item in states
+        if isinstance(item, dict)
+        and str(item.get("entity_id") or "").startswith("weather.")
+        and str(item.get("state") or "").lower() not in {"unavailable", "unknown", ""}
+    ]
+    if "weather.home" in available:
+        return "weather.home"
+    return sorted(available)[0] if available else ""
+
+
+def _assistant_weather_condition(value: object) -> str:
+    raw = str(value or "").strip().lower().replace("_", " ")
+    mapping = {
+        "clear night": "clear",
+        "partlycloudy": "partly cloudy",
+        "rainy": "rainy",
+        "pouring": "heavy rain",
+        "lightning rainy": "thunderstorms with rain",
+        "lightning": "thunderstorms",
+        "snowy rainy": "a wintry mix",
+        "exceptional": "unusual conditions",
+    }
+    return mapping.get(raw, raw.replace("partlycloudy", "partly cloudy")) or "unavailable conditions"
+
+
+def _assistant_forecast_datetime(value: object) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _assistant_weather_forecast_data(
+    ha_url: str,
+    token: str,
+    entity_id: str,
+    forecast_type: str,
+) -> list[dict]:
+    raw = _ha_json_request(
+        ha_url,
+        token,
+        "POST",
+        "/api/services/weather/get_forecasts?return_response",
+        {"entity_id": entity_id, "type": forecast_type},
+        timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
+    )
+    if not isinstance(raw, dict):
+        return []
+    response = raw.get("service_response") if isinstance(raw.get("service_response"), dict) else raw
+    entity_data = response.get(entity_id) if isinstance(response, dict) else None
+    if not isinstance(entity_data, dict) and isinstance(response, dict):
+        # Some wrappers use the only returned weather entity even if Home
+        # Assistant normalized or redirected the requested entity ID.
+        for value in response.values():
+            if isinstance(value, dict) and isinstance(value.get("forecast"), list):
+                entity_data = value
+                break
+    forecast = entity_data.get("forecast") if isinstance(entity_data, dict) else None
+    return [item for item in forecast if isinstance(item, dict)] if isinstance(forecast, list) else []
+
+
+def _assistant_weather_response(text: str, ha_url: str, token: str) -> tuple[str, str, str] | None:
+    """Answer current-weather and forecast questions from Home Assistant first.
+
+    This is faster and free compared with a web search. If Home Assistant has no
+    usable weather entity or forecast, returning None lets hybrid routing send
+    the informational request to the configured cloud agent instead.
+    """
+    normalized = _assistant_normalize_phrase(text)
+    padded = f" {normalized} "
+    weather_terms = (
+        " weather ", " forecast ", " forcast ", " rain ", " raining ",
+        " snow ", " temperature outside ", " outside temperature ",
+    )
+    if not any(term in padded for term in weather_terms):
+        return None
+    entity_id = _assistant_selected_weather_entity_id(ha_url, token)
+    if not entity_id:
+        return None
+
+    asks_forecast = any(
+        term in padded
+        for term in (
+            " forecast ", " forcast ", " tomorrow ", " tonight ", " later ",
+            " will it ", " going to rain ", " going to snow ", " this week ",
+        )
+    )
+    if not asks_forecast:
+        try:
+            item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
+        except Exception:
+            return None
+        if not isinstance(item, dict):
+            return None
+        attrs = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
+        state = str(item.get("state") or "").strip().lower()
+        if state in {"", "unknown", "unavailable"}:
+            return None
+        condition = _assistant_weather_condition(state)
+        temperature = _assistant_format_temperature(attrs.get("temperature"))
+        humidity = attrs.get("humidity")
+        pieces = []
+        if temperature:
+            pieces.append(f"It is currently {temperature} degrees outside")
+            if condition:
+                pieces[-1] += f" with {condition} conditions"
+        else:
+            pieces.append(f"Current conditions are {condition}")
+        try:
+            humidity_number = int(round(float(humidity)))
+        except (TypeError, ValueError):
+            humidity_number = -1
+        if 0 <= humidity_number <= 100 and any(term in normalized for term in ("humidity", "weather", "conditions")):
+            pieces.append(f"humidity is {humidity_number} percent")
+        return f"{'. '.join(pieces)}.", "query_answer", "home_assistant_weather"
+
+    now_local = datetime.now().astimezone()
+    if "tomorrow" in normalized:
+        target_date = now_local.date() + timedelta(days=1)
+        day_label = "Tomorrow"
+    else:
+        target_date = now_local.date()
+        day_label = "Today"
+
+    forecasts: list[dict] = []
+    used_type = "daily"
+    for forecast_type in ("daily", "twice_daily", "hourly"):
+        try:
+            forecasts = _assistant_weather_forecast_data(ha_url, token, entity_id, forecast_type)
+        except Exception:
+            forecasts = []
+        if forecasts:
+            used_type = forecast_type
+            break
+    if not forecasts:
+        return None
+
+    matching: list[dict] = []
+    for item in forecasts:
+        when = _assistant_forecast_datetime(item.get("datetime"))
+        if when is None:
+            continue
+        try:
+            item_date = when.astimezone(now_local.tzinfo).date() if when.tzinfo else when.date()
+        except Exception:
+            item_date = when.date()
+        if item_date == target_date:
+            matching.append(item)
+    if not matching:
+        # Use the first future period rather than fabricating a date.
+        matching = forecasts[:1]
+        first_when = _assistant_forecast_datetime(matching[0].get("datetime")) if matching else None
+        if first_when is not None:
+            try:
+                actual_date = first_when.astimezone(now_local.tzinfo).date() if first_when.tzinfo else first_when.date()
+                day_label = "Tomorrow" if actual_date == now_local.date() + timedelta(days=1) else actual_date.strftime("%A")
+            except Exception:
+                pass
+    if not matching:
+        return None
+
+    def numeric_values(key: str) -> list[float]:
+        values: list[float] = []
+        for item in matching:
+            try:
+                values.append(float(item.get(key)))
+            except (TypeError, ValueError):
+                continue
+        return values
+
+    conditions = [_assistant_weather_condition(item.get("condition")) for item in matching if item.get("condition")]
+    condition = max(set(conditions), key=conditions.count) if conditions else "unavailable conditions"
+    temperatures = numeric_values("temperature")
+    lows = numeric_values("templow")
+    if used_type in {"hourly", "twice_daily"}:
+        high = max(temperatures) if temperatures else None
+        low = min(temperatures + lows) if temperatures or lows else None
+    else:
+        high = temperatures[0] if temperatures else None
+        low = lows[0] if lows else None
+    precipitation = numeric_values("precipitation_probability")
+    rain_chance = max(precipitation) if precipitation else None
+
+    response = f"{day_label}'s forecast is {condition}"
+    high_text = _assistant_format_temperature(high)
+    low_text = _assistant_format_temperature(low)
+    if high_text and low_text and high_text != low_text:
+        response += f", with a high of {high_text} and a low of {low_text} degrees"
+    elif high_text:
+        response += f", near {high_text} degrees"
+    if rain_chance is not None:
+        response += f". The chance of precipitation is {int(round(rain_chance))} percent"
+    return f"{response}.", "query_answer", "home_assistant_weather"
+
+
+def _assistant_local_query_needs_cloud(response_text: str, response_type: str, error_code: str) -> bool:
+    if str(error_code or "").strip().lower() in {
+        "no_intent_match", "no_valid_targets", "failed_to_handle", "unknown"
+    }:
+        return True
+    if str(response_type or "").strip().lower() == "error":
+        return True
+    normalized = _assistant_normalize_phrase(response_text)
+    return any(
+        phrase in normalized
+        for phrase in (
+            "more than one", "multiple entries", "multiple devices", "which one",
+            "not aware of any device", "could not find", "couldn t find",
+        )
+    )
 
 def _assistant_local_fast_response(text: str) -> tuple[str, str, str] | None:
     """Answer a narrow set of read-only thermostat questions without an LLM.
@@ -9380,12 +9819,17 @@ def _assistant_process_payload(payload: dict) -> dict:
         if quick is None:
             quick = _assistant_shared_temperature_response(text, ha_url, token)
         if quick is None:
+            quick = _assistant_weather_response(text, ha_url, token)
+        if quick is None:
+            quick = _assistant_home_status_response(text, ha_url, token)
+        if quick is None:
             quick = _assistant_local_fast_response(text)
         route = "local_fast_path"
         selected_agent_id = local_agent_id
         returned_conversation_id = ""
         continue_conversation = False
         error_code = ""
+        fallback_reason = ""
         if quick:
             response_text, response_type, route = quick
         else:
@@ -9411,17 +9855,21 @@ def _assistant_process_payload(payload: dict) -> dict:
             response_text, response_type, returned_conversation_id, continue_conversation, error_code = _assistant_extract_response(raw)
             route = "home_assistant_local" if desired_route == "local" else "cloud_conversation"
 
-            # Only an actual no-intent-match is eligible for cloud fallback. A
-            # missing/ambiguous device remains a local error so OpenAI cannot
-            # guess or operate on a different target.
+            # Device-control commands never fall through to an LLM. Read-only
+            # questions may fall through when built-in Assist cannot resolve a
+            # target or asks the user to choose one. This preserves safety while
+            # allowing the cloud agent to inspect exposed entities and provide a
+            # useful summary instead of repeating a rigid intent error.
             can_fallback = (
                 desired_route == "local"
                 and str(shared_profile.get("routing_mode") or "hybrid") == "hybrid"
-                and error_code == "no_intent_match"
+                and _assistant_is_read_only_query(text)
+                and _assistant_local_query_needs_cloud(response_text, response_type, error_code)
                 and cloud_agent_id
                 and cloud_agent_id != local_agent_id
             )
             if can_fallback:
+                fallback_reason = error_code or "ambiguous_local_query"
                 selected_agent_id = cloud_agent_id
                 cloud_payload = {"text": text, "language": language, "agent_id": cloud_agent_id}
                 if conversation_id:
@@ -9435,7 +9883,7 @@ def _assistant_process_payload(payload: dict) -> dict:
                     timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
                 )
                 response_text, response_type, returned_conversation_id, continue_conversation, error_code = _assistant_extract_response(raw)
-                route = "cloud_fallback"
+                route = "cloud_fallback_read_only"
             if not response_text:
                 response_text = "Home Assistant completed the request but did not return a spoken response."
         conversation_ms = int((time.monotonic() - conversation_started) * 1000)
@@ -9556,6 +10004,7 @@ def _assistant_process_payload(payload: dict) -> dict:
             "spokenResponse": spoken_response,
             "responseType": response_type,
             "responseErrorCode": error_code,
+            "fallbackReason": fallback_reason,
             "route": route,
             "routingMode": shared_profile.get("routing_mode"),
             "conversationId": returned_conversation_id,
