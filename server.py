@@ -9978,9 +9978,10 @@ def _assistant_process_payload(payload: dict) -> dict:
             request_id = _ASSISTANT_REQUEST_SEQ
             previous_conversation_id = str(_ASSISTANT_STATE.get("conversationId") or "").strip()
         shared_profile = _assistant_get_shared_profile(ha_url, token)
+        announcement_only = _assistant_bool(payload.get("announcementOnly"), False)
         speak = _assistant_bool(payload.get("speak"), config.get("speak", True))
-        fun_mode = _assistant_bool(payload.get("funMode"), config.get("funMode", False))
-        personality_enabled = _assistant_bool(payload.get("playfulReplies"), config.get("playfulReplies", True))
+        fun_mode = False if announcement_only else _assistant_bool(payload.get("funMode"), config.get("funMode", False))
+        personality_enabled = False if announcement_only else _assistant_bool(payload.get("playfulReplies"), config.get("playfulReplies", True))
         language = str(payload.get("language") or config.get("language") or "en-US").strip().replace("_", "-")[:16] or "en-US"
         if language.lower() == "en":
             language = "en-US"
@@ -10034,105 +10035,114 @@ def _assistant_process_payload(payload: dict) -> dict:
         )
 
         conversation_started = time.monotonic()
-        quick = _assistant_learning_command(text, ha_url, token)
-        if quick is None:
-            quick = _assistant_local_automation_response(text, ha_url, token)
-        if quick is None:
-            quick = _assistant_shared_temperature_response(text, ha_url, token)
-        if quick is None:
-            quick = _assistant_weather_response(text, ha_url, token)
-        if quick is None:
-            quick = _assistant_home_status_response(text, ha_url, token)
-        if quick is None:
-            quick = _assistant_local_fast_response(text)
-        route = "local_fast_path"
-        selected_agent_id = local_agent_id
+        route = "jarvis_announcement" if announcement_only else "local_fast_path"
+        selected_agent_id = "announcement.direct" if announcement_only else local_agent_id
         returned_conversation_id = ""
         continue_conversation = False
         error_code = ""
         fallback_reason = ""
-        if quick:
-            response_text, response_type, route = quick
+        if announcement_only:
+            # Automation announcements are already complete spoken copy. Do not
+            # send them through Home Assistant Assist or OpenAI, and do not add
+            # personality text that would change the supplied message.
+            response_text = text
+            response_type = "announcement"
         else:
-            desired_route = _assistant_route_command(
-                text,
-                shared_profile,
-                has_cloud_conversation=bool(conversation_id),
-            )
-            selected_agent_id = local_agent_id if desired_route == "local" else cloud_agent_id
-            if desired_route == "cloud" and not cloud_agent_id:
-                response_text = (
-                    "The OpenAI conversation agent is not configured. "
-                    "Save it under Shared Routing and Personality, then try again."
-                )
-                response_type = "error"
-                error_code = "cloud_agent_not_configured"
-                route = "cloud_unavailable"
+            quick = _assistant_learning_command(text, ha_url, token)
+            if quick is None:
+                quick = _assistant_local_automation_response(text, ha_url, token)
+            if quick is None:
+                quick = _assistant_shared_temperature_response(text, ha_url, token)
+            if quick is None:
+                quick = _assistant_weather_response(text, ha_url, token)
+            if quick is None:
+                quick = _assistant_home_status_response(text, ha_url, token)
+            if quick is None:
+                quick = _assistant_local_fast_response(text)
+            if quick:
+                response_text, response_type, route = quick
             else:
-                conversation_payload = {"text": text, "language": language, "agent_id": selected_agent_id}
-                if desired_route == "cloud" and conversation_id:
-                    conversation_payload["conversation_id"] = conversation_id
-                raw = _ha_json_request(
-                    ha_url,
-                    token,
-                    "POST",
-                    "/api/conversation/process",
-                    conversation_payload,
-                    timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
+                desired_route = _assistant_route_command(
+                    text,
+                    shared_profile,
+                    has_cloud_conversation=bool(conversation_id),
                 )
-                response_text, response_type, returned_conversation_id, continue_conversation, error_code = _assistant_extract_response(raw)
-                route = "home_assistant_local" if desired_route == "local" else "cloud_conversation"
+                selected_agent_id = local_agent_id if desired_route == "local" else cloud_agent_id
+                if desired_route == "cloud" and not cloud_agent_id:
+                    response_text = (
+                        "The OpenAI conversation agent is not configured. "
+                        "Save it under Shared Routing and Personality, then try again."
+                    )
+                    response_type = "error"
+                    error_code = "cloud_agent_not_configured"
+                    route = "cloud_unavailable"
+                else:
+                    conversation_payload = {"text": text, "language": language, "agent_id": selected_agent_id}
+                    if desired_route == "cloud" and conversation_id:
+                        conversation_payload["conversation_id"] = conversation_id
+                    raw = _ha_json_request(
+                        ha_url,
+                        token,
+                        "POST",
+                        "/api/conversation/process",
+                        conversation_payload,
+                        timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
+                    )
+                    response_text, response_type, returned_conversation_id, continue_conversation, error_code = _assistant_extract_response(raw)
+                    route = "home_assistant_local" if desired_route == "local" else "cloud_conversation"
 
-                # Read-only questions and explicitly named automation/script/scene
-                # actions may use the configured OpenAI agent after local Assist
-                # fails. Other device-control commands remain local-only so an LLM
-                # cannot guess a different target.
-                fallback_kind = ""
-                if (
-                    desired_route == "local"
-                    and str(shared_profile.get("routing_mode") or "hybrid") == "hybrid"
-                    and _assistant_local_query_needs_cloud(response_text, response_type, error_code)
-                ):
-                    if _assistant_is_weather_query(text) or _assistant_is_read_only_query(text):
-                        fallback_kind = "read_only"
-                    elif _assistant_is_explicit_automation_action(text):
-                        fallback_kind = "automation"
-                if fallback_kind:
-                    fallback_reason = error_code or f"unresolved_local_{fallback_kind}"
-                    if cloud_agent_id and cloud_agent_id != local_agent_id:
-                        selected_agent_id = cloud_agent_id
-                        cloud_payload = {"text": text, "language": language, "agent_id": cloud_agent_id}
-                        if conversation_id:
-                            cloud_payload["conversation_id"] = conversation_id
-                        raw = _ha_json_request(
-                            ha_url,
-                            token,
-                            "POST",
-                            "/api/conversation/process",
-                            cloud_payload,
-                            timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
-                        )
-                        response_text, response_type, returned_conversation_id, continue_conversation, error_code = _assistant_extract_response(raw)
-                        route = "cloud_fallback_automation" if fallback_kind == "automation" else "cloud_fallback_read_only"
-                    else:
-                        response_text = (
-                            "The local Home Assistant agent could not match that request, and the OpenAI "
-                            "conversation agent is not configured for fallback."
-                        )
-                        response_type = "error"
-                        error_code = "cloud_agent_not_configured"
-                        route = "cloud_unavailable"
-                if not response_text:
-                    response_text = "Home Assistant completed the request but did not return a spoken response."
+                    # Read-only questions and explicitly named automation/script/scene
+                    # actions may use the configured OpenAI agent after local Assist
+                    # fails. Other device-control commands remain local-only so an LLM
+                    # cannot guess a different target.
+                    fallback_kind = ""
+                    if (
+                        desired_route == "local"
+                        and str(shared_profile.get("routing_mode") or "hybrid") == "hybrid"
+                        and _assistant_local_query_needs_cloud(response_text, response_type, error_code)
+                    ):
+                        if _assistant_is_weather_query(text) or _assistant_is_read_only_query(text):
+                            fallback_kind = "read_only"
+                        elif _assistant_is_explicit_automation_action(text):
+                            fallback_kind = "automation"
+                    if fallback_kind:
+                        fallback_reason = error_code or f"unresolved_local_{fallback_kind}"
+                        if cloud_agent_id and cloud_agent_id != local_agent_id:
+                            selected_agent_id = cloud_agent_id
+                            cloud_payload = {"text": text, "language": language, "agent_id": cloud_agent_id}
+                            if conversation_id:
+                                cloud_payload["conversation_id"] = conversation_id
+                            raw = _ha_json_request(
+                                ha_url,
+                                token,
+                                "POST",
+                                "/api/conversation/process",
+                                cloud_payload,
+                                timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
+                            )
+                            response_text, response_type, returned_conversation_id, continue_conversation, error_code = _assistant_extract_response(raw)
+                            route = "cloud_fallback_automation" if fallback_kind == "automation" else "cloud_fallback_read_only"
+                        else:
+                            response_text = (
+                                "The local Home Assistant agent could not match that request, and the OpenAI "
+                                "conversation agent is not configured for fallback."
+                            )
+                            response_type = "error"
+                            error_code = "cloud_agent_not_configured"
+                            route = "cloud_unavailable"
+                    if not response_text:
+                        response_text = "Home Assistant completed the request but did not return a spoken response."
         conversation_ms = int((time.monotonic() - conversation_started) * 1000)
 
-        if config.get("continueConversation") and _assistant_is_cloud_route(route):
+        if announcement_only:
+            saved_conversation_id = previous_conversation_id
+        elif config.get("continueConversation") and _assistant_is_cloud_route(route):
             saved_conversation_id = returned_conversation_id
         elif config.get("continueConversation") and not new_conversation:
             saved_conversation_id = previous_conversation_id
         else:
             saved_conversation_id = ""
-        spoken_response = _assistant_playful_spoken_text(
+        spoken_response = response_text if announcement_only else _assistant_playful_spoken_text(
             response_text,
             request_id,
             personality_enabled,

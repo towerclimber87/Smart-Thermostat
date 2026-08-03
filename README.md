@@ -86,6 +86,13 @@ The assistant reuses the Home Assistant URL and long-lived token already stored 
 
 ### Local automation execution and controlled OpenAI fallback
 
+Version 13.10 adds the missing Home Assistant automation announcement service:
+
+- `iha.jarvis_announcement` is now registered by the IHA custom integration.
+- Automation messages bypass Home Assistant Assist and OpenAI, so the supplied text is spoken exactly as written.
+- Announcements still use the thermostat's configured TTS policy, Sonos announcement playback, screen animation, and optional media-player override.
+- Running an announcement does not replace or reset the saved JARVIS conversation.
+
 Version 13.00 fixes JARVIS requests started from Home Assistant automations and adds a reliable local-first path for running household automations:
 
 - explicit requests such as “Run the Welcome Home automation,” “Trigger the bedtime routine,” and “Activate Movie Night scene” first match exact `automation.*`, `script.*`, and `scene.*` entities and call the corresponding Home Assistant service directly;
@@ -263,7 +270,7 @@ To configure it from another computer, press **Backup Config** on the thermostat
 
 Version 12.30 moved learned temperature-source mappings into the IHA Home Assistant integration instead of saving a separate copy on each wall panel. Version 12.40 adds the shared routing and personality profile to that same record. Every IHA thermostat reads the same live data before answering multi-room temperature questions.
 
-Install the matching `Supporting/iha.zip` files into Home Assistant's `/config/custom_components/iha/` directory and restart Home Assistant before testing. The matching integration version is **10.10.0**.
+Install the matching `Supporting/iha.zip` files into Home Assistant's `/config/custom_components/iha/` directory and restart Home Assistant before testing. The matching integration version is **10.12.0**.
 
 JARVIS can be taught by speech or by **Backup Config → JARVIS Voice → Shared Home Knowledge**:
 
