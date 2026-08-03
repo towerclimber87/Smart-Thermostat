@@ -8928,8 +8928,121 @@ def _assistant_tts_speak(
 
 def _assistant_estimated_hold_seconds(message: str, extra_seconds: float = 0.0) -> float:
     words = max(1, len(str(message or "").split()))
-    # Natural TTS commonly lands around 145-175 WPM. Add startup/announcement time.
+    # Safety fallback only. Normal spoken responses are now cleared by watching
+    # the selected media player and applying the configured delay after playback
+    # actually returns to its pre-announcement state.
     return max(4.0, min(28.0, (words / 2.45) + 2.8 + max(0.0, float(extra_seconds or 0.0))))
+
+
+def _assistant_media_snapshot(ha_url: str, token: str, media_player_id: str) -> dict:
+    """Read one media-player state without using the normal eight-second cache."""
+    media_player_id = str(media_player_id or "").strip()
+    if not media_player_id:
+        return {}
+    try:
+        item = _ha_json_request(
+            ha_url,
+            token,
+            "GET",
+            f"/api/states/{media_player_id}",
+            timeout=2.0,
+        )
+        return item if isinstance(item, dict) else {}
+    except Exception:
+        return {}
+
+
+def _assistant_media_signature(item: dict) -> tuple[str, tuple[str, ...]]:
+    """Return a stable state/signature suitable for Sonos announcement tracking."""
+    item = item if isinstance(item, dict) else {}
+    state = str(item.get("state") or "unknown").strip().lower()
+    attrs = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
+    # Deliberately exclude media_position and timestamps. Those continue changing
+    # while music resumes and would prevent us from recognizing the baseline.
+    signature = (
+        state,
+        str(attrs.get("media_content_id") or ""),
+        str(attrs.get("media_content_type") or ""),
+        str(attrs.get("media_title") or ""),
+        str(attrs.get("media_artist") or ""),
+        str(attrs.get("media_album_name") or ""),
+        str(attrs.get("source") or ""),
+        str(attrs.get("app_id") or ""),
+        str(attrs.get("app_name") or ""),
+    )
+    return state, signature
+
+
+def _assistant_watch_media_playback(
+    request_id: int,
+    ha_url: str,
+    token: str,
+    media_player_id: str,
+    baseline: dict,
+    extra_seconds: float,
+    fallback_clear_at: float,
+) -> None:
+    """Clear the JARVIS overlay after the Sonos announcement truly finishes.
+
+    The configured hold value is applied *after* playback returns to idle or to
+    the music/source that was active before the announcement. If Home Assistant
+    never exposes a usable transition, the existing speech estimate remains the
+    safety fallback and this watcher exits without changing it.
+    """
+    active_states = {"playing", "buffering"}
+    inactive_states = {"idle", "paused", "off", "standby", "unavailable", "unknown"}
+    baseline_state, baseline_signature = _assistant_media_signature(baseline)
+    baseline_known = bool(baseline) and baseline_state not in {"unknown", "unavailable"}
+    baseline_active = baseline_state in active_states
+    observed_announcement = False
+    poll_interval = 0.25
+
+    # Give Home Assistant/Sonos enough time to publish the transition while never
+    # extending the independently calculated fallback deadline.
+    while time.monotonic() < fallback_clear_at:
+        with _ASSISTANT_LOCK:
+            if int(_ASSISTANT_STATE.get("requestId") or 0) != int(request_id):
+                return
+            if str(_ASSISTANT_STATE.get("stage") or "idle") not in {"speaking", "complete"}:
+                return
+
+        current = _assistant_media_snapshot(ha_url, token, media_player_id)
+        current_state, current_signature = _assistant_media_signature(current)
+        current_active = current_state in active_states
+
+        if not observed_announcement:
+            if baseline_known:
+                # An idle speaker beginning playback, or an already-playing Sonos
+                # temporarily switching media metadata, marks announcement start.
+                observed_announcement = (
+                    (not baseline_active and current_active)
+                    or (current_signature != baseline_signature and current_state not in inactive_states)
+                )
+            else:
+                observed_announcement = current_active
+        else:
+            if baseline_known and baseline_active:
+                finished = current_signature == baseline_signature
+            elif baseline_known:
+                finished = current_state in inactive_states
+            else:
+                finished = not current_active
+
+            if finished:
+                clear_at = time.monotonic() + max(0.0, float(extra_seconds or 0.0))
+                with _ASSISTANT_LOCK:
+                    if int(_ASSISTANT_STATE.get("requestId") or 0) != int(request_id):
+                        return
+                    if str(_ASSISTANT_STATE.get("stage") or "idle") not in {"speaking", "complete"}:
+                        return
+                    # Never delay an overlay that is already scheduled to clear
+                    # sooner; this watcher only removes the estimate's excess tail.
+                    existing = float(_ASSISTANT_STATE.get("clearAtMonotonic") or 0.0)
+                    _ASSISTANT_STATE["clearAtMonotonic"] = min(existing, clear_at) if existing > 0 else clear_at
+                    _ASSISTANT_STATE["updatedAt"] = int(time.time() * 1000)
+                return
+
+        time.sleep(poll_interval)
 
 
 
@@ -10015,6 +10128,24 @@ def _assistant_process_payload(payload: dict) -> dict:
             str(shared_profile.get("cloud_agent_id") or panel_cloud_agent_id).strip(),
         )
         media_player_id = str(payload.get("mediaPlayerId") or config.get("effectiveMediaPlayerId") or "").strip()
+        media_baseline: dict[str, object] = {}
+        media_baseline_ready = threading.Event()
+        if speak and media_player_id:
+            # Capture the pre-announcement Sonos state in parallel with the
+            # conversation request so playback is not delayed by another HA call.
+            def capture_media_baseline() -> None:
+                try:
+                    media_baseline.update(_assistant_media_snapshot(ha_url, token, media_player_id))
+                finally:
+                    media_baseline_ready.set()
+
+            threading.Thread(
+                target=capture_media_baseline,
+                name=f"assistant-media-baseline-{request_id}",
+                daemon=True,
+            ).start()
+        else:
+            media_baseline_ready.set()
         configured_tts = str(payload.get("ttsEntityId") or config.get("ttsEntityId") or "").strip()
         local_tts_voice = str(
             payload.get("localTtsVoice") or config.get("localTtsVoice") or "en_US-Jarvis_Real-medium"
@@ -10255,7 +10386,12 @@ def _assistant_process_payload(payload: dict) -> dict:
             "totalMs": total_ms,
         }
 
-        hold_seconds = _assistant_estimated_hold_seconds(spoken_response if speech_played else response_text, config.get("responseHoldSeconds", 2.0))
+        response_hold_seconds = max(0.0, float(config.get("responseHoldSeconds", 2.0) or 0.0))
+        hold_seconds = _assistant_estimated_hold_seconds(
+            spoken_response if speech_played else response_text,
+            response_hold_seconds,
+        )
+        fallback_clear_at = time.monotonic() + hold_seconds
         status_text = "Response ready."
         if speak and speech_error:
             status_text = "The answer is ready, but Sonos/TTS needs configuration."
@@ -10267,8 +10403,27 @@ def _assistant_process_payload(payload: dict) -> dict:
             error=speech_error,
             ttsEntityId=tts_entity_id or local_tts_configured or configured_tts,
             speechPlayed=speech_played,
-            clearAtMonotonic=time.monotonic() + hold_seconds,
+            clearAtMonotonic=fallback_clear_at,
         )
+        if speech_played and media_player_id:
+            # The baseline request normally completes while Assist/TTS is working.
+            # A very short wait here avoids racing an unusually fast local reply
+            # without delaying normal speech startup.
+            media_baseline_ready.wait(0.05)
+            threading.Thread(
+                target=_assistant_watch_media_playback,
+                args=(
+                    request_id,
+                    ha_url,
+                    token,
+                    media_player_id,
+                    dict(media_baseline),
+                    response_hold_seconds,
+                    fallback_clear_at,
+                ),
+                name=f"assistant-playback-watch-{request_id}",
+                daemon=True,
+            ).start()
         return {
             "ok": True,
             "requestId": request_id,
