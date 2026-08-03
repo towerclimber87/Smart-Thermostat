@@ -10207,6 +10207,7 @@ class SettingsDialog(QDialog):
         self._pending_settings_quiet = True
         self._settings_saving = False
         self._settings_dirty = False
+        self._jarvis_dirty = False
         self._settings_update_seq = 0
         self._last_settings_error = ""
         self.thermostatUpdateCompleted.connect(self.handle_settings_update_completed)
@@ -10380,8 +10381,87 @@ class SettingsDialog(QDialog):
             "Security Codes": "Alarm disarm and settings-access PINs",
             "Thermostat Unit": "The name used to identify this thermostat",
             "Screen Rotation": "Upright or upside-down landscape screen orientation",
+            "Jarvis": "Everyday voice, volume, response, and screen-display controls",
         }
         return descriptions.get(str(title or ""), "Open this section to view its settings")
+
+    def jarvis_voice_defaults(self) -> dict:
+        return {
+            "enabled": True,
+            "speak": True,
+            "funMode": False,
+            "playfulReplies": True,
+            "continueConversation": True,
+            "showResponseText": True,
+            "responseHoldSeconds": 2,
+            "announcementVolumePercent": 45,
+        }
+
+    def jarvis_voice_config(self, create: bool = False) -> dict:
+        config = self.s.config if isinstance(self.s.config, dict) else {}
+        if config is not self.s.config:
+            self.s.config = config
+        integrations = config.get("integrations")
+        if not isinstance(integrations, dict):
+            if not create:
+                return {}
+            integrations = {}
+            config["integrations"] = integrations
+        home_assistant = integrations.get("homeAssistant")
+        if not isinstance(home_assistant, dict):
+            if not create:
+                return {}
+            home_assistant = {}
+            integrations["homeAssistant"] = home_assistant
+        voice = home_assistant.get("voiceAssistant")
+        if not isinstance(voice, dict):
+            if not create:
+                return {}
+            voice = {}
+            home_assistant["voiceAssistant"] = voice
+        if create:
+            for key, value in self.jarvis_voice_defaults().items():
+                voice.setdefault(key, copy.deepcopy(value))
+        return voice
+
+    def jarvis_bool_value(self, key: str) -> bool:
+        defaults = self.jarvis_voice_defaults()
+        voice = self.jarvis_voice_config(False)
+        return bool(voice.get(key, defaults.get(key, False)))
+
+    def jarvis_toggle_text(self, key: str, label: str) -> str:
+        return f"{label}: {'ON' if self.jarvis_bool_value(key) else 'OFF'}"
+
+    def toggle_jarvis_setting(self, key: str, label: str):
+        voice = self.jarvis_voice_config(True)
+        voice[key] = not self.jarvis_bool_value(key)
+        button = (getattr(self, "jarvis_toggle_buttons", {}) or {}).get(key)
+        if button is not None:
+            button.setText(self.jarvis_toggle_text(key, label))
+            if hasattr(button, "setActive"):
+                button.setActive(bool(voice.get(key)))
+            button.repaint()
+        self._jarvis_dirty = True
+        self.mark_settings_dirty()
+
+    def add_jarvis_toggle(self, layout: QGridLayout, key: str, label: str, row: int, col: int):
+        button = RoundButton(
+            self.jarvis_toggle_text(key, label),
+            active=self.jarvis_bool_value(key),
+            min_h=42,
+        )
+        button.clicked.connect(lambda checked=False, k=key, l=label: self.toggle_jarvis_setting(k, l))
+        self.jarvis_toggle_buttons[key] = button
+        layout.addWidget(button, row, col)
+
+    def apply_jarvis_values_to_config(self):
+        if not hasattr(self, "jarvis_toggle_buttons"):
+            return
+        voice = self.jarvis_voice_config(True)
+        if "jarvisAnnouncementVolumePercent" in self.controls:
+            voice["announcementVolumePercent"] = max(1, min(100, self.val_number("jarvisAnnouncementVolumePercent")))
+        if "jarvisResponseHoldSeconds" in self.controls:
+            voice["responseHoldSeconds"] = max(0, min(15, self.val_number("jarvisResponseHoldSeconds")))
 
     def section_header_button(self, title: str) -> QPushButton:
         description = self.section_description(title)
@@ -11227,6 +11307,38 @@ class SettingsDialog(QDialog):
     def build(self):
         t = self.s.thermostat or {}
 
+        jarvis_voice = self.jarvis_voice_config(False)
+        jarvis_defaults = self.jarvis_voice_defaults()
+        self.jarvis_toggle_buttons: dict[str, RoundButton] = {}
+        jarvis = self.add_section("Jarvis", -1, 0, 1, 4)
+        jarvis_note = QLabel("Quick controls for everyday JARVIS behavior. Advanced voice, agent, and routing settings remain available in Backup Config.")
+        jarvis_note.setWordWrap(True)
+        jarvis_note.setFont(font(8, QFont.Bold))
+        jarvis_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
+        jarvis.layout().addWidget(jarvis_note)
+        jarvis_grid = self.section_grid(jarvis, 2)
+        try:
+            jarvis_volume = int(round(float(jarvis_voice.get("announcementVolumePercent", jarvis_defaults["announcementVolumePercent"]))))
+        except (TypeError, ValueError):
+            jarvis_volume = int(jarvis_defaults["announcementVolumePercent"])
+        try:
+            jarvis_hold = int(round(float(jarvis_voice.get("responseHoldSeconds", jarvis_defaults["responseHoldSeconds"]))))
+        except (TypeError, ValueError):
+            jarvis_hold = int(jarvis_defaults["responseHoldSeconds"])
+        self.add_section_value(jarvis_grid, "jarvisAnnouncementVolumePercent", "Voice Volume", jarvis_volume, 0, 0, 1, 100, " %")
+        self.add_section_value(jarvis_grid, "jarvisResponseHoldSeconds", "Screen Display Time", jarvis_hold, 0, 1, 0, 15, " sec")
+        self.add_jarvis_toggle(jarvis_grid, "enabled", "JARVIS", 1, 0)
+        self.add_jarvis_toggle(jarvis_grid, "speak", "Speak on Sonos", 1, 1)
+        self.add_jarvis_toggle(jarvis_grid, "showResponseText", "Show Response Text", 2, 0)
+        self.add_jarvis_toggle(jarvis_grid, "continueConversation", "Remember Conversation", 2, 1)
+        self.add_jarvis_toggle(jarvis_grid, "playfulReplies", "Use Form of Address", 3, 0)
+        self.add_jarvis_toggle(jarvis_grid, "funMode", "Processing Phrases", 3, 1)
+        jarvis_save_note = QLabel("Changes are applied with Save Settings. Pressing Done on the main settings screen also saves pending JARVIS changes.")
+        jarvis_save_note.setWordWrap(True)
+        jarvis_save_note.setFont(font(7, QFont.Black))
+        jarvis_save_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
+        jarvis.layout().addWidget(jarvis_save_note)
+
         auto_home = self.add_section("Auto Away / Home", 0, 0, 1, 2)
         auto_grid = self.section_grid(auto_home, 2)
         self.add_section_value(auto_grid, "awayHeat", "Heat Away", t.get("awayHeat", 55), 0, 0, 40, 75)
@@ -11534,6 +11646,8 @@ class SettingsDialog(QDialog):
         # Keeping the API out of the tap path makes repeated touchscreen taps
         # immediate and avoids waiting on a thermostat round-trip.
         self.controls[key].repaint()
+        if str(key).startswith("jarvis"):
+            self._jarvis_dirty = True
         self.mark_settings_dirty()
 
     def build_settings_changes(self) -> dict:
@@ -11665,6 +11779,9 @@ class SettingsDialog(QDialog):
 
     def close_settings(self):
         self._settings_save_timer.stop()
+        if self._jarvis_dirty:
+            self.save_all()
+            return
         self.push_pending_settings()
         self.accept()
 
@@ -11709,6 +11826,7 @@ class SettingsDialog(QDialog):
 
     def save_all(self):
         self._settings_save_timer.stop()
+        self.apply_jarvis_values_to_config()
         changes = self.merge_dicts(self._pending_settings_changes, self.build_settings_changes())
         self.apply_thermostat_changes_locally(changes)
         self._pending_settings_changes = None
@@ -11757,6 +11875,7 @@ class SettingsDialog(QDialog):
         config_record = data.get("config")
         if isinstance(config_record, dict):
             self.s.config = config_record.get("config") or self.s.config
+        self._jarvis_dirty = False
         if hasattr(self, "security_code_field"):
             self.security_code_field.setText(self.masked_code(str((self.s.config.get("alarm") or {}).get("disarmCode") or "")))
         if hasattr(self, "settings_code_field"):
