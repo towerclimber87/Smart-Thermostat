@@ -6,7 +6,7 @@ The package intentionally does not include the old `public/` web UI or the old T
 
 ## Important security note
 
-`data/panel-config.json` may contain your Home Assistant URL and long-lived access token. Do not push this repository to a public GitHub repo with real panel data inside `data/`.
+`data/panel-config.json` may contain your Home Assistant URL, long-lived access token, and an OpenAI API key when the direct cinematic voice is enabled. Do not push this repository to a public GitHub repo with real panel data inside `data/`.
 
 ## Install or update on the Pi
 
@@ -82,7 +82,23 @@ python3 native_app/main.py
 
 Version 11.60 adds an original full-screen AI-core animation and a typed command loop. The Raspberry Pi does not run a language model or speech recognizer. It only displays the animation and forwards text to the Home Assistant conversation API, keeping the panel workload small.
 
-The assistant reuses the Home Assistant URL and long-lived token already stored in the thermostat configuration. Replies can be sent to the Sonos/media player already selected on the Audio page, or to a separate media player chosen in the temporary Backup Config web portal. The portal also allows an explicit `conversation.*` agent and `tts.*` entity to be entered. Leaving the conversation agent blank uses Home Assistant's default agent; leaving TTS blank makes the thermostat select an available TTS entity automatically. For safety, the stored-token assistant endpoint accepts commands only from the thermostat itself unless the temporary Backup Config portal is open.
+The assistant reuses the Home Assistant URL and long-lived token already stored in the thermostat configuration. Replies can be sent to the Sonos/media player already selected on the Audio page, or to a separate media player chosen in the temporary Backup Config web portal. The portal also allows an explicit `conversation.*` agent and `tts.*` entity to be entered. Leaving the conversation agent blank uses Home Assistant's default agent; leaving TTS blank now prefers an available OpenAI TTS entity before Home Assistant Cloud or Piper. For safety, the stored-token assistant endpoint accepts commands only from the thermostat itself unless the temporary Backup Config portal is open.
+
+### Original cinematic voice over Sonos
+
+Version 12.20 adds a direct OpenAI speech mode to the **JARVIS Voice** tab. It does not install ElevenLabs, Piper, HACS, or another voice provider. The thermostat uses the same OpenAI API account you already use with Home Assistant, generates a temporary MP3, and asks Home Assistant to play it as a Sonos announcement. The previous Sonos program and volume are restored by the announcement path when the player supports it.
+
+One-time setup:
+
+1. Press **Backup Config** on the thermostat and open the temporary configuration address.
+2. Open **JARVIS Voice**.
+3. Select **OpenAI cinematic voice — recommended**.
+4. Paste an OpenAI API key from the same OpenAI account, keep `gpt-4o-mini-tts`, select a voice, and save.
+5. Run the typed test. The default is **Onyx**, speed **1.08**, with a prefilled original refined British-style household-assistant prompt.
+
+The API key is stored with the panel configuration but is never returned by the JARVIS configuration/status endpoints. Generated MP3 files use random names, are served only long enough for the LAN speaker to retrieve them, and are removed after approximately ten minutes. The Sonos/media player must be able to reach the thermostat's LAN address on port `8080`.
+
+The existing **Home Assistant TTS entity** mode remains available. In that mode, voice instructions and speed stay configured in the Home Assistant OpenAI TTS subentry, while the thermostat can pass a supported voice choice to the selected TTS entity.
 
 Open the continuous typed loop on the Pi:
 
@@ -112,4 +128,4 @@ curl -sS -X POST \
   http://127.0.0.1:8080/api/assistant/process | python3 -m json.tool
 ```
 
-To configure it from another computer, press **Backup Config** on the thermostat, open the temporary web address shown on the panel, and use the **Voice Assistant & Sonos** section. This page does not display or transmit the saved Home Assistant token to the browser.
+To configure it from another computer, press **Backup Config** on the thermostat, open the temporary web address shown on the panel, and use the **JARVIS Voice** tab. This page does not display or transmit the saved Home Assistant token to the browser.

@@ -14,6 +14,7 @@ import json
 import mimetypes
 import os
 import re
+import secrets
 import signal
 import socket
 import shutil
@@ -60,6 +61,20 @@ USB_CONFIG_FILENAME = os.environ.get("SMART_THERMOSTAT_USB_CONFIG_FILENAME", "sm
 # when a thumb drive is still mounted there. Use a runtime folder outside the
 # repo instead.
 RUNTIME_DIR = Path(os.environ.get("SMART_THERMOSTAT_RUNTIME_DIR", "/tmp/smart-thermostat-runtime")).expanduser()
+ASSISTANT_AUDIO_DIR = Path(
+    os.environ.get("SMART_THERMOSTAT_ASSISTANT_AUDIO_DIR", str(RUNTIME_DIR / "assistant-audio"))
+).expanduser()
+ASSISTANT_AUDIO_TTL_SECONDS = max(60.0, float(os.environ.get("SMART_THERMOSTAT_ASSISTANT_AUDIO_TTL_SECONDS", "600") or "600"))
+OPENAI_TTS_ENDPOINT = os.environ.get("SMART_THERMOSTAT_OPENAI_TTS_ENDPOINT", "https://api.openai.com/v1/audio/speech").strip() or "https://api.openai.com/v1/audio/speech"
+OPENAI_TTS_VOICES = ("onyx", "cedar", "marin", "alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "sage", "shimmer", "verse")
+JARVIS_TTS_INSTRUCTIONS = (
+    "Speak as an original sophisticated futuristic household computer assistant. "
+    "Use a refined British-style accent, a calm lower-pitched male presentation, "
+    "crisp pronunciation, measured confidence, restrained warmth, and subtle dry humor. "
+    "Sound polished and mildly synthetic while remaining natural. Keep the delivery concise "
+    "and slightly faster than normal. Do not imitate any actor or copyrighted character."
+)
+_SERVER_PORT = int(os.environ.get("PORT", "8080") or "8080")
 USB_RUNTIME_MOUNT_ROOT = Path(os.environ.get("SMART_THERMOSTAT_USB_RUNTIME_MOUNT_ROOT", "/tmp/smart-thermostat-usb")).expanduser()
 USB_LEGACY_MOUNT_ROOT = DATA_DIR / "usb-mounts"
 USB_MOUNT_ROOTS = tuple(
@@ -368,8 +383,14 @@ DEFAULT_HOME_ASSISTANT_CONFIG = {
         "enabled": True,
         "agentId": "",
         "ttsEntityId": "",
+        "ttsMode": "home_assistant",
+        "ttsVoice": "onyx",
+        "openAiApiKey": "",
+        "openAiModel": "gpt-4o-mini-tts",
+        "openAiInstructions": JARVIS_TTS_INSTRUCTIONS,
+        "openAiSpeed": 1.08,
         "mediaPlayerId": "",
-        "language": "en",
+        "language": "en-US",
         "speak": True,
         "funMode": True,
         "playfulReplies": True,
@@ -2722,9 +2743,21 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
     assistant = _assistant_config_payload()
     assistant_agent = html.escape(str(assistant.get("agentId") or ""), quote=True)
     assistant_tts = html.escape(str(assistant.get("ttsEntityId") or ""), quote=True)
+    assistant_tts_mode = str(assistant.get("ttsMode") or "home_assistant")
+    assistant_tts_mode_ha = "selected" if assistant_tts_mode == "home_assistant" else ""
+    assistant_tts_mode_openai = "selected" if assistant_tts_mode == "openai_direct" else ""
+    assistant_tts_voice = str(assistant.get("ttsVoice") or "onyx").strip().lower() or "onyx"
+    assistant_voice_options = "".join(
+        f'<option value="{html.escape(voice, quote=True)}" {"selected" if voice == assistant_tts_voice else ""}>{html.escape(voice.title())}</option>'
+        for voice in OPENAI_TTS_VOICES
+    )
+    assistant_openai_model = html.escape(str(assistant.get("openAiModel") or "gpt-4o-mini-tts"), quote=True)
+    assistant_openai_instructions = html.escape(str(assistant.get("openAiInstructions") or JARVIS_TTS_INSTRUCTIONS))
+    assistant_openai_speed = html.escape(str(assistant.get("openAiSpeed") or 1.08), quote=True)
+    assistant_openai_key_status = "An OpenAI API key is saved on this thermostat." if assistant.get("openAiApiKeyConfigured") else "No OpenAI API key is saved yet."
     assistant_media = html.escape(str(assistant.get("mediaPlayerId") or ""), quote=True)
     assistant_effective_media = html.escape(str(assistant.get("effectiveMediaPlayerId") or "not selected"), quote=True)
-    assistant_language = html.escape(str(assistant.get("language") or "en"), quote=True)
+    assistant_language = html.escape(str(assistant.get("language") or "en-US"), quote=True)
     assistant_hold = html.escape(str(assistant.get("responseHoldSeconds") or 2.0), quote=True)
     assistant_volume = int(assistant.get("announcementVolumePercent") or 45)
     assistant_enabled = "checked" if assistant.get("enabled") else ""
@@ -2765,9 +2798,10 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
     button.secondary {{ background:rgba(255,255,255,.10); box-shadow:none; border:1px solid rgba(255,255,255,.15); }}
     button:disabled {{ opacity:.55; cursor:wait; }}
     input[type=file] {{ width:100%; padding:14px; border-radius:15px; color:#dce8ff; border:1px dashed rgba(255,255,255,.28); background:rgba(0,0,0,.18); }}
-    input[type=text],input[type=number],input[type=password],select {{ width:100%; min-height:46px; border-radius:13px; border:1px solid rgba(255,255,255,.16); background:#0a1425; color:#f7fbff; padding:0 12px; font-size:14px; }}
+    input[type=text],input[type=number],input[type=password],select,textarea {{ width:100%; min-height:46px; border-radius:13px; border:1px solid rgba(255,255,255,.16); background:#0a1425; color:#f7fbff; padding:0 12px; font-size:14px; }}
+    textarea {{ min-height:142px; padding:12px; resize:vertical; font-family:inherit; line-height:1.45; }}
     select[multiple] {{ min-height:170px; padding:8px; }}
-    input:focus,select:focus {{ outline:2px solid rgba(70,232,255,.45); border-color:#46e8ff; }}
+    input:focus,select:focus,textarea:focus {{ outline:2px solid rgba(70,232,255,.45); border-color:#46e8ff; }}
     .form-grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:13px; }}
     .field label {{ display:block; color:#b8c6da; font-size:12px; font-weight:900; letter-spacing:.5px; margin:0 0 7px; }}
     .hint {{ display:block; margin-top:7px; color:#8294ae; font-size:12px; line-height:1.35; }}
@@ -2784,6 +2818,10 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
     code {{ color:#8ff4ff; }}
     .status {{ min-height:48px; padding:12px 14px; border-radius:15px; color:#e9f4ff; background:rgba(0,0,0,.20); border:1px solid rgba(255,255,255,.10); white-space:pre-wrap; margin-top:12px; }}
     .ok {{ color:#76ffc4; }} .bad {{ color:#ff8a8a; }}
+    .voice-provider {{ margin:14px 0; }}
+    .voice-provider h3 {{ margin-bottom:7px; }}
+    .voice-provider[hidden] {{ display:none; }}
+    .voice-note {{ margin:0 0 13px; padding:11px 13px; border-radius:13px; border:1px solid rgba(70,232,255,.24); background:rgba(70,232,255,.07); color:#cfefff; line-height:1.45; }}
 
     /* Thermostat settings are intentionally denser than the backup and voice
        tabs. Natural-height cards prevent a short section from being stretched
@@ -2876,9 +2914,18 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
   <section id="tab-jarvis" class="tab-panel">
     <div class="card">
       <div class="eyebrow">JARVIS Voice</div><h2>Assistant &amp; Sonos</h2>
-      <p class="muted">The selected announcement volume is remembered. On Sonos, the response is sent as an announcement so the previous music and volume return automatically when speech finishes.</p>
+      <p class="muted">Choose the built-in OpenAI cinematic voice path to control voice, delivery instructions, and speed without installing ElevenLabs, Piper, HACS, or another service. It uses your existing OpenAI API account and creates an original assistant voice rather than copying the movie character or actor.</p>
       <div class="checks"><label class="check"><input id="va-enabled" type="checkbox" {assistant_enabled}>Assistant enabled</label><label class="check"><input id="va-speak" type="checkbox" {assistant_speak}>Speak on Sonos</label><label class="check"><input id="va-fun" type="checkbox" {assistant_fun}>Goofy screen quips</label><label class="check"><input id="va-playful" type="checkbox" {assistant_playful}>Playful spoken prefix</label><label class="check"><input id="va-continue" type="checkbox" {assistant_continue}>Continue conversation</label><label class="check"><input id="va-show-text" type="checkbox" {assistant_show_text}>Show response text</label></div>
-      <div class="form-grid"><div class="field"><label>Conversation agent entity</label><input id="va-agent" type="text" value="{assistant_agent}" placeholder="conversation.openai_conversation or blank"></div><div class="field"><label>Text-to-speech entity</label><input id="va-tts" type="text" value="{assistant_tts}" placeholder="tts.openai_tts or blank"></div><div class="field"><label>Sonos / media player entity</label><input id="va-media" type="text" value="{assistant_media}" placeholder="Blank follows Audio page selection"><span class="hint">Current effective output: <code>{assistant_effective_media}</code></span></div><div class="field"><label>Language</label><input id="va-language" type="text" value="{assistant_language}" placeholder="en"></div><div class="field"><label>Extra screen hold after response (seconds)</label><input id="va-hold" type="number" min="0" max="15" step="0.5" value="{assistant_hold}"></div><div class="field"><label>Speech volume</label><div class="slider-row"><input id="va-volume" type="range" min="1" max="100" step="1" value="{assistant_volume}"><output id="va-volume-value">{assistant_volume}%</output></div><span class="hint">This volume applies only to the JARVIS announcement. Sonos restores its previous volume afterward.</span></div></div>
+      <div class="settings-section voice-provider"><h3>Speech Provider</h3><div class="form-grid"><div class="field full"><label>Text-to-speech path</label><select id="va-tts-mode"><option value="openai_direct" {assistant_tts_mode_openai}>OpenAI cinematic voice — recommended</option><option value="home_assistant" {assistant_tts_mode_ha}>Home Assistant TTS entity — existing behavior</option></select><span class="hint">OpenAI cinematic voice calls the official OpenAI speech API directly from the thermostat. Home Assistant still handles the conversation and Sonos playback.</span></div></div></div>
+      <div id="va-openai-settings" class="settings-section voice-provider">
+        <h3>OpenAI Cinematic Voice</h3><p class="voice-note">No additional voice provider is required. Paste the same OpenAI API key already used by your Home Assistant OpenAI integration. The saved key is not displayed or returned by the JARVIS settings endpoint. {assistant_openai_key_status}</p>
+        <div class="form-grid"><div class="field"><label>OpenAI API key</label><input id="va-openai-key" type="password" autocomplete="new-password" placeholder="Leave blank to keep the saved key"><span class="hint">Only enter a value when adding or replacing the key.</span></div><div class="field"><label>Voice</label><select id="va-voice">{assistant_voice_options}</select><span class="hint">Onyx is the default lower, measured voice. Cedar is a good alternate.</span></div><div class="field"><label>Speech model</label><input id="va-openai-model" type="text" value="{assistant_openai_model}" placeholder="gpt-4o-mini-tts"></div><div class="field"><label>Speech speed</label><input id="va-openai-speed" type="number" min="0.25" max="4" step="0.01" value="{assistant_openai_speed}"></div><div class="field full"><label>Voice delivery instructions</label><textarea id="va-openai-instructions" maxlength="4096">{assistant_openai_instructions}</textarea></div></div>
+      </div>
+      <div id="va-ha-tts-settings" class="settings-section voice-provider">
+        <h3>Home Assistant TTS</h3><p class="voice-note">Use this mode to keep speech generation entirely inside Home Assistant. When the selected TTS entity supports voice selection, the voice chosen above is passed to it. OpenAI instructions and speed must be configured on the OpenAI TTS subentry in Home Assistant.</p>
+        <div class="form-grid"><div class="field full"><label>Text-to-speech entity</label><input id="va-tts" type="text" value="{assistant_tts}" placeholder="tts.openai_tts or blank"><span class="hint">Blank now prefers an available OpenAI TTS entity before Home Assistant Cloud or Piper.</span></div></div>
+      </div>
+      <div class="form-grid"><div class="field"><label>Conversation agent entity</label><input id="va-agent" type="text" value="{assistant_agent}" placeholder="conversation.openai_conversation or blank"></div><div class="field"><label>Sonos / media player entity</label><input id="va-media" type="text" value="{assistant_media}" placeholder="Blank follows Audio page selection"><span class="hint">Current effective output: <code>{assistant_effective_media}</code></span></div><div class="field"><label>Language</label><input id="va-language" type="text" value="{assistant_language}" placeholder="en-US"></div><div class="field"><label>Extra screen hold after response (seconds)</label><input id="va-hold" type="number" min="0" max="15" step="0.5" value="{assistant_hold}"></div><div class="field full"><label>Speech volume</label><div class="slider-row"><input id="va-volume" type="range" min="1" max="100" step="1" value="{assistant_volume}"><output id="va-volume-value">{assistant_volume}%</output></div><span class="hint">On Sonos, the response is sent as an announcement so the previous music and volume return automatically when speech finishes.</span></div></div>
       <div class="button-row"><button id="va-save" type="button">Save JARVIS Settings</button></div>
       <div class="test-row"><input id="va-test-text" type="text" value="Tell me the current thermostat temperature in one short sentence."><button id="va-test" type="button" class="secondary">Run Test</button></div>
       <div id="va-status" class="status muted">Save the settings, then run a typed test.</div>
@@ -2909,8 +2956,10 @@ qs('ts-save').addEventListener('click',async()=>{{ try{{qs('ts-save').disabled=t
 qs('ts-reload').addEventListener('click',()=>{{window.thermostatSettingsLoaded=false;loadThermostatSettings();}});
 
 qs('va-volume').addEventListener('input',()=>{{qs('va-volume-value').textContent=qs('va-volume').value+'%';}});
-function assistantPayload() {{ return {{enabled:qs('va-enabled').checked,speak:qs('va-speak').checked,funMode:qs('va-fun').checked,playfulReplies:qs('va-playful').checked,continueConversation:qs('va-continue').checked,showResponseText:qs('va-show-text').checked,agentId:value('va-agent').trim(),ttsEntityId:value('va-tts').trim(),mediaPlayerId:value('va-media').trim(),language:value('va-language').trim()||'en',responseHoldSeconds:Number(value('va-hold')||2),announcementVolumePercent:Number(value('va-volume')||45)}}; }}
-qs('va-save').addEventListener('click',async()=>{{try{{qs('va-save').disabled=true;setBox(qs('va-status'),'Saving JARVIS settings...','muted');const response=await fetch('/api/assistant/config',{{method:'POST',headers:{{'Accept':'application/json','Content-Type':'application/json'}},body:JSON.stringify(assistantPayload())}});const data=await response.json().catch(()=>({{}}));if(!response.ok||!data.ok)throw new Error(data.error||'Could not save JARVIS settings.');setBox(qs('va-status'),data.message||'JARVIS settings saved.','ok');}}catch(err){{setBox(qs('va-status'),err.message||String(err),'bad');}}finally{{qs('va-save').disabled=false;}}}});
+function updateTtsMode() {{ const direct=value('va-tts-mode')==='openai_direct'; qs('va-openai-settings').hidden=!direct; qs('va-ha-tts-settings').hidden=direct; }}
+qs('va-tts-mode').addEventListener('change',updateTtsMode); updateTtsMode();
+function assistantPayload() {{ return {{enabled:qs('va-enabled').checked,speak:qs('va-speak').checked,funMode:qs('va-fun').checked,playfulReplies:qs('va-playful').checked,continueConversation:qs('va-continue').checked,showResponseText:qs('va-show-text').checked,agentId:value('va-agent').trim(),ttsEntityId:value('va-tts').trim(),ttsMode:value('va-tts-mode'),ttsVoice:value('va-voice'),openAiApiKey:value('va-openai-key').trim(),openAiModel:value('va-openai-model').trim(),openAiInstructions:value('va-openai-instructions').trim(),openAiSpeed:Number(value('va-openai-speed')||1.08),mediaPlayerId:value('va-media').trim(),language:value('va-language').trim()||'en-US',responseHoldSeconds:Number(value('va-hold')||2),announcementVolumePercent:Number(value('va-volume')||45)}}; }}
+qs('va-save').addEventListener('click',async()=>{{try{{qs('va-save').disabled=true;setBox(qs('va-status'),'Saving JARVIS settings...','muted');const response=await fetch('/api/assistant/config',{{method:'POST',headers:{{'Accept':'application/json','Content-Type':'application/json'}},body:JSON.stringify(assistantPayload())}});const data=await response.json().catch(()=>({{}}));if(!response.ok||!data.ok)throw new Error(data.error||'Could not save JARVIS settings.');qs('va-openai-key').value='';setBox(qs('va-status'),data.message||'JARVIS settings saved.','ok');}}catch(err){{setBox(qs('va-status'),err.message||String(err),'bad');}}finally{{qs('va-save').disabled=false;}}}});
 qs('va-test').addEventListener('click',async()=>{{const text=value('va-test-text').trim();if(!text){{setBox(qs('va-status'),'Enter a test command first.','bad');return;}}try{{qs('va-test').disabled=true;setBox(qs('va-status'),'Running command. Watch the thermostat screen...','muted');const response=await fetch('/api/assistant/process',{{method:'POST',headers:{{'Accept':'application/json','Content-Type':'application/json'}},body:JSON.stringify({{text}})}});const data=await response.json().catch(()=>({{}}));if(!response.ok||!data.ok)throw new Error(data.error||'Assistant test failed.');const suffix=data.speechPlayed?'\\nSpoken on '+data.mediaPlayerId+' at '+(data.announcementVolumePercent||value('va-volume'))+'%.':(data.speechError?'\\nVoice was not played: '+data.speechError:'');setBox(qs('va-status'),'JARVIS: '+data.response+suffix,data.speechPlayed?'ok':'muted');}}catch(err){{setBox(qs('va-status'),err.message||String(err),'bad');}}finally{{qs('va-test').disabled=false;}}}});
 </script>
 </body></html>"""
@@ -7754,6 +7803,18 @@ def _assistant_bool(value: object, fallback: bool = False) -> bool:
     return _boolish(value)
 
 
+def _assistant_private_voice_config() -> dict:
+    """Return merged voice settings, including secrets, for local backend use."""
+    record = _read_panel_config_record()
+    config = record.get("config") if isinstance(record, dict) else {}
+    integrations = config.get("integrations") if isinstance(config, dict) else {}
+    ha = integrations.get("homeAssistant") if isinstance(integrations, dict) else {}
+    ha = ha if isinstance(ha, dict) else {}
+    defaults = DEFAULT_HOME_ASSISTANT_CONFIG.get("voiceAssistant") or {}
+    raw = ha.get("voiceAssistant") if isinstance(ha.get("voiceAssistant"), dict) else {}
+    return _merge_missing_defaults(defaults, raw)
+
+
 def _assistant_config_payload() -> dict:
     """Return normalized, token-free voice-assistant settings."""
     record = _read_panel_config_record()
@@ -7779,7 +7840,9 @@ def _assistant_config_payload() -> dict:
         ha.get("selectedMediaPlayerId") or legacy_media.get("entityId") or legacy_media.get("entity_id"),
         "media_player",
     )
-    language = str(voice.get("language") or "en").strip().replace("_", "-")[:16] or "en"
+    language = str(voice.get("language") or "en-US").strip().replace("_", "-")[:16] or "en-US"
+    if language.lower() == "en":
+        language = "en-US"
     try:
         response_hold = max(0.0, min(15.0, float(voice.get("responseHoldSeconds", 2.0) or 0.0)))
     except (TypeError, ValueError):
@@ -7788,10 +7851,28 @@ def _assistant_config_payload() -> dict:
         announcement_volume = int(max(1, min(100, round(float(voice.get("announcementVolumePercent", 45) or 45)))))
     except (TypeError, ValueError):
         announcement_volume = 45
+    tts_mode = str(voice.get("ttsMode") or "home_assistant").strip().lower()
+    if tts_mode not in {"home_assistant", "openai_direct"}:
+        tts_mode = "home_assistant"
+    tts_voice = str(voice.get("ttsVoice") or "onyx").strip().lower()
+    if tts_voice not in OPENAI_TTS_VOICES:
+        tts_voice = "onyx"
+    openai_model = str(voice.get("openAiModel") or "gpt-4o-mini-tts").strip()[:80] or "gpt-4o-mini-tts"
+    openai_instructions = str(voice.get("openAiInstructions") or JARVIS_TTS_INSTRUCTIONS).strip()[:4096] or JARVIS_TTS_INSTRUCTIONS
+    try:
+        openai_speed = max(0.25, min(4.0, float(voice.get("openAiSpeed", 1.08) or 1.08)))
+    except (TypeError, ValueError):
+        openai_speed = 1.08
     return {
         "enabled": _assistant_bool(voice.get("enabled"), True),
         "agentId": clean_entity(voice.get("agentId"), "conversation"),
         "ttsEntityId": clean_entity(voice.get("ttsEntityId"), "tts"),
+        "ttsMode": tts_mode,
+        "ttsVoice": tts_voice,
+        "openAiApiKeyConfigured": bool(str(voice.get("openAiApiKey") or "").strip()),
+        "openAiModel": openai_model,
+        "openAiInstructions": openai_instructions,
+        "openAiSpeed": openai_speed,
         "mediaPlayerId": media_player_id,
         "effectiveMediaPlayerId": media_player_id or fallback_media_player_id,
         "language": language,
@@ -7837,13 +7918,36 @@ def _assistant_update_config(payload: dict) -> dict:
         "agentId": entity_value("agentId", "conversation"),
         "ttsEntityId": entity_value("ttsEntityId", "tts"),
         "mediaPlayerId": entity_value("mediaPlayerId", "media_player"),
-        "language": str(payload.get("language", voice.get("language", "en")) or "en").strip().replace("_", "-")[:16] or "en",
+        "language": str(payload.get("language", voice.get("language", "en-US")) or "en-US").strip().replace("_", "-")[:16] or "en-US",
         "speak": _assistant_bool(payload.get("speak"), voice.get("speak", True)),
         "funMode": _assistant_bool(payload.get("funMode"), voice.get("funMode", True)),
         "playfulReplies": _assistant_bool(payload.get("playfulReplies"), voice.get("playfulReplies", True)),
         "continueConversation": _assistant_bool(payload.get("continueConversation"), voice.get("continueConversation", True)),
         "showResponseText": _assistant_bool(payload.get("showResponseText"), voice.get("showResponseText", True)),
     })
+    if str(voice.get("language") or "").lower() == "en":
+        voice["language"] = "en-US"
+    tts_mode = str(payload.get("ttsMode", voice.get("ttsMode", "home_assistant")) or "home_assistant").strip().lower()
+    if tts_mode not in {"home_assistant", "openai_direct"}:
+        raise ValueError("ttsMode must be home_assistant or openai_direct")
+    voice["ttsMode"] = tts_mode
+    tts_voice = str(payload.get("ttsVoice", voice.get("ttsVoice", "onyx")) or "onyx").strip().lower()
+    if tts_voice not in OPENAI_TTS_VOICES:
+        raise ValueError("ttsVoice is not a supported OpenAI voice")
+    voice["ttsVoice"] = tts_voice
+    voice["openAiModel"] = str(payload.get("openAiModel", voice.get("openAiModel", "gpt-4o-mini-tts")) or "gpt-4o-mini-tts").strip()[:80] or "gpt-4o-mini-tts"
+    voice["openAiInstructions"] = str(payload.get("openAiInstructions", voice.get("openAiInstructions", JARVIS_TTS_INSTRUCTIONS)) or JARVIS_TTS_INSTRUCTIONS).strip()[:4096] or JARVIS_TTS_INSTRUCTIONS
+    incoming_api_key = str(payload.get("openAiApiKey") or "").strip()
+    if incoming_api_key:
+        if len(incoming_api_key) < 20 or any(ch.isspace() for ch in incoming_api_key):
+            raise ValueError("OpenAI API key does not look valid")
+        voice["openAiApiKey"] = incoming_api_key[:512]
+    if _assistant_bool(payload.get("clearOpenAiApiKey"), False):
+        voice["openAiApiKey"] = ""
+    try:
+        voice["openAiSpeed"] = max(0.25, min(4.0, float(payload.get("openAiSpeed", voice.get("openAiSpeed", 1.08)) or 1.08)))
+    except (TypeError, ValueError):
+        voice["openAiSpeed"] = 1.08
     try:
         voice["responseHoldSeconds"] = max(0.0, min(15.0, float(payload.get("responseHoldSeconds", voice.get("responseHoldSeconds", 2.0)) or 0.0)))
     except (TypeError, ValueError):
@@ -7856,7 +7960,7 @@ def _assistant_update_config(payload: dict) -> dict:
     saved = _write_panel_config_record(config)
     return {
         "ok": True,
-        "message": "Voice assistant settings saved.",
+        "message": "JARVIS voice settings saved.",
         "version": saved.get("version"),
         "updatedAt": saved.get("updatedAt"),
         "assistant": _assistant_config_payload(),
@@ -7959,7 +8063,10 @@ def _assistant_resolve_tts_entity(ha_url: str, token: str, configured: str) -> s
         for item in states
         if isinstance(item, dict) and str(item.get("entity_id") or "").startswith("tts.")
     )
-    for preferred in ("tts.home_assistant_cloud", "tts.openai", "tts.piper"):
+    for entity_id in available:
+        if "openai" in entity_id.lower():
+            return entity_id
+    for preferred in ("tts.home_assistant_cloud", "tts.piper"):
         if preferred in available:
             return preferred
     return available[0] if available else ""
@@ -7987,6 +8094,260 @@ def _assistant_playful_spoken_text(text: str, request_id: int, enabled: bool, re
     return pool[max(0, int(request_id)) % len(pool)] + clean
 
 
+def _assistant_cleanup_audio_files() -> None:
+    """Remove expired one-time speech files from the thermostat runtime folder."""
+    try:
+        ASSISTANT_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+        cutoff = time.time() - ASSISTANT_AUDIO_TTL_SECONDS
+        for item in ASSISTANT_AUDIO_DIR.glob("*.mp3"):
+            try:
+                if item.stat().st_mtime < cutoff:
+                    item.unlink(missing_ok=True)
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+def _assistant_store_audio(audio: bytes) -> tuple[str, str]:
+    if not audio:
+        raise ValueError("OpenAI returned an empty speech file")
+    if len(audio) > 25 * 1024 * 1024:
+        raise ValueError("Generated speech file is unexpectedly large")
+    _assistant_cleanup_audio_files()
+    ASSISTANT_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+    filename = f"{secrets.token_hex(16)}.mp3"
+    final_path = ASSISTANT_AUDIO_DIR / filename
+    temp_path = final_path.with_suffix(".tmp")
+    temp_path.write_bytes(audio)
+    os.replace(temp_path, final_path)
+    host = _local_ip_address()
+    return filename, f"http://{host}:{_SERVER_PORT}/api/assistant/audio/{filename}"
+
+
+def _assistant_audio_path_from_request(path: str) -> Path | None:
+    prefix = "/api/assistant/audio/"
+    if not str(path or "").startswith(prefix):
+        return None
+    filename = str(path)[len(prefix):]
+    if not re.fullmatch(r"[a-f0-9]{32}\.mp3", filename):
+        return None
+    _assistant_cleanup_audio_files()
+    candidate = ASSISTANT_AUDIO_DIR / filename
+    try:
+        if not candidate.is_file():
+            return None
+        if time.time() - candidate.stat().st_mtime > ASSISTANT_AUDIO_TTL_SECONDS:
+            candidate.unlink(missing_ok=True)
+            return None
+    except OSError:
+        return None
+    return candidate
+
+
+def _send_assistant_audio(handler: BaseHTTPRequestHandler, file_path: Path, head_only: bool = False) -> None:
+    total = file_path.stat().st_size
+    start = 0
+    end = max(0, total - 1)
+    status = 200
+    range_header = str(handler.headers.get("Range") or "").strip()
+    match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header) if range_header else None
+    if match and total:
+        first, last = match.groups()
+        if first:
+            start = min(total - 1, int(first))
+            end = min(total - 1, int(last)) if last else total - 1
+        elif last:
+            length = min(total, int(last))
+            start = total - length
+            end = total - 1
+        if end < start:
+            handler.send_error(416, "Requested range not satisfiable")
+            return
+        status = 206
+    length = max(0, end - start + 1)
+    handler.send_response(status)
+    handler.send_header("Content-Type", "audio/mpeg")
+    handler.send_header("Accept-Ranges", "bytes")
+    handler.send_header("Content-Length", str(length))
+    handler.send_header("Cache-Control", "private, max-age=600")
+    if status == 206:
+        handler.send_header("Content-Range", f"bytes {start}-{end}/{total}")
+    handler.send_header("Connection", "close")
+    handler.end_headers()
+    handler.close_connection = True
+    if head_only or not length:
+        return
+    with file_path.open("rb") as stream:
+        stream.seek(start)
+        remaining = length
+        while remaining > 0:
+            chunk = stream.read(min(65536, remaining))
+            if not chunk:
+                break
+            handler.wfile.write(chunk)
+            remaining -= len(chunk)
+
+
+def _assistant_openai_tts_audio(
+    api_key: str,
+    message: str,
+    voice: str,
+    instructions: str,
+    speed: float,
+    model: str,
+) -> bytes:
+    api_key = str(api_key or "").strip()
+    if not api_key:
+        raise ValueError("OpenAI cinematic voice is selected, but no OpenAI API key is saved")
+    clean_message = str(message or "").strip()
+    if not clean_message:
+        raise ValueError("There is no response text to speak")
+    voice = str(voice or "onyx").strip().lower()
+    if voice not in OPENAI_TTS_VOICES:
+        voice = "onyx"
+    model = str(model or "gpt-4o-mini-tts").strip()[:80] or "gpt-4o-mini-tts"
+    try:
+        speed = max(0.25, min(4.0, float(speed or 1.08)))
+    except (TypeError, ValueError):
+        speed = 1.08
+    payload = {
+        "model": model,
+        "input": clean_message[:4096],
+        "voice": voice,
+        "instructions": str(instructions or JARVIS_TTS_INSTRUCTIONS).strip()[:4096] or JARVIS_TTS_INSTRUCTIONS,
+        "speed": speed,
+        "response_format": "mp3",
+    }
+    req = request.Request(
+        OPENAI_TTS_ENDPOINT,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "audio/mpeg,application/octet-stream",
+            "User-Agent": "SmartThermostat-JARVIS/1.0",
+        },
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=max(ASSISTANT_HA_TIMEOUT_SECONDS, 60.0)) as response:
+            audio = response.read(25 * 1024 * 1024 + 1)
+    except error.HTTPError as exc:
+        detail = ""
+        try:
+            raw = exc.read(4096).decode("utf-8", errors="replace")
+            parsed = json.loads(raw)
+            detail = str((parsed.get("error") or {}).get("message") or raw).strip()
+        except Exception:
+            detail = str(exc.reason or exc)
+        raise ValueError(f"OpenAI speech request failed: {detail[:500]}") from exc
+    except error.URLError as exc:
+        raise ValueError(f"Could not reach OpenAI speech service: {exc.reason}") from exc
+    if len(audio) > 25 * 1024 * 1024:
+        raise ValueError("OpenAI speech response exceeded the safety limit")
+    return audio
+
+
+def _assistant_play_media_url(
+    ha_url: str,
+    token: str,
+    media_player_id: str,
+    media_url: str,
+    announcement_volume_percent: int,
+) -> object:
+    volume = int(max(1, min(100, round(float(announcement_volume_percent or 45)))))
+    try:
+        result = _ha_json_request(
+            ha_url,
+            token,
+            "POST",
+            "/api/services/media_player/play_media",
+            {
+                "entity_id": media_player_id,
+                "media_content_id": media_url,
+                "media_content_type": "music",
+                "announce": True,
+                "extra": {"volume": volume},
+            },
+            timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
+        )
+        return {"method": "sonos_announcement", "volumeManaged": True, "volumePercent": volume, "result": result}
+    except Exception as announcement_error:
+        fallback = _ha_json_request(
+            ha_url,
+            token,
+            "POST",
+            "/api/services/media_player/play_media",
+            {
+                "entity_id": media_player_id,
+                "media_content_id": media_url,
+                "media_content_type": "music",
+            },
+            timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
+        )
+        return {
+            "method": "media_player_play_media_fallback",
+            "volumeManaged": False,
+            "volumePercent": volume,
+            "announcementError": str(announcement_error),
+            "result": fallback,
+        }
+
+
+def _assistant_openai_direct_speak(
+    ha_url: str,
+    token: str,
+    media_player_id: str,
+    message: str,
+    api_key: str,
+    voice: str,
+    instructions: str,
+    speed: float,
+    model: str,
+    announcement_volume_percent: int,
+) -> object:
+    if not media_player_id:
+        raise ValueError("No Sonos/media player entity is configured")
+    audio = _assistant_openai_tts_audio(api_key, message, voice, instructions, speed, model)
+    filename, media_url = _assistant_store_audio(audio)
+    result = _assistant_play_media_url(
+        ha_url,
+        token,
+        media_player_id,
+        media_url,
+        announcement_volume_percent,
+    )
+    if isinstance(result, dict):
+        result["audioFile"] = filename
+        result["ttsProvider"] = "openai_direct"
+        result["voice"] = voice
+        result["model"] = model
+    return result
+
+
+def _assistant_tts_request_options(ha_url: str, token: str, tts_entity_id: str, voice: str) -> dict:
+    options: dict[str, object] = {"preferred_format": "mp3"}
+    voice = str(voice or "").strip().lower()
+    if not voice:
+        return options
+    supported: set[str] = set()
+    friendly = ""
+    try:
+        state = _ha_state_cached(ha_url, token, tts_entity_id, ttl=30.0)
+        attrs = state.get("attributes") if isinstance(state, dict) else {}
+        attrs = attrs if isinstance(attrs, dict) else {}
+        raw_supported = attrs.get("supported_options") or []
+        if isinstance(raw_supported, (list, tuple, set)):
+            supported = {str(item).strip().lower() for item in raw_supported}
+        friendly = str(attrs.get("friendly_name") or "").lower()
+    except Exception:
+        pass
+    if "voice" in supported or "openai" in str(tts_entity_id or "").lower() or "openai" in friendly:
+        options["voice"] = voice
+    return options
+
+
 def _assistant_reachable_media_url(ha_url: str, media_url: str) -> str:
     media_url = str(media_url or "").strip()
     if not media_url:
@@ -8009,69 +8370,93 @@ def _assistant_tts_speak(
     message: str,
     language: str,
     announcement_volume_percent: int = 45,
+    tts_voice: str = "",
 ) -> object:
     if not tts_entity_id:
         raise ValueError("No Home Assistant TTS entity is configured or available")
     if not media_player_id:
         raise ValueError("No Sonos/media player entity is configured")
     volume = int(max(1, min(100, round(float(announcement_volume_percent or 45)))))
+    language = str(language or "en-US").strip().replace("_", "-") or "en-US"
+    if language.lower() == "en":
+        language = "en-US"
+    options = _assistant_tts_request_options(ha_url, token, tts_entity_id, tts_voice)
 
-    # Sonos supports announcement overlays with a dedicated volume in
-    # media_player.play_media. The speaker restores its prior playback and
-    # volume after the announcement, so we never have to guess when speech ends
-    # or leave the user's music at the JARVIS volume.
     try:
         tts_payload = {
             "engine_id": tts_entity_id,
             "message": message,
             "cache": True,
+            "language": language,
+            "options": options,
         }
-        generated = _ha_json_request(
-            ha_url, token, "POST", "/api/tts_get_url", tts_payload,
-            timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
-        )
+        try:
+            generated = _ha_json_request(
+                ha_url, token, "POST", "/api/tts_get_url", tts_payload,
+                timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            # Older or stricter providers may not expose voice selection. Retry
+            # with only the universally supported preferred-format hint.
+            if "voice" not in options:
+                raise
+            options = {"preferred_format": "mp3"}
+            tts_payload["options"] = options
+            generated = _ha_json_request(
+                ha_url, token, "POST", "/api/tts_get_url", tts_payload,
+                timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
+            )
         media_url = _assistant_reachable_media_url(ha_url, str((generated or {}).get("url") or (generated or {}).get("path") or ""))
         if not media_url:
             raise ValueError("Home Assistant did not return a TTS media URL")
-        result = _ha_json_request(
+        result = _assistant_play_media_url(
             ha_url,
             token,
-            "POST",
-            "/api/services/media_player/play_media",
-            {
-                "entity_id": media_player_id,
-                "media_content_id": media_url,
-                "media_content_type": "music",
-                "announce": True,
-                "extra": {"volume": volume},
-            },
-            timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
+            media_player_id,
+            media_url,
+            volume,
         )
-        return {"method": "sonos_announcement", "volumeManaged": True, "volumePercent": volume, "result": result}
+        if isinstance(result, dict):
+            result["ttsProvider"] = "home_assistant"
+            result["ttsOptions"] = options
+        return result
     except Exception as announcement_error:
-        # Preserve compatibility with non-Sonos players or older Sonos
-        # firmware. This fallback speaks normally but cannot promise a separate
-        # announcement volume.
-        fallback = _ha_json_request(
-            ha_url,
-            token,
-            "POST",
-            "/api/services/tts/speak",
-            {
-                "entity_id": tts_entity_id,
-                "media_player_entity_id": media_player_id,
-                "message": message,
-                "cache": True,
-            },
-            timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
-        )
+        service_payload = {
+            "entity_id": tts_entity_id,
+            "media_player_entity_id": media_player_id,
+            "message": message,
+            "cache": True,
+            "language": language,
+            "options": options,
+        }
+        try:
+            fallback = _ha_json_request(
+                ha_url,
+                token,
+                "POST",
+                "/api/services/tts/speak",
+                service_payload,
+                timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            service_payload.pop("options", None)
+            fallback = _ha_json_request(
+                ha_url,
+                token,
+                "POST",
+                "/api/services/tts/speak",
+                service_payload,
+                timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
+            )
         return {
             "method": "tts_speak_fallback",
             "volumeManaged": False,
             "volumePercent": volume,
             "announcementError": str(announcement_error),
+            "ttsProvider": "home_assistant",
             "result": fallback,
         }
+
 
 
 def _assistant_estimated_hold_seconds(message: str, extra_seconds: float = 0.0) -> float:
@@ -8166,10 +8551,26 @@ def _assistant_process_payload(payload: dict) -> dict:
         speak = _assistant_bool(payload.get("speak"), config.get("speak", True))
         fun_mode = _assistant_bool(payload.get("funMode"), config.get("funMode", True))
         playful_replies = _assistant_bool(payload.get("playfulReplies"), config.get("playfulReplies", True)) and fun_mode
-        language = str(payload.get("language") or config.get("language") or "en").strip()[:16] or "en"
+        language = str(payload.get("language") or config.get("language") or "en-US").strip().replace("_", "-")[:16] or "en-US"
+        if language.lower() == "en":
+            language = "en-US"
         agent_id = str(payload.get("agentId") or config.get("agentId") or "").strip()
         media_player_id = str(payload.get("mediaPlayerId") or config.get("effectiveMediaPlayerId") or "").strip()
         configured_tts = str(payload.get("ttsEntityId") or config.get("ttsEntityId") or "").strip()
+        tts_mode = str(payload.get("ttsMode") or config.get("ttsMode") or "home_assistant").strip().lower()
+        if tts_mode not in {"home_assistant", "openai_direct"}:
+            tts_mode = "home_assistant"
+        tts_voice = str(payload.get("ttsVoice") or config.get("ttsVoice") or "onyx").strip().lower()
+        if tts_voice not in OPENAI_TTS_VOICES:
+            tts_voice = "onyx"
+        private_voice = _assistant_private_voice_config()
+        openai_api_key = str(private_voice.get("openAiApiKey") or "").strip()
+        openai_model = str(config.get("openAiModel") or private_voice.get("openAiModel") or "gpt-4o-mini-tts").strip()[:80] or "gpt-4o-mini-tts"
+        openai_instructions = str(config.get("openAiInstructions") or private_voice.get("openAiInstructions") or JARVIS_TTS_INSTRUCTIONS).strip()[:4096] or JARVIS_TTS_INSTRUCTIONS
+        try:
+            openai_speed = max(0.25, min(4.0, float(config.get("openAiSpeed", private_voice.get("openAiSpeed", 1.08)) or 1.08)))
+        except (TypeError, ValueError):
+            openai_speed = 1.08
         try:
             announcement_volume = int(max(1, min(100, round(float(payload.get("announcementVolumePercent", config.get("announcementVolumePercent", 45)) or 45)))))
         except (TypeError, ValueError):
@@ -8190,7 +8591,7 @@ def _assistant_process_payload(payload: dict) -> dict:
             startedAt=int(time.time() * 1000),
             clearAtMonotonic=0.0,
             mediaPlayerId=media_player_id,
-            ttsEntityId=configured_tts,
+            ttsEntityId="openai.direct" if tts_mode == "openai_direct" else configured_tts,
             speechPlayed=False,
         )
 
@@ -8225,6 +8626,7 @@ def _assistant_process_payload(payload: dict) -> dict:
         tts_entity_id = ""
         speech_played = False
         speech_error = ""
+        speech_result: object = {}
 
         _assistant_set_state(
             "speaking",
@@ -8237,9 +8639,27 @@ def _assistant_process_payload(payload: dict) -> dict:
         tts_started = time.monotonic()
         if speak:
             try:
-                tts_entity_id = _assistant_resolve_tts_entity(ha_url, token, configured_tts)
-                _assistant_set_state("speaking", ttsEntityId=tts_entity_id)
-                _assistant_tts_speak(ha_url, token, tts_entity_id, media_player_id, spoken_response, language, announcement_volume)
+                if tts_mode == "openai_direct":
+                    tts_entity_id = "openai.direct"
+                    _assistant_set_state("speaking", ttsEntityId=tts_entity_id)
+                    speech_result = _assistant_openai_direct_speak(
+                        ha_url,
+                        token,
+                        media_player_id,
+                        spoken_response,
+                        openai_api_key,
+                        tts_voice,
+                        openai_instructions,
+                        openai_speed,
+                        openai_model,
+                        announcement_volume,
+                    )
+                else:
+                    tts_entity_id = _assistant_resolve_tts_entity(ha_url, token, configured_tts)
+                    _assistant_set_state("speaking", ttsEntityId=tts_entity_id)
+                    speech_result = _assistant_tts_speak(
+                        ha_url, token, tts_entity_id, media_player_id, spoken_response, language, announcement_volume, tts_voice
+                    )
                 speech_played = True
             except Exception as exc:
                 speech_error = str(exc)
@@ -8278,8 +8698,11 @@ def _assistant_process_payload(payload: dict) -> dict:
             "agentId": agent_id or "home_assistant/default",
             "mediaPlayerId": media_player_id,
             "ttsEntityId": tts_entity_id or configured_tts,
+            "ttsMode": tts_mode,
+            "ttsVoice": tts_voice,
             "announcementVolumePercent": announcement_volume,
             "speechPlayed": speech_played,
+            "speechResult": speech_result,
             "speechError": speech_error,
             "timings": timings,
             "assistant": state,
@@ -10221,6 +10644,9 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         query = parse_qs(parsed.query)
+        audio_path = _assistant_audio_path_from_request(path)
+        if audio_path is not None:
+            return _send_assistant_audio(self, audio_path, head_only=False)
         if path == "/api/health":
             return _json(self, 200, {"ok": True})
         if path == "/api/system/info":
@@ -10296,6 +10722,13 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.close_connection = True
         self.wfile.write(data)
+
+    def do_HEAD(self) -> None:
+        path = urlparse(self.path).path
+        audio_path = _assistant_audio_path_from_request(path)
+        if audio_path is not None:
+            return _send_assistant_audio(self, audio_path, head_only=True)
+        self.send_error(404, "Not found")
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
@@ -10602,10 +11035,12 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    global _SERVER_PORT
     parser = argparse.ArgumentParser(description="Run the Smart Thermostat local server")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8080")))
     args = parser.parse_args()
+    _SERVER_PORT = int(args.port)
 
     class SmartThermostatHTTPServer(ThreadingHTTPServer):
         daemon_threads = True
