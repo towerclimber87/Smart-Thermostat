@@ -8578,59 +8578,86 @@ def _assistant_tts_speak(
         raise ValueError("No Home Assistant TTS entity is configured or available")
     if not media_player_id:
         raise ValueError("No Sonos/media player entity is configured")
-    volume = int(max(1, min(100, round(float(announcement_volume_percent or 45)))))
-    language = str(language or "en-US").strip().replace("_", "-") or "en-US"
-    if language.lower() == "en":
-        language = "en-US"
-    options = _assistant_tts_request_options(ha_url, token, tts_entity_id, tts_voice)
 
-    try:
-        tts_payload = {
+    volume = int(max(1, min(100, round(float(announcement_volume_percent or 45)))))
+    language = str(language or "").strip().replace("_", "-")
+    voice = str(tts_voice or "").strip()
+    options = _assistant_tts_request_options(ha_url, token, tts_entity_id, voice) if voice else {}
+
+    # Local providers such as Piper already have their language and voice saved
+    # on the TTS entity. Passing the panel's generic en-US value to an en-GB
+    # Piper entity causes Home Assistant to return HTTP 500. Start with the
+    # provider defaults, exactly like a successful Developer Tools tts.speak
+    # action, and only add optional overrides for providers that need them.
+    get_url_payloads: list[dict[str, object]] = [
+        {
             "engine_id": tts_entity_id,
             "message": message,
             "cache": True,
-            "language": language,
-            "options": options,
         }
+    ]
+    if voice or language:
+        enhanced: dict[str, object] = dict(get_url_payloads[0])
+        if language:
+            enhanced["language"] = language
+        if options:
+            enhanced["options"] = options
+        # Keep the provider-default request first. The enhanced request is a
+        # fallback for premium TTS entities that accept per-call controls.
+        get_url_payloads.append(enhanced)
+
+    generation_errors: list[str] = []
+    for tts_payload in get_url_payloads:
         try:
             generated = _ha_json_request(
-                ha_url, token, "POST", "/api/tts_get_url", tts_payload,
+                ha_url,
+                token,
+                "POST",
+                "/api/tts_get_url",
+                tts_payload,
                 timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
             )
-        except Exception:
-            # Older or stricter providers may not expose voice selection. Retry
-            # with only the universally supported preferred-format hint.
-            if "voice" not in options:
-                raise
-            options = {"preferred_format": "mp3"}
-            tts_payload["options"] = options
-            generated = _ha_json_request(
-                ha_url, token, "POST", "/api/tts_get_url", tts_payload,
-                timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
+            media_url = _assistant_reachable_media_url(
+                ha_url,
+                str((generated or {}).get("url") or (generated or {}).get("path") or ""),
             )
-        media_url = _assistant_reachable_media_url(ha_url, str((generated or {}).get("url") or (generated or {}).get("path") or ""))
-        if not media_url:
-            raise ValueError("Home Assistant did not return a TTS media URL")
-        result = _assistant_play_media_url(
-            ha_url,
-            token,
-            media_player_id,
-            media_url,
-            volume,
-        )
-        if isinstance(result, dict):
-            result["ttsProvider"] = "home_assistant"
-            result["ttsOptions"] = options
-        return result
-    except Exception as announcement_error:
-        service_payload = {
+            if not media_url:
+                raise ValueError("Home Assistant did not return a TTS media URL")
+            result = _assistant_play_media_url(
+                ha_url,
+                token,
+                media_player_id,
+                media_url,
+                volume,
+            )
+            if isinstance(result, dict):
+                result["ttsProvider"] = "home_assistant"
+                result["ttsOptions"] = tts_payload.get("options", {})
+                result["ttsLanguage"] = tts_payload.get("language", "provider_default")
+            return result
+        except Exception as exc:
+            generation_errors.append(str(exc))
+
+    # Match the action that was verified manually in Developer Tools. The TTS
+    # entity is the service target, while the Sonos entity is service data.
+    service_payloads: list[dict[str, object]] = [
+        {
             "entity_id": tts_entity_id,
             "media_player_entity_id": media_player_id,
             "message": message,
             "cache": True,
-            "language": language,
-            "options": options,
         }
+    ]
+    if voice or language:
+        enhanced_service: dict[str, object] = dict(service_payloads[0])
+        if language:
+            enhanced_service["language"] = language
+        if options:
+            enhanced_service["options"] = options
+        service_payloads.append(enhanced_service)
+
+    service_errors: list[str] = []
+    for service_payload in service_payloads:
         try:
             fallback = _ha_json_request(
                 ha_url,
@@ -8640,24 +8667,21 @@ def _assistant_tts_speak(
                 service_payload,
                 timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
             )
-        except Exception:
-            service_payload.pop("options", None)
-            fallback = _ha_json_request(
-                ha_url,
-                token,
-                "POST",
-                "/api/services/tts/speak",
-                service_payload,
-                timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
-            )
-        return {
-            "method": "tts_speak_fallback",
-            "volumeManaged": False,
-            "volumePercent": volume,
-            "announcementError": str(announcement_error),
-            "ttsProvider": "home_assistant",
-            "result": fallback,
-        }
+            return {
+                "method": "tts_speak_fallback",
+                "volumeManaged": False,
+                "volumePercent": volume,
+                "generationErrors": generation_errors,
+                "ttsProvider": "home_assistant",
+                "ttsOptions": service_payload.get("options", {}),
+                "ttsLanguage": service_payload.get("language", "provider_default"),
+                "result": fallback,
+            }
+        except Exception as exc:
+            service_errors.append(str(exc))
+
+    details = service_errors[-1] if service_errors else (generation_errors[-1] if generation_errors else "Unknown TTS error")
+    raise RuntimeError(f"Home Assistant TTS failed after provider-default and fallback attempts: {details}")
 
 
 
@@ -9541,10 +9565,10 @@ def _assistant_process_payload(payload: dict) -> dict:
             "cloudAgentId": cloud_agent_id,
             "mediaPlayerId": media_player_id,
             "ttsEntityId": tts_entity_id or local_tts_configured or configured_tts,
-            "ttsMode": tts_mode,
+            "ttsMode": "home_assistant" if tts_path == "local" else tts_mode,
             "ttsPolicy": tts_policy,
             "ttsPath": tts_path,
-            "ttsVoice": tts_voice,
+            "ttsVoice": "" if tts_path == "local" else tts_voice,
             "announcementVolumePercent": announcement_volume,
             "speechPlayed": speech_played,
             "speechResult": speech_result,

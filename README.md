@@ -86,6 +86,8 @@ The assistant reuses the Home Assistant URL and long-lived token already stored 
 
 ### Cost-aware hybrid routing
 
+Version 12.50 fixes local Piper playback from JARVIS test automations and thermostat requests. Local TTS now uses the language and voice already configured on the Home Assistant TTS entity instead of forcing the panel's generic language value. It first requests a Sonos-compatible announcement URL with provider defaults and then falls back to the same minimal `tts.speak` payload verified in Home Assistant Developer Tools.
+
 Version 12.40 adds one shared routing and personality profile to the same Home Assistant-owned record used by JARVIS knowledge:
 
 ```text
