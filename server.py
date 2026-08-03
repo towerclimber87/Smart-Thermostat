@@ -7455,13 +7455,18 @@ def _assistant_tts_speak(ha_url: str, token: str, tts_entity_id: str, media_play
         raise ValueError("No Home Assistant TTS entity is configured or available")
     if not media_player_id:
         raise ValueError("No Sonos/media player entity is configured")
+
+    # Keep this request deliberately provider-neutral. Home Assistant TTS
+    # entities already store their own language, voice, speed, and audio-format
+    # options. Passing generic language/format overrides caused OpenAI TTS to
+    # raise HTTP 500 even though the same entity worked from Developer Tools.
+    # This is the minimal tts.speak payload Home Assistant accepts and matches
+    # the action that was verified directly on the selected Sonos speaker.
     payload = {
         "entity_id": tts_entity_id,
         "media_player_entity_id": media_player_id,
         "message": message,
-        "cache": True,
-        "language": language,
-        "options": {"preferred_format": "mp3"},
+        "cache": False,
     }
     return _ha_json_request(
         ha_url,
