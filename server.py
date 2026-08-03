@@ -4738,6 +4738,9 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
         else "home"
     )
     sync_status = _sync_status_payload()
+    assistant_config = _assistant_config_payload()
+    jarvis_volume_percent = int(assistant_config.get("announcementVolumePercent") or 45)
+    jarvis_volume_level = round(jarvis_volume_percent / 100.0, 2)
     thermostat_detail = {
         **thermostat,
         "current_temperature": thermostat["currentTemp"],
@@ -4793,6 +4796,10 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
         "sync": sync_status,
         "syncArmed": bool(sync_status.get("active")),
         "syncRemainingSeconds": int(sync_status.get("remainingSeconds") or 0),
+        "jarvisVolumePercent": jarvis_volume_percent,
+        "jarvis_volume_percent": jarvis_volume_percent,
+        "jarvisVolumeLevel": jarvis_volume_level,
+        "jarvis_volume_level": jarvis_volume_level,
     }
     payload = {
         "ok": True,
@@ -4867,6 +4874,10 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
         "sync": sync_status,
         "syncArmed": bool(sync_status.get("active")),
         "syncRemainingSeconds": int(sync_status.get("remainingSeconds") or 0),
+        "jarvisVolumePercent": jarvis_volume_percent,
+        "jarvis_volume_percent": jarvis_volume_percent,
+        "jarvisVolumeLevel": jarvis_volume_level,
+        "jarvis_volume_level": jarvis_volume_level,
     }
     return payload
 

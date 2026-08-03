@@ -84,6 +84,10 @@ The native panel displays the AI-core animation and sends typed commands to Home
 
 The assistant reuses the Home Assistant URL and long-lived token already stored in the thermostat configuration. Replies can be sent to the Sonos/media player selected on the Audio page or to a separate player selected under **Backup Config → JARVIS Voice**. The stored-token assistant endpoint accepts commands only from the thermostat itself unless the temporary Backup Config portal is open.
 
+### Persistent JARVIS automation volume
+
+Version 13.50 exposes each panel's saved JARVIS voice volume through the normal thermostat status poll. The matching IHA 10.13.0 integration publishes a media-player-ready sensor such as `sensor.office_thermostat_jarvis_volume`, whose state is `0.45` for 45 percent. Home Assistant retains the last valid value in `.storage/iha.jarvis_volume`, so existing automations can keep using it while the wall panel is offline or rebooting. The sensor attributes report the percentage and whether the current value is live or cached.
+
 ### Local automation execution and controlled OpenAI fallback
 
 Version 13.10 adds the missing Home Assistant automation announcement service:
@@ -270,7 +274,7 @@ To configure it from another computer, press **Backup Config** on the thermostat
 
 Version 12.30 moved learned temperature-source mappings into the IHA Home Assistant integration instead of saving a separate copy on each wall panel. Version 12.40 adds the shared routing and personality profile to that same record. Every IHA thermostat reads the same live data before answering multi-room temperature questions.
 
-Install the matching `Supporting/iha.zip` files into Home Assistant's `/config/custom_components/iha/` directory and restart Home Assistant before testing. The matching integration version is **10.12.0**.
+Install the matching `Supporting/iha.zip` files into Home Assistant's `/config/custom_components/iha/` directory and restart Home Assistant before testing. The matching integration version is **10.13.0**.
 
 JARVIS can be taught by speech or by **Backup Config → JARVIS Voice → Shared Home Knowledge**:
 
