@@ -9796,8 +9796,6 @@ def _assistant_process_payload(payload: dict) -> dict:
         return {"ok": False, "error": "Enter a command in the text field."}
     if len(text) > 1200:
         return {"ok": False, "error": "Command is too long (maximum 1200 characters)."}
-    request_mode = str(payload.get("mode") or "conversation").strip().lower()
-    direct_announcement = request_mode in {"announcement", "announce", "direct_announcement"}
     config = _assistant_config_payload()
     if not config.get("enabled") and not _assistant_bool(payload.get("force"), False):
         return {"ok": False, "error": "The thermostat voice assistant is disabled in the config portal."}
@@ -9813,23 +9811,10 @@ def _assistant_process_payload(payload: dict) -> dict:
             _ASSISTANT_REQUEST_SEQ += 1
             request_id = _ASSISTANT_REQUEST_SEQ
             previous_conversation_id = str(_ASSISTANT_STATE.get("conversationId") or "").strip()
-        # Direct announcements are intentionally isolated from Home Assistant's
-        # conversation/intent processor. They already contain the exact text to
-        # speak, so routing them through Assist can turn them into an action_done
-        # response ("Done") or a no_intent_match error. Skipping that round trip
-        # also makes automation announcements noticeably faster.
-        shared_profile = (
-            _assistant_normalize_shared_profile({})
-            if direct_announcement
-            else _assistant_get_shared_profile(ha_url, token)
-        )
+        shared_profile = _assistant_get_shared_profile(ha_url, token)
         speak = _assistant_bool(payload.get("speak"), config.get("speak", True))
         fun_mode = _assistant_bool(payload.get("funMode"), config.get("funMode", False))
-        personality_enabled = (
-            False
-            if direct_announcement
-            else _assistant_bool(payload.get("playfulReplies"), config.get("playfulReplies", True))
-        )
+        personality_enabled = _assistant_bool(payload.get("playfulReplies"), config.get("playfulReplies", True))
         language = str(payload.get("language") or config.get("language") or "en-US").strip().replace("_", "-")[:16] or "en-US"
         if language.lower() == "en":
             language = "en-US"
@@ -9879,103 +9864,92 @@ def _assistant_process_payload(payload: dict) -> dict:
         )
 
         conversation_started = time.monotonic()
-        route = "direct_announcement" if direct_announcement else "local_fast_path"
-        selected_agent_id = "" if direct_announcement else local_agent_id
+        quick = _assistant_learning_command(text, ha_url, token)
+        if quick is None:
+            quick = _assistant_shared_temperature_response(text, ha_url, token)
+        if quick is None:
+            quick = _assistant_weather_response(text, ha_url, token)
+        if quick is None:
+            quick = _assistant_home_status_response(text, ha_url, token)
+        if quick is None:
+            quick = _assistant_local_fast_response(text)
+        route = "local_fast_path"
+        selected_agent_id = local_agent_id
         returned_conversation_id = ""
         continue_conversation = False
         error_code = ""
         fallback_reason = ""
-
-        if direct_announcement:
-            # The message is already final. Preserve it exactly, including any
-            # punctuation chosen by the automation author.
-            response_text = text
-            response_type = "announcement"
+        if quick:
+            response_text, response_type, route = quick
         else:
-            quick = _assistant_learning_command(text, ha_url, token)
-            if quick is None:
-                quick = _assistant_shared_temperature_response(text, ha_url, token)
-            if quick is None:
-                quick = _assistant_weather_response(text, ha_url, token)
-            if quick is None:
-                quick = _assistant_home_status_response(text, ha_url, token)
-            if quick is None:
-                quick = _assistant_local_fast_response(text)
-            if quick:
-                response_text, response_type, route = quick
-            else:
-                desired_route = _assistant_route_command(
-                    text,
-                    shared_profile,
-                    has_cloud_conversation=bool(conversation_id),
-                )
-                selected_agent_id = local_agent_id if desired_route == "local" else cloud_agent_id
-                conversation_payload = {"text": text, "language": language}
-                if selected_agent_id:
-                    conversation_payload["agent_id"] = selected_agent_id
-                if desired_route == "cloud" and conversation_id:
-                    conversation_payload["conversation_id"] = conversation_id
+            desired_route = _assistant_route_command(
+                text,
+                shared_profile,
+                has_cloud_conversation=bool(conversation_id),
+            )
+            selected_agent_id = local_agent_id if desired_route == "local" else cloud_agent_id
+            conversation_payload = {"text": text, "language": language}
+            if selected_agent_id:
+                conversation_payload["agent_id"] = selected_agent_id
+            if desired_route == "cloud" and conversation_id:
+                conversation_payload["conversation_id"] = conversation_id
+            raw = _ha_json_request(
+                ha_url,
+                token,
+                "POST",
+                "/api/conversation/process",
+                conversation_payload,
+                timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
+            )
+            response_text, response_type, returned_conversation_id, continue_conversation, error_code = _assistant_extract_response(raw)
+            route = "home_assistant_local" if desired_route == "local" else "cloud_conversation"
+
+            # Device-control commands never fall through to an LLM. Read-only
+            # questions may fall through when built-in Assist cannot resolve a
+            # target or asks the user to choose one. This preserves safety while
+            # allowing the cloud agent to inspect exposed entities and provide a
+            # useful summary instead of repeating a rigid intent error.
+            can_fallback = (
+                desired_route == "local"
+                and str(shared_profile.get("routing_mode") or "hybrid") == "hybrid"
+                and (_assistant_is_read_only_query(text) or _assistant_is_weather_query(text))
+                and _assistant_local_query_needs_cloud(response_text, response_type, error_code)
+                and cloud_agent_id
+                and cloud_agent_id != local_agent_id
+            )
+            if can_fallback:
+                fallback_reason = error_code or "ambiguous_local_query"
+                selected_agent_id = cloud_agent_id
+                cloud_payload = {"text": text, "language": language, "agent_id": cloud_agent_id}
+                if conversation_id:
+                    cloud_payload["conversation_id"] = conversation_id
                 raw = _ha_json_request(
                     ha_url,
                     token,
                     "POST",
                     "/api/conversation/process",
-                    conversation_payload,
+                    cloud_payload,
                     timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
                 )
                 response_text, response_type, returned_conversation_id, continue_conversation, error_code = _assistant_extract_response(raw)
-                route = "home_assistant_local" if desired_route == "local" else "cloud_conversation"
-
-                # Device-control commands never fall through to an LLM. Read-only
-                # questions may fall through when built-in Assist cannot resolve a
-                # target or asks the user to choose one. This preserves safety while
-                # allowing the cloud agent to inspect exposed entities and provide a
-                # useful summary instead of repeating a rigid intent error.
-                can_fallback = (
-                    desired_route == "local"
-                    and str(shared_profile.get("routing_mode") or "hybrid") == "hybrid"
-                    and (_assistant_is_read_only_query(text) or _assistant_is_weather_query(text))
-                    and _assistant_local_query_needs_cloud(response_text, response_type, error_code)
-                    and cloud_agent_id
-                    and cloud_agent_id != local_agent_id
-                )
-                if can_fallback:
-                    fallback_reason = error_code or "ambiguous_local_query"
-                    selected_agent_id = cloud_agent_id
-                    cloud_payload = {"text": text, "language": language, "agent_id": cloud_agent_id}
-                    if conversation_id:
-                        cloud_payload["conversation_id"] = conversation_id
-                    raw = _ha_json_request(
-                        ha_url,
-                        token,
-                        "POST",
-                        "/api/conversation/process",
-                        cloud_payload,
-                        timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
-                    )
-                    response_text, response_type, returned_conversation_id, continue_conversation, error_code = _assistant_extract_response(raw)
-                    route = "cloud_fallback_read_only"
-                if not response_text:
-                    response_text = "Home Assistant completed the request but did not return a spoken response."
+                route = "cloud_fallback_read_only"
+            if not response_text:
+                response_text = "Home Assistant completed the request but did not return a spoken response."
         conversation_ms = int((time.monotonic() - conversation_started) * 1000)
 
-        if direct_announcement:
-            saved_conversation_id = ""
-            spoken_response = response_text
+        if config.get("continueConversation") and _assistant_is_cloud_route(route):
+            saved_conversation_id = returned_conversation_id
+        elif config.get("continueConversation") and not new_conversation:
+            saved_conversation_id = previous_conversation_id
         else:
-            if config.get("continueConversation") and _assistant_is_cloud_route(route):
-                saved_conversation_id = returned_conversation_id
-            elif config.get("continueConversation") and not new_conversation:
-                saved_conversation_id = previous_conversation_id
-            else:
-                saved_conversation_id = ""
-            spoken_response = _assistant_playful_spoken_text(
-                response_text,
-                request_id,
-                personality_enabled,
-                response_type,
-                shared_profile,
-            )
+            saved_conversation_id = ""
+        spoken_response = _assistant_playful_spoken_text(
+            response_text,
+            request_id,
+            personality_enabled,
+            response_type,
+            shared_profile,
+        )
         tts_entity_id = ""
         tts_path = "none"
         speech_played = False
@@ -9993,17 +9967,8 @@ def _assistant_process_payload(payload: dict) -> dict:
         tts_started = time.monotonic()
         if speak:
             try:
-                # Direct announcements use the voice provider saved on this
-                # thermostat. They must not be silently rerouted to Piper by the
-                # shared question/command cost policy, because an announcement is
-                # already final text and is expected to use the configured JARVIS
-                # delivery. Normal questions and commands retain the shared policy.
-                use_local_tts = (
-                    False
-                    if direct_announcement
-                    else tts_policy == "local_only" or (
-                        tts_policy == "hybrid" and not _assistant_is_cloud_route(route)
-                    )
+                use_local_tts = tts_policy == "local_only" or (
+                    tts_policy == "hybrid" and not _assistant_is_cloud_route(route)
                 )
                 if use_local_tts:
                     tts_entity_id = _assistant_resolve_local_tts_entity(ha_url, token, local_tts_configured)
@@ -10090,16 +10055,16 @@ def _assistant_process_payload(payload: dict) -> dict:
             "responseErrorCode": error_code,
             "fallbackReason": fallback_reason,
             "route": route,
-            "routingMode": "direct_announcement" if direct_announcement else shared_profile.get("routing_mode"),
+            "routingMode": shared_profile.get("routing_mode"),
             "conversationId": returned_conversation_id,
             "continueConversation": continue_conversation,
-            "agentId": "direct_announcement" if direct_announcement else (selected_agent_id or "home_assistant/default"),
+            "agentId": selected_agent_id or "home_assistant/default",
             "localAgentId": local_agent_id,
             "cloudAgentId": cloud_agent_id,
             "mediaPlayerId": media_player_id,
             "ttsEntityId": tts_entity_id or local_tts_configured or configured_tts,
             "ttsMode": "home_assistant" if tts_path == "local" else tts_mode,
-            "ttsPolicy": "panel_configured" if direct_announcement else tts_policy,
+            "ttsPolicy": tts_policy,
             "ttsPath": tts_path,
             "ttsVoice": "" if tts_path == "local" else tts_voice,
             "announcementVolumePercent": announcement_volume,
