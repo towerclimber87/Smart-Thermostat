@@ -2743,7 +2743,7 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
     :root {{ color-scheme:dark; font-family:Arial,Helvetica,sans-serif; }}
     * {{ box-sizing:border-box; }}
     body {{ margin:0; min-height:100vh; color:#f7fbff; background:radial-gradient(circle at 15% 0%,rgba(70,232,255,.24),transparent 28%),linear-gradient(135deg,#071222,#101d35 52%,#050913); }}
-    .wrap {{ width:min(1180px,calc(100% - 30px)); margin:0 auto; padding:28px 0 48px; }}
+    .wrap {{ width:min(1480px,calc(100% - 20px)); margin:0 auto; padding:18px 0 30px; }}
     .hero {{ display:flex; justify-content:space-between; gap:18px; align-items:flex-start; margin-bottom:16px; }}
     .eyebrow {{ color:#46e8ff; font-size:12px; font-weight:900; letter-spacing:4px; text-transform:uppercase; }}
     h1 {{ margin:7px 0 8px; font-size:clamp(32px,5vw,58px); line-height:.95; }}
@@ -2784,9 +2784,37 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
     code {{ color:#8ff4ff; }}
     .status {{ min-height:48px; padding:12px 14px; border-radius:15px; color:#e9f4ff; background:rgba(0,0,0,.20); border:1px solid rgba(255,255,255,.10); white-space:pre-wrap; margin-top:12px; }}
     .ok {{ color:#76ffc4; }} .bad {{ color:#ff8a8a; }}
-    @media(max-width:900px) {{ .summary-grid {{ grid-template-columns:repeat(3,1fr); }} .section-grid {{ grid-template-columns:1fr; }} .full {{ grid-column:auto; }} }}
-    @media(max-width:720px) {{ .hero,.actions {{ display:grid; grid-template-columns:1fr; }} .form-grid {{ grid-template-columns:1fr; }} .checks {{ grid-template-columns:1fr 1fr; }} .pill {{ white-space:normal; }} }}
-    @media(max-width:480px) {{ .summary-grid {{ grid-template-columns:1fr 1fr; }} .checks {{ grid-template-columns:1fr; }} .test-row {{ grid-template-columns:1fr; }} }}
+
+    /* Thermostat settings are intentionally denser than the backup and voice
+       tabs. Natural-height cards prevent a short section from being stretched
+       to match the tallest card in the same grid row. */
+    #tab-thermostat > .card {{ padding:13px 14px; border-radius:16px; }}
+    #tab-thermostat .eyebrow {{ font-size:10px; letter-spacing:3px; }}
+    #tab-thermostat h2 {{ margin:3px 0 5px; font-size:23px; }}
+    #tab-thermostat h3 {{ margin:0 0 8px; font-size:16px; line-height:1.1; }}
+    #tab-thermostat .section-grid {{ grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px; margin-top:9px; align-items:start; grid-auto-flow:dense; }}
+    #tab-thermostat .settings-section {{ align-self:start; border-radius:13px; padding:10px 11px; }}
+    #tab-thermostat .settings-section.full {{ grid-column:1/-1; }}
+    #tab-thermostat .form-grid {{ gap:8px 9px; }}
+    #tab-thermostat .field label {{ margin-bottom:4px; font-size:11px; letter-spacing:.2px; }}
+    #tab-thermostat input[type=text],
+    #tab-thermostat input[type=number],
+    #tab-thermostat input[type=password],
+    #tab-thermostat select {{ min-height:37px; height:37px; border-radius:10px; padding:0 10px; font-size:13px; }}
+    #tab-thermostat select[multiple] {{ min-height:96px; height:96px; padding:5px 7px; }}
+    #tab-thermostat .hint {{ margin-top:4px; font-size:11px; line-height:1.25; }}
+    #tab-thermostat .muted {{ margin:0 0 7px; font-size:12px; line-height:1.3; }}
+    #tab-thermostat .checks {{ grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; margin:8px 0 0; }}
+    #tab-thermostat .check {{ min-height:36px; padding:6px 8px; border-radius:10px; gap:7px; font-size:13px; }}
+    #tab-thermostat .check input {{ width:16px; height:16px; }}
+    #tab-thermostat .button-row {{ margin-top:10px; gap:8px; }}
+    #tab-thermostat .button-row button {{ min-height:42px; border-radius:12px; padding:0 16px; font-size:14px; }}
+    #tab-thermostat .status {{ min-height:40px; margin-top:8px; padding:9px 11px; border-radius:11px; font-size:12px; }}
+
+    @media(max-width:1200px) {{ #tab-thermostat .section-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} }}
+    @media(max-width:900px) {{ .summary-grid {{ grid-template-columns:repeat(3,1fr); }} .section-grid {{ grid-template-columns:1fr; }} .full {{ grid-column:auto; }} #tab-thermostat .section-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} #tab-thermostat .settings-section.full {{ grid-column:1/-1; }} }}
+    @media(max-width:720px) {{ .hero,.actions {{ display:grid; grid-template-columns:1fr; }} .form-grid {{ grid-template-columns:1fr; }} .checks {{ grid-template-columns:1fr 1fr; }} .pill {{ white-space:normal; }} #tab-thermostat .section-grid {{ grid-template-columns:1fr; }} #tab-thermostat .settings-section.full {{ grid-column:auto; }} #tab-thermostat .form-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} }}
+    @media(max-width:480px) {{ .summary-grid {{ grid-template-columns:1fr 1fr; }} .checks {{ grid-template-columns:1fr; }} .test-row {{ grid-template-columns:1fr; }} #tab-thermostat .form-grid {{ grid-template-columns:1fr; }} }}
   </style>
 </head>
 <body>
