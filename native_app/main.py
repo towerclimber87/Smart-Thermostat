@@ -10381,7 +10381,7 @@ class SettingsDialog(QDialog):
             "Security Codes": "Alarm disarm and settings-access PINs",
             "Thermostat Unit": "The name used to identify this thermostat",
             "Screen Rotation": "Upright or upside-down landscape screen orientation",
-            "Jarvis": "Everyday voice, volume, response, and screen-display controls",
+            "Jarvis": "Home Assistant speech volume, response, and screen-display controls",
         }
         return descriptions.get(str(title or ""), "Open this section to view its settings")
 
@@ -11311,7 +11311,7 @@ class SettingsDialog(QDialog):
         jarvis_defaults = self.jarvis_voice_defaults()
         self.jarvis_toggle_buttons: dict[str, RoundButton] = {}
         jarvis = self.add_section("Jarvis", -1, 0, 1, 4)
-        jarvis_note = QLabel("Quick controls for everyday JARVIS behavior. Advanced voice, agent, and routing settings remain available in Backup Config.")
+        jarvis_note = QLabel("Home Assistant handles speech and Sonos playback. This screen controls announcement volume, response text, and how long the JARVIS overlay remains visible.")
         jarvis_note.setWordWrap(True)
         jarvis_note.setFont(font(8, QFont.Bold))
         jarvis_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
@@ -11325,7 +11325,7 @@ class SettingsDialog(QDialog):
             jarvis_hold = int(round(float(jarvis_voice.get("responseHoldSeconds", jarvis_defaults["responseHoldSeconds"]))))
         except (TypeError, ValueError):
             jarvis_hold = int(jarvis_defaults["responseHoldSeconds"])
-        self.add_section_value(jarvis_grid, "jarvisAnnouncementVolumePercent", "Voice Volume", jarvis_volume, 0, 0, 1, 100, " %")
+        self.add_section_value(jarvis_grid, "jarvisAnnouncementVolumePercent", "Announcement Volume", jarvis_volume, 0, 0, 1, 100, " %")
         self.add_section_value(jarvis_grid, "jarvisResponseHoldSeconds", "Screen Display Time", jarvis_hold, 0, 1, 0, 15, " sec")
         self.add_jarvis_toggle(jarvis_grid, "enabled", "JARVIS", 1, 0)
         self.add_jarvis_toggle(jarvis_grid, "speak", "Speak on Sonos", 1, 1)

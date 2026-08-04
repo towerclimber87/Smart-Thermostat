@@ -1,3 +1,11 @@
+## Home Assistant-owned speech (10.14.0)
+
+Version **10.14.0** moves JARVIS audio generation and Sonos playback out of the thermostat backend. `iha.ask_jarvis` and `iha.jarvis_announcement` now ask the panel to process/display the text with `externalSpeech`, then Home Assistant calls its native `tts.speak` service directly. The panel still shows the JARVIS icon, command, response text, speaking/complete state, and saved screen hold time.
+
+The panel's **Announcement Volume** remains authoritative. Home Assistant temporarily applies that level to the selected media player, calls the configured TTS entity with `cache: false`, monitors the playback cycle, restores the previous media-player volume, and tells the panel when playback finishes. For Home Assistant Cloud, the configured voice is passed in `options.voice` (for example, `JennyNeural`).
+
+This design is also ready for an external wireless microphone array: the microphone/Assist pipeline stays in Home Assistant, while the IHA panel remains a visual status and volume-control surface.
+
 # Supporting
 
 Place supporting documents, notes, screenshots, reference files, and other repo-only materials here.

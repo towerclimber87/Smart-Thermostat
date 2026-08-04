@@ -82,11 +82,15 @@ python3 native_app/main.py
 
 The native panel displays the AI-core animation and sends typed commands to Home Assistant. The Raspberry Pi does not run an LLM. Home Assistant handles local intents and forwards only broader requests to the configured conversation agent.
 
-The assistant reuses the Home Assistant URL and long-lived token already stored in the thermostat configuration. Replies can be sent to the Sonos/media player selected on the Audio page or to a separate player selected under **Backup Config → JARVIS Voice**. The stored-token assistant endpoint accepts commands only from the thermostat itself unless the temporary Backup Config portal is open.
+The assistant reuses the Home Assistant URL and long-lived token already stored in the thermostat configuration. The stored-token assistant endpoint accepts commands only from the thermostat itself unless the temporary Backup Config portal is open.
+
+### Home Assistant-owned speech playback
+
+Version 13.90 removes audio generation and Sonos playback from the thermostat backend. The matching IHA 10.14.0 integration calls Home Assistant's native `tts.speak` action using the TTS entity, voice, language, media player, and announcement volume saved on the panel. The thermostat continues to show the JARVIS icon, command, response text, speaking status, and configured screen hold time. Home Assistant restores the prior media-player volume after playback and reports completion back to the panel. This is the intended path for automations and for a future Home Assistant wireless microphone array.
 
 ### Persistent JARVIS automation volume
 
-Version 13.50 exposes each panel's saved JARVIS voice volume through the normal thermostat status poll. The matching IHA 10.13.0 integration publishes a media-player-ready sensor such as `sensor.office_thermostat_jarvis_volume`, whose state is `0.45` for 45 percent. Home Assistant retains the last valid value in `.storage/iha.jarvis_volume`, so existing automations can keep using it while the wall panel is offline or rebooting. The sensor attributes report the percentage and whether the current value is live or cached.
+Version 13.50 exposes each panel's saved JARVIS voice volume through the normal thermostat status poll. The matching IHA 10.14.0 integration publishes a media-player-ready sensor such as `sensor.office_thermostat_jarvis_volume`, whose state is `0.45` for 45 percent. Home Assistant retains the last valid value in `.storage/iha.jarvis_volume`, so existing automations can keep using it while the wall panel is offline or rebooting. The sensor attributes report the percentage and whether the current value is live or cached.
 
 ### Local automation execution and controlled OpenAI fallback
 
@@ -94,7 +98,7 @@ Version 13.10 adds the missing Home Assistant automation announcement service:
 
 - `iha.jarvis_announcement` is now registered by the IHA custom integration.
 - Automation messages bypass Home Assistant Assist and OpenAI, so the supplied text is spoken exactly as written.
-- Announcements still use the thermostat's configured TTS policy, Sonos announcement playback, screen animation, and optional media-player override.
+- Announcements use Home Assistant native TTS and Sonos playback while retaining the thermostat's screen animation, saved announcement volume, and optional media-player override.
 - Running an announcement does not replace or reset the saved JARVIS conversation.
 
 Version 13.00 fixes JARVIS requests started from Home Assistant automations and adds a reliable local-first path for running household automations:
@@ -274,7 +278,7 @@ To configure it from another computer, press **Backup Config** on the thermostat
 
 Version 12.30 moved learned temperature-source mappings into the IHA Home Assistant integration instead of saving a separate copy on each wall panel. Version 12.40 adds the shared routing and personality profile to that same record. Every IHA thermostat reads the same live data before answering multi-room temperature questions.
 
-Install the matching `Supporting/iha.zip` files into Home Assistant's `/config/custom_components/iha/` directory and restart Home Assistant before testing. The matching integration version is **10.13.0**.
+Install the matching `Supporting/iha.zip` files into Home Assistant's `/config/custom_components/iha/` directory and restart Home Assistant before testing. The matching integration version is **10.14.0**.
 
 JARVIS can be taught by speech or by **Backup Config → JARVIS Voice → Shared Home Knowledge**:
 
