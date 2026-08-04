@@ -1842,6 +1842,11 @@ class AppState:
         self.system_info: dict = {}
         self.last_error = ""
         self.status_refresh_paused_until = 0.0
+        # Every background thermostat-status request captures this epoch. Local
+        # commands bump it before changing the optimistic UI so a slow response
+        # that started earlier cannot repaint an old mode/setpoint/door-pause
+        # state after the command has already been accepted on screen.
+        self.status_refresh_epoch = 0
         # Local setpoint hold used by the native dial/buttons. Home Assistant and
         # the local backend can briefly report the old target while a just-touched
         # setpoint is still round-tripping. Keep the newly selected target on
@@ -1855,6 +1860,19 @@ class AppState:
         # Home Assistant. Saved panel config is display cache only and must never
         # be treated as authoritative when opening alarm controls.
         self.alarm_state_refreshed_at = 0.0
+
+    def pause_status_refresh(self, seconds: float = 2.5):
+        self.status_refresh_epoch += 1
+        self.status_refresh_paused_until = max(
+            float(getattr(self, "status_refresh_paused_until", 0.0) or 0.0),
+            time.monotonic() + max(0.0, float(seconds)),
+        )
+
+    def resume_status_refresh(self):
+        # Invalidate requests that may have started during the optimistic hold,
+        # then allow a new authoritative poll immediately.
+        self.status_refresh_epoch += 1
+        self.status_refresh_paused_until = 0.0
 
     def ha(self) -> dict:
         return nested_get(self.config, "integrations", "homeAssistant", default={}) or {}
@@ -4669,7 +4687,7 @@ class ThermostatScreen(Page):
             self.s.thermostat["autoSwitchNotice"] = copy.deepcopy(cleared_notice)
             if dismissed:
                 self.s.thermostat["autoSwitchNoticeDismissed"] = copy.deepcopy(dismissed)
-            self.s.status_refresh_paused_until = max(getattr(self.s, "status_refresh_paused_until", 0.0), time.monotonic() + 2.5)
+            self.s.pause_status_refresh(2.5)
             self.sync(self.s.config, self.s.thermostat)
 
             changes = {"autoSwitchNotice": cleared_notice}
@@ -4695,7 +4713,7 @@ class ThermostatScreen(Page):
             next_hold = dict(hold)
             next_hold["dismissed"] = True
             self.s.thermostat["autoSwitchHold"] = copy.deepcopy(next_hold)
-            self.s.status_refresh_paused_until = max(getattr(self.s, "status_refresh_paused_until", 0.0), time.monotonic() + 2.5)
+            self.s.pause_status_refresh(2.5)
             self.sync(self.s.config, self.s.thermostat)
             self.s.update_thermostat({"autoSwitchHold": next_hold})
             self.sync(self.s.config, self.s.thermostat)
@@ -5020,7 +5038,19 @@ class ThermostatScreen(Page):
         pause = self.s.thermostat.setdefault("pauseFunction", {})
         duration_minutes = int(max(1, min(60, round(self.safe_float(pause.get("durationMinutes") if isinstance(pause, dict) else 5, 5.0)))))
         changes = {"pauseFunction": {"action": "resume"}}
+        original_pause = copy.deepcopy(pause) if isinstance(pause, dict) else {}
+        original_target = self.s.thermostat.get("targetTemp")
+        original_last_comfort = self.s.thermostat.get("lastComfortTarget")
         if isinstance(pause, dict):
+            # Restore the comfort target immediately instead of leaving the
+            # dial on the temporary Away target until the API round trip ends.
+            # Keep the original values above so a failed command can put the
+            # visible pause state back exactly as it was.
+            previous_target = pause.get("previousTargetTemp")
+            previous_last = pause.get("previousLastComfortTarget")
+            if not bool(self.s.thermostat.get("away")) and previous_target is not None:
+                self.s.thermostat["targetTemp"] = previous_target
+                self.s.thermostat["lastComfortTarget"] = previous_last if previous_last is not None else previous_target
             pause["snoozeUntil"] = int(time.time() * 1000) + duration_minutes * 60000
             pause["active"] = False
             pause["pausedAt"] = 0
@@ -5029,19 +5059,29 @@ class ThermostatScreen(Page):
             pause["activeEntityIds"] = []
             pause["countdownAllowed"] = False
             pause["countdownReason"] = "resumed"
-        self.s.status_refresh_paused_until = max(getattr(self.s, "status_refresh_paused_until", 0.0), time.monotonic() + 2.5)
+        control_hold = max(5.0, float(getattr(self.s.api, "control_timeout", 4.0) or 4.0) + 1.0)
+        self.s.pause_status_refresh(control_hold)
         self.sync(self.s.config, self.s.thermostat)
 
         def done(result):
             if isinstance(result, dict):
                 self.s.ingest_thermostat(result)
-                self.sync(self.s.config, self.s.thermostat)
+            self.s.resume_status_refresh()
+            self.sync(self.s.config, self.s.thermostat)
+
+        def failed(error):
+            self.s.thermostat["pauseFunction"] = copy.deepcopy(original_pause)
+            self.s.thermostat["targetTemp"] = original_target
+            self.s.thermostat["lastComfortTarget"] = original_last_comfort
+            self.s.resume_status_refresh()
+            self.sync(self.s.config, self.s.thermostat)
+            self.requestToast.emit(f"Resume failed: {error}")
 
         self.run_async(
             "door-snooze",
             lambda: self.s.api.thermostat_update(changes),
             done,
-            lambda err: self.requestToast.emit(f"Resume failed: {err}"),
+            failed,
         )
 
 
@@ -5434,7 +5474,7 @@ class ThermostatScreen(Page):
         # must be cleared immediately or the local UI can repaint Away several
         # more times before the backend response arrives.
         self.s.clear_mode_override()
-        self.s.status_refresh_paused_until = max(getattr(self.s, "status_refresh_paused_until", 0.0), time.monotonic() + 2.5)
+        self.s.pause_status_refresh(2.5)
         changes = {"away": False, "awaySource": "", "manualAwayPresenceLatch": None}
         people = self.thermostat.get("autoAwayPeople") or self.s.thermostat.get("autoAwayPeople") or []
         entity_ids = []
@@ -10338,7 +10378,7 @@ class SettingsDialog(QDialog):
     def mark_settings_dirty(self):
         self._settings_dirty = True
         self._last_settings_error = ""
-        self.s.status_refresh_paused_until = max(getattr(self.s, "status_refresh_paused_until", 0.0), time.monotonic() + 8.0)
+        self.s.pause_status_refresh(8.0)
 
     def value_control(self, key: str, label: str, value, low=None, high=None, suffix="°") -> QFrame:
         panel = QFrame()
@@ -11738,7 +11778,7 @@ class SettingsDialog(QDialog):
         # 1+ second lag and sometimes repainting old values back over the new
         # number. Keep the change local and let Save Settings perform the
         # authoritative thermostat write.
-        self.s.status_refresh_paused_until = max(getattr(self.s, "status_refresh_paused_until", 0.0), time.monotonic() + 8.0)
+        self.s.pause_status_refresh(8.0)
         self._pending_settings_changes = self.merge_dicts(self._pending_settings_changes, changes)
         self._pending_settings_quiet = bool(getattr(self, "_pending_settings_quiet", True)) and bool(quiet)
         if not push:
@@ -11798,10 +11838,11 @@ class SettingsDialog(QDialog):
                     self.thermostat_name_label.setText(self.thermostat_name_summary_text())
         if self._settings_dirty or self._pending_settings_changes:
             self._settings_dirty = False
-            self.s.status_refresh_paused_until = max(getattr(self.s, "status_refresh_paused_until", 0.0), time.monotonic() + 2.5)
+            self.s.pause_status_refresh(2.5)
             QTimer.singleShot(0, self.push_pending_settings)
         else:
-            self.s.status_refresh_paused_until = time.monotonic() + 0.2
+            self.s.resume_status_refresh()
+            self.s.pause_status_refresh(0.2)
 
     def close_settings(self):
         self._settings_save_timer.stop()
@@ -11860,7 +11901,7 @@ class SettingsDialog(QDialog):
         self._settings_saving = True
         self._settings_update_seq += 1
         seq = self._settings_update_seq
-        self.s.status_refresh_paused_until = max(getattr(self.s, "status_refresh_paused_until", 0.0), time.monotonic() + 8.0)
+        self.s.pause_status_refresh(8.0)
         self.bottom_save.setEnabled(False)
         self.bottom_save.setText("Saving…")
 
@@ -14041,15 +14082,18 @@ class MainWindow(Background):
     def refresh_status(self):
         if getattr(self, "_status_refresh_running", False):
             return
+        if time.monotonic() < getattr(self.s, "status_refresh_paused_until", 0.0):
+            return
         self._status_refresh_running = True
         api = self.s.api
+        refresh_epoch = int(getattr(self.s, "status_refresh_epoch", 0) or 0)
 
         def worker():
             try:
                 data = api.thermostat_status()
-                self.statusRefreshCompleted.emit({"data": data, "error": None})
+                self.statusRefreshCompleted.emit({"data": data, "error": None, "epoch": refresh_epoch})
             except Exception as exc:
-                self.statusRefreshCompleted.emit({"data": None, "error": str(exc)})
+                self.statusRefreshCompleted.emit({"data": None, "error": str(exc), "epoch": refresh_epoch})
 
         threading.Thread(target=worker, name="thermostat-status-refresh", daemon=True).start()
 
@@ -14057,6 +14101,8 @@ class MainWindow(Background):
         self._status_refresh_running = False
         data = info if isinstance(info, dict) else {}
         if data.get("error"):
+            return
+        if int(data.get("epoch", -1)) != int(getattr(self.s, "status_refresh_epoch", 0) or 0):
             return
         if time.monotonic() < getattr(self.s, "status_refresh_paused_until", 0.0):
             return

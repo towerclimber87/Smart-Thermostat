@@ -151,6 +151,13 @@ _THERMOSTAT_RECORD_LOCK = threading.RLock()
 _THERMOSTAT_RECORD_CACHE: dict | None = None
 _THERMOSTAT_RECORD_LAST_PERSIST_SIGNATURE = ""
 _THERMOSTAT_RECORD_DIRTY = False
+# Incremented for every explicit thermostat command. Runtime sensor/door polls
+# are intentionally calculated outside the record lock because Home Assistant
+# can take several seconds to answer. The generation lets those background
+# calculations detect that a newer panel/HA command landed while they were in
+# flight, discard their stale snapshot, and retry against the new state instead
+# of overwriting it when they finally finish.
+_THERMOSTAT_CONTROL_GENERATION = 0
 _HVAC_HISTORY_LOCK = threading.RLock()
 _HVAC_HISTORY_ARCHIVE: dict | None = None
 _HVAC_HISTORY_CURRENT: dict | None = None
@@ -4420,7 +4427,19 @@ def _apply_door_pause_snooze_request(existing: dict, minutes: object = None) -> 
     return _merge_thermostat_state(t)
 
 
-def _apply_runtime_thermostat_logic(record: dict, *, notify: bool = True) -> dict:
+def _thermostat_control_generation_snapshot() -> int:
+    with _THERMOSTAT_RECORD_LOCK:
+        return int(_THERMOSTAT_CONTROL_GENERATION)
+
+
+def _calculate_runtime_thermostat_logic(record: dict, *, notify: bool = True) -> tuple[dict, bool]:
+    """Calculate one runtime pass without committing its final full snapshot.
+
+    Several sensor helpers update their own narrow runtime fields while they
+    run. The final door/presence/schedule snapshot is committed separately so
+    it can be rejected if an explicit thermostat command arrived during any of
+    the slower Home Assistant work.
+    """
     thermostat = record.get("thermostat") or {}
     was_away = bool(thermostat.get("away"))
     thermostat = _clear_expired_virtual_temp_override(thermostat)
@@ -4431,10 +4450,10 @@ def _apply_runtime_thermostat_logic(record: dict, *, notify: bool = True) -> dic
             # External means the selected Home Assistant sensor/climate entity is
             # primary. Onboard sensors remain a safety fallback if HA is missing.
             before_ha = thermostat
-            thermostat = _apply_selected_ha_temperature_sensor_if_needed(thermostat)
+            thermostat = _apply_selected_ha_temperature_sensor_if_needed(thermostat, commit=False)
             if thermostat is before_ha and LOCAL_TEMP_SENSOR_ENABLED:
                 thermostat = _apply_local_temperature_sensor_if_needed(
-                    {"thermostat": thermostat}, force_use=True
+                    {"thermostat": thermostat}, force_use=True, commit=False
                 )
         else:
             # Internal means the onboard HDC2080 pair is primary. Keep HA only as
@@ -4443,26 +4462,57 @@ def _apply_runtime_thermostat_logic(record: dict, *, notify: bool = True) -> dic
                 sensor = _read_local_temperature_sensor()
                 if sensor.get("available") and sensor.get("temperatureF") is not None:
                     thermostat = _apply_local_temperature_sensor_if_needed(
-                        {"thermostat": thermostat}, sensor=sensor, force_use=True
+                        {"thermostat": thermostat}, sensor=sensor, force_use=True, commit=False
                     )
                 else:
-                    thermostat = _apply_selected_ha_temperature_sensor_if_needed(thermostat)
+                    thermostat = _apply_selected_ha_temperature_sensor_if_needed(thermostat, commit=False)
             else:
-                thermostat = _apply_selected_ha_temperature_sensor_if_needed(thermostat)
+                thermostat = _apply_selected_ha_temperature_sensor_if_needed(thermostat, commit=False)
 
-    thermostat = _apply_selected_ha_outdoor_temperature_sensor_if_needed(thermostat)
+    thermostat = _apply_selected_ha_outdoor_temperature_sensor_if_needed(thermostat, commit=False)
     updated = _apply_presence_away_logic(thermostat)
     updated = _apply_door_pause_logic(updated)
     updated = _apply_away_setpoint_logic(updated, was_away=was_away)
     updated = _apply_comfort_auto_switch_logic(updated, notify=notify)
     scheduled = _apply_thermostat_schedules(updated)
     scheduled = _apply_away_setpoint_logic(scheduled, was_away=was_away, finalize_restore=True)
-    if scheduled != updated:
-        _write_thermostat_record(scheduled, persist=True)
-        updated = scheduled
-    elif updated != thermostat:
-        _write_thermostat_record(updated, persist=False)
-    return updated
+    return scheduled, scheduled != updated
+
+
+def _apply_runtime_thermostat_logic(record: dict | None = None, *, notify: bool = True) -> dict:
+    """Apply runtime logic without allowing a stale poll to undo a command.
+
+    The old control-loop flow read a complete thermostat snapshot, waited on
+    Home Assistant door/sensor calls, and then wrote that old snapshot back.
+    If Resume, a setpoint change, or a mode change happened during that wait,
+    the background pass could overwrite it a moment later. That exactly caused
+    the comfort-pause popup to disappear and immediately return.
+
+    Always begin from a fresh record and retry when the explicit-control
+    generation changes. The final generation check and write share the record
+    lock, closing the last check/write race without holding the lock during HA
+    network requests.
+    """
+    del record  # Callers may still pass the historical argument; a fresh snapshot is required.
+    for _attempt in range(3):
+        with _THERMOSTAT_RECORD_LOCK:
+            generation = int(_THERMOSTAT_CONTROL_GENERATION)
+            working_record = _read_thermostat_record()
+
+        original = working_record.get("thermostat") or {}
+        updated, persist = _calculate_runtime_thermostat_logic(working_record, notify=notify)
+
+        with _THERMOSTAT_RECORD_LOCK:
+            if generation != _THERMOSTAT_CONTROL_GENERATION:
+                continue
+            if updated != original:
+                _write_thermostat_record(updated, persist=persist)
+            return updated
+
+    # Rapid consecutive commands are more important than this background pass.
+    # Return the newest authoritative state and let the next loop retry instead
+    # of committing any calculation that was repeatedly made stale.
+    return _read_thermostat_record().get("thermostat") or {}
 
 
 def _apply_thermal_safety_runtime_logic(record: dict) -> dict:
@@ -5091,6 +5141,8 @@ def _strip_comfort_target_changes(incoming: dict) -> dict:
 
 
 def _handle_thermostat_update_locked(payload: dict) -> dict:
+    global _THERMOSTAT_CONTROL_GENERATION
+    _THERMOSTAT_CONTROL_GENERATION += 1
     existing = _read_thermostat_record()["thermostat"]
     incoming = payload.get("thermostat", payload) if isinstance(payload, dict) else {}
     if not isinstance(incoming, dict):
@@ -6902,7 +6954,7 @@ def _clear_expired_virtual_temp_override(thermostat: dict) -> dict:
     return thermostat
 
 
-def _apply_selected_ha_temperature_sensor_if_needed(thermostat: dict) -> dict:
+def _apply_selected_ha_temperature_sensor_if_needed(thermostat: dict, *, commit: bool = True) -> dict:
     if _virtual_temp_override_active(thermostat):
         return thermostat
     source = _selected_ha_temperature_entity()
@@ -6930,7 +6982,7 @@ def _apply_selected_ha_temperature_sensor_if_needed(thermostat: dict) -> dict:
         updated["currentTempSourceName"] = label
         updated["runtimeTempSource"] = "home-assistant"
         updated["runtimeTempSourceName"] = label
-        if updated != thermostat:
+        if commit and updated != thermostat:
             _write_thermostat_record(updated, persist=False)
         return updated
     except Exception as exc:
@@ -6956,7 +7008,7 @@ def _selected_ha_outdoor_temperature_entity() -> dict | None:
     return None
 
 
-def _apply_selected_ha_outdoor_temperature_sensor_if_needed(thermostat: dict) -> dict:
+def _apply_selected_ha_outdoor_temperature_sensor_if_needed(thermostat: dict, *, commit: bool = True) -> dict:
     source = _selected_ha_outdoor_temperature_entity()
     if not source:
         return thermostat
@@ -6990,7 +7042,7 @@ def _apply_selected_ha_outdoor_temperature_sensor_if_needed(thermostat: dict) ->
 
         updated["outdoorTempSource"] = "home-assistant"
         updated["outdoorTempSourceName"] = label
-        if updated != thermostat:
+        if commit and updated != thermostat:
             _write_thermostat_record(updated, persist=False)
         return updated
     except Exception as exc:
@@ -6998,7 +7050,13 @@ def _apply_selected_ha_outdoor_temperature_sensor_if_needed(thermostat: dict) ->
         return thermostat
 
 
-def _apply_local_temperature_sensor_if_needed(record: dict, *, sensor: dict | None = None, force_use: bool = False) -> dict:
+def _apply_local_temperature_sensor_if_needed(
+    record: dict,
+    *,
+    sensor: dict | None = None,
+    force_use: bool = False,
+    commit: bool = True,
+) -> dict:
     thermostat = record.get("thermostat") or {}
     if _virtual_temp_override_active(thermostat):
         return thermostat
@@ -7037,7 +7095,7 @@ def _apply_local_temperature_sensor_if_needed(record: dict, *, sensor: dict | No
         "temperatureDeltaF": sensor.get("temperatureDeltaF"),
         "ignoredAddresses": list(sensor.get("ignoredAddresses") or []),
     }
-    if updated != thermostat:
+    if commit and updated != thermostat:
         _write_thermostat_record(updated, persist=False)
     return updated
 
@@ -7050,6 +7108,7 @@ def _thermostat_control_loop() -> None:
     )
     while not _CONTROL_LOOP_STOP.wait(CONTROL_LOOP_INTERVAL_SECONDS):
         try:
+            control_generation = _thermostat_control_generation_snapshot()
             record = _read_thermostat_record()
             thermal_protection = _thermal_protection_status()
             thermostat = (
@@ -7057,7 +7116,14 @@ def _thermostat_control_loop() -> None:
                 if thermal_protection.get("active")
                 else _apply_runtime_thermostat_logic(record)
             )
+            if control_generation != _thermostat_control_generation_snapshot():
+                continue
             outputs = _thermostat_outputs(thermostat)
+            # A panel/HA command that arrived after this runtime snapshot owns
+            # the outputs. Skip the stale hardware pass; the command's immediate
+            # async apply and the next control-loop iteration use the new state.
+            if control_generation != _thermostat_control_generation_snapshot():
+                continue
             _apply_thermostat_outputs_to_hardware(outputs, thermostat)
         except Exception as exc:  # noqa: BLE001 - keep local HVAC control alive
             print(f"Thermostat autonomous control loop error: {exc}", flush=True)
