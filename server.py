@@ -971,6 +971,18 @@ def _normalize_presence_home_override(value: object) -> dict | None:
     reason = str(value.get("reason") or "manual-return-home").strip()[:80] or "manual-return-home"
     duration_ms = int(_number(value.get("durationMs", value.get("durationMilliseconds", 0)), 0, 0, None) or 0)
     expires_at = int(_number(value.get("expiresAt", value.get("until", value.get("expires_at", 0))), 0, 0, None) or 0)
+    away_observed_at = int(
+        _number(
+            value.get("awayObservedAt", value.get("departureObservedAt", value.get("departedAt", 0))),
+            0,
+            0,
+            None,
+        )
+        or 0
+    )
+    away_observed_entity_ids = _normalize_presence_entity_list(
+        value.get("awayObservedEntityIds", value.get("departureEntityIds", []))
+    )
     if reason == "arriving" and expires_at <= 0:
         expires_at = int(started_at + (duration_ms if duration_ms > 0 else ARRIVING_AWAY_BYPASS_MS))
     if expires_at > 0 and now_ms >= expires_at:
@@ -985,6 +997,10 @@ def _normalize_presence_home_override(value: object) -> dict | None:
         payload["durationMs"] = duration_ms
     if expires_at > 0:
         payload["expiresAt"] = expires_at
+    if away_observed_at > 0:
+        payload["awayObservedAt"] = away_observed_at
+    if away_observed_entity_ids:
+        payload["awayObservedEntityIds"] = away_observed_entity_ids
     return payload
 
 
@@ -4117,6 +4133,11 @@ def _thermostat_auto_away_entity_ids(thermostat: dict) -> list[str]:
     return _person_entity_ids_from_entries(thermostat.get("autoAwayPeople") or [])
 
 
+def _presence_state_confidently_away(value: object) -> bool:
+    state = str(value or "").strip().lower()
+    return state not in {"", "home", "unknown", "unavailable", "none", "null"}
+
+
 def _apply_presence_away_logic(thermostat: dict) -> dict:
     entity_ids = _thermostat_auto_away_entity_ids(thermostat)
     if not entity_ids:
@@ -4126,7 +4147,11 @@ def _apply_presence_away_logic(thermostat: dict) -> dict:
         return thermostat
     was_away = bool(thermostat.get("away"))
     home_entity_ids = [entity_id for entity_id in entity_ids if states.get(entity_id) == "home"]
+    confidently_away_entity_ids = [
+        entity_id for entity_id in entity_ids if _presence_state_confidently_away(states.get(entity_id))
+    ]
     any_home = bool(home_entity_ids)
+    all_confidently_away = len(confidently_away_entity_ids) == len(entity_ids)
     updated = dict(thermostat)
     away_source = str(updated.get("awaySource") or "").strip().lower()
     home_override = _normalize_presence_home_override(updated.get("presenceHomeOverride"))
@@ -4136,13 +4161,23 @@ def _apply_presence_away_logic(thermostat: dict) -> dict:
         updated["presenceHomeOverride"] = None
 
     if any_home:
-        # A real Home report releases the indefinite manual Return Home hold,
-        # but it must not cancel the timed Arriving hold. Arrival is also used
-        # while already home to suppress Auto Away during a short trip, so that
-        # two-hour bypass must remain active even after a Home state is observed.
         home_override_reason = str((home_override or {}).get("reason") or "").strip().lower()
-        if home_override and home_override_reason != "arriving":
+        if home_override and home_override_reason == "arriving":
+            # Arriving may be armed before leaving, while the selected person is
+            # still Home. Do not clear it on that initial Home report. Once a
+            # complete away state has been observed during this Arriving window,
+            # however, the next Home report is the actual return and must end the
+            # temporary state immediately instead of leaving Arriving highlighted
+            # for the rest of the two-hour timer.
+            started_at = int(_number(home_override.get("startedAt"), 0, 0, None) or 0)
+            away_observed_at = int(_number(home_override.get("awayObservedAt"), 0, 0, None) or 0)
+            if away_observed_at > 0 and away_observed_at >= started_at:
+                updated["presenceHomeOverride"] = None
+                home_override = None
+        elif home_override:
+            # A real Home report releases an indefinite manual Return Home hold.
             updated["presenceHomeOverride"] = None
+            home_override = None
         if bool(updated.get("away")) and away_source in {"presence", "auto", ""}:
             updated["away"] = False
             updated["awaySource"] = "presence"
@@ -4153,7 +4188,14 @@ def _apply_presence_away_logic(thermostat: dict) -> dict:
         if home_override:
             # A Home override blocks Auto Away while all assigned people still
             # report Away/unknown. Manual Return Home lasts until a real Home
-            # report; the Arriving override lasts only until its timed expiry.
+            # report; Arriving also remembers a confirmed departure so the next
+            # Home report can end the trip and return the UI to Home immediately.
+            home_override_reason = str(home_override.get("reason") or "").strip().lower()
+            if home_override_reason == "arriving" and all_confidently_away:
+                home_override = dict(home_override)
+                if not int(_number(home_override.get("awayObservedAt"), 0, 0, None) or 0):
+                    home_override["awayObservedAt"] = int(time.time() * 1000)
+                home_override["awayObservedEntityIds"] = confidently_away_entity_ids
             updated["away"] = False
             updated["awaySource"] = ""
             updated["manualAwayPresenceLatch"] = None
@@ -5219,6 +5261,21 @@ def _handle_thermostat_update_locked(payload: dict) -> dict:
     mode_change_source = _incoming_source(incoming, "modeChangeSource", "mode_change_source", "hvacModeChangeSource", "hvac_mode_change_source")
     target_change_source = _incoming_source(incoming, "targetChangeSource", "target_change_source", "temperatureChangeSource", "temperature_change_source")
     now_ms = int(time.time() * 1000)
+
+    existing_home_override = _normalize_presence_home_override(existing.get("presenceHomeOverride"))
+    existing_home_override_reason = str((existing_home_override or {}).get("reason") or "").strip().lower()
+    if (
+        requested_mode in {"off", "heat", "cool"}
+        and requested_preset != "arriving"
+        and _source_is_panel_guard_exempt(mode_change_source)
+        and existing_home_override_reason == "arriving"
+    ):
+        # Heat/Cool/Off from the panel or another explicit control source is a
+        # direct operating choice. Treat it as leaving the temporary Arriving
+        # state as well; otherwise HVAC mode changes correctly while Arriving
+        # remains highlighted for up to two hours and masks the selected mode.
+        incoming = dict(incoming)
+        incoming["presenceHomeOverride"] = None
 
     # The wall panel is the authority for very recent touches. Home Assistant can
     # echo old mode/setpoint values for a few seconds when it reconnects or when

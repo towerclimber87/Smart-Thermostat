@@ -5418,12 +5418,23 @@ class ThermostatScreen(Page):
                 self.s.thermostat["preAwayTargetTemp"] = before_tap.get("targetTemp", before_tap.get("lastComfortTarget"))
                 self.s.thermostat["presenceHomeOverride"] = None
         else:
-            # Physical/manual button taps should visibly win immediately.
-            changes = {"mode": mode, "away": False, "awaySource": "", "modeChangeSource": "panel"}
-            self.s.set_mode_override(mode, away=False)
+            # Physical/manual button taps should visibly win immediately. They
+            # also end a timed Arriving state; HVAC mode and the highlighted
+            # presence preset must never disagree after the same wall-panel tap.
+            changes = {
+                "mode": mode,
+                "away": False,
+                "awaySource": "",
+                "manualAwayPresenceLatch": None,
+                "presenceHomeOverride": None,
+                "modeChangeSource": "panel",
+            }
+            self.s.set_mode_override(mode, away=False, clear_presence_home_override=True)
             self.s.thermostat["mode"] = mode
             self.s.thermostat["away"] = False
             self.s.thermostat["awaySource"] = ""
+            self.s.thermostat["manualAwayPresenceLatch"] = None
+            self.s.thermostat["presenceHomeOverride"] = None
             if mode in {"heat", "cool"}:
                 # Show the bypassable delay immediately instead of waiting for
                 # the API round trip. The backend repeats the same calculation
