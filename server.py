@@ -8806,7 +8806,15 @@ def _assistant_tts_request_options(ha_url: str, token: str, tts_entity_id: str, 
     except Exception:
         pass
     entity_key = str(tts_entity_id or "").lower()
-    if "voice" in supported or "openai" in entity_key or "openai" in friendly or "piper" in entity_key or "piper" in friendly:
+    if (
+        "voice" in supported
+        or "openai" in entity_key
+        or "openai" in friendly
+        or "piper" in entity_key
+        or "piper" in friendly
+        or "home_assistant_cloud" in entity_key
+        or "home assistant cloud" in friendly
+    ):
         return {"voice": exact_voice}
     return {}
 
@@ -8843,32 +8851,77 @@ def _assistant_tts_speak(
     volume = int(max(1, min(100, round(float(announcement_volume_percent or 45)))))
     language = str(language or "").strip().replace("_", "-")
     voice = str(tts_voice or "").strip()
+    entity_key = str(tts_entity_id or "").strip().lower()
     options = _assistant_tts_request_options(ha_url, token, tts_entity_id, voice) if voice else {}
 
-    # A custom Piper voice must be requested explicitly on every call. The
-    # Home Assistant assistant pipeline selection does not change the default
-    # voice used by direct tts.piper service calls from this thermostat. Match
-    # the verified Developer Tools request first (options.voice only), then fall
-    # back to provider defaults if a provider does not accept per-call voices.
+    # Home Assistant Cloud must receive the same complete tts.speak request that
+    # was verified in Developer Tools. Sending a partial request first can
+    # succeed while silently using the provider's default voice, which is why
+    # the thermostat previously sounded different from the manual Jenny test.
+    exact_service_error = ""
+    if "home_assistant_cloud" in entity_key:
+        exact_cloud_payload: dict[str, object] = {
+            "entity_id": tts_entity_id,
+            "media_player_entity_id": media_player_id,
+            "message": message,
+            "cache": False,
+        }
+        if language:
+            exact_cloud_payload["language"] = language
+        if options:
+            exact_cloud_payload["options"] = options
+        try:
+            exact_result = _ha_json_request(
+                ha_url,
+                token,
+                "POST",
+                "/api/services/tts/speak",
+                exact_cloud_payload,
+                timeout=ASSISTANT_HA_TIMEOUT_SECONDS,
+            )
+            return {
+                "method": "tts_speak_exact_cloud",
+                "volumeManaged": False,
+                "volumePercent": volume,
+                "ttsProvider": "home_assistant_cloud",
+                "ttsOptions": exact_cloud_payload.get("options", {}),
+                "ttsLanguage": exact_cloud_payload.get("language", "provider_default"),
+                "cache": False,
+                "result": exact_result,
+            }
+        except Exception as exc:
+            exact_service_error = str(exc)
+
+    # For URL-based Sonos announcements, always try the complete language +
+    # voice request first. Provider-default attempts are last-resort fallbacks.
     base_get_url: dict[str, object] = {
         "engine_id": tts_entity_id,
         "message": message,
         "cache": False,
     }
     get_url_payloads: list[dict[str, object]] = []
+    if language or options:
+        exact_get_url = dict(base_get_url)
+        if language and "piper" not in entity_key:
+            exact_get_url["language"] = language
+        if options:
+            exact_get_url["options"] = options
+        get_url_payloads.append(exact_get_url)
     if options:
         voice_payload = dict(base_get_url)
         voice_payload["options"] = options
-        get_url_payloads.append(voice_payload)
-    get_url_payloads.append(base_get_url)
-    if language and "piper" not in str(tts_entity_id or "").lower():
+        if voice_payload not in get_url_payloads:
+            get_url_payloads.append(voice_payload)
+    if language and "piper" not in entity_key:
         language_payload = dict(base_get_url)
         language_payload["language"] = language
-        if options:
-            language_payload["options"] = options
-        get_url_payloads.append(language_payload)
+        if language_payload not in get_url_payloads:
+            get_url_payloads.append(language_payload)
+    get_url_payloads.append(base_get_url)
 
     generation_errors: list[str] = []
+    if exact_service_error:
+        generation_errors.append(f"Exact Home Assistant Cloud tts.speak request failed: {exact_service_error}")
     for tts_payload in get_url_payloads:
         try:
             generated = _ha_json_request(
@@ -8909,17 +8962,24 @@ def _assistant_tts_speak(
         "cache": False,
     }
     service_payloads: list[dict[str, object]] = []
+    if language or options:
+        exact_service = dict(base_service)
+        if language and "piper" not in entity_key:
+            exact_service["language"] = language
+        if options:
+            exact_service["options"] = options
+        service_payloads.append(exact_service)
     if options:
         voice_service = dict(base_service)
         voice_service["options"] = options
-        service_payloads.append(voice_service)
-    service_payloads.append(base_service)
-    if language and "piper" not in str(tts_entity_id or "").lower():
+        if voice_service not in service_payloads:
+            service_payloads.append(voice_service)
+    if language and "piper" not in entity_key:
         language_service = dict(base_service)
         language_service["language"] = language
-        if options:
-            language_service["options"] = options
-        service_payloads.append(language_service)
+        if language_service not in service_payloads:
+            service_payloads.append(language_service)
+    service_payloads.append(base_service)
 
     service_errors: list[str] = []
     for service_payload in service_payloads:
