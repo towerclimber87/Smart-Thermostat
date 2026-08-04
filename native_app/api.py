@@ -83,6 +83,9 @@ class ApiClient:
     def thermostat_status(self) -> dict[str, Any]:
         return self.get("/api/thermostat/status")
 
+    def thermal_status(self) -> dict[str, Any]:
+        return self.get("/api/system/thermal")
+
     def thermostat_update(self, changes: dict[str, Any]) -> dict[str, Any]:
         return self.post("/api/thermostat/control", {"thermostat": changes}, timeout=self.control_timeout)
 

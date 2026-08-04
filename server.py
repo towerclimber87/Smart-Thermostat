@@ -197,6 +197,16 @@ HARDWARE_I2C_BUS = int(os.environ.get("SMART_THERMOSTAT_I2C_BUS", "1"))
 HARDWARE_I2C_DEVICE = Path(f"/dev/i2c-{HARDWARE_I2C_BUS}")
 CONTROL_LOOP_ENABLED = os.environ.get("SMART_THERMOSTAT_CONTROL_LOOP", "1").strip().lower() not in {"0", "false", "no", "off"}
 CONTROL_LOOP_INTERVAL_SECONDS = max(1.0, float(os.environ.get("SMART_THERMOSTAT_CONTROL_LOOP_SECONDS", "2") or "2"))
+THERMAL_PROTECTION_ENABLED = os.environ.get("SMART_THERMOSTAT_THERMAL_PROTECTION", "1").strip().lower() not in {"0", "false", "no", "off"}
+THERMAL_PROTECTION_TRIGGER_C = max(50.0, float(os.environ.get("SMART_THERMOSTAT_THERMAL_TRIGGER_C", "70") or "70"))
+THERMAL_PROTECTION_CLEAR_C = min(
+    THERMAL_PROTECTION_TRIGGER_C - 1.0,
+    max(35.0, float(os.environ.get("SMART_THERMOSTAT_THERMAL_CLEAR_C", "65") or "65")),
+)
+THERMAL_PROTECTION_CLEAR_HOLD_SECONDS = max(
+    0.0,
+    float(os.environ.get("SMART_THERMOSTAT_THERMAL_CLEAR_HOLD_SECONDS", "120") or "120"),
+)
 LOCAL_TEMP_SENSOR_ENABLED = os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_SENSOR", "auto").strip().lower() not in {"0", "false", "no", "off", "disabled"}
 # The two onboard HDC2080 sensors are the primary room-temperature source.
 # Home Assistant remains available only when neither onboard sensor can provide
@@ -257,6 +267,15 @@ _LOCAL_TEMP_SENSOR_HEALTH = {
 }
 _CONTROL_LOOP_THREAD_STARTED = False
 _CONTROL_LOOP_STOP = threading.Event()
+_THERMAL_PROTECTION_LOCK = threading.RLock()
+_THERMAL_PROTECTION_STATE = {
+    "active": False,
+    "triggeredAt": 0,
+    "clearedAt": 0,
+    "clearCandidateAt": 0.0,
+    "lastReadAt": 0,
+    "lastTempC": None,
+}
 
 
 def _json(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> None:
@@ -4446,6 +4465,39 @@ def _apply_runtime_thermostat_logic(record: dict, *, notify: bool = True) -> dic
     return updated
 
 
+def _apply_thermal_safety_runtime_logic(record: dict) -> dict:
+    """Refresh only the room-temperature source needed by HVAC safety limits.
+
+    During CPU overheat protection we deliberately skip outdoor weather,
+    presence, schedules, door-pause processing, comfort switching, and other
+    normal runtime work. The selected room sensor remains alive because the
+    safety-low and safety-high protections still require a trustworthy room
+    temperature.
+    """
+    thermostat = record.get("thermostat") or {}
+    thermostat = _clear_expired_virtual_temp_override(thermostat)
+    if _virtual_temp_override_active(thermostat):
+        return thermostat
+
+    room_mode = _room_temp_control_mode(thermostat)
+    if room_mode == "external":
+        before_ha = thermostat
+        thermostat = _apply_selected_ha_temperature_sensor_if_needed(thermostat)
+        if thermostat is before_ha and LOCAL_TEMP_SENSOR_ENABLED:
+            thermostat = _apply_local_temperature_sensor_if_needed(
+                {"thermostat": thermostat}, force_use=True
+            )
+        return thermostat
+
+    if LOCAL_TEMP_SENSOR_ENABLED:
+        sensor = _read_local_temperature_sensor()
+        if sensor.get("available") and sensor.get("temperatureF") is not None:
+            return _apply_local_temperature_sensor_if_needed(
+                {"thermostat": thermostat}, sensor=sensor, force_use=True
+            )
+    return _apply_selected_ha_temperature_sensor_if_needed(thermostat)
+
+
 def _mark_thermostat_equipment_run(outputs: dict) -> None:
     now_ms = int(time.time() * 1000)
     try:
@@ -4579,7 +4631,32 @@ def _normalize_fan_for_active_cooling(thermostat: dict) -> dict:
         thermostat["fan"] = "auto"
     return thermostat
 
-def _thermostat_outputs(thermostat: dict) -> dict:
+def _thermostat_outputs(thermostat: dict, *, ignore_thermal_protection: bool = False) -> dict:
+    thermal_protection = _thermal_protection_status() if not ignore_thermal_protection else {"active": False}
+    if thermal_protection.get("active"):
+        # Preserve the configured safety low/high protection while suppressing
+        # every normal comfort call, fan request, fan hold, schedule, and manual
+        # changeover request. Setting mode to Off still allows the established
+        # safetyMode block below to energize emergency heat/cool when the room is
+        # outside its configured safe range.
+        safety_only = dict(thermostat or {})
+        safety_only.update({
+            "mode": "off",
+            "fan": "off",
+            "coolFanHoldUntil": 0,
+            "manualPendingMode": "",
+            "manualLockoutUntil": 0,
+            "autoPendingMode": "",
+            "autoLockoutUntil": 0,
+        })
+        outputs = _thermostat_outputs(safety_only, ignore_thermal_protection=True)
+        outputs.update({
+            "thermalProtection": True,
+            "normalOperationsSuspended": True,
+            "thermalProtectionMode": "safety-only",
+        })
+        return outputs
+
     mode = _allowed_mode_for_locks(_normalize_mode(thermostat.get("mode"), "cool"), thermostat, "cool")
     active_mode = thermostat.get("autoActiveMode") if mode == "auto" else mode
     active_mode = _normalize_mode(active_mode, "cool")
@@ -4692,27 +4769,37 @@ def _thermostat_outputs(thermostat: dict) -> dict:
         "minimumCycleUntil": cycle_until,
         "minimumCycleMode": cycle_mode,
         "minimumCycleReason": cycle_reason,
+        "thermalProtection": False,
+        "normalOperationsSuspended": False,
+        "thermalProtectionMode": "normal",
     }
 
 def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware: bool = False) -> dict:
     serial = _stable_panel_serial()
     sw_version = _read_version_value()
     record = _read_thermostat_record()
+    thermal_protection = _thermal_protection_status()
     if refresh_runtime:
-        thermostat = _apply_runtime_thermostat_logic(record)
+        thermostat = (
+            _apply_thermal_safety_runtime_logic(record)
+            if thermal_protection.get("active")
+            else _apply_runtime_thermostat_logic(record)
+        )
         record = _read_thermostat_record()
         record["thermostat"] = thermostat
     else:
         thermostat = record["thermostat"]
-    try:
-        thermostat = _refresh_person_tracking_states(thermostat)
-    except Exception as exc:
-        # Person state refresh is helpful for the UI, but it must never make the
-        # thermostat status endpoint fail or make the native app boot with blank
-        # information. Keep the last saved thermostat record if HA/person refresh
-        # has a bad value or an unexpected schema issue.
-        print(f"Person tracking refresh skipped: {exc}", flush=True)
+    if not thermal_protection.get("active"):
+        try:
+            thermostat = _refresh_person_tracking_states(thermostat)
+        except Exception as exc:
+            # Person state refresh is helpful for the UI, but it must never make the
+            # thermostat status endpoint fail or make the native app boot with blank
+            # information. Keep the last saved thermostat record if HA/person refresh
+            # has a bad value or an unexpected schema issue.
+            print(f"Person tracking refresh skipped: {exc}", flush=True)
     outputs = _thermostat_outputs(thermostat)
+    thermal_protection = _thermal_protection_status(refresh=False)
     if (bool(outputs.get("cool")) or str(outputs.get("hvacAction") or "").lower() == "cooling") and str(thermostat.get("fan") or "auto").lower() == "off":
         thermostat = dict(thermostat)
         thermostat["fan"] = "auto"
@@ -4790,6 +4877,8 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
         "jarvis_volume_percent": jarvis_volume_percent,
         "jarvisVolumeLevel": jarvis_volume_level,
         "jarvis_volume_level": jarvis_volume_level,
+        "thermalProtection": thermal_protection,
+        "thermal_protection": thermal_protection,
     }
     payload = {
         "ok": True,
@@ -4868,6 +4957,8 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
         "jarvis_volume_percent": jarvis_volume_percent,
         "jarvisVolumeLevel": jarvis_volume_level,
         "jarvis_volume_level": jarvis_volume_level,
+        "thermalProtection": thermal_protection,
+        "thermal_protection": thermal_protection,
     }
     return payload
 
@@ -5251,6 +5342,13 @@ def _handle_thermostat_update(payload: dict) -> dict:
     The thermostat record lock is re-entrant, so the existing read/write helpers
     remain safe while this command owns one consistent state transaction.
     """
+    if _thermal_protection_status().get("active"):
+        # Preserve the user's normal thermostat settings exactly as they were
+        # before the event. Safety-only outputs are calculated separately, so
+        # incoming panel/HA comfort commands are intentionally ignored until the
+        # Pi has recovered below the clear threshold.
+        return _thermostat_status_payload(refresh_runtime=False, apply_hardware=False)
+
     with _THERMOSTAT_RECORD_LOCK:
         accepted = _handle_thermostat_update_locked(payload)
     sync_changes = _sync_changes_from_control_payload(payload, accepted)
@@ -5335,6 +5433,95 @@ def _cpu_temperature_c() -> float | None:
     return None
 
 
+def _thermal_protection_status(*, cpu_temp_c: float | None = None, refresh: bool = True) -> dict:
+    """Return and update the latched Raspberry Pi overheat protection state.
+
+    Protection starts immediately at the configured trigger. It clears only
+    after the CPU remains at or below the lower recovery threshold for the full
+    hold period. If the thermal sensor becomes unreadable while protection is
+    active, the latch intentionally stays active rather than guessing that the
+    unit recovered.
+    """
+    now = time.time()
+    if cpu_temp_c is None and refresh:
+        cpu_temp_c = _cpu_temperature_c()
+
+    transition = ""
+    with _THERMAL_PROTECTION_LOCK:
+        state = _THERMAL_PROTECTION_STATE
+        if cpu_temp_c is not None:
+            try:
+                cpu_temp_c = float(cpu_temp_c)
+            except (TypeError, ValueError):
+                cpu_temp_c = None
+        if cpu_temp_c is not None:
+            state["lastTempC"] = cpu_temp_c
+            state["lastReadAt"] = int(now * 1000)
+
+        active = bool(state.get("active"))
+        if not THERMAL_PROTECTION_ENABLED:
+            if active:
+                transition = "disabled"
+            state["active"] = False
+            state["clearCandidateAt"] = 0.0
+        elif cpu_temp_c is not None and not active and cpu_temp_c >= THERMAL_PROTECTION_TRIGGER_C:
+            state["active"] = True
+            state["triggeredAt"] = int(now * 1000)
+            state["clearedAt"] = 0
+            state["clearCandidateAt"] = 0.0
+            transition = "entered"
+        elif active:
+            if cpu_temp_c is not None and cpu_temp_c <= THERMAL_PROTECTION_CLEAR_C:
+                candidate = float(state.get("clearCandidateAt") or 0.0)
+                if candidate <= 0.0:
+                    state["clearCandidateAt"] = now
+                elif now - candidate >= THERMAL_PROTECTION_CLEAR_HOLD_SECONDS:
+                    state["active"] = False
+                    state["clearedAt"] = int(now * 1000)
+                    state["clearCandidateAt"] = 0.0
+                    transition = "cleared"
+            else:
+                state["clearCandidateAt"] = 0.0
+
+        active = bool(state.get("active"))
+        last_temp_c = state.get("lastTempC")
+        clear_candidate = float(state.get("clearCandidateAt") or 0.0)
+        clear_remaining = 0
+        if active and clear_candidate > 0.0:
+            clear_remaining = max(0, int(round(THERMAL_PROTECTION_CLEAR_HOLD_SECONDS - (now - clear_candidate))))
+        payload = {
+            "enabled": bool(THERMAL_PROTECTION_ENABLED),
+            "active": active,
+            "message": "UNIT OVERHEATING" if active else "",
+            "mode": "safety-only" if active else "normal",
+            "normalOperationsSuspended": active,
+            "safetyClimateEnabled": active,
+            "cpuTempC": round(float(last_temp_c), 1) if last_temp_c is not None else None,
+            "cpuTempF": round(float(last_temp_c) * 9.0 / 5.0 + 32.0, 1) if last_temp_c is not None else None,
+            "triggerC": round(THERMAL_PROTECTION_TRIGGER_C, 1),
+            "clearC": round(THERMAL_PROTECTION_CLEAR_C, 1),
+            "clearHoldSeconds": int(round(THERMAL_PROTECTION_CLEAR_HOLD_SECONDS)),
+            "clearRemainingSeconds": clear_remaining,
+            "triggeredAt": int(state.get("triggeredAt") or 0),
+            "clearedAt": int(state.get("clearedAt") or 0),
+            "lastReadAt": int(state.get("lastReadAt") or 0),
+            "sensorAvailable": last_temp_c is not None,
+        }
+
+    if transition == "entered":
+        print(
+            f"THERMAL PROTECTION ENTERED: CPU {payload.get('cpuTempC')}C >= {THERMAL_PROTECTION_TRIGGER_C:g}C; "
+            "normal operation suspended, safety climate only.",
+            flush=True,
+        )
+    elif transition in {"cleared", "disabled"}:
+        print(
+            f"THERMAL PROTECTION {transition.upper()}: CPU {payload.get('cpuTempC')}C; normal operation restored.",
+            flush=True,
+        )
+    return payload
+
+
 def _throttled_status() -> str:
     vcgencmd = "/usr/bin/vcgencmd" if Path("/usr/bin/vcgencmd").exists() else "vcgencmd"
     try:
@@ -5365,6 +5552,7 @@ def _system_info_payload(server_port: int | str | None = None) -> dict:
     app_uptime = _format_duration(app_uptime_seconds)
     cpu_temp_c = _cpu_temperature_c()
     cpu_temp_f = (cpu_temp_c * 9 / 5 + 32) if cpu_temp_c is not None else None
+    thermal_protection = _thermal_protection_status(cpu_temp_c=cpu_temp_c)
     throttled = _throttled_status()
     thermal_summary = "Unavailable"
     if cpu_temp_c is not None:
@@ -5393,6 +5581,8 @@ def _system_info_payload(server_port: int | str | None = None) -> dict:
         "cpuTempF": round(cpu_temp_f, 1) if cpu_temp_f is not None else None,
         "throttled": throttled,
         "thermal": thermal_summary,
+        "thermalProtection": thermal_protection,
+        "thermal_protection": thermal_protection,
     }
 
 
@@ -5710,6 +5900,12 @@ def _apply_thermostat_outputs_to_hardware(outputs: dict, thermostat: dict | None
     """Route room outputs independently to onboard GPIO or Home Assistant."""
     global _HVAC_OUTPUT_LAST_LOG_SIGNATURE
     thermostat = _merge_thermostat_state(thermostat or _read_thermostat_record().get("thermostat") or {})
+    thermal_protection = _thermal_protection_status()
+    if thermal_protection.get("active"):
+        # Never trust a stale caller snapshot while the protection latch is on.
+        # Recalculate from the current thermostat record so only safety-low/high
+        # calls can reach either GPIO or Home Assistant.
+        outputs = _thermostat_outputs(thermostat)
     modes = {kind: _equipment_control_mode(thermostat, kind) for kind in ("fan", "heat", "cool")}
     hardware_relays = {
         kind: bool(outputs.get(kind)) if modes[kind] == "internal" else False
@@ -5742,7 +5938,21 @@ def _apply_thermostat_outputs_to_hardware(outputs: dict, thermostat: dict | None
         )
     with _HARDWARE_LOCK:
         _expire_manual_hardware_locked()
-        if _HARDWARE_MANUAL.get("active"):
+        if thermal_protection.get("active"):
+            # A relay left on from the hardware test screen must not override the
+            # thermal emergency policy. Clear the test latch and shut off the
+            # decorative RGB output to reduce unnecessary load.
+            _HARDWARE_MANUAL["active"] = False
+            _HARDWARE_MANUAL["relays"] = {"fan": False, "heat": False, "cool": False}
+            _HARDWARE_MANUAL["activatedAt"] = 0.0
+            _HARDWARE_MANUAL["expiresAt"] = 0.0
+            if bool(_HARDWARE_RGB.get("on")):
+                _HARDWARE_RGB["on"] = False
+                try:
+                    _rgb_backend().write(False, str(_HARDWARE_RGB.get("color") or "#35eaff"))
+                except Exception:
+                    pass
+        elif _HARDWARE_MANUAL.get("active"):
             return
         _write_relay_outputs_locked(
             hardware_relays,
@@ -5759,6 +5969,8 @@ def _apply_thermostat_outputs_to_hardware(outputs: dict, thermostat: dict | None
 
 
 def _set_manual_relay(relay: str, on: bool) -> dict:
+    if _thermal_protection_status().get("active"):
+        raise ValueError("Manual relay control is disabled while the unit is overheating.")
     relay = str(relay or "").strip().lower()
     if relay not in HARDWARE_RELAY_PINS:
         raise ValueError("Unknown relay")
@@ -5790,6 +6002,8 @@ def _release_manual_hardware() -> dict:
 
 
 def _set_rgb_hardware(on: bool, color: object) -> dict:
+    if _thermal_protection_status().get("active"):
+        on = False
     with _HARDWARE_LOCK:
         _HARDWARE_RGB["on"] = bool(on)
         _HARDWARE_RGB["color"] = _normalize_hex_color(color, _HARDWARE_RGB.get("color") or "#35eaff")
@@ -6837,7 +7051,12 @@ def _thermostat_control_loop() -> None:
     while not _CONTROL_LOOP_STOP.wait(CONTROL_LOOP_INTERVAL_SECONDS):
         try:
             record = _read_thermostat_record()
-            thermostat = _apply_runtime_thermostat_logic(record)
+            thermal_protection = _thermal_protection_status()
+            thermostat = (
+                _apply_thermal_safety_runtime_logic(record)
+                if thermal_protection.get("active")
+                else _apply_runtime_thermostat_logic(record)
+            )
             outputs = _thermostat_outputs(thermostat)
             _apply_thermostat_outputs_to_hardware(outputs, thermostat)
         except Exception as exc:  # noqa: BLE001 - keep local HVAC control alive
@@ -10226,6 +10445,13 @@ def _assistant_knowledge_admin_update(payload: dict) -> dict:
 
 def _assistant_process_payload(payload: dict) -> dict:
     request_started = time.monotonic()
+    thermal_protection = _thermal_protection_status()
+    if thermal_protection.get("active"):
+        return {
+            "ok": False,
+            "thermalProtection": thermal_protection,
+            "error": "Voice assistant processing is suspended while the unit is overheating.",
+        }
     payload = payload if isinstance(payload, dict) else {}
     text = str(payload.get("text") or payload.get("command") or "").strip()
     if not text:
@@ -12576,6 +12802,13 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
         if path == "/api/system/info":
             server_port = getattr(self.server, "server_address", (None, None))[1]
             return _json(self, 200, _system_info_payload(server_port))
+        if path == "/api/system/thermal":
+            thermal_protection = _thermal_protection_status()
+            return _json(self, 200, {
+                "ok": True,
+                "thermalProtection": thermal_protection,
+                "thermal_protection": thermal_protection,
+            })
         if path == "/api/system/update-status":
             refresh = str((query.get("refresh") or [""])[0]).strip().lower() in {"1", "true", "yes", "on"}
             return _json(self, 200, _update_status_payload(refresh_remote=refresh))

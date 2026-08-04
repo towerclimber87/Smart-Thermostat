@@ -78,6 +78,18 @@ cd ~/Smart-Thermostat-Development
 python3 native_app/main.py
 ```
 
+## Raspberry Pi thermal emergency protection
+
+Version 14.00 adds a latched CPU-overheat mode for wall-cavity installations:
+
+- protection enters immediately when the Raspberry Pi CPU reaches **70°C**;
+- all normal thermostat comfort calls, schedules, presence handling, door-pause work, manual relay tests, JARVIS processing, page polling, animations, and ordinary touchscreen interaction are suspended;
+- the autonomous backend and selected room-temperature source stay active so the configured **Safety Low** and **Safety High** heat/cool protections can still operate;
+- the display wakes if necessary and shows a black screen containing only **UNIT OVERHEATING** in red;
+- normal operation returns only after the CPU remains at or below **65°C for two minutes**, preventing rapid cycling near the threshold.
+
+The defaults can be overridden through `SMART_THERMOSTAT_THERMAL_TRIGGER_C`, `SMART_THERMOSTAT_THERMAL_CLEAR_C`, and `SMART_THERMOSTAT_THERMAL_CLEAR_HOLD_SECONDS`.
+
 ## Typed JARVIS-style Home Assistant console
 
 The native panel displays the AI-core animation and sends typed commands to Home Assistant. The Raspberry Pi does not run an LLM. Home Assistant handles local intents and forwards only broader requests to the configured conversation agent.

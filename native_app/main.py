@@ -1129,6 +1129,10 @@ class StatusToast(GlassPanel):
         self.timer.timeout.connect(self.hide)
 
     def show_message(self, text: str, ms: int = 2800):
+        parent = self.parent()
+        if parent is not None and getattr(parent, "_thermal_protection_active", False):
+            self.hide()
+            return
         self.label.setText(text)
         self.adjustSize()
         if self.parent():
@@ -1179,6 +1183,9 @@ class Page(QWidget):
         data = info if isinstance(info, dict) else {}
         callbacks = self._async_jobs.pop(str(data.get("id") or ""), None)
         if not callbacks:
+            return
+        window = self.window()
+        if window is not None and getattr(window, "_thermal_protection_active", False):
             return
         on_success, on_error = callbacks
         if data.get("error"):
@@ -1423,6 +1430,25 @@ class ScreenSleepOverlay(QWidget):
     def paintEvent(self, event):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor(0, 0, 0))
+
+
+class ThermalProtectionOverlay(QWidget):
+    """Static black emergency screen with one high-contrast warning."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_OpaquePaintEvent, True)
+        self.setAttribute(Qt.WA_StyledBackground, False)
+        self.setAttribute(Qt.WA_AcceptTouchEvents, True)
+        self.setMouseTracking(True)
+        self.hide()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor(0, 0, 0))
+        painter.setPen(QColor(255, 35, 35))
+        painter.setFont(font(44, QFont.Black, 8))
+        painter.drawText(self.rect(), Qt.AlignCenter, "UNIT OVERHEATING")
 
 
 
@@ -12686,6 +12712,7 @@ class AlarmControlDialog(QDialog):
 
 class MainWindow(Background):
     statusRefreshCompleted = pyqtSignal(object)
+    thermalStatusCompleted = pyqtSignal(object)
     alarmRefreshCompleted = pyqtSignal(object)
     assistantStatusCompleted = pyqtSignal(object)
     mainAsyncCompleted = pyqtSignal(object)
@@ -12699,10 +12726,13 @@ class MainWindow(Background):
         self.setMinimumSize(1000, 620)
         self.toast = StatusToast(self)
         self.navigation_locked = False
+        self._thermal_protection_active = False
+        self._thermal_suspended_timers: dict[str, tuple[QTimer, int, bool, bool]] = {}
         self._display_sleeping = False
         self._display_wake_block_until = 0.0
         self._last_user_activity_at = time.monotonic()
         self.sleep_overlay = ScreenSleepOverlay(self)
+        self.thermal_overlay = ThermalProtectionOverlay(self)
         self.assistant_overlay = AssistantOverlay(self)
         self._assistant_status_running = False
         self.sleep_button = SleepButton(self)
@@ -12785,15 +12815,20 @@ class MainWindow(Background):
         self._alarm_dialog_open = False
         self._alarm_reopen_block_until = 0.0
         self._status_refresh_running = False
+        self._thermal_status_running = False
         self._alarm_refresh_running = False
         self._main_async_jobs: dict[str, tuple[Callable | None, Callable | None]] = {}
         self.statusRefreshCompleted.connect(self._handle_status_refresh_completed)
+        self.thermalStatusCompleted.connect(self._handle_thermal_status_completed)
         self.alarmRefreshCompleted.connect(self._handle_alarm_refresh_completed)
         self.assistantStatusCompleted.connect(self._handle_assistant_status_completed)
         self.mainAsyncCompleted.connect(self._handle_main_async_completed)
         self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self.refresh_status)
         self.status_timer.start(4000)
+        self.thermal_watch_timer = QTimer(self)
+        self.thermal_watch_timer.timeout.connect(self.refresh_thermal_status)
+        self.thermal_watch_timer.start(2000)
         self.assistant_status_timer = QTimer(self)
         self.assistant_status_timer.timeout.connect(self.refresh_assistant_status)
         self.assistant_status_timer.start(350)
@@ -12817,15 +12852,18 @@ class MainWindow(Background):
             if not self.api.wait_until_ready(5):
                 self.toast.show_message("Backend is not responding on 127.0.0.1:8080")
             self.s.load()
-            try:
-                self.s.refresh_alarm_state()
-            except Exception:
-                pass
+            self.apply_thermal_protection_state(self.s.thermostat)
+            if not getattr(self, "_thermal_protection_active", False):
+                try:
+                    self.s.refresh_alarm_state()
+                except Exception:
+                    pass
             self.sync_runtime_only()
             self.sync_visible_page(self.current_name)
             self.position_sleep_controls()
             QTimer.singleShot(0, self.refresh_assistant_status)
-            self.toast.show_message("Native panel ready")
+            if not getattr(self, "_thermal_protection_active", False):
+                self.toast.show_message("Native panel ready")
         except Exception as exc:
             self.toast.show_message(f"Startup problem: {exc}", 6000)
         finally:
@@ -12845,6 +12883,8 @@ class MainWindow(Background):
             )
             if hasattr(self, "sleep_overlay"):
                 self.sleep_overlay.setGeometry(self.rect())
+            if hasattr(self, "thermal_overlay"):
+                self.thermal_overlay.setGeometry(self.rect())
             if hasattr(self, "assistant_overlay"):
                 self.assistant_overlay.setGeometry(self.rect())
 
@@ -12876,6 +12916,18 @@ class MainWindow(Background):
                 self.assistant_overlay.raise_()
             elif hasattr(self, "sleep_button") and not getattr(self, "_display_sleeping", False):
                 self.sleep_button.raise_()
+
+            if getattr(self, "_thermal_protection_active", False) and hasattr(self, "thermal_overlay"):
+                if hasattr(self, "sleep_button"):
+                    self.sleep_button.hide()
+                if hasattr(self, "sync_button"):
+                    self.sync_button.hide()
+                if hasattr(self, "assistant_overlay"):
+                    self.assistant_overlay.hide()
+                if hasattr(self, "sleep_overlay"):
+                    self.sleep_overlay.hide()
+                self.thermal_overlay.show()
+                self.thermal_overlay.raise_()
         except Exception:
             pass
 
@@ -13244,6 +13296,8 @@ class MainWindow(Background):
         try:
             event_type = event.type()
             now = time.monotonic()
+            if getattr(self, "_thermal_protection_active", False) and event_type in self.display_input_event_types():
+                return True
             if event_type in self.display_input_event_types():
                 if getattr(self, "_display_sleeping", False):
                     self.wake_display_screen()
@@ -13714,6 +13768,9 @@ class MainWindow(Background):
         callbacks = self._main_async_jobs.pop(str(data.get("id") or ""), None)
         if not callbacks:
             return
+        if getattr(self, "_thermal_protection_active", False):
+            self.position_sleep_controls()
+            return
         on_success, on_error = callbacks
         if data.get("error"):
             if on_error:
@@ -13765,6 +13822,8 @@ class MainWindow(Background):
 
     def refresh_alarm_state(self):
         """Background poll for Home Assistant-initiated Alarmo state changes."""
+        if getattr(self, "_thermal_protection_active", False):
+            return
         if getattr(self, "_alarm_refresh_running", False):
             return
         if not self.configured_alarm_entity_id():
@@ -13797,6 +13856,8 @@ class MainWindow(Background):
 
     def refresh_assistant_status(self):
         """Poll the local backend only; no Home Assistant work occurs in this timer."""
+        if getattr(self, "_thermal_protection_active", False):
+            return
         if getattr(self, "_assistant_status_running", False):
             return
         self._assistant_status_running = True
@@ -13813,6 +13874,8 @@ class MainWindow(Background):
 
     def _handle_assistant_status_completed(self, info: object):
         self._assistant_status_running = False
+        if getattr(self, "_thermal_protection_active", False):
+            return
         data = info if isinstance(info, dict) else {}
         if data.get("error"):
             return
@@ -13828,6 +13891,152 @@ class MainWindow(Background):
         if hasattr(self, "assistant_overlay"):
             self.assistant_overlay.set_status(assistant)
         self.position_sleep_controls()
+
+    @staticmethod
+    def thermal_protection_from_payload(payload: object) -> dict:
+        data = payload if isinstance(payload, dict) else {}
+        for key in ("thermalProtection", "thermal_protection"):
+            value = data.get(key)
+            if isinstance(value, dict):
+                return value
+        thermostat = data.get("thermostat") if isinstance(data.get("thermostat"), dict) else {}
+        for key in ("thermalProtection", "thermal_protection"):
+            value = thermostat.get(key)
+            if isinstance(value, dict):
+                return value
+        return {}
+
+    def thermal_timer_candidates(self) -> list[tuple[str, QTimer]]:
+        # QTimer objects are QObject children even when a page stores them inside
+        # a list/dictionary or a nested widget owns them. Walking the Qt object
+        # tree catches every animation, debounce, polling, and one-shot timer
+        # without relying on attribute names. The thermal-only watch timer is
+        # filtered by the caller because it is the one lightweight loop required
+        # to detect safe recovery.
+        candidates: list[tuple[str, QTimer]] = []
+        seen: set[int] = set()
+        try:
+            timers = self.findChildren(QTimer)
+        except Exception:
+            timers = []
+        for timer in timers:
+            marker = id(timer)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            candidates.append((f"qt:{marker}", timer))
+        return candidates
+
+    def suspend_nonessential_thermal_activity(self):
+        saved: dict[str, tuple[QTimer, int, bool, bool]] = {}
+        for key, timer in self.thermal_timer_candidates():
+            if timer is self.thermal_watch_timer:
+                continue
+            try:
+                saved[key] = (timer, max(1, int(timer.interval() or 1)), bool(timer.isActive()), bool(timer.isSingleShot()))
+                timer.stop()
+            except Exception:
+                continue
+        self._thermal_suspended_timers = saved
+        try:
+            self._sync_pending_changes.clear()
+            self._sync_active_until = 0.0
+            self._sync_optimistic_active = False
+        except Exception:
+            pass
+
+    def resume_nonessential_thermal_activity(self):
+        saved = getattr(self, "_thermal_suspended_timers", {})
+        self._thermal_suspended_timers = {}
+        for _key, item in saved.items():
+            try:
+                timer, interval, was_active, single_shot = item
+                # Do not replay stale one-shot UI actions that were pending when
+                # the emergency screen took over. Repeating background timers
+                # resume at their original cadence.
+                if was_active and not single_shot:
+                    timer.start(max(1, int(interval)))
+            except Exception:
+                continue
+
+    def enter_thermal_protection_screen(self):
+        if getattr(self, "_thermal_protection_active", False):
+            return
+        self._thermal_protection_active = True
+        trace_runtime("Thermal protection screen entered; nonessential UI activity suspended")
+
+        modal = QApplication.activeModalWidget()
+        if modal is not None and modal is not self:
+            try:
+                modal.close()
+            except Exception:
+                pass
+
+        if getattr(self, "_display_sleeping", False):
+            self._display_sleeping = False
+            self._display_wake_block_until = 0.0
+            self._run_display_power_command(SCREEN_SLEEP_ON_COMMAND)
+        try:
+            self.sleep_overlay.hide()
+            self.assistant_overlay.set_status({"stage": "idle", "active": False})
+            self.toast.hide()
+        except Exception:
+            pass
+        self.suspend_nonessential_thermal_activity()
+        self.position_sleep_controls()
+
+    def leave_thermal_protection_screen(self):
+        if not getattr(self, "_thermal_protection_active", False):
+            return
+        self._thermal_protection_active = False
+        trace_runtime("Thermal protection screen cleared; normal UI activity restored")
+        try:
+            self.thermal_overlay.hide()
+        except Exception:
+            pass
+        self.resume_nonessential_thermal_activity()
+        self._last_user_activity_at = time.monotonic()
+        self.position_sleep_controls()
+        self.sync_runtime_only()
+        QTimer.singleShot(0, self.refresh_status)
+        QTimer.singleShot(0, self.refresh_alarm_state)
+        QTimer.singleShot(0, self.refresh_assistant_status)
+
+    def apply_thermal_protection_state(self, payload: object):
+        thermal = self.thermal_protection_from_payload(payload)
+        active = bool(thermal.get("active"))
+        if active:
+            if getattr(self, "_thermal_protection_active", False):
+                self.position_sleep_controls()
+            else:
+                self.enter_thermal_protection_screen()
+        else:
+            self.leave_thermal_protection_screen()
+
+    def refresh_thermal_status(self):
+        """Poll only the Pi thermal latch; this remains active during emergency mode."""
+        if getattr(self, "_thermal_status_running", False):
+            return
+        self._thermal_status_running = True
+        api = self.s.api
+
+        def worker():
+            try:
+                data = api.thermal_status()
+                self.thermalStatusCompleted.emit({"data": data, "error": None})
+            except Exception as exc:
+                self.thermalStatusCompleted.emit({"data": None, "error": str(exc)})
+
+        threading.Thread(target=worker, name="thermal-status-refresh", daemon=True).start()
+
+    def _handle_thermal_status_completed(self, info: object):
+        self._thermal_status_running = False
+        data = info if isinstance(info, dict) else {}
+        if data.get("error"):
+            return
+        payload = data.get("data")
+        if isinstance(payload, dict):
+            self.apply_thermal_protection_state(payload)
 
     def refresh_status(self):
         if getattr(self, "_status_refresh_running", False):
@@ -13854,7 +14063,9 @@ class MainWindow(Background):
         status = data.get("data")
         if isinstance(status, dict):
             self.s.ingest_thermostat(status)
-            self.sync_runtime_only()
+            self.apply_thermal_protection_state(status)
+            if not getattr(self, "_thermal_protection_active", False):
+                self.sync_runtime_only()
 
     def sync_runtime_only(self):
         t = self.s.thermostat or {}
@@ -13878,6 +14089,8 @@ class MainWindow(Background):
 
     def poll(self):
         try:
+            if getattr(self, "_thermal_protection_active", False):
+                return
             if getattr(self, "_poll_busy", False):
                 return
             if time.monotonic() - getattr(self, "_last_page_change_at", 0) < 1.2:
