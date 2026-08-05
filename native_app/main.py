@@ -2756,12 +2756,15 @@ class TextKeyboardDialog(QDialog):
 
 class ScheduleEditDialog(QDialog):
     saved = pyqtSignal(dict)
+    peopleLoaded = pyqtSignal(object)
 
     def __init__(self, state: AppState, schedule: dict | None = None, parent=None):
         super().__init__(parent)
         self.s = state
         self.schedule = copy.deepcopy(schedule or {})
         self.people: list[dict] = []
+        self._people_loading = False
+        self.peopleLoaded.connect(self.handle_people_loaded)
         self.setModal(True)
         self.setWindowTitle("Schedule")
         # Keep this dialog inside the 10.1" touchscreen. The previous fixed
@@ -2789,6 +2792,7 @@ class ScheduleEditDialog(QDialog):
         self.load_people()
         self.build()
         QTimer.singleShot(0, self.fit_to_screen)
+        QTimer.singleShot(0, self.refresh_people_async)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -2805,6 +2809,12 @@ class ScheduleEditDialog(QDialog):
         self.move(geo.x() + (geo.width() - width) // 2, geo.y() + (geo.height() - height) // 2)
 
     def load_people(self):
+        """Load the saved person cache without touching the network.
+
+        This runs while the schedule dialog is being constructed on the Qt UI
+        thread. Home Assistant discovery is started separately after the dialog
+        paints so a slow or unreachable HA server cannot freeze touch input.
+        """
         saved_groups = []
         if isinstance(self.s.thermostat, dict):
             for key in ("people", "autoAwayPeople"):
@@ -2812,17 +2822,56 @@ class ScheduleEditDialog(QDialog):
                 if isinstance(value, list):
                     saved_groups.append(value)
         for saved_people in saved_groups:
-            for p in saved_people:
-                if isinstance(p, dict) and p.get("entityId") and all(str(x.get("entityId")) != str(p.get("entityId")) for x in self.available_people):
-                    self.available_people.append(p)
-        try:
-            data = self.s.api.post("/api/ha/entities", self.s.ha_payload({"domains": ["person"]}))
-            for p in data.get("entities") or []:
-                eid = str(p.get("entityId") or "")
-                if eid and all(str(x.get("entityId")) != eid for x in self.available_people):
-                    self.available_people.append(p)
-        except Exception:
-            pass
+            for person in saved_people:
+                if not isinstance(person, dict):
+                    continue
+                entity_id = str(person.get("entityId") or person.get("entity_id") or "").strip()
+                if entity_id and all(str(x.get("entityId") or x.get("entity_id") or "") != entity_id for x in self.available_people):
+                    item = dict(person)
+                    item["entityId"] = entity_id
+                    self.available_people.append(item)
+
+    def refresh_people_async(self):
+        if self._people_loading:
+            return
+        ha = self.s.ha()
+        if not str(ha.get("url") or "").strip() or not str(ha.get("token") or "").strip():
+            return
+        self._people_loading = True
+
+        def worker():
+            try:
+                data = self.s.api.post("/api/ha/entities", self.s.ha_payload({"domains": ["person"]}))
+                self.peopleLoaded.emit({"entities": data.get("entities") or [], "error": None})
+            except Exception as exc:
+                self.peopleLoaded.emit({"entities": [], "error": str(exc)})
+
+        threading.Thread(target=worker, name="schedule-person-refresh", daemon=True).start()
+
+    def handle_people_loaded(self, info: object):
+        self._people_loading = False
+        data = info if isinstance(info, dict) else {}
+        changed = False
+        for person in data.get("entities") or []:
+            if not isinstance(person, dict):
+                continue
+            entity_id = str(person.get("entityId") or person.get("entity_id") or "").strip()
+            if not entity_id:
+                continue
+            existing = next((x for x in self.available_people if str(x.get("entityId") or x.get("entity_id") or "") == entity_id), None)
+            if existing is None:
+                item = dict(person)
+                item["entityId"] = entity_id
+                self.available_people.append(item)
+                changed = True
+            else:
+                before = dict(existing)
+                existing.update(person)
+                existing["entityId"] = entity_id
+                changed = changed or existing != before
+        if changed:
+            self.available_people.sort(key=lambda item: str(item.get("name") or item.get("friendly_name") or item.get("entityId") or "").lower())
+            self.refresh()
 
     def small_label(self, text: str) -> QLabel:
         lab = QLabel(text)
@@ -3117,7 +3166,8 @@ class ScheduleEditDialog(QDialog):
     def add_person(self):
         entities = self.available_people
         if not entities:
-            QMessageBox.warning(self, "People", "No Home Assistant person entities found.")
+            message = "Home Assistant people are still loading." if self._people_loading else "No Home Assistant person entities found."
+            QMessageBox.warning(self, "People", message)
             return
         dlg = EntityPickerDialog("Choose Person", entities, self)
         def selected(e):
@@ -3151,10 +3201,18 @@ class ScheduleEditDialog(QDialog):
 
 class ScheduleManagerDialog(QDialog):
     changed = pyqtSignal()
+    scheduleSaveCompleted = pyqtSignal(object)
+    scheduleRunCompleted = pyqtSignal(object)
 
     def __init__(self, state: AppState, parent=None):
         super().__init__(parent)
         self.s = state
+        self._schedule_save_seq = 0
+        self._schedule_save_running = False
+        self._schedule_save_pending: list[dict] | None = None
+        self._schedule_run_seq = 0
+        self.scheduleSaveCompleted.connect(self.handle_schedule_save_completed)
+        self.scheduleRunCompleted.connect(self.handle_schedule_run_completed)
         self.setModal(True)
         self.setWindowTitle("Schedules")
         self.setMinimumSize(640, 420)
@@ -3260,18 +3318,60 @@ class ScheduleManagerDialog(QDialog):
         return panel
 
     def save_schedules(self, schedules: list[dict]):
-        # Update the native UI first so shortcut buttons return instantly, then
-        # persist to the backend. This prevents a slow local API write from
-        # making the schedule screen look like it did nothing.
+        # Update the native UI first so the schedule editor returns instantly.
+        # Persist on a worker thread: /api/thermostat/control may wait on a slow
+        # Home Assistant person-state refresh and must never block Qt touch input.
+        schedules = [copy.deepcopy(item) for item in schedules if isinstance(item, dict)]
         self.s.set_thermostat_schedules_local(schedules)
         self.changed.emit()
         self.refresh()
+        if self._schedule_save_running:
+            self._schedule_save_pending = copy.deepcopy(schedules)
+            return
+        self._start_schedule_save(schedules)
+
+    def _start_schedule_save(self, schedules: list[dict]):
+        self._schedule_save_running = True
+        self._schedule_save_seq += 1
+        seq = self._schedule_save_seq
+        payload = copy.deepcopy(schedules)
+
+        def worker():
+            try:
+                result = self.s.api.thermostat_update({"schedules": payload})
+                self.scheduleSaveCompleted.emit({"seq": seq, "result": result, "error": None})
+            except Exception as exc:
+                self.scheduleSaveCompleted.emit({"seq": seq, "result": None, "error": str(exc)})
+
+        threading.Thread(target=worker, name="schedule-save", daemon=True).start()
+
+    def handle_schedule_save_completed(self, info: object):
+        data = info if isinstance(info, dict) else {}
         try:
-            self.s.update_thermostat({"schedules": schedules})
-            self.s.set_thermostat_schedules_local(self.s.thermostat_schedules())
-            self.changed.emit()
-        except Exception as exc:
-            QMessageBox.warning(self, "Schedules", f"Schedule save failed: {exc}")
+            seq = int(data.get("seq") or 0)
+        except Exception:
+            seq = 0
+        if seq != self._schedule_save_seq:
+            return
+        self._schedule_save_running = False
+        pending = self._schedule_save_pending
+        self._schedule_save_pending = None
+        error = str(data.get("error") or "")
+        if error:
+            if self.isVisible():
+                QMessageBox.warning(self, "Schedules", f"Schedule save failed: {error}")
+        elif pending is None:
+            # Only accept the response when there is no newer local edit waiting.
+            # Otherwise the older response would briefly repaint the superseded
+            # schedule list before the queued save completes.
+            result = data.get("result")
+            if isinstance(result, dict):
+                self.s.ingest_thermostat(result)
+                self.s.set_thermostat_schedules_local(self.s.thermostat_schedules())
+                self.changed.emit()
+                self.refresh()
+        if pending is not None:
+            self._start_schedule_save(pending)
 
     def new_schedule(self):
         dlg = ScheduleEditDialog(self.s, None, self)
@@ -3306,12 +3406,42 @@ class ScheduleManagerDialog(QDialog):
         target = sched.get("heatSetpoint") if effective == "heat" else sched.get("coolSetpoint")
         try:
             val = int(float(target))
-            self.s.set_target_override(val)
-            self.s.update_thermostat({"targetTemp": val, "lastComfortTarget": val, "targetChangeSource": "panel"})
-            self.changed.emit()
         except Exception as exc:
-            self.s.clear_target_override()
             QMessageBox.warning(self, "Schedule", str(exc))
+            return
+        self.s.set_target_override(val)
+        self.changed.emit()
+        self._schedule_run_seq += 1
+        seq = self._schedule_run_seq
+
+        def worker():
+            try:
+                result = self.s.api.thermostat_update({"targetTemp": val, "lastComfortTarget": val, "targetChangeSource": "panel"})
+                self.scheduleRunCompleted.emit({"seq": seq, "result": result, "error": None})
+            except Exception as exc:
+                self.scheduleRunCompleted.emit({"seq": seq, "result": None, "error": str(exc)})
+
+        threading.Thread(target=worker, name="schedule-run-dialog", daemon=True).start()
+
+    def handle_schedule_run_completed(self, info: object):
+        data = info if isinstance(info, dict) else {}
+        try:
+            seq = int(data.get("seq") or 0)
+        except Exception:
+            seq = 0
+        if seq != self._schedule_run_seq:
+            return
+        error = str(data.get("error") or "")
+        if error:
+            self.s.clear_target_override()
+            self.changed.emit()
+            if self.isVisible():
+                QMessageBox.warning(self, "Schedule", error)
+            return
+        result = data.get("result")
+        if isinstance(result, dict):
+            self.s.ingest_thermostat(result)
+        self.changed.emit()
 
 
 
@@ -13515,6 +13645,7 @@ class MainWindow(Background):
     mainAsyncCompleted = pyqtSignal(object)
     screenBrightnessCompleted = pyqtSignal(object)
     screenMotionCompleted = pyqtSignal(object)
+    reloadAllCompleted = pyqtSignal(object)
 
     def __init__(self):
         super().__init__()
@@ -13622,12 +13753,22 @@ class MainWindow(Background):
         self._thermal_status_running = False
         self._alarm_refresh_running = False
         self._main_async_jobs: dict[str, tuple[Callable | None, Callable | None]] = {}
+        self._reload_all_running = False
+        self._reload_all_pending = False
+        self._ui_heartbeat_at = time.monotonic()
+        self._ui_stall_last_dump_at = 0.0
         self.statusRefreshCompleted.connect(self._handle_status_refresh_completed)
         self.thermalStatusCompleted.connect(self._handle_thermal_status_completed)
         self.alarmRefreshCompleted.connect(self._handle_alarm_refresh_completed)
         self.assistantStatusCompleted.connect(self._handle_assistant_status_completed)
         self.mainAsyncCompleted.connect(self._handle_main_async_completed)
         self.screenMotionCompleted.connect(self.handle_screen_motion_completed)
+        self.reloadAllCompleted.connect(self._handle_reload_all_completed)
+        self.ui_heartbeat_timer = QTimer(self)
+        self.ui_heartbeat_timer.setInterval(500)
+        self.ui_heartbeat_timer.timeout.connect(self._mark_ui_heartbeat)
+        self.ui_heartbeat_timer.start()
+        threading.Thread(target=self._ui_stall_watchdog, name="ui-stall-watchdog", daemon=True).start()
         self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self.refresh_status)
         self.status_timer.start(4000)
@@ -14975,12 +15116,74 @@ class MainWindow(Background):
         self.update_sync_button_state()
 
     def reload_all(self):
-        try:
-            self.s.load()
-            self.sync_runtime_only()
-            self.update_sync_button_state()
-        except Exception as exc:
-            self.toast.show_message(f"Reload failed: {exc}")
+        """Reload backend state without blocking the Qt event loop."""
+        if self._reload_all_running:
+            self._reload_all_pending = True
+            return
+        self._reload_all_running = True
+        self._reload_all_pending = False
+        api = self.s.api
+
+        def worker():
+            result = {"config": None, "thermostat": None, "systemInfo": None, "errors": []}
+            try:
+                result["config"] = api.get_config_record()
+            except Exception as exc:
+                result["errors"].append(f"config: {exc}")
+            try:
+                result["thermostat"] = api.thermostat_status()
+            except Exception as exc:
+                result["errors"].append(f"thermostat: {exc}")
+            try:
+                result["systemInfo"] = api.get("/api/system/info")
+            except Exception as exc:
+                result["errors"].append(f"system: {exc}")
+            self.reloadAllCompleted.emit(result)
+
+        threading.Thread(target=worker, name="full-state-reload", daemon=True).start()
+
+    def _handle_reload_all_completed(self, info: object):
+        data = info if isinstance(info, dict) else {}
+        config_record = data.get("config")
+        if isinstance(config_record, dict):
+            self.s.config = config_record.get("config") or self.s.config
+        thermostat = data.get("thermostat")
+        if isinstance(thermostat, dict):
+            self.s.ingest_thermostat(thermostat)
+        self.s.thermostat_schedules()
+        system_info = data.get("systemInfo")
+        if isinstance(system_info, dict):
+            self.s.system_info = system_info
+        self.sync_runtime_only()
+        self.update_sync_button_state()
+        errors = [str(item) for item in (data.get("errors") or []) if str(item)]
+        if errors and config_record is None and thermostat is None:
+            self.toast.show_message("Reload failed: " + "; ".join(errors[:2]))
+        self._reload_all_running = False
+        if self._reload_all_pending:
+            self._reload_all_pending = False
+            QTimer.singleShot(0, self.reload_all)
+
+    def _mark_ui_heartbeat(self):
+        self._ui_heartbeat_at = time.monotonic()
+
+    def _ui_stall_watchdog(self):
+        """Record all Python thread stacks when the Qt loop stops responding."""
+        while True:
+            time.sleep(1.0)
+            now = time.monotonic()
+            stalled_for = now - float(getattr(self, "_ui_heartbeat_at", now) or now)
+            if stalled_for < 5.0 or now - float(getattr(self, "_ui_stall_last_dump_at", 0.0) or 0.0) < 20.0:
+                continue
+            self._ui_stall_last_dump_at = now
+            try:
+                path = runtime_log_path("native-ui-stall.log")
+                with open(path, "a", buffering=1) as handle:
+                    handle.write(f"\n===== UI stall {datetime.now().isoformat(timespec='seconds')} duration={stalled_for:.1f}s =====\n")
+                    faulthandler.dump_traceback(file=handle, all_threads=True)
+                trace_runtime(f"UI stall trace written to {path} after {stalled_for:.1f}s")
+            except Exception as exc:
+                trace_runtime(f"UI stall trace failed: {exc}")
 
     def sync_all(self):
         t = self.s.thermostat or {}
@@ -15169,7 +15372,6 @@ class MainWindow(Background):
                     return
             if self.current_name == "Thermostat":
                 dlg = SettingsDialog(self.s, self)
-                dlg.saved.connect(self.reload_all)
             elif self.current_name == "Audio":
                 dlg = AudioSettingsDialog(self.s, self)
                 dlg.saved.connect(self.reload_all)
