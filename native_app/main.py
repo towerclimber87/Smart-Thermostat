@@ -13529,6 +13529,7 @@ class MainWindow(Background):
         self._display_sleeping = False
         self._display_wake_block_until = 0.0
         self._motion_wake_block_until = 0.0
+        self._manual_sleep_touch_only = False
         self._last_user_activity_at = time.monotonic()
         self._last_motion_activity_at = self._last_user_activity_at
         self._screen_motion_poll_running = False
@@ -14109,7 +14110,19 @@ class MainWindow(Background):
                 return True
             if event_type in self.display_input_event_types():
                 if getattr(self, "_display_sleeping", False):
-                    self.wake_display_screen()
+                    # Touchscreens commonly arrive as either Qt touch events or
+                    # synthesized mouse-button events. Only those physical panel
+                    # inputs may clear a manual Sleep-button lock.
+                    touch_wake_events = {
+                        QEvent.MouseButtonPress,
+                        QEvent.MouseButtonRelease,
+                        QEvent.MouseButtonDblClick,
+                        QEvent.TouchBegin,
+                        QEvent.TouchUpdate,
+                        QEvent.TouchEnd,
+                    }
+                    wake_source = "touch" if event_type in touch_wake_events else "input"
+                    self.wake_display_screen(source=wake_source)
                     return True
                 if now < getattr(self, "_display_wake_block_until", 0.0):
                     return True
@@ -14294,6 +14307,10 @@ class MainWindow(Background):
         self._display_sleeping = True
         self._display_wake_block_until = 0.0
         self._motion_wake_block_until = time.monotonic() + (5.0 if manual else 0.0)
+        # Pressing the on-screen Sleep button is an explicit request to keep the
+        # display off. Preserve that state until a real touchscreen/mouse input
+        # wakes it; motion and other programmatic wake paths must be ignored.
+        self._manual_sleep_touch_only = bool(manual)
         self.position_sleep_controls()
         self.sleep_overlay.show()
         self.sleep_overlay.raise_()
@@ -14302,10 +14319,13 @@ class MainWindow(Background):
         # and blocks accidental touches.
         QTimer.singleShot(120, lambda: self._run_display_power_command(SCREEN_SLEEP_OFF_COMMAND))
 
-    def wake_display_screen(self):
+    def wake_display_screen(self, source: str = "programmatic"):
         if not getattr(self, "_display_sleeping", False):
             return
+        if getattr(self, "_manual_sleep_touch_only", False) and source != "touch":
+            return
         self._display_sleeping = False
+        self._manual_sleep_touch_only = False
         self._display_wake_block_until = time.monotonic() + SCREEN_WAKE_INPUT_BLOCK_SECONDS
         self._last_user_activity_at = time.monotonic()
         self._last_motion_activity_at = self._last_user_activity_at
@@ -14375,7 +14395,7 @@ class MainWindow(Background):
                 and getattr(self, "_display_sleeping", False)
                 and now >= float(getattr(self, "_motion_wake_block_until", 0.0) or 0.0)
             ):
-                self.wake_display_screen()
+                self.wake_display_screen(source="motion")
             return
 
         if not bool(settings.get("motionAutoSleepEnabled")):
@@ -14758,10 +14778,10 @@ class MainWindow(Background):
         assistant = result.get("assistant") if isinstance(result.get("assistant"), dict) else {}
         active = bool(assistant.get("active")) and str(assistant.get("stage") or "idle").lower() != "idle"
         if active:
-            # A command entered from SSH should wake a sleeping panel just like a
-            # physical touch, then let the animation own the screen until done.
+            # Assistant activity may wake an automatically sleeping panel. A
+            # manual Sleep-button lock remains touch-only and ignores this path.
             if getattr(self, "_display_sleeping", False):
-                self.wake_display_screen()
+                self.wake_display_screen(source="assistant")
             self._last_user_activity_at = time.monotonic()
         if hasattr(self, "assistant_overlay"):
             self.assistant_overlay.set_status(assistant)
@@ -14849,6 +14869,7 @@ class MainWindow(Background):
 
         if getattr(self, "_display_sleeping", False):
             self._display_sleeping = False
+            self._manual_sleep_touch_only = False
             self._display_wake_block_until = 0.0
             self._run_display_power_command(SCREEN_SLEEP_ON_COMMAND)
         try:
