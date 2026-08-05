@@ -96,6 +96,10 @@ The native panel displays the AI-core animation and sends typed commands to Home
 
 The assistant reuses the Home Assistant URL and long-lived token already stored in the thermostat configuration. The stored-token assistant endpoint accepts commands only from the thermostat itself unless the temporary Backup Config portal is open.
 
+### JARVIS Sonos completion synchronization
+
+Version 14.71 includes IHA 10.17.2. Sonos may briefly return to its baseline media state while an announcement is still audible. JARVIS now keeps the configured announcement volume and on-screen speaking state active for at least a conservative duration derived from the spoken text, while real media-player playback can extend that window. Only then does Home Assistant restore the prior volume and tell the panel to clear the JARVIS overlay. The existing 400 millisecond pre-speech volume settling pause is retained.
+
 ### Home Assistant-owned speech playback
 
 Version 13.90 removes audio generation and Sonos playback from the thermostat backend. The matching IHA 10.14.0 integration calls Home Assistant's native `tts.speak` action using the TTS entity, voice, language, media player, and announcement volume saved on the panel. The thermostat continues to show the JARVIS icon, command, response text, speaking status, and configured screen hold time. Home Assistant restores the prior media-player volume after playback and reports completion back to the panel. This is the intended path for automations and for a future Home Assistant wireless microphone array.

@@ -1,3 +1,9 @@
+## JARVIS playback completion synchronization (10.17.2)
+
+Version **10.17.2** prevents Sonos announcement volume and the panel's JARVIS overlay from resetting during speech. Some Sonos players briefly return to their baseline media state before the announcement audio has finished. The integration now treats its conservative text-derived speech duration as a minimum hold: observable playback may keep the announcement active longer, but an early state transition cannot shorten it. The previous Sonos volume is restored and the panel receives the finished callback only after that completion window.
+
+The existing 400 millisecond volume-settling pause remains in place before `tts.speak`, so the first words begin at the panel's configured announcement volume.
+
 ## Home Assistant-owned speech (10.14.0)
 
 Version **10.14.0** moves JARVIS audio generation and Sonos playback out of the thermostat backend. `iha.ask_jarvis` and `iha.jarvis_announcement` now ask the panel to process/display the text with `externalSpeech`, then Home Assistant calls its native `tts.speak` service directly. The panel still shows the JARVIS icon, command, response text, speaking/complete state, and saved screen hold time.
