@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from typing import Callable, Iterable
 
-from PyQt5.QtCore import QEasingCurve, QEvent, QPointF, QRect, QRectF, QSize, Qt, QTimer, QVariantAnimation, pyqtSignal
+from PyQt5.QtCore import QEvent, QPointF, QRect, QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QBrush, QColor, QConicalGradient, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QRadialGradient
 from PyQt5.QtWidgets import (
     QApplication,
@@ -116,10 +116,19 @@ class GlassPanel(QFrame):
 
 
 class RoundButton(QPushButton):
+    """Standard button with touchscreen release tolerance.
+
+    The control keeps its original visual size.  The small tolerance is used
+    only when a touchscreen press begins inside the button and the synthesized
+    mouse release lands a few pixels outside because of normal finger drift.
+    """
+
     def __init__(self, text: str = "", active: bool = False, kind: str = "normal", min_h: int = 46, parent=None):
         super().__init__(text, parent)
         self._active = active
         self._kind = kind
+        self._relaxed_press_active = False
+        self._release_slop = 8
         self.setCursor(Qt.PointingHandCursor)
         self.setMinimumHeight(min_h)
         self.setFont(font(12))
@@ -136,33 +145,55 @@ class RoundButton(QPushButton):
     def refresh(self):
         self.setStyleSheet(button_style(active=self._active, danger=self._kind == "danger", green=self._kind == "green", purple=self._kind == "purple"))
 
+    def mousePressEvent(self, event):
+        self._relaxed_press_active = bool(
+            self.isEnabled()
+            and event.button() == Qt.LeftButton
+            and self.rect().contains(event.pos())
+        )
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        recover_touch_release = bool(
+            self._relaxed_press_active
+            and self.isEnabled()
+            and event.button() == Qt.LeftButton
+            and not self.rect().contains(event.pos())
+            and QRectF(self.rect()).adjusted(
+                -self._release_slop,
+                -self._release_slop,
+                self._release_slop,
+                self._release_slop,
+            ).contains(QPointF(event.pos()))
+        )
+        self._relaxed_press_active = False
+        if recover_touch_release:
+            self.setDown(False)
+            self.click()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
 
 class KeypadButton(RoundButton):
-    """Round button with persistent touchscreen press confirmation.
+    """Keypad button with lightweight touchscreen feedback.
 
-    Qt's normal ``:pressed`` state can be too brief to notice on a touchscreen,
-    especially when there is no haptic feedback. KeypadButton keeps the normal
-    depressed state while the finger is down, then paints a short release pulse
-    after the tap so every accepted key press has a clear visual response.
+    The former 180 ms QVariantAnimation generated repeated software-painted
+    frames for every digit.  A single short feedback pulse gives the same
+    confirmation without adding animation work to the input path.
     """
 
     def __init__(self, text: str = "", active: bool = False, kind: str = "normal", min_h: int = 46, parent=None):
-        self._release_feedback = 0.0
-        self._release_animation = None
+        self._release_feedback = False
         super().__init__(text, active=active, kind=kind, min_h=min_h, parent=parent)
-        self._release_animation = QVariantAnimation(self)
-        self._release_animation.setDuration(180)
-        self._release_animation.setStartValue(1.0)
-        self._release_animation.setEndValue(0.0)
-        self._release_animation.setEasingCurve(QEasingCurve.OutCubic)
-        self._release_animation.valueChanged.connect(self._set_release_feedback)
-        self._release_animation.finished.connect(self._clear_release_feedback)
+        self._release_feedback_timer = QTimer(self)
+        self._release_feedback_timer.setSingleShot(True)
+        self._release_feedback_timer.setInterval(90)
+        self._release_feedback_timer.timeout.connect(self._clear_release_feedback)
+        self.clicked.connect(self._show_release_feedback)
         self.refresh()
 
     def refresh(self):
-        # Make the down-state substantially more obvious than the standard
-        # shared button style: darker face, brighter border, and a visible
-        # downward shift. The post-release pulse is painted separately below.
         base = button_style(
             active=self._active,
             danger=self._kind == "danger",
@@ -192,41 +223,24 @@ class KeypadButton(RoundButton):
         """
         self.setStyleSheet(base)
 
-    def _set_release_feedback(self, value):
-        try:
-            self._release_feedback = float(value)
-        except (TypeError, ValueError):
-            self._release_feedback = 0.0
+    def _clear_release_feedback(self):
+        self._release_feedback = False
         self.update()
 
-    def _clear_release_feedback(self):
-        self._release_feedback = 0.0
+    def _show_release_feedback(self):
+        self._release_feedback = True
+        self._release_feedback_timer.start()
         self.update()
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton and self._release_animation is not None:
-            self._release_animation.stop()
+        if event.button() == Qt.LeftButton:
+            self._release_feedback_timer.stop()
             self._clear_release_feedback()
         super().mousePressEvent(event)
 
-    def mouseReleaseEvent(self, event):
-        accepted_tap = bool(
-            self.isEnabled()
-            and event.button() == Qt.LeftButton
-            and self.rect().contains(event.pos())
-        )
-        super().mouseReleaseEvent(event)
-        if accepted_tap and self._release_animation is not None:
-            self._release_animation.stop()
-            self._release_animation.setStartValue(1.0)
-            self._release_animation.setEndValue(0.0)
-            self._set_release_feedback(1.0)
-            self._release_animation.start()
-
     def paintEvent(self, event):
         super().paintEvent(event)
-        amount = max(0.0, min(1.0, float(self._release_feedback)))
-        if amount <= 0.001:
+        if not self._release_feedback:
             return
         if self._kind == "danger":
             accent = QColor(255, 166, 111)
@@ -237,10 +251,8 @@ class KeypadButton(RoundButton):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         rect = QRectF(self.rect()).adjusted(2.5, 2.5, -2.5, -2.5)
-        fill_alpha = int(48 * amount)
-        border_alpha = int(235 * amount)
-        p.setBrush(QColor(accent.red(), accent.green(), accent.blue(), fill_alpha))
-        p.setPen(QPen(QColor(accent.red(), accent.green(), accent.blue(), border_alpha), 1.5 + (2.0 * amount)))
+        p.setBrush(QColor(accent.red(), accent.green(), accent.blue(), 42))
+        p.setPen(QPen(QColor(accent.red(), accent.green(), accent.blue(), 220), 2.4))
         p.drawRoundedRect(rect, 19, 19)
 
 
@@ -252,12 +264,16 @@ class IconCircle(QAbstractButton):
         self.text = text
         self.value = value or text
         self.active = active
+        self._relaxed_press_active = False
+        self._release_slop = 8
         self._press_feedback_active = False
         self._press_feedback_timer = QTimer(self)
         self._press_feedback_timer.setSingleShot(True)
-        self._press_feedback_timer.setInterval(140)
+        self._press_feedback_timer.setInterval(100)
         self._press_feedback_timer.timeout.connect(self._clear_press_feedback)
+        self.clicked.connect(self._handle_clicked)
         self.setCursor(Qt.PointingHandCursor)
+        # Keep the exact original visual and layout dimensions.
         self.setFixedSize(diameter, diameter)
         self.setFont(font(max(12, diameter // 3)))
 
@@ -270,14 +286,16 @@ class IconCircle(QAbstractButton):
         self._press_feedback_timer.start()
         self.update()
 
+    def _handle_clicked(self, checked: bool = False):
+        self._show_press_feedback()
+        self.clickedValue.emit(self.value)
+
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         pressed = self.isDown() or self._press_feedback_active
         rect = QRectF(self.rect()).adjusted(1, 1, -1, -1)
         if pressed:
-            # Briefly shrink and lower the face so a quick touchscreen tap
-            # still looks like a physical button being pushed in.
             rect = rect.adjusted(4, 5, -4, -3)
         g = QLinearGradient(rect.topLeft(), rect.bottomRight())
         if pressed:
@@ -299,16 +317,34 @@ class IconCircle(QAbstractButton):
         p.setFont(self.font())
         p.drawText(rect, Qt.AlignCenter, self.text)
 
+    def mousePressEvent(self, event):
+        self._relaxed_press_active = bool(
+            self.isEnabled()
+            and event.button() == Qt.LeftButton
+            and self.rect().contains(event.pos())
+        )
+        super().mousePressEvent(event)
+
     def mouseReleaseEvent(self, event):
-        inside = event.button() == Qt.LeftButton and self.rect().contains(event.pos())
-        # Let QAbstractButton emit the normal clicked() signal exactly once.
-        # Emitting clicked() here and then calling the base implementation made
-        # touchscreen plus/minus buttons fire twice, which changed the main
-        # thermostat setpoint by 2° per tap instead of 1°.
+        recover_touch_release = bool(
+            self._relaxed_press_active
+            and self.isEnabled()
+            and event.button() == Qt.LeftButton
+            and not self.rect().contains(event.pos())
+            and QRectF(self.rect()).adjusted(
+                -self._release_slop,
+                -self._release_slop,
+                self._release_slop,
+                self._release_slop,
+            ).contains(QPointF(event.pos()))
+        )
+        self._relaxed_press_active = False
+        if recover_touch_release:
+            self.setDown(False)
+            self.click()
+            event.accept()
+            return
         super().mouseReleaseEvent(event)
-        if inside:
-            self._show_press_feedback()
-            self.clickedValue.emit(self.value)
 
 
 class TopPill(QWidget):

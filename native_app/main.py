@@ -8954,7 +8954,7 @@ class CodeKeypadDialog(QDialog):
         next_text = entered + remaining
         if self.code_display.text() != next_text:
             self.code_display.setText(next_text)
-            self.code_display.repaint()
+            self.code_display.update()
 
     def add_code_digit(self, digit: str):
         if len(self.code_buffer) >= 4:
@@ -13618,7 +13618,7 @@ class AlarmControlDialog(QDialog):
         next_text = entered + remaining
         if self.code_display.text() != next_text:
             self.code_display.setText(next_text)
-            self.code_display.repaint()
+            self.code_display.update()
 
     def add_code_digit(self, digit: str):
         if time.monotonic() < getattr(self, "_keypad_accept_after", 0.0):
@@ -13837,6 +13837,7 @@ class MainWindow(Background):
         self.s = AppState(self.api)
         self.setWindowTitle("Smart Thermostat Native")
         self.setMinimumSize(1000, 620)
+        self.setAttribute(Qt.WA_AcceptTouchEvents, True)
         self.toast = StatusToast(self)
         self.navigation_locked = False
         self._thermal_protection_active = False
@@ -13934,6 +13935,13 @@ class MainWindow(Background):
         self._last_audio_manual_leave_at = -AUDIO_IDLE_SECONDS
         self._ignore_info_until = 0.0
         self._modal_touch_block_until = 0.0
+        # Handle button touch sequences directly instead of waiting for Qt/X11
+        # to synthesize mouse events.  This does not change any widget sizes.
+        self._direct_touch_button: QAbstractButton | None = None
+        self._direct_touch_last_global: QPoint | None = None
+        self._direct_touch_mouse_suppress_until = 0.0
+        self._direct_touch_mouse_suppress_point: QPoint | None = None
+        self._touch_input_active = False
         self._alarm_dialog_open = False
         self._alarm_reopen_block_until = 0.0
         self._status_refresh_running = False
@@ -13945,6 +13953,7 @@ class MainWindow(Background):
         self._main_async_jobs: dict[str, tuple[Callable | None, Callable | None]] = {}
         self._reload_all_running = False
         self._reload_all_pending = False
+        self._interaction_runtime_sync_pending = False
         self._ui_heartbeat_at = time.monotonic()
         self._ui_stall_last_dump_at = 0.0
         self.statusRefreshCompleted.connect(self._handle_status_refresh_completed)
@@ -14394,6 +14403,181 @@ class MainWindow(Background):
             failed,
         )
 
+    @staticmethod
+    def _touch_global_point(event) -> QPoint | None:
+        points = []
+        try:
+            points = list(event.touchPoints())
+        except Exception:
+            points = []
+        if not points:
+            try:
+                points = list(event.changedTouchPoints())
+            except Exception:
+                points = []
+        if not points:
+            return None
+        point = points[0]
+        try:
+            screen_pos = point.screenPos()
+            return QPoint(int(round(screen_pos.x())), int(round(screen_pos.y())))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _button_global_rect(button: QAbstractButton) -> QRectF:
+        top_left = button.mapToGlobal(button.rect().topLeft())
+        return QRectF(float(top_left.x()), float(top_left.y()), float(button.width()), float(button.height()))
+
+    @staticmethod
+    def _button_ancestor(widget) -> QAbstractButton | None:
+        current = widget
+        while current is not None:
+            if isinstance(current, QAbstractButton):
+                return current
+            try:
+                current = current.parentWidget()
+            except Exception:
+                return None
+        return None
+
+    def _button_at_touch_point(self, global_point: QPoint) -> QAbstractButton | None:
+        direct = self._button_ancestor(QApplication.widgetAt(global_point))
+        if direct is not None and direct.isVisible() and direct.isEnabled():
+            return direct
+
+        # Keep the controls visually unchanged while allowing a very small
+        # invisible edge tolerance for imprecise capacitive touch coordinates.
+        root = QApplication.activeModalWidget() or QApplication.activeWindow() or self
+        try:
+            buttons = list(root.findChildren(QAbstractButton))
+            if isinstance(root, QAbstractButton):
+                buttons.append(root)
+        except Exception:
+            buttons = []
+        candidates: list[tuple[float, QAbstractButton]] = []
+        point_f = QPointF(global_point)
+        for button in buttons:
+            try:
+                if not button.isVisible() or not button.isEnabled():
+                    continue
+                rect = self._button_global_rect(button)
+                if not rect.adjusted(-6.0, -6.0, 6.0, 6.0).contains(point_f):
+                    continue
+                center = rect.center()
+                distance = abs(center.x() - point_f.x()) + abs(center.y() - point_f.y())
+                candidates.append((float(distance), button))
+            except RuntimeError:
+                continue
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: item[0])
+        return candidates[0][1]
+
+    def _activate_direct_touch_button(self, button: QAbstractButton):
+        try:
+            if button is not None and button.isVisible() and button.isEnabled():
+                button.click()
+        except RuntimeError:
+            pass
+
+    def _handle_direct_button_touch(self, event_type, event) -> bool:
+        touch_types = {QEvent.TouchBegin, QEvent.TouchUpdate, QEvent.TouchEnd, QEvent.TouchCancel}
+        if event_type not in touch_types:
+            return False
+
+        point = self._touch_global_point(event) or self._direct_touch_last_global
+        if event_type == QEvent.TouchBegin:
+            if point is None:
+                return False
+            button = self._button_at_touch_point(point)
+            if button is None:
+                return False
+            self._direct_touch_button = button
+            self._direct_touch_last_global = point
+            self._touch_input_active = True
+            try:
+                button.setDown(True)
+                button.update()
+            except RuntimeError:
+                self._direct_touch_button = None
+                self._touch_input_active = False
+                return False
+            event.accept()
+            return True
+
+        button = self._direct_touch_button
+        if button is None:
+            return False
+        if point is not None:
+            self._direct_touch_last_global = point
+        try:
+            hit_point = QPointF(self._direct_touch_last_global) if self._direct_touch_last_global is not None else QPointF()
+            inside = self._button_global_rect(button).adjusted(-10.0, -10.0, 10.0, 10.0).contains(hit_point)
+        except RuntimeError:
+            inside = False
+
+        if event_type == QEvent.TouchUpdate:
+            try:
+                button.setDown(bool(inside))
+                button.update()
+            except RuntimeError:
+                pass
+            event.accept()
+            return True
+
+        accepted = bool(event_type == QEvent.TouchEnd and inside)
+        try:
+            button.setDown(False)
+            button.update()
+        except RuntimeError:
+            accepted = False
+        self._direct_touch_button = None
+        self._touch_input_active = False
+        self._direct_touch_mouse_suppress_until = time.monotonic() + 0.22
+        self._direct_touch_mouse_suppress_point = self._direct_touch_last_global
+        self._direct_touch_last_global = None
+        event.accept()
+        if accepted:
+            # Run after the touch event returns.  Opening a modal from inside the
+            # QTouchEvent filter can otherwise leave the release tied to the old
+            # widget and make the first tap appear to do nothing.
+            QTimer.singleShot(0, lambda b=button: self._activate_direct_touch_button(b))
+        QTimer.singleShot(0, self.flush_deferred_interaction_sync)
+        return True
+
+    def _suppress_mouse_copy_of_touch(self, event_type, event, now: float) -> bool:
+        if event_type not in {QEvent.MouseButtonPress, QEvent.MouseButtonRelease, QEvent.MouseButtonDblClick}:
+            return False
+        point = None
+        try:
+            point = event.globalPos()
+        except Exception:
+            point = None
+        reference = self._direct_touch_last_global if self._direct_touch_button is not None else self._direct_touch_mouse_suppress_point
+        deadline = float("inf") if self._direct_touch_button is not None else float(self._direct_touch_mouse_suppress_until)
+        if point is None or reference is None or now >= deadline:
+            return False
+        if (point - reference).manhattanLength() > 24:
+            return False
+        event.accept()
+        return True
+
+    def modal_interaction_active(self) -> bool:
+        modal = QApplication.activeModalWidget()
+        return modal is not None and modal is not self
+
+    def background_interaction_busy(self) -> bool:
+        return bool(getattr(self, "_touch_input_active", False) or self.modal_interaction_active())
+
+    def flush_deferred_interaction_sync(self):
+        if not getattr(self, "_interaction_runtime_sync_pending", False):
+            return
+        if self.background_interaction_busy():
+            return
+        self._interaction_runtime_sync_pending = False
+        self.sync_runtime_only()
+
     def display_input_event_types(self) -> set:
         return {
             QEvent.MouseButtonPress,
@@ -14517,6 +14701,11 @@ class MainWindow(Background):
         try:
             event_type = event.type()
             now = time.monotonic()
+            if event_type == QEvent.Show and isinstance(obj, (QAbstractButton, QDialog)):
+                # Ensure newly opened dialogs and their buttons expose the raw
+                # touch sequence to the application filter instead of relying
+                # only on delayed X11 mouse synthesis.
+                obj.setAttribute(Qt.WA_AcceptTouchEvents, True)
             if getattr(self, "_thermal_protection_active", False) and event_type in self.display_input_event_types():
                 return True
             if event_type in self.display_input_event_types():
@@ -14542,6 +14731,15 @@ class MainWindow(Background):
                 if event_type in self.display_activity_event_types():
                     self._last_user_activity_at = now
                     self._last_motion_activity_at = now
+
+            # Complete button taps from the original touch sequence.  This is
+            # intentionally before edge-brightness handling so an actual button
+            # at the left edge remains a button rather than becoming a drag.
+            if self._handle_direct_button_touch(event_type, event):
+                return True
+            if self._suppress_mouse_copy_of_touch(event_type, event, now):
+                return True
+
             if event_type in self.edge_brightness_event_types():
                 if getattr(self, "_display_sleeping", False):
                     return False
@@ -15134,6 +15332,8 @@ class MainWindow(Background):
         """Background poll for Home Assistant-initiated Alarmo state changes."""
         if getattr(self, "_thermal_protection_active", False):
             return
+        if self.modal_interaction_active():
+            return
         if getattr(self, "_alarm_refresh_running", False):
             return
         if not self.configured_alarm_entity_id():
@@ -15159,6 +15359,9 @@ class MainWindow(Background):
                 page.restore_alarm_card_from_cache()
             return
         self.s.apply_alarm_state(fresh)
+        if self.background_interaction_busy():
+            self._interaction_runtime_sync_pending = True
+            return
         if isinstance(page, ThermostatScreen):
             page.apply_alarm_state_refresh(fresh)
         if self.current_name == "Thermostat":
@@ -15167,6 +15370,8 @@ class MainWindow(Background):
     def refresh_assistant_status(self):
         """Poll the local backend only; no Home Assistant work occurs in this timer."""
         if getattr(self, "_thermal_protection_active", False):
+            return
+        if self.modal_interaction_active():
             return
         if getattr(self, "_assistant_status_running", False):
             return
@@ -15200,6 +15405,8 @@ class MainWindow(Background):
             if getattr(self, "_display_sleeping", False):
                 self.wake_display_screen(source="assistant")
             self._last_user_activity_at = time.monotonic()
+        if self.background_interaction_busy():
+            return
         changed = False
         if hasattr(self, "assistant_overlay"):
             changed = bool(self.assistant_overlay.set_status(assistant))
@@ -15360,6 +15567,8 @@ class MainWindow(Background):
     def refresh_status(self):
         if getattr(self, "_status_refresh_running", False):
             return
+        if self.modal_interaction_active():
+            return
         if time.monotonic() < getattr(self.s, "status_refresh_paused_until", 0.0):
             return
         self._status_refresh_running = True
@@ -15389,7 +15598,10 @@ class MainWindow(Background):
             self.s.ingest_thermostat(status)
             self.apply_thermal_protection_state(status)
             if not getattr(self, "_thermal_protection_active", False):
-                self.sync_runtime_only()
+                if self.background_interaction_busy():
+                    self._interaction_runtime_sync_pending = True
+                else:
+                    self.sync_runtime_only()
 
     def sync_runtime_only(self):
         t = self.s.thermostat or {}
@@ -15676,6 +15888,7 @@ class MainWindow(Background):
             self.reload_all()
         finally:
             self._settings_dialog_open = False
+            QTimer.singleShot(0, self.flush_deferred_interaction_sync)
             # Touchscreens can emit a second tap/release after the modal closes.
             # Block immediate re-entry so the settings keypad does not pop back up.
             self._settings_reopen_block_until = time.monotonic() + 2.0
