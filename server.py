@@ -44,6 +44,7 @@ THERMOSTAT_STATE_FILE = DATA_DIR / "thermostat-state.json"
 THERMOSTAT_SCHEDULES_FILE = DATA_DIR / "thermostat-schedules.json"
 THERMOSTAT_SCHEDULES_BACKUP_FILE = DATA_DIR / "thermostat-schedules.backup.json"
 PANEL_CONFIG_FILE = DATA_DIR / "panel-config.json"
+PANEL_CONFIG_BACKUP_FILE = DATA_DIR / "panel-config.backup.json"
 HVAC_HISTORY_FILE = DATA_DIR / "hvac-history.json"
 ALARM_ACTION_AUDIT_FILE = DATA_DIR / "alarm-actions.log"
 APP_STARTED_AT = time.time()
@@ -517,6 +518,21 @@ def _migrate_panel_config(config: object) -> dict | None:
             "disarmCode": str(migrated["alarm"].get("disarmCode") or "")[:8],
         }
 
+    # The settings PIN is independent from the alarm disarm PIN. Older builds
+    # sometimes kept only alarm.disarmCode and the native UI then treated that
+    # unrelated value as the settings password after a restart. Preserve any
+    # valid settings PIN, accept the old alarm.settingsCode location, and use
+    # the appliance's historical 3762 value only when neither exists.
+    security = migrated.get("security") if isinstance(migrated.get("security"), dict) else {}
+    settings_code = str(security.get("settingsCode") or "").strip()
+    alarm_settings_code = ""
+    if isinstance(migrated.get("alarm"), dict):
+        alarm_settings_code = str(migrated["alarm"].get("settingsCode") or "").strip()
+    if not re.fullmatch(r"\d{4}", settings_code):
+        settings_code = alarm_settings_code if re.fullmatch(r"\d{4}", alarm_settings_code) else "3762"
+    security["settingsCode"] = settings_code
+    migrated["security"] = security
+
     integrations = migrated.get("integrations")
     if isinstance(integrations, dict) and isinstance(integrations.get("homeAssistant"), dict):
         integrations["homeAssistant"] = _merge_missing_defaults(
@@ -531,7 +547,7 @@ def _migrate_panel_config(config: object) -> dict | None:
 def _snapshot_settings_files() -> dict[str, str | None]:
     """Capture settings files before a git reset/update can replace them."""
     snapshots: dict[str, str | None] = {}
-    for key, path in (("thermostat", THERMOSTAT_STATE_FILE), ("schedules", THERMOSTAT_SCHEDULES_FILE), ("schedulesBackup", THERMOSTAT_SCHEDULES_BACKUP_FILE), ("panel", PANEL_CONFIG_FILE)):
+    for key, path in (("thermostat", THERMOSTAT_STATE_FILE), ("schedules", THERMOSTAT_SCHEDULES_FILE), ("schedulesBackup", THERMOSTAT_SCHEDULES_BACKUP_FILE), ("panel", PANEL_CONFIG_FILE), ("panelBackup", PANEL_CONFIG_BACKUP_FILE)):
         try:
             snapshots[key] = path.read_text(encoding="utf-8") if path.exists() else None
         except OSError:
@@ -542,7 +558,7 @@ def _snapshot_settings_files() -> dict[str, str | None]:
 def _restore_settings_files(snapshots: dict[str, str | None]) -> None:
     """Restore settings captured before the updater reset the code folder."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    for key, path in (("thermostat", THERMOSTAT_STATE_FILE), ("schedules", THERMOSTAT_SCHEDULES_FILE), ("schedulesBackup", THERMOSTAT_SCHEDULES_BACKUP_FILE), ("panel", PANEL_CONFIG_FILE)):
+    for key, path in (("thermostat", THERMOSTAT_STATE_FILE), ("schedules", THERMOSTAT_SCHEDULES_FILE), ("schedulesBackup", THERMOSTAT_SCHEDULES_BACKUP_FILE), ("panel", PANEL_CONFIG_FILE), ("panelBackup", PANEL_CONFIG_BACKUP_FILE)):
         content = snapshots.get(key)
         if content is None:
             continue
@@ -1671,29 +1687,6 @@ def _write_schedule_backup(schedules: object) -> None:
         _atomic_write_json(THERMOSTAT_SCHEDULES_BACKUP_FILE, record)
 
 
-def _mirror_schedules_to_panel_config(schedules: object) -> None:
-    """Mirror schedules into panel config for migration/update safety.
-
-    Schedule edits are low-frequency user actions, so this does not add steady
-    SD-card wear. It gives older and newer builds a second persistent location
-    to recover from if thermostat-state.json is replaced during an update.
-    """
-    safe = _normalize_schedule_entries(schedules)
-    try:
-        existing = _read_panel_config_record().get("config")
-        config = _deepcopy_json(existing) if isinstance(existing, dict) else {}
-        thermostat = config.setdefault("thermostat", {})
-        if not isinstance(thermostat, dict):
-            thermostat = {}
-            config["thermostat"] = thermostat
-        thermostat["schedules"] = safe
-        # Also keep the old top-level shape populated for legacy fallbacks.
-        config["schedules"] = safe
-        _write_panel_config_record(config)
-    except Exception:
-        pass
-
-
 def _legacy_panel_config_schedules() -> list[dict]:
     """Return schedules saved in old panel config locations, if any."""
     try:
@@ -1843,42 +1836,80 @@ def _normalize_panel_config(config: object) -> dict | None:
     return _migrate_panel_config(config)
 
 
+def _panel_config_record_from_path(path: Path) -> dict | None:
+    if not path.exists():
+        return None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+
+    version = int(raw.get("version", 1) or 1)
+    updated_at = int(raw.get("updatedAt", 0) or 0)
+    config = _normalize_panel_config(raw.get("config"))
+    if config is None and any(key in raw for key in ("thermostat", "alarm", "security", "blinds", "lights", "integrations")):
+        config = _normalize_panel_config(raw)
+    if not isinstance(config, dict):
+        return None
+    return {"version": version, "updatedAt": updated_at, "config": config}
+
+
 def _read_panel_config_record() -> dict:
     with _PANEL_CONFIG_LOCK:
-        if not PANEL_CONFIG_FILE.exists():
-            return {"version": 1, "updatedAt": 0, "config": None}
-
-        try:
-            raw = json.loads(PANEL_CONFIG_FILE.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            raw = {}
-
-        version = 1
-        updated_at = 0
-        config = None
-        if isinstance(raw, dict):
-            version = int(raw.get("version", 1) or 1)
-            updated_at = int(raw.get("updatedAt", 0) or 0)
-            config = _normalize_panel_config(raw.get("config"))
-            if config is None and any(key in raw for key in ("thermostat", "alarm", "blinds", "lights", "integrations")):
-                config = _normalize_panel_config(raw)
-
-        return {"version": version, "updatedAt": updated_at, "config": config}
+        primary = _panel_config_record_from_path(PANEL_CONFIG_FILE)
+        if primary is not None:
+            return primary
+        backup = _panel_config_record_from_path(PANEL_CONFIG_BACKUP_FILE)
+        if backup is not None:
+            return backup
+        return {"version": 1, "updatedAt": 0, "config": None}
 
 
 def _write_panel_config_record(config: dict) -> dict:
-    safe_config = _normalize_panel_config(config) or {}
     with _PANEL_CONFIG_LOCK:
-        existing = _read_panel_config_record()
+        primary = _panel_config_record_from_path(PANEL_CONFIG_FILE)
+        backup = _panel_config_record_from_path(PANEL_CONFIG_BACKUP_FILE)
+        existing = primary or backup or {
+            "version": 1, "updatedAt": 0, "config": None
+        }
+
+        # A native page can hold an older in-memory config while another page
+        # saves a new Settings PIN. Never let a later unrelated full-config save
+        # erase that credential merely because its stale payload omitted the
+        # security section. A valid four-digit incoming value still wins.
+        candidate = _deepcopy_json(config) if isinstance(config, dict) else {}
+        incoming_security = candidate.get("security") if isinstance(candidate.get("security"), dict) else {}
+        incoming_code = str(incoming_security.get("settingsCode") or "").strip()
+        existing_config = existing.get("config") if isinstance(existing.get("config"), dict) else {}
+        existing_security = existing_config.get("security") if isinstance(existing_config.get("security"), dict) else {}
+        existing_code = str(existing_security.get("settingsCode") or "").strip()
+        if not re.fullmatch(r"\d{4}", incoming_code) and re.fullmatch(r"\d{4}", existing_code):
+            incoming_security = dict(incoming_security)
+            incoming_security["settingsCode"] = existing_code
+            candidate["security"] = incoming_security
+
+        safe_config = _normalize_panel_config(candidate) or {}
         if existing.get("config") == safe_config and PANEL_CONFIG_FILE.exists():
             return {
                 "version": int(existing.get("version", 1) or 1),
                 "updatedAt": int(existing.get("updatedAt", 0) or 0),
                 "config": safe_config,
             }
+
+        # Keep the previous known-good complete panel configuration. Schedule
+        # edits no longer touch this file, but this backup also protects PINs,
+        # Home Assistant credentials, and source assignments from an unrelated
+        # malformed or interrupted config write.
+        if primary is not None:
+            _atomic_write_json(PANEL_CONFIG_BACKUP_FILE, primary)
+
         next_version = int(existing.get("version", 0) or 0) + 1
         record = {"version": next_version, "updatedAt": int(time.time()), "config": safe_config}
         _atomic_write_json(PANEL_CONFIG_FILE, record)
+        if primary is None and backup is None:
+            _atomic_write_json(PANEL_CONFIG_BACKUP_FILE, record)
         return record
 
 
@@ -5579,8 +5610,10 @@ def _handle_thermostat_update_locked(payload: dict) -> tuple[dict, dict, dict]:
     command_result["modeRevision"] = int(_number(merged.get("modeRevision"), 0, 0, None) or 0)
     if incoming_has_schedules:
         saved_schedules = _normalize_schedule_entries(incoming.get("schedules"))
+        # Schedules have their own authoritative file and independent backup.
+        # Never rewrite panel-config.json from a schedule action because that
+        # file also contains security PINs, HA credentials, and hardware setup.
         _write_schedule_backup(saved_schedules)
-        _mirror_schedules_to_panel_config(saved_schedules)
 
     # Keep the control endpoint fast. The native UI has already made the local
     # setpoint change visible, and it only needs confirmation that the setting

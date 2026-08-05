@@ -28,10 +28,14 @@ def runtime_log_dir() -> Path:
     configured = str(os.environ.get("SMART_THERMOSTAT_LOG_DIR") or "").strip()
     if configured:
         return Path(configured)
-    shm = Path("/dev/shm")
+    # Freeze traces must survive a forced reboot. They are written only on
+    # process start, crashes, or a confirmed UI stall, so persistent storage
+    # here does not create steady-state SD-card traffic.
+    persistent = ROOT_DIR / "data" / "logs"
     try:
-        if shm.exists() and os.access(str(shm), os.W_OK):
-            return shm / "smart-thermostat-native" / "logs"
+        persistent.mkdir(parents=True, exist_ok=True)
+        if os.access(str(persistent), os.W_OK):
+            return persistent
     except Exception:
         pass
     return Path(os.environ.get("SMART_THERMOSTAT_RUNTIME_DIR", "/tmp/smart-thermostat-native")) / "logs"
@@ -55,7 +59,7 @@ def trace_runtime(message: str):
 
 
 def install_crash_logging():
-    """Keep a tiny RAM-backed crash log so restart loops do not erase clues."""
+    """Keep a small persistent crash log so forced restarts do not erase clues."""
     global _RUNTIME_CRASH_LOG_HANDLE
     if _RUNTIME_CRASH_LOG_HANDLE is not None:
         return
@@ -3211,6 +3215,8 @@ class ScheduleManagerDialog(QDialog):
         self._schedule_save_running = False
         self._schedule_save_pending: list[dict] | None = None
         self._schedule_run_seq = 0
+        self._close_when_saved = False
+        self._schedule_save_failed = False
         self.scheduleSaveCompleted.connect(self.handle_schedule_save_completed)
         self.scheduleRunCompleted.connect(self.handle_schedule_run_completed)
         self.setModal(True)
@@ -3233,14 +3239,20 @@ class ScheduleManagerDialog(QDialog):
         title.setFont(font(24, QFont.Black))
         title.setStyleSheet("color:#55f0ff; letter-spacing:3px;")
         new_btn = RoundButton("+ New", active=True, min_h=46)
-        close = RoundButton("Done", active=False, min_h=46)
+        self.close_button = RoundButton("Done", active=False, min_h=46)
         new_btn.clicked.connect(self.new_schedule)
-        close.clicked.connect(self.accept)
+        self.close_button.clicked.connect(self.request_close)
         header.addWidget(title)
         header.addStretch(1)
         header.addWidget(new_btn)
-        header.addWidget(close)
+        header.addWidget(self.close_button)
         root.addLayout(header)
+        self.save_status = QLabel("")
+        self.save_status.setFont(font(8, QFont.Bold))
+        self.save_status.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.save_status.setStyleSheet("color:#9fb0c8; background:transparent; border:0; padding:0 4px;")
+        self.save_status.hide()
+        root.addWidget(self.save_status)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setStyleSheet("QScrollArea{background:transparent;border:0;}")
@@ -3317,6 +3329,33 @@ class ScheduleManagerDialog(QDialog):
         lay.addWidget(delete)
         return panel
 
+    def request_close(self):
+        if self._schedule_save_failed and not self._schedule_save_running:
+            self._close_when_saved = True
+            self.close_button.setEnabled(False)
+            self.close_button.setText("Retrying…")
+            self.save_status.setText("Retrying the latest schedule changes before closing…")
+            self.save_status.show()
+            trace_runtime("schedule dialog retrying failed save before close")
+            self._start_schedule_save(self.schedules())
+            return
+        if self._schedule_save_running or self._schedule_save_pending is not None:
+            self._close_when_saved = True
+            self.close_button.setEnabled(False)
+            self.close_button.setText("Saving…")
+            self.save_status.setText("Finishing schedule changes before closing…")
+            self.save_status.show()
+            trace_runtime("schedule dialog close deferred until queued saves finish")
+            return
+        self.accept()
+
+    def closeEvent(self, event):
+        if (self._schedule_save_running or self._schedule_save_pending is not None) and not QApplication.closingDown():
+            self.request_close()
+            event.ignore()
+            return
+        super().closeEvent(event)
+
     def save_schedules(self, schedules: list[dict]):
         # Update the native UI first so the schedule editor returns instantly.
         # Persist on a worker thread: /api/thermostat/control may wait on a slow
@@ -3325,6 +3364,9 @@ class ScheduleManagerDialog(QDialog):
         self.s.set_thermostat_schedules_local(schedules)
         self.changed.emit()
         self.refresh()
+        self._schedule_save_failed = False
+        self.save_status.setText("Saving schedule changes…")
+        self.save_status.show()
         if self._schedule_save_running:
             self._schedule_save_pending = copy.deepcopy(schedules)
             return
@@ -3335,6 +3377,7 @@ class ScheduleManagerDialog(QDialog):
         self._schedule_save_seq += 1
         seq = self._schedule_save_seq
         payload = copy.deepcopy(schedules)
+        trace_runtime(f"schedule save started seq={seq} count={len(payload)}")
 
         def worker():
             try:
@@ -3357,10 +3400,26 @@ class ScheduleManagerDialog(QDialog):
         pending = self._schedule_save_pending
         self._schedule_save_pending = None
         error = str(data.get("error") or "")
+        trace_runtime(f"schedule save completed seq={seq} error={bool(error)} pending={pending is not None}")
         if error:
+            if pending is not None:
+                self.save_status.setText("First save failed; retrying the latest schedule list…")
+                self.save_status.show()
+                trace_runtime("schedule save failed with a newer edit queued; retrying latest list")
+                self._start_schedule_save(pending)
+                return
+            self._close_when_saved = False
+            self._schedule_save_failed = True
+            self.close_button.setEnabled(True)
+            self.close_button.setText("Retry / Done")
+            self.save_status.setText("Schedule save failed. Tap Retry / Done to try again.")
+            self.save_status.show()
             if self.isVisible():
                 QMessageBox.warning(self, "Schedules", f"Schedule save failed: {error}")
-        elif pending is None:
+            return
+
+        self._schedule_save_failed = False
+        if pending is None:
             # Only accept the response when there is no newer local edit waiting.
             # Otherwise the older response would briefly repaint the superseded
             # schedule list before the queued save completes.
@@ -3370,8 +3429,18 @@ class ScheduleManagerDialog(QDialog):
                 self.s.set_thermostat_schedules_local(self.s.thermostat_schedules())
                 self.changed.emit()
                 self.refresh()
-        if pending is not None:
-            self._start_schedule_save(pending)
+            self.close_button.setEnabled(True)
+            self.close_button.setText("Done")
+            self.save_status.setText("Schedule changes saved.")
+            self.save_status.show()
+            if self._close_when_saved:
+                self._close_when_saved = False
+                QTimer.singleShot(0, self.accept)
+            else:
+                QTimer.singleShot(1200, self.save_status.hide)
+            return
+
+        self._start_schedule_save(pending)
 
     def new_schedule(self):
         dlg = ScheduleEditDialog(self.s, None, self)
@@ -14798,11 +14867,11 @@ class MainWindow(Background):
     def settings_code(self) -> str:
         security = self.s.config.get("security") or {}
         alarm = self.s.config.get("alarm") or {}
-        code = str(security.get("settingsCode") or alarm.get("settingsCode") or alarm.get("disarmCode") or "").strip()
-        # The appliance has historically used 3762 as the panel/settings code.
-        # Keep it as a safe fallback for page unlocks when older configs do not
-        # yet have security.settingsCode saved.
-        return code or "3762"
+        # Settings access and alarm disarm are separate credentials. Falling
+        # back to alarm.disarmCode made the Settings PIN appear to change after
+        # a reboot whenever security.settingsCode was absent.
+        code = str(security.get("settingsCode") or alarm.get("settingsCode") or "").strip()
+        return code if len(code) == 4 and code.isdigit() else "3762"
 
     def alarm_disarm_code(self) -> str:
         alarm = self.s.config.get("alarm") or {}
@@ -15446,7 +15515,10 @@ class MainWindow(Background):
                     self._settings_reopen_block_until = time.monotonic() + 1.5
                     return
             if self.current_name == "Thermostat":
+                started = time.monotonic()
+                trace_runtime("settings unlock accepted; constructing thermostat settings dialog")
                 dlg = SettingsDialog(self.s, self)
+                trace_runtime(f"thermostat settings dialog constructed in {time.monotonic() - started:.2f}s")
             elif self.current_name == "Audio":
                 dlg = AudioSettingsDialog(self.s, self)
                 dlg.saved.connect(self.reload_all)
