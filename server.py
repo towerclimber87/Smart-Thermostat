@@ -11,6 +11,7 @@ import argparse
 import atexit
 from difflib import SequenceMatcher
 import html
+import ipaddress
 import json
 import mimetypes
 import os
@@ -2240,6 +2241,259 @@ def _panel_config_payload() -> dict:
         "exists": isinstance(record.get("config"), dict),
         "config": record.get("config"),
     }
+
+
+
+HOUSE_SYNC_SECTION_SPECS = {
+    "blinds": "blinds",
+    "lights": "lights",
+    "roomControl": "controls",
+}
+HOUSE_SYNC_MAX_ROOMS = 64
+HOUSE_SYNC_MAX_ITEMS_PER_ROOM = 96
+HOUSE_SYNC_MAX_PROFILE_BYTES = 2 * 1024 * 1024
+
+
+def _validate_house_sync_section(section_name: str, value: object) -> dict:
+    """Validate one transferable page configuration without changing its data."""
+    item_key = HOUSE_SYNC_SECTION_SPECS.get(str(section_name or ""))
+    if not item_key or not isinstance(value, dict):
+        raise ValueError(f"Source {section_name} configuration is missing or invalid")
+
+    section = _deepcopy_json(value)
+    rooms = section.get("rooms")
+    if not isinstance(rooms, dict) or not rooms:
+        raise ValueError(f"Source {section_name} configuration has no rooms")
+    if len(rooms) > HOUSE_SYNC_MAX_ROOMS:
+        raise ValueError(f"Source {section_name} configuration has too many rooms")
+
+    for room_key, room in rooms.items():
+        room_key_text = str(room_key or "").strip()
+        if not room_key_text or len(room_key_text) > 120 or not isinstance(room, dict):
+            raise ValueError(f"Source {section_name} contains an invalid room")
+        label = room.get("label")
+        if label is not None and (not isinstance(label, str) or len(label) > 200):
+            raise ValueError(f"Source {section_name} room {room_key_text} has an invalid label")
+        items = room.get(item_key)
+        if not isinstance(items, list):
+            raise ValueError(f"Source {section_name} room {room_key_text} has an invalid {item_key} list")
+        if len(items) > HOUSE_SYNC_MAX_ITEMS_PER_ROOM:
+            raise ValueError(f"Source {section_name} room {room_key_text} has too many entries")
+        for item in items:
+            if not isinstance(item, dict):
+                raise ValueError(f"Source {section_name} room {room_key_text} contains an invalid entry")
+            for field, limit in (("id", 240), ("name", 240), ("haName", 240), ("haEntityId", 300), ("domain", 80)):
+                field_value = item.get(field)
+                if field_value is not None and (not isinstance(field_value, str) or len(field_value) > limit):
+                    raise ValueError(f"Source {section_name} contains an invalid {field} value")
+
+    # Room-entry PINs and any future secret-like fields remain local to the
+    # destination panel. House Sync transfers layout and entity assignments,
+    # never credentials.
+    secret_keys = {"accesscode", "coderequiredstates", "pin", "password", "token", "apikey", "secret"}
+
+    def strip_secrets(value: object) -> object:
+        if isinstance(value, dict):
+            return {
+                key: strip_secrets(child)
+                for key, child in value.items()
+                if str(key).replace("-", "").replace("_", "").lower() not in secret_keys
+            }
+        if isinstance(value, list):
+            return [strip_secrets(child) for child in value]
+        return value
+
+    section = strip_secrets(section)
+    rooms = section.get("rooms") if isinstance(section, dict) else {}
+    active_room = str(section.get("room") or "").strip()
+    if active_room not in rooms:
+        section["room"] = next(iter(rooms))
+    return section
+
+
+def _house_sync_profile_payload() -> dict:
+    record = _read_panel_config_record()
+    config = record.get("config") if isinstance(record, dict) else {}
+    if not isinstance(config, dict):
+        return {"ok": False, "error": "This thermostat does not have a valid panel configuration."}
+    try:
+        sections = {
+            section_name: _validate_house_sync_section(section_name, config.get(section_name))
+            for section_name in HOUSE_SYNC_SECTION_SPECS
+        }
+        encoded_size = len(json.dumps(sections, separators=(",", ":")).encode("utf-8"))
+        if encoded_size > HOUSE_SYNC_MAX_PROFILE_BYTES:
+            raise ValueError("The source House Sync profile is too large")
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+
+    thermostat = _read_thermostat_record().get("thermostat") or {}
+    return {
+        "ok": True,
+        "schemaVersion": 1,
+        "source": {
+            "name": str(thermostat.get("name") or "IHA Thermostat").strip() or "IHA Thermostat",
+            "serial": _stable_panel_serial(),
+            "version": _read_version_value(),
+        },
+        "configVersion": int(record.get("version", 1) or 1),
+        "configUpdatedAt": int(record.get("updatedAt", 0) or 0),
+        "sections": sections,
+    }
+
+
+def _house_sync_safe_panel_url(value: object) -> str:
+    """Allow House Sync only from a resolved private/local panel address."""
+    base_url = _normalize_sync_panel_url(value)
+    if not base_url:
+        raise ValueError("The selected thermostat does not expose a valid panel URL")
+    parsed = urlparse(base_url)
+    host = str(parsed.hostname or "").strip()
+    port = int(parsed.port or (443 if parsed.scheme == "https" else 8080))
+    try:
+        addresses = {
+            str(sockaddr[0]).split("%", 1)[0]
+            for _family, _socktype, _proto, _canonname, sockaddr in socket.getaddrinfo(
+                host, port, type=socket.SOCK_STREAM
+            )
+            if sockaddr
+        }
+    except OSError as exc:
+        raise ValueError(f"The selected thermostat address could not be resolved: {exc}") from exc
+    if not addresses:
+        raise ValueError("The selected thermostat address could not be resolved")
+    private_v4 = (
+        ipaddress.ip_network("10.0.0.0/8"),
+        ipaddress.ip_network("172.16.0.0/12"),
+        ipaddress.ip_network("192.168.0.0/16"),
+    )
+    private_v6 = ipaddress.ip_network("fc00::/7")
+    for address in addresses:
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError as exc:
+            raise ValueError("The selected thermostat resolved to an invalid address") from exc
+        allowed = ip.is_loopback or ip.is_link_local
+        if isinstance(ip, ipaddress.IPv4Address):
+            allowed = allowed or any(ip in network for network in private_v4)
+        else:
+            allowed = allowed or ip in private_v6
+        if not allowed:
+            raise ValueError("House Sync is limited to thermostats on the local network")
+    return base_url
+
+
+def _fetch_house_sync_profile(panel_url: object) -> tuple[str, dict]:
+    base_url = _house_sync_safe_panel_url(panel_url)
+    req = request.Request(
+        f"{base_url}/api/house-sync/profile",
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "SmartThermostatHouseSync/1.0",
+            "Connection": "close",
+        },
+        method="GET",
+    )
+    try:
+        with request.urlopen(req, timeout=max(4.0, HA_REQUEST_TIMEOUT_SECONDS * 2.0)) as resp:
+            content_length = int(resp.headers.get("Content-Length") or 0)
+            if content_length > HOUSE_SYNC_MAX_PROFILE_BYTES:
+                raise ValueError("The source thermostat returned an oversized House Sync profile")
+            raw = resp.read(HOUSE_SYNC_MAX_PROFILE_BYTES + 1)
+    except error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")[:500]
+        raise RuntimeError(f"Source thermostat returned HTTP {exc.code}: {body}") from exc
+    except error.URLError as exc:
+        raise RuntimeError(f"Could not reach source thermostat {base_url}: {exc.reason}") from exc
+    if len(raw) > HOUSE_SYNC_MAX_PROFILE_BYTES:
+        raise ValueError("The source thermostat returned an oversized House Sync profile")
+    try:
+        profile = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("The source thermostat returned an invalid House Sync profile") from exc
+    if not isinstance(profile, dict) or profile.get("ok") is False:
+        raise ValueError(str((profile or {}).get("error") if isinstance(profile, dict) else "Invalid House Sync profile"))
+    return base_url, profile
+
+
+def _apply_house_sync_payload(payload: object) -> dict:
+    if not isinstance(payload, dict):
+        return {"ok": False, "error": "House Sync request must be an object"}
+    try:
+        base_url, profile = _fetch_house_sync_profile(
+            payload.get("sourcePanelUrl") or payload.get("panelUrl") or payload.get("source")
+        )
+        try:
+            schema_version = int(profile.get("schemaVersion", 1) or 1)
+        except (TypeError, ValueError):
+            schema_version = 0
+        if schema_version != 1:
+            raise ValueError("The source thermostat uses an unsupported House Sync profile version")
+        source = profile.get("source") if isinstance(profile.get("source"), dict) else {}
+        source_serial = str(source.get("serial") or "").strip()
+        if source_serial and source_serial == _stable_panel_serial():
+            raise ValueError("Select a different thermostat as the House Sync source")
+        raw_sections = profile.get("sections")
+        if not isinstance(raw_sections, dict):
+            raise ValueError("The source thermostat did not provide House Sync sections")
+        sections = {
+            section_name: _validate_house_sync_section(section_name, raw_sections.get(section_name))
+            for section_name in HOUSE_SYNC_SECTION_SPECS
+        }
+        encoded_size = len(json.dumps(sections, separators=(",", ":")).encode("utf-8"))
+        if encoded_size > HOUSE_SYNC_MAX_PROFILE_BYTES:
+            raise ValueError("The source House Sync profile is too large")
+    except (ValueError, RuntimeError) as exc:
+        return {"ok": False, "error": str(exc)}
+
+    with _PANEL_CONFIG_LOCK:
+        before_record = _read_panel_config_record()
+        before_config = before_record.get("config") if isinstance(before_record, dict) else {}
+        if not isinstance(before_config, dict):
+            return {"ok": False, "error": "The destination panel configuration is invalid; nothing was changed."}
+        candidate = _deepcopy_json(before_config)
+        for section_name, section in sections.items():
+            candidate[section_name] = _deepcopy_json(section)
+        try:
+            written = _write_panel_config_record(candidate)
+            saved_config = written.get("config") if isinstance(written, dict) else None
+            if not isinstance(saved_config, dict):
+                raise RuntimeError("The updated configuration could not be verified")
+            for section_name, expected in sections.items():
+                if saved_config.get(section_name) != expected:
+                    raise RuntimeError(f"The saved {section_name} configuration did not match the source")
+        except Exception as exc:
+            rollback_ok = False
+            try:
+                restored = _write_panel_config_record(before_config)
+                rollback_ok = isinstance(restored.get("config"), dict) and all(
+                    restored["config"].get(section_name) == before_config.get(section_name)
+                    for section_name in HOUSE_SYNC_SECTION_SPECS
+                )
+            except Exception:
+                rollback_ok = False
+            detail = "The original configuration was restored." if rollback_ok else "Automatic rollback could not be verified; use panel-config.backup.json."
+            return {"ok": False, "error": f"House Sync failed: {exc}. {detail}"}
+
+    source_name = str(source.get("name") or payload.get("sourceName") or "source thermostat").strip() or "source thermostat"
+    return {
+        "ok": True,
+        "message": f"House Sync copied Blinds, Lights, and Room from {source_name}.",
+        "source": {"name": source_name, "serial": source_serial, "panelUrl": base_url},
+        "sections": list(HOUSE_SYNC_SECTION_SPECS),
+        "version": int(written.get("version", 1) or 1),
+        "updatedAt": int(written.get("updatedAt", 0) or 0),
+        "config": written.get("config"),
+        "backupFile": PANEL_CONFIG_BACKUP_FILE.name,
+    }
+
+
+def _request_client_is_loopback(handler: BaseHTTPRequestHandler) -> bool:
+    try:
+        address = str((handler.client_address or ("",))[0]).split("%", 1)[0]
+        return ipaddress.ip_address(address).is_loopback
+    except (ValueError, TypeError):
+        return False
 
 
 def _config_backup_filename() -> str:
@@ -8506,6 +8760,7 @@ def _discovery_payload() -> dict:
             "hardwareTelemetry": "/api/hardware/telemetry",
             "motionControl": "/api/hardware/motion",
             "discovery": "/api/discovery",
+            "houseSyncProfile": "/api/house-sync/profile",
         },
         "thermostat": status["thermostat"],
         "climate": status["thermostat"],
@@ -13430,6 +13685,9 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
             return _json(self, 200, _hvac_history_dates_payload())
         if path == "/api/config":
             return _json(self, 200, _panel_config_payload())
+        if path == "/api/house-sync/profile":
+            result = _house_sync_profile_payload()
+            return _json(self, 200 if result.get("ok") else 409, result)
         if path == "/api/thermostat/status":
             return _json(self, 200, _thermostat_status_payload(refresh_runtime=False, apply_hardware=False))
         if path == "/api/sync/status":
@@ -13479,7 +13737,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/hardware/temperature-sensors", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/playback", "/api/assistant/config", "/api/assistant/knowledge", "/api/settings/web"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/hardware/temperature-sensors", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply", "/api/house-sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/playback", "/api/assistant/config", "/api/assistant/knowledge", "/api/settings/web"}:
             self.send_error(404, "Not found")
             return
 
@@ -13516,6 +13774,12 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
             if path == "/api/assistant/knowledge":
                 result = _assistant_knowledge_admin_update(payload)
+                return _json(self, 200 if result.get("ok") else 400, result)
+
+            if path == "/api/house-sync/apply":
+                if not _request_client_is_loopback(self):
+                    return _json(self, 403, {"ok": False, "error": "House Sync can only be started from this thermostat screen."})
+                result = _apply_house_sync_payload(payload)
                 return _json(self, 200 if result.get("ok") else 400, result)
 
             if path == "/api/config":

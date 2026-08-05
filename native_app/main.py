@@ -9353,6 +9353,190 @@ class ThermostatSyncSelectionDialog(QDialog):
         self.accept()
 
 
+
+class HouseSyncSelectionDialog(QDialog):
+    selected = pyqtSignal(dict)
+
+    def __init__(self, state: AppState, current_peer: dict | None = None, parent=None):
+        super().__init__(parent)
+        self.s = state
+        self.current_peer = copy.deepcopy(current_peer) if isinstance(current_peer, dict) else None
+        self.available_peers: list[dict] = []
+        self.selected_peer: dict | None = copy.deepcopy(self.current_peer)
+        self.buttons: dict[str, RoundButton] = {}
+        self.setModal(True)
+        self.setWindowTitle("House Sync Source")
+        self.setWindowFlag(Qt.FramelessWindowHint, True)
+        self.setMinimumSize(720, 520)
+        self.resize(1280, 800)
+        self.setStyleSheet("""
+            QDialog { background:#09111f; color:#f7fbff; }
+            QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
+        """)
+        self.load_peers()
+        self.build()
+        QTimer.singleShot(0, self.fit_to_screen)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.fit_to_screen()
+
+    def fit_to_screen(self):
+        fit_dialog_to_available_screen(self, margin=0)
+
+    def current_id(self) -> str:
+        peer = self.selected_peer if isinstance(self.selected_peer, dict) else {}
+        return str(peer.get("entityId") or peer.get("entity_id") or "").strip()
+
+    def normalize_peer(self, peer: object) -> dict | None:
+        if not isinstance(peer, dict):
+            return None
+        entity_id = str(peer.get("entityId") or peer.get("entity_id") or "").strip()
+        if not entity_id.startswith("climate."):
+            return None
+        return {
+            "entityId": entity_id,
+            "name": str(peer.get("name") or peer.get("friendlyName") or peer.get("friendly_name") or entity_id),
+            "state": str(peer.get("state") or "unknown"),
+            "serial": str(peer.get("serial") or peer.get("ihaSerial") or ""),
+            "panelUrl": str(peer.get("panelUrl") or peer.get("panel_url") or "").strip(),
+            "syncCapable": bool(peer.get("syncCapable", peer.get("ihaPanel", False))),
+        }
+
+    def load_peers(self):
+        by_id: dict[str, dict] = {}
+        saved = self.normalize_peer(self.current_peer)
+        if saved:
+            by_id[saved["entityId"]] = saved
+        ha = self.s.ha()
+        if isinstance(ha, dict):
+            for key in ("syncThermostatEntities", "syncAvailableThermostatEntities"):
+                for raw in ha.get(key) or []:
+                    peer = self.normalize_peer(raw)
+                    if peer:
+                        by_id[peer["entityId"]] = peer
+        try:
+            selected = [saved] if saved else []
+            data = self.s.api.post(
+                "/api/sync/thermostats",
+                self.s.ha_payload({"selected": selected}),
+                timeout=8.0,
+            )
+            for raw in data.get("thermostats") or []:
+                peer = self.normalize_peer(raw)
+                if peer:
+                    previous = by_id.get(peer["entityId"]) or {}
+                    if not peer.get("panelUrl") and previous.get("panelUrl"):
+                        peer["panelUrl"] = previous.get("panelUrl")
+                    if not peer.get("serial") and previous.get("serial"):
+                        peer["serial"] = previous.get("serial")
+                    by_id[peer["entityId"]] = peer
+            self._load_error = ""
+        except Exception as exc:
+            self._load_error = str(exc)
+        self.available_peers = sorted(
+            by_id.values(),
+            key=lambda x: str(x.get("name") or x.get("entityId") or "").lower(),
+        )
+
+    def build(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(12, 10, 12, 10)
+        root.setSpacing(8)
+        header = QHBoxLayout()
+        title = QLabel("HOUSE SYNC SOURCE")
+        title.setFont(font(22, QFont.Black))
+        title.setStyleSheet("color:#55f0ff; letter-spacing:3px;")
+        refresh = RoundButton("Refresh", active=True, min_h=40)
+        header.addWidget(title)
+        header.addStretch(1)
+        header.addWidget(refresh)
+        root.addLayout(header)
+
+        note = QLabel("Choose one other IHA thermostat to copy from. House Sync reads only the Blinds, Lights, and Room page configuration. It never copies thermostat settings, panel or Room-entry security codes, Home Assistant credentials, schedules, or JARVIS settings.")
+        note.setWordWrap(True)
+        note.setFont(font(10, QFont.Black))
+        note.setStyleSheet("color:#cdd8ee; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.10); border-radius:12px; padding:8px;")
+        root.addWidget(note)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea{background:transparent;border:0;}")
+        body = QWidget()
+        self.body_lay = QVBoxLayout(body)
+        self.body_lay.setContentsMargins(0, 0, 0, 0)
+        self.body_lay.setSpacing(8)
+        scroll.setWidget(body)
+        root.addWidget(scroll, 1)
+
+        bottom = QHBoxLayout()
+        cancel = RoundButton("Cancel", active=False, min_h=42)
+        self.use_button = RoundButton("Use Selected Source", active=True, min_h=42)
+        self.use_button.setEnabled(bool(self.current_id()))
+        bottom.addStretch(1)
+        bottom.addWidget(cancel)
+        bottom.addWidget(self.use_button)
+        root.addLayout(bottom)
+
+        refresh.clicked.connect(self.reload_peers)
+        cancel.clicked.connect(self.reject)
+        self.use_button.clicked.connect(self.save)
+        self.refresh()
+
+    def reload_peers(self):
+        self.load_peers()
+        self.refresh()
+
+    def refresh(self):
+        while self.body_lay.count():
+            item = self.body_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.buttons = {}
+        if not self.available_peers:
+            text = "No other IHA thermostat screens were found in Home Assistant."
+            detail = str(getattr(self, "_load_error", "") or "").strip()
+            if detail:
+                text += f"\n\n{detail}"
+            none = QLabel(text)
+            none.setWordWrap(True)
+            none.setStyleSheet("color:#c4d0e5; background:rgba(255,255,255,0.05); border-radius:12px; padding:12px;")
+            self.body_lay.addWidget(none)
+            self.use_button.setEnabled(False)
+            return
+
+        selected_id = self.current_id()
+        for peer in self.available_peers:
+            entity_id = str(peer.get("entityId") or "")
+            name = str(peer.get("name") or entity_id)
+            state = str(peer.get("state") or "")
+            panel_url = str(peer.get("panelUrl") or "").strip()
+            active = entity_id == selected_id
+            suffix_parts = [state] if state else []
+            if not panel_url:
+                suffix_parts.append("House Sync unavailable")
+            suffix = f"  ({' • '.join(suffix_parts)})" if suffix_parts else ""
+            button = RoundButton(("✓  " if active else "○  ") + name + suffix, active=active, min_h=52)
+            button.setEnabled(bool(panel_url))
+            if panel_url:
+                button.clicked.connect(lambda checked=False, p=peer: self.choose_peer(p))
+            self.buttons[entity_id] = button
+            self.body_lay.addWidget(button)
+        self.body_lay.addStretch(1)
+        self.use_button.setEnabled(bool(selected_id and str((self.selected_peer or {}).get("panelUrl") or "").strip()))
+
+    def choose_peer(self, peer: dict):
+        self.selected_peer = copy.deepcopy(peer)
+        self.refresh()
+
+    def save(self):
+        peer = self.normalize_peer(self.selected_peer)
+        if not peer or not str(peer.get("panelUrl") or "").strip():
+            return
+        self.selected.emit(peer)
+        self.accept()
+
+
 class ColorWheelWidget(QWidget):
     colorChanged = pyqtSignal(QColor)
 
@@ -10545,6 +10729,7 @@ class SettingsDialog(QDialog):
     settingsSaveCompleted = pyqtSignal(object)
     tempSensorTelemetryLoaded = pyqtSignal(object)
     tempSensorSaveCompleted = pyqtSignal(object)
+    houseSyncCompleted = pyqtSignal(object)
 
     def __init__(self, state: AppState, parent=None):
         super().__init__(parent)
@@ -10701,6 +10886,9 @@ class SettingsDialog(QDialog):
         self.settingsSaveCompleted.connect(self.handle_save_all_completed)
         self.tempSensorTelemetryLoaded.connect(self.handle_source_temp_telemetry_loaded)
         self.tempSensorSaveCompleted.connect(self.handle_source_temp_save_completed)
+        self.houseSyncCompleted.connect(self.handle_house_sync_completed)
+        self.house_sync_source: dict | None = None
+        self.house_sync_running = False
         self.build()
         self.finalize_section_index()
         self.done.clicked.connect(self.close_settings)
@@ -10867,7 +11055,7 @@ class SettingsDialog(QDialog):
             "Minimum Runtime": "Minimum equipment on-time and off-time for each cycle",
             "Internal / External Sources": "Choose sources and configure both onboard temperature sensors",
             "Outside Temperature": "Home Assistant source for outdoor temperature and weather",
-            "Sync": "Thermostats that receive temporary copied mode and setpoint changes",
+            "Sync": "Temporary thermostat control sync and one-time House Sync setup copying",
             "Person Tracking": "People displayed on the main thermostat screen",
             "Doors / Comfort Pause": "Door sensor and delay before heating or cooling pauses",
             "Security Codes": "Alarm disarm and settings-access PINs",
@@ -11327,6 +11515,105 @@ class SettingsDialog(QDialog):
 
         dlg.saved.connect(apply)
         dlg.exec_()
+
+
+    def house_sync_source_summary_text(self) -> str:
+        source = self.house_sync_source if isinstance(self.house_sync_source, dict) else {}
+        name = str(source.get("name") or source.get("entityId") or "").strip()
+        panel_url = str(source.get("panelUrl") or source.get("panel_url") or "").strip()
+        if not name or not panel_url:
+            return "No source selected. Choose the configured thermostat you want to copy from."
+        return f"Copy from: {name}\n{panel_url}"
+
+    def update_house_sync_widgets(self):
+        if hasattr(self, "house_sync_source_summary"):
+            self.house_sync_source_summary.setText(self.house_sync_source_summary_text())
+            self.house_sync_source_summary.repaint()
+        source_ready = bool(
+            isinstance(self.house_sync_source, dict)
+            and str(self.house_sync_source.get("panelUrl") or self.house_sync_source.get("panel_url") or "").strip()
+        )
+        if hasattr(self, "house_sync_button"):
+            self.house_sync_button.setVisible(source_ready)
+            self.house_sync_button.setEnabled(source_ready and not self.house_sync_running)
+            self.house_sync_button.setText("Sync House Setup" if not self.house_sync_running else "Syncing…")
+        if hasattr(self, "choose_house_sync_button"):
+            self.choose_house_sync_button.setEnabled(not self.house_sync_running)
+        if hasattr(self, "bottom_save"):
+            self.bottom_save.setEnabled(not self.house_sync_running and not self._settings_saving)
+        if hasattr(self, "done"):
+            self.done.setEnabled(not self.house_sync_running)
+
+    def choose_house_sync_source(self):
+        dlg = HouseSyncSelectionDialog(self.s, self.house_sync_source, self)
+
+        def apply(peer: dict):
+            self.house_sync_source = copy.deepcopy(peer) if isinstance(peer, dict) else None
+            self.update_house_sync_widgets()
+
+        dlg.selected.connect(apply)
+        dlg.exec_()
+
+    def start_house_sync(self):
+        source = self.house_sync_source if isinstance(self.house_sync_source, dict) else {}
+        panel_url = str(source.get("panelUrl") or source.get("panel_url") or "").strip()
+        source_name = str(source.get("name") or source.get("entityId") or "source thermostat").strip() or "source thermostat"
+        if not panel_url or self.house_sync_running:
+            return
+        if self._settings_saving:
+            QMessageBox.information(self, "House Sync", "Settings are still being saved. Start House Sync after that save finishes.")
+            return
+        answer = QMessageBox.question(
+            self,
+            "House Sync",
+            f"Replace this thermostat's Blinds, Lights, and Room page setup with the configuration from {source_name}?\n\n"
+            "Only those three page sections will be replaced. The current complete panel config is backed up first. Thermostat operation, panel and Room-entry security codes, Home Assistant credentials, schedules, and JARVIS settings are not copied.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self.house_sync_running = True
+        self.update_house_sync_widgets()
+
+        payload = {
+            "sourcePanelUrl": panel_url,
+            "sourceName": source_name,
+            "sourceEntityId": str(source.get("entityId") or ""),
+            "sourceSerial": str(source.get("serial") or ""),
+        }
+
+        def worker():
+            try:
+                result = self.s.api.post("/api/house-sync/apply", payload, timeout=18.0)
+                self.houseSyncCompleted.emit({"result": result, "error": None})
+            except Exception as exc:
+                self.houseSyncCompleted.emit({"result": None, "error": str(exc)})
+
+        threading.Thread(target=worker, name="settings-house-sync", daemon=True).start()
+
+    def handle_house_sync_completed(self, info: object):
+        data = info if isinstance(info, dict) else {}
+        self.house_sync_running = False
+        self.update_house_sync_widgets()
+        error_text = str(data.get("error") or "").strip()
+        result = data.get("result") if isinstance(data.get("result"), dict) else {}
+        if error_text or not result.get("ok"):
+            QMessageBox.warning(self, "House Sync", error_text or str(result.get("error") or "House Sync failed."))
+            return
+
+        returned_config = result.get("config") if isinstance(result.get("config"), dict) else {}
+        for section_name in ("blinds", "lights", "roomControl"):
+            if isinstance(returned_config.get(section_name), dict):
+                self.s.config[section_name] = copy.deepcopy(returned_config[section_name])
+        self.saved.emit()
+        QMessageBox.information(
+            self,
+            "House Sync Complete",
+            str(result.get("message") or "Blinds, Lights, and Room were copied successfully.")
+            + "\n\nThe previous complete panel configuration is available in panel-config.backup.json.",
+        )
+
 
     def choose_auto_away_people(self):
         current = self.s.thermostat.get("autoAwayPeople") if isinstance(self.s.thermostat, dict) else []
@@ -12514,6 +12801,41 @@ class SettingsDialog(QDialog):
         sync_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
         sync_section.layout().addWidget(sync_note)
 
+        house_divider = QFrame()
+        house_divider.setFixedHeight(1)
+        house_divider.setStyleSheet("background:rgba(85,240,255,0.28); border:0; margin-top:5px; margin-bottom:3px;")
+        sync_section.layout().addWidget(house_divider)
+        house_title = QLabel("HOUSE SYNC")
+        house_title.setFont(font(10, QFont.Black))
+        house_title.setStyleSheet("color:#55f0ff; letter-spacing:2px; background:transparent; border:0;")
+        sync_section.layout().addWidget(house_title)
+        self.house_sync_source_summary = QLabel(self.house_sync_source_summary_text())
+        self.house_sync_source_summary.setWordWrap(True)
+        self.house_sync_source_summary.setFont(font(7, QFont.Black))
+        self.house_sync_source_summary.setStyleSheet("color:#c4d0e5; background:rgba(5,10,20,0.42); border:1px dashed rgba(160,180,210,0.26); border-radius:8px; padding:5px;")
+        self.choose_house_sync_button = RoundButton("Choose Source", active=True, min_h=30)
+        self.choose_house_sync_button.setMinimumWidth(140)
+        self.choose_house_sync_button.clicked.connect(self.choose_house_sync_source)
+        house_source_row = QHBoxLayout()
+        house_source_row.setSpacing(6)
+        house_source_row.addWidget(self.house_sync_source_summary, 1)
+        house_source_row.addWidget(self.choose_house_sync_button)
+        sync_section.layout().addLayout(house_source_row)
+        self.house_sync_button = RoundButton("Sync House Setup", active=True, min_h=34)
+        self.house_sync_button.setMinimumWidth(190)
+        self.house_sync_button.clicked.connect(self.start_house_sync)
+        self.house_sync_button.hide()
+        house_action_row = QHBoxLayout()
+        house_action_row.addStretch(1)
+        house_action_row.addWidget(self.house_sync_button)
+        sync_section.layout().addLayout(house_action_row)
+        house_note = QLabel("House Sync performs a one-time copy of only the Blinds, Lights, and Room configuration from the selected thermostat. It validates the source first, writes atomically, verifies the saved result, and restores the previous configuration if verification fails.")
+        house_note.setWordWrap(True)
+        house_note.setFont(font(7, QFont.Black))
+        house_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
+        sync_section.layout().addWidget(house_note)
+        self.update_house_sync_widgets()
+
         person_tracking = self.add_section("Person Tracking", 4, 2, 1, 2)
         self.person_tracking_summary = QLabel(self.people_summary_text())
         self.person_tracking_summary.setWordWrap(True)
@@ -12865,6 +13187,9 @@ class SettingsDialog(QDialog):
             self.s.pause_status_refresh(0.2)
 
     def close_settings(self):
+        if self.house_sync_running:
+            QMessageBox.information(self, "House Sync", "House Sync is still running. Keep settings open until it finishes.")
+            return
         self._settings_save_timer.stop()
         if self._jarvis_dirty or self._display_settings_dirty:
             self.save_all()
@@ -12952,6 +13277,9 @@ class SettingsDialog(QDialog):
         threading.Thread(target=worker, name="settings-display-save", daemon=True).start()
 
     def save_all(self):
+        if self.house_sync_running:
+            QMessageBox.information(self, "House Sync", "House Sync is still running. Save Settings after it finishes.")
+            return
         self._settings_save_timer.stop()
         if (
             self._display_settings_dirty
