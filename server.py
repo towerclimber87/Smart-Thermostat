@@ -329,6 +329,15 @@ DEFAULT_THERMOSTAT = {
     "lastPanelTargetRequestAt": 0,
     "lastPanelModeRequestMode": "",
     "lastPanelModeRequestAt": 0,
+    # Monotonic revisions let the touchscreen and Home Assistant distinguish a
+    # delayed status response from a newer accepted command. They are persisted
+    # with the setpoint/mode so a reconnect always starts from panel-owned state.
+    "targetRevision": 0,
+    "modeRevision": 0,
+    "lastTargetChangeSource": "startup",
+    "lastTargetChangeAt": 0,
+    "lastModeChangeSource": "startup",
+    "lastModeChangeAt": 0,
     "mode": "cool",
     "fan": "auto",
     "away": False,
@@ -1240,6 +1249,10 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             ("lastPanelTargetTemp", base.get("lastPanelTargetTemp", 0), 0, 130),
             ("lastPanelTargetRequestAt", base.get("lastPanelTargetRequestAt", 0), 0, None),
             ("lastPanelModeRequestAt", base.get("lastPanelModeRequestAt", 0), 0, None),
+            ("targetRevision", base.get("targetRevision", 0), 0, None),
+            ("modeRevision", base.get("modeRevision", 0), 0, None),
+            ("lastTargetChangeAt", base.get("lastTargetChangeAt", 0), 0, None),
+            ("lastModeChangeAt", base.get("lastModeChangeAt", 0), 0, None),
             # Match the values the native settings screen actually offers.
             # Otherwise the UI can show “saved” while the backend silently
             # clamps values like Heat Away 40 or Cool Away 100 back to older
@@ -1308,6 +1321,10 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
         if "lastPanelModeRequestMode" in source:
             panel_mode = str(source.get("lastPanelModeRequestMode") or "").strip().lower()
             base["lastPanelModeRequestMode"] = panel_mode if panel_mode in {"", "off", "heat", "cool"} else ""
+        if "lastTargetChangeSource" in source:
+            base["lastTargetChangeSource"] = str(source.get("lastTargetChangeSource") or "unknown").strip().lower()[:80] or "unknown"
+        if "lastModeChangeSource" in source:
+            base["lastModeChangeSource"] = str(source.get("lastModeChangeSource") or "unknown").strip().lower()[:80] or "unknown"
         if "autoSwitchNotice" in source:
             base["autoSwitchNotice"] = _normalize_auto_switch_notice(source.get("autoSwitchNotice"))
         if "autoSwitchNoticeDismissed" in source:
@@ -1401,7 +1418,13 @@ THERMOSTAT_PERSIST_KEYS = (
     "targetTemp",
     "lastComfortTarget",
     "preAwayTargetTemp",
+    "targetRevision",
+    "lastTargetChangeSource",
+    "lastTargetChangeAt",
     "mode",
+    "modeRevision",
+    "lastModeChangeSource",
+    "lastModeChangeAt",
     "fan",
     "away",
     "awaySource",
@@ -1755,8 +1778,39 @@ def _write_thermostat_record(thermostat: dict, *, force: bool = False, persist: 
         if _THERMOSTAT_RECORD_CACHE is None:
             _THERMOSTAT_RECORD_CACHE = _read_thermostat_record_from_disk()
             _THERMOSTAT_RECORD_LAST_PERSIST_SIGNATURE = _thermostat_persist_signature(_THERMOSTAT_RECORD_CACHE["thermostat"])
+        previous = _merge_thermostat_state(_THERMOSTAT_RECORD_CACHE.get("thermostat") or {})
         merged = _merge_thermostat_state(thermostat)
         now = int(time.time())
+        now_ms = int(time.time() * 1000)
+
+        # Every accepted setpoint/mode transition receives a strictly increasing
+        # revision. This is deliberately centralized so schedules, presence, Away,
+        # touchscreen, Home Assistant, and peer-sync changes all participate.
+        # Clients can then ignore an old response that finishes after a newer one.
+        previous_target = _number(previous.get("targetTemp"), 70, 40, 100)
+        merged_target = _number(merged.get("targetTemp"), previous_target, 40, 100)
+        if abs(merged_target - previous_target) >= 0.001:
+            previous_revision = int(_number(previous.get("targetRevision"), 0, 0, None) or 0)
+            proposed_revision = int(_number(merged.get("targetRevision"), 0, 0, None) or 0)
+            merged["targetRevision"] = max(previous_revision + 1, proposed_revision)
+            previous_changed_at = int(_number(previous.get("lastTargetChangeAt"), 0, 0, None) or 0)
+            proposed_changed_at = int(_number(merged.get("lastTargetChangeAt"), 0, 0, None) or 0)
+            if proposed_revision <= previous_revision and proposed_changed_at <= previous_changed_at:
+                merged["lastTargetChangeAt"] = now_ms
+                merged["lastTargetChangeSource"] = "panel-runtime"
+
+        previous_mode = _normalize_mode(previous.get("mode"), "cool")
+        merged_mode = _normalize_mode(merged.get("mode"), previous_mode)
+        if merged_mode != previous_mode:
+            previous_revision = int(_number(previous.get("modeRevision"), 0, 0, None) or 0)
+            proposed_revision = int(_number(merged.get("modeRevision"), 0, 0, None) or 0)
+            merged["modeRevision"] = max(previous_revision + 1, proposed_revision)
+            previous_changed_at = int(_number(previous.get("lastModeChangeAt"), 0, 0, None) or 0)
+            proposed_changed_at = int(_number(merged.get("lastModeChangeAt"), 0, 0, None) or 0)
+            if proposed_revision <= previous_revision and proposed_changed_at <= previous_changed_at:
+                merged["lastModeChangeAt"] = now_ms
+                merged["lastModeChangeSource"] = "panel-runtime"
+
         record = {
             "version": int(_THERMOSTAT_RECORD_CACHE.get("version", 1) or 1),
             "updatedAt": now,
@@ -5197,7 +5251,7 @@ def _strip_comfort_target_changes(incoming: dict) -> dict:
     return {k: v for k, v in incoming.items() if k not in THERMOSTAT_COMFORT_TARGET_KEYS}
 
 
-def _handle_thermostat_update_locked(payload: dict) -> dict:
+def _handle_thermostat_update_locked(payload: dict) -> tuple[dict, dict, dict]:
     global _THERMOSTAT_CONTROL_GENERATION
     _THERMOSTAT_CONTROL_GENERATION += 1
     existing = _read_thermostat_record()["thermostat"]
@@ -5276,6 +5330,51 @@ def _handle_thermostat_update_locked(payload: dict) -> dict:
     mode_change_source = _incoming_source(incoming, "modeChangeSource", "mode_change_source", "hvacModeChangeSource", "hvac_mode_change_source")
     target_change_source = _incoming_source(incoming, "targetChangeSource", "target_change_source", "temperatureChangeSource", "temperature_change_source")
     now_ms = int(time.time() * 1000)
+    command_result = {
+        "accepted": True,
+        "targetAccepted": None,
+        "modeAccepted": None,
+        "reason": "",
+        "clientCommandId": str(incoming.get("clientCommandId") or incoming.get("client_command_id") or "").strip()[:160],
+    }
+
+    # Home Assistant sends the revision it most recently read from this panel.
+    # If the wall thermostat changed while HA was disconnected—or a delayed HA
+    # request arrives after a newer command—the panel state wins and the stale
+    # field is ignored. Older integration builds omit these fields and continue
+    # to use the existing recent-touch guards.
+    if requested_mode in {"off", "heat", "cool", "auto"} and _source_is_explicit_home_assistant_command(mode_change_source):
+        expected_mode_revision = incoming.get("expectedModeRevision", incoming.get("expected_mode_revision"))
+        if expected_mode_revision is not None:
+            expected_mode_revision = int(_number(expected_mode_revision, -1, -1, None) or 0)
+            current_mode_revision = int(_number(existing.get("modeRevision"), 0, 0, None) or 0)
+            if expected_mode_revision != current_mode_revision:
+                incoming = _strip_mode_changes(dict(incoming))
+                requested_mode = ""
+                command_result.update({
+                    "accepted": False,
+                    "modeAccepted": False,
+                    "reason": "The panel mode changed after Home Assistant last refreshed.",
+                })
+            else:
+                command_result["modeAccepted"] = True
+
+    incoming_target = _target_value_from_incoming(incoming)
+    if incoming_target is not None and _source_is_explicit_home_assistant_command(target_change_source):
+        expected_target_revision = incoming.get("expectedTargetRevision", incoming.get("expected_target_revision"))
+        if expected_target_revision is not None:
+            expected_target_revision = int(_number(expected_target_revision, -1, -1, None) or 0)
+            current_target_revision = int(_number(existing.get("targetRevision"), 0, 0, None) or 0)
+            if expected_target_revision != current_target_revision:
+                incoming = _strip_comfort_target_changes(dict(incoming))
+                incoming_target = None
+                command_result.update({
+                    "accepted": False,
+                    "targetAccepted": False,
+                    "reason": "The panel setpoint changed after Home Assistant last refreshed.",
+                })
+            else:
+                command_result["targetAccepted"] = True
 
     existing_home_override = _normalize_presence_home_override(existing.get("presenceHomeOverride"))
     existing_home_override_reason = str((existing_home_override or {}).get("reason") or "").strip().lower()
@@ -5374,8 +5473,22 @@ def _handle_thermostat_update_locked(payload: dict) -> dict:
         incoming = {k: v for k, v in incoming.items() if k != "bypassChangeoverLockout"}
 
     was_away = bool(existing.get("away"))
+    accepted_target = _target_value_from_incoming(incoming)
+    if accepted_target is not None and command_result.get("targetAccepted") is None:
+        command_result["targetAccepted"] = True
+    if requested_mode in {"off", "heat", "cool", "auto"} and command_result.get("modeAccepted") is None:
+        command_result["modeAccepted"] = True
+
     merged = _merge_thermostat_state(existing, incoming)
     merged = _apply_away_setpoint_logic(merged, was_away=was_away)
+
+    # A Home-mode setpoint is one coherent comfort setting. The native panel
+    # already sent both fields, but the HA climate entity historically sent only
+    # targetTemp. That left lastComfortTarget stale, so a later Away/Home, door
+    # pause, or presence transition could restore an older temperature.
+    pause_state = merged.get("pauseFunction") if isinstance(merged.get("pauseFunction"), dict) else {}
+    if accepted_target is not None and not was_away and not bool(merged.get("away")) and not bool(pause_state.get("active")):
+        merged["lastComfortTarget"] = _number(merged.get("targetTemp"), accepted_target, 40, 100)
 
     if _source_is_panel(mode_change_source) and requested_mode in {"off", "heat", "cool"}:
         merged["lastPanelModeRequestMode"] = requested_mode
@@ -5437,7 +5550,33 @@ def _handle_thermostat_update_locked(payload: dict) -> dict:
     merged = _apply_comfort_auto_switch_logic(merged, notify=True)
     merged = _apply_away_setpoint_logic(merged, was_away=was_away, finalize_restore=True)
     merged = _normalize_fan_for_active_cooling(merged)
-    _write_thermostat_record(merged)
+
+    final_target = _number(merged.get("targetTemp"), existing.get("targetTemp", 70), 40, 100)
+    existing_target = _number(existing.get("targetTemp"), 70, 40, 100)
+    if abs(final_target - existing_target) >= 0.001:
+        merged["targetRevision"] = int(_number(existing.get("targetRevision"), 0, 0, None) or 0) + 1
+        merged["lastTargetChangeAt"] = now_ms
+        merged["lastTargetChangeSource"] = (
+            target_change_source
+            or _incoming_source(incoming, "presetChangeSource", "preset_change_source")
+            or "panel-control"
+        )[:80]
+
+    final_mode = _normalize_mode(merged.get("mode"), "cool")
+    existing_mode = _normalize_mode(existing.get("mode"), "cool")
+    if final_mode != existing_mode:
+        merged["modeRevision"] = int(_number(existing.get("modeRevision"), 0, 0, None) or 0) + 1
+        merged["lastModeChangeAt"] = now_ms
+        merged["lastModeChangeSource"] = (
+            mode_change_source
+            or _incoming_source(incoming, "presetChangeSource", "preset_change_source")
+            or "panel-control"
+        )[:80]
+
+    saved_record = _write_thermostat_record(merged)
+    merged = saved_record.get("thermostat") or merged
+    command_result["targetRevision"] = int(_number(merged.get("targetRevision"), 0, 0, None) or 0)
+    command_result["modeRevision"] = int(_number(merged.get("modeRevision"), 0, 0, None) or 0)
     if incoming_has_schedules:
         saved_schedules = _normalize_schedule_entries(incoming.get("schedules"))
         _write_schedule_backup(saved_schedules)
@@ -5449,7 +5588,7 @@ def _handle_thermostat_update_locked(payload: dict) -> dict:
     # background worker so a slow HA switch command cannot surface as
     # "Set temp failed: timed out" on the touchscreen.
     _schedule_thermostat_outputs_apply(merged, reason="control")
-    return merged
+    return merged, command_result, {"thermostat": dict(incoming)}
 
 
 def _handle_thermostat_update(payload: dict) -> dict:
@@ -5474,14 +5613,16 @@ def _handle_thermostat_update(payload: dict) -> dict:
         return _thermostat_status_payload(refresh_runtime=False, apply_hardware=False)
 
     with _THERMOSTAT_RECORD_LOCK:
-        accepted = _handle_thermostat_update_locked(payload)
-    sync_changes = _sync_changes_from_control_payload(payload, accepted)
+        accepted, command_result, accepted_payload = _handle_thermostat_update_locked(payload)
+    sync_changes = _sync_changes_from_control_payload(accepted_payload, accepted)
     if sync_changes:
         _schedule_armed_thermostat_sync(sync_changes)
     # Build the response after releasing the state transaction. Status assembly
     # may refresh Home Assistant person tracking and should never delay the
     # autonomous HVAC loop while holding the thermostat record lock.
-    return _thermostat_status_payload(refresh_runtime=False, apply_hardware=False)
+    response = _thermostat_status_payload(refresh_runtime=False, apply_hardware=False)
+    response["commandResult"] = command_result
+    return response
 
 
 def _local_host_name() -> str:

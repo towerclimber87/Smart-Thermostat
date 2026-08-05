@@ -1854,6 +1854,9 @@ class AppState:
         # jump forward again.
         self._target_override_value: int | None = None
         self._target_override_until = 0.0
+        self._target_override_base_revision = -1
+        self._last_target_revision = -1
+        self._last_mode_revision = -1
         self._mode_override: dict | None = None
         self._mode_override_until = 0.0
         # Monotonic timestamp of the last alarm state confirmed directly with
@@ -1969,12 +1972,17 @@ class AppState:
         self.config = record.get("config") or self.config
         return record
 
-    def set_target_override(self, value: float, hold_seconds: float = 60.0):
-        """Hold a locally selected setpoint against stale status refreshes."""
+    def set_target_override(self, value: float, hold_seconds: float = 20.0):
+        """Hold a local target only until the backend confirms a newer revision."""
         try:
             val = int(round(float(value)))
         except Exception:
             return
+        current = self.thermostat if isinstance(self.thermostat, dict) else {}
+        try:
+            self._target_override_base_revision = int(float(current.get("targetRevision", -1)))
+        except (TypeError, ValueError):
+            self._target_override_base_revision = -1
         self._target_override_value = val
         self._target_override_until = time.monotonic() + max(1.0, float(hold_seconds))
         if not isinstance(self.thermostat, dict):
@@ -1985,6 +1993,7 @@ class AppState:
     def clear_target_override(self):
         self._target_override_value = None
         self._target_override_until = 0.0
+        self._target_override_base_revision = -1
 
     def set_mode_override(
         self,
@@ -2037,12 +2046,59 @@ class AppState:
         if self._target_override_value is None or now >= self._target_override_until:
             self.clear_target_override()
             return thermostat
+
+        try:
+            incoming_target = int(round(float(thermostat.get("targetTemp", thermostat.get("target_temperature")))))
+        except (TypeError, ValueError):
+            incoming_target = None
+        try:
+            incoming_revision = int(float(thermostat.get("targetRevision", -1)))
+        except (TypeError, ValueError):
+            incoming_revision = -1
+
+        # Matching data is the command acknowledgement; a higher revision with a
+        # different target is a later panel/HA command and must win immediately.
+        if incoming_target == self._target_override_value:
+            self.clear_target_override()
+            return thermostat
+        if incoming_revision > self._target_override_base_revision >= 0:
+            self.clear_target_override()
+            return thermostat
+
         thermostat["targetTemp"] = self._target_override_value
         thermostat["lastComfortTarget"] = self._target_override_value
         return thermostat
 
     def ingest_thermostat(self, payload: dict | None) -> dict:
-        self.thermostat = self.apply_target_override(self.apply_mode_override(thermostat_detail_payload(payload)))
+        incoming = thermostat_detail_payload(payload)
+        current = self.thermostat if isinstance(self.thermostat, dict) else {}
+
+        # Status requests can finish out of order. Preserve only target/mode fields
+        # from the newer revision while still accepting fresh temperatures, relay
+        # state, timers, and diagnostics from the response.
+        try:
+            incoming_target_revision = int(float(incoming.get("targetRevision", -1)))
+        except (TypeError, ValueError):
+            incoming_target_revision = -1
+        if incoming_target_revision >= 0 and self._last_target_revision >= 0 and incoming_target_revision < self._last_target_revision:
+            for key in ("targetTemp", "target_temperature", "temperature", "lastComfortTarget", "targetRevision", "lastTargetChangeSource", "lastTargetChangeAt"):
+                if key in current:
+                    incoming[key] = copy.deepcopy(current.get(key))
+        elif incoming_target_revision >= 0:
+            self._last_target_revision = max(self._last_target_revision, incoming_target_revision)
+
+        try:
+            incoming_mode_revision = int(float(incoming.get("modeRevision", -1)))
+        except (TypeError, ValueError):
+            incoming_mode_revision = -1
+        if incoming_mode_revision >= 0 and self._last_mode_revision >= 0 and incoming_mode_revision < self._last_mode_revision:
+            for key in ("mode", "hvac_mode", "hvacMode", "modeRevision", "lastModeChangeSource", "lastModeChangeAt"):
+                if key in current:
+                    incoming[key] = copy.deepcopy(current.get(key))
+        elif incoming_mode_revision >= 0:
+            self._last_mode_revision = max(self._last_mode_revision, incoming_mode_revision)
+
+        self.thermostat = self.apply_target_override(self.apply_mode_override(incoming))
         return self.thermostat
 
     def load(self):
