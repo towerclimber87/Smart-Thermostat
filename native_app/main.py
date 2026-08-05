@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import faulthandler
+from concurrent.futures import ThreadPoolExecutor
 import math
 import html
 import os
@@ -436,6 +437,21 @@ SCREEN_BRIGHTNESS_DISPLAY_OUTPUT = os.environ.get("SMART_THERMOSTAT_DISPLAY_OUTP
 SCREEN_BRIGHTNESS_BACKLIGHT_PATH = os.environ.get("SMART_THERMOSTAT_SCREEN_BACKLIGHT_PATH", "").strip()
 SCREEN_BRIGHTNESS_COMMAND = os.environ.get("SMART_THERMOSTAT_SCREEN_BRIGHTNESS_COMMAND", "").strip()
 ALARM_STATE_POLL_SECONDS = float(os.environ.get("SMART_THERMOSTAT_ALARM_POLL_SECONDS", "30"))
+
+# Local backend polling is adaptive. Fast refresh is reserved for an active
+# assistant, a sleeping panel waiting for motion, an armed Sync window, or a Pi
+# approaching its thermal safety threshold. Keeping the idle cadence relaxed
+# avoids hundreds of short-lived HTTP/request threads per minute.
+ASSISTANT_STATUS_ACTIVE_INTERVAL_MS = 300
+ASSISTANT_STATUS_IDLE_INTERVAL_MS = 2000
+ASSISTANT_STATUS_ERROR_INTERVAL_MS = 5000
+SCREEN_MOTION_SLEEP_INTERVAL_MS = 1000
+SCREEN_MOTION_AWAKE_INTERVAL_MS = 3000
+SCREEN_MOTION_MANUAL_SLEEP_INTERVAL_MS = 5000
+SCREEN_MOTION_DISABLED_INTERVAL_MS = 10000
+THERMAL_STATUS_NORMAL_INTERVAL_MS = 5000
+THERMAL_STATUS_NEAR_INTERVAL_MS = 2000
+THERMAL_STATUS_NEAR_MARGIN_C = 5.0
 
 
 def screen_display_settings(config: dict | None) -> dict:
@@ -1521,6 +1537,7 @@ class AssistantOverlay(QWidget):
         self.request_id = 0
         self.phase = 0.0
         self._active = False
+        self._status_signature: tuple[object, ...] | None = None
 
         # Precomputed pseudo-random shell debris. Keeping this deterministic
         # avoids allocating random geometry every frame on the Raspberry Pi.
@@ -1552,21 +1569,43 @@ class AssistantOverlay(QWidget):
     def is_active(self) -> bool:
         return bool(self._active and self.stage != "idle")
 
-    def set_status(self, payload: object):
+    def set_status(self, payload: object) -> bool:
         data = payload if isinstance(payload, dict) else {}
         if isinstance(data.get("assistant"), dict):
             data = data.get("assistant") or {}
         stage = str(data.get("stage") or "idle").strip().lower()
         active = bool(data.get("active", stage != "idle")) and stage != "idle"
-        self.stage = stage
-        self.command = str(data.get("command") or "")
-        self.response = str(data.get("response") or "")
-        self.status_text = str(data.get("statusText") or "")
-        self.error_text = str(data.get("error") or "")
+        command = str(data.get("command") or "")
+        response = str(data.get("response") or "")
+        status_text = str(data.get("statusText") or "")
+        error_text = str(data.get("error") or "")
         try:
-            self.request_id = int(data.get("requestId") or 0)
+            request_id = int(data.get("requestId") or 0)
         except Exception:
-            self.request_id = 0
+            request_id = 0
+
+        signature = (stage, active, command, response, status_text, error_text, request_id)
+        changed = signature != self._status_signature
+        if not changed:
+            # Recover visibility without repainting/repositioning the overlay on
+            # every idle status response.
+            if active and not self.isVisible():
+                self.show()
+                self.raise_()
+                return True
+            if not active and self.isVisible():
+                self.animation.stop()
+                self.hide()
+                return True
+            return False
+
+        self._status_signature = signature
+        self.stage = stage
+        self.command = command
+        self.response = response
+        self.status_text = status_text
+        self.error_text = error_text
+        self.request_id = request_id
         self._active = active
         if active:
             if not self.animation.isActive():
@@ -1577,6 +1616,7 @@ class AssistantOverlay(QWidget):
         else:
             self.animation.stop()
             self.hide()
+        return True
 
     def advance_animation(self):
         speed = 0.090 if self.stage == "processing" else (0.064 if self.stage == "speaking" else 0.052)
@@ -13825,6 +13865,9 @@ class MainWindow(Background):
         self._sync_toggle_generation = 0
         self._sync_toggle_pending_generation = 0
         self._sync_optimistic_active = False
+        self._sync_status_initialized = False
+        self._sync_status_retry_after = 0.0
+        self._last_sync_button_render: tuple[bool, int, bool] | None = None
         self._last_sync_notice_at = 0.0
         self._last_sync_result_at = 0
         self.peer_sync_timer = QTimer(self)
@@ -13896,6 +13939,9 @@ class MainWindow(Background):
         self._status_refresh_running = False
         self._thermal_status_running = False
         self._alarm_refresh_running = False
+        # Reuse a small worker pool for recurring local status requests instead
+        # of creating and destroying multiple Python threads every second.
+        self._status_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="panel-status")
         self._main_async_jobs: dict[str, tuple[Callable | None, Callable | None]] = {}
         self._reload_all_running = False
         self._reload_all_pending = False
@@ -13918,10 +13964,10 @@ class MainWindow(Background):
         self.status_timer.start(4000)
         self.thermal_watch_timer = QTimer(self)
         self.thermal_watch_timer.timeout.connect(self.refresh_thermal_status)
-        self.thermal_watch_timer.start(2000)
+        self.thermal_watch_timer.start(THERMAL_STATUS_NORMAL_INTERVAL_MS)
         self.assistant_status_timer = QTimer(self)
         self.assistant_status_timer.timeout.connect(self.refresh_assistant_status)
-        self.assistant_status_timer.start(350)
+        self.assistant_status_timer.start(ASSISTANT_STATUS_IDLE_INTERVAL_MS)
         self.alarm_timer = QTimer(self)
         self.alarm_timer.timeout.connect(self.refresh_alarm_state)
         self.alarm_timer.start(int(max(5.0, ALARM_STATE_POLL_SECONDS) * 1000))
@@ -13933,11 +13979,66 @@ class MainWindow(Background):
         self.screen_sleep_timer.start(5000)
         self.screen_motion_timer = QTimer(self)
         self.screen_motion_timer.timeout.connect(self.refresh_screen_motion_status)
-        self.screen_motion_timer.start(1000)
+        self.screen_motion_timer.start(SCREEN_MOTION_AWAKE_INTERVAL_MS)
         app = QApplication.instance()
         if app is not None:
             app.installEventFilter(self)
         QTimer.singleShot(100, self.boot)
+
+    @staticmethod
+    def _set_repeating_timer_interval(timer: QTimer, interval_ms: int):
+        interval_ms = max(50, int(interval_ms))
+        if int(timer.interval() or 0) != interval_ms:
+            timer.setInterval(interval_ms)
+        if not timer.isActive():
+            timer.start()
+
+    def _submit_status_worker(self, worker: Callable[[], None]):
+        try:
+            self._status_executor.submit(worker)
+        except RuntimeError:
+            # The application is shutting down; no status result is needed.
+            pass
+
+    def _update_assistant_poll_interval(self, active: bool, *, error: bool = False):
+        interval = (
+            ASSISTANT_STATUS_ERROR_INTERVAL_MS
+            if error
+            else ASSISTANT_STATUS_ACTIVE_INTERVAL_MS
+            if active
+            else ASSISTANT_STATUS_IDLE_INTERVAL_MS
+        )
+        self._set_repeating_timer_interval(self.assistant_status_timer, interval)
+
+    def _update_screen_motion_poll_interval(self):
+        settings = self.current_screen_display_settings()
+        enabled = bool(settings.get("motionAutoSleepEnabled") or settings.get("motionAutoWakeEnabled"))
+        if not enabled:
+            interval = SCREEN_MOTION_DISABLED_INTERVAL_MS
+        elif getattr(self, "_display_sleeping", False):
+            interval = (
+                SCREEN_MOTION_MANUAL_SLEEP_INTERVAL_MS
+                if getattr(self, "_manual_sleep_touch_only", False)
+                else SCREEN_MOTION_SLEEP_INTERVAL_MS
+            )
+        else:
+            interval = SCREEN_MOTION_AWAKE_INTERVAL_MS
+        self._set_repeating_timer_interval(self.screen_motion_timer, interval)
+
+    def _update_thermal_poll_interval(self, payload: object = None, *, error: bool = False):
+        data = payload if isinstance(payload, dict) else {}
+        thermal = self.thermal_protection_from_payload(data)
+        active = bool(thermal.get("active"))
+        try:
+            cpu_temp = float(thermal.get("cpuTempC"))
+            trigger = float(thermal.get("triggerC"))
+            near_threshold = cpu_temp >= trigger - THERMAL_STATUS_NEAR_MARGIN_C
+        except (TypeError, ValueError):
+            near_threshold = False
+        interval = THERMAL_STATUS_NEAR_INTERVAL_MS if active or near_threshold else THERMAL_STATUS_NORMAL_INTERVAL_MS
+        if error:
+            interval = THERMAL_STATUS_NORMAL_INTERVAL_MS
+        self._set_repeating_timer_interval(self.thermal_watch_timer, interval)
 
     def boot(self):
         QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -14099,24 +14200,49 @@ class MainWindow(Background):
 
         def done(result):
             self._sync_status_poll_running = False
+            self._sync_status_initialized = True
+            self._sync_status_retry_after = 0.0
             self.apply_sync_status(result)
 
         def failed(_err):
             self._sync_status_poll_running = False
+            self._sync_status_initialized = False
+            self._sync_status_retry_after = time.monotonic() + 10.0
 
         self.run_async("sync-status", lambda: self.s.api.get("/api/sync/status"), done, failed)
 
     def update_sync_button_state(self):
         try:
             peers = self.sync_peer_entities()
-            active = bool(peers) and time.monotonic() < float(getattr(self, "_sync_active_until", 0.0) or 0.0)
+            has_peers = bool(peers)
+            active = has_peers and time.monotonic() < float(getattr(self, "_sync_active_until", 0.0) or 0.0)
             if not active:
                 self._sync_active_until = 0.0
             remaining = max(0, int(math.ceil(float(getattr(self, "_sync_active_until", 0.0) or 0.0) - time.monotonic()))) if active else 0
-            if hasattr(self, "sync_button"):
-                self.sync_button.setActive(active, remaining)
-            self.position_sleep_controls()
-            self.refresh_sync_status()
+            render = (active, remaining, has_peers)
+            previous = getattr(self, "_last_sync_button_render", None)
+            if render != previous:
+                self._last_sync_button_render = render
+                if hasattr(self, "sync_button"):
+                    self.sync_button.setActive(active, remaining)
+                # Geometry/visibility only changes when the active state or peer
+                # availability changes; the countdown text does not need a full
+                # overlay reposition every second.
+                if previous is None or previous[0] != active or previous[2] != has_peers:
+                    self.position_sleep_controls()
+
+            initial_retry_due = bool(
+                not getattr(self, "_sync_status_initialized", False)
+                and time.monotonic() >= float(getattr(self, "_sync_status_retry_after", 0.0) or 0.0)
+            )
+            should_poll_backend = bool(
+                active
+                or initial_retry_due
+                or getattr(self, "_sync_toggle_pending_generation", 0)
+                or getattr(self, "_sync_apply_running", False)
+            )
+            if should_poll_backend:
+                self.refresh_sync_status()
         except Exception:
             pass
 
@@ -14596,6 +14722,7 @@ class MainWindow(Background):
         # display off. Preserve that state until a real touchscreen/mouse input
         # wakes it; motion and other programmatic wake paths must be ignored.
         self._manual_sleep_touch_only = bool(manual)
+        self._update_screen_motion_poll_interval()
         self.position_sleep_controls()
         self.sleep_overlay.show()
         self.sleep_overlay.raise_()
@@ -14614,6 +14741,7 @@ class MainWindow(Background):
         self._display_wake_block_until = time.monotonic() + SCREEN_WAKE_INPUT_BLOCK_SECONDS
         self._last_user_activity_at = time.monotonic()
         self._last_motion_activity_at = self._last_user_activity_at
+        self._update_screen_motion_poll_interval()
         self._run_display_power_command(SCREEN_SLEEP_ON_COMMAND)
         self.sleep_overlay.hide()
         self.position_sleep_controls()
@@ -14642,6 +14770,7 @@ class MainWindow(Background):
         if not (settings.get("motionAutoSleepEnabled") or settings.get("motionAutoWakeEnabled")):
             self._screen_motion_available = False
             self._screen_motion_active = False
+            self._update_screen_motion_poll_interval()
             return
         if self._screen_motion_poll_running:
             return
@@ -14654,10 +14783,11 @@ class MainWindow(Background):
             except Exception as exc:
                 self.screenMotionCompleted.emit({"result": None, "error": str(exc)})
 
-        threading.Thread(target=worker, name="screen-motion-poll", daemon=True).start()
+        self._submit_status_worker(worker)
 
     def handle_screen_motion_completed(self, info: object):
         self._screen_motion_poll_running = False
+        self._update_screen_motion_poll_interval()
         data = info if isinstance(info, dict) else {}
         if data.get("error"):
             self._screen_motion_available = False
@@ -15050,7 +15180,7 @@ class MainWindow(Background):
             except Exception as exc:
                 self.assistantStatusCompleted.emit({"data": None, "error": str(exc)})
 
-        threading.Thread(target=worker, name="assistant-status-refresh", daemon=True).start()
+        self._submit_status_worker(worker)
 
     def _handle_assistant_status_completed(self, info: object):
         self._assistant_status_running = False
@@ -15058,19 +15188,23 @@ class MainWindow(Background):
             return
         data = info if isinstance(info, dict) else {}
         if data.get("error"):
+            self._update_assistant_poll_interval(False, error=True)
             return
         result = data.get("data") if isinstance(data.get("data"), dict) else {}
         assistant = result.get("assistant") if isinstance(result.get("assistant"), dict) else {}
         active = bool(assistant.get("active")) and str(assistant.get("stage") or "idle").lower() != "idle"
+        self._update_assistant_poll_interval(active)
         if active:
             # Assistant activity may wake an automatically sleeping panel. A
             # manual Sleep-button lock remains touch-only and ignores this path.
             if getattr(self, "_display_sleeping", False):
                 self.wake_display_screen(source="assistant")
             self._last_user_activity_at = time.monotonic()
+        changed = False
         if hasattr(self, "assistant_overlay"):
-            self.assistant_overlay.set_status(assistant)
-        self.position_sleep_controls()
+            changed = bool(self.assistant_overlay.set_status(assistant))
+        if changed:
+            self.position_sleep_controls()
 
     @staticmethod
     def thermal_protection_from_payload(payload: object) -> dict:
@@ -15176,6 +15310,8 @@ class MainWindow(Background):
         except Exception:
             pass
         self.resume_nonessential_thermal_activity()
+        self._update_assistant_poll_interval(False)
+        self._update_screen_motion_poll_interval()
         self._last_user_activity_at = time.monotonic()
         self.position_sleep_controls()
         self.sync_runtime_only()
@@ -15208,15 +15344,17 @@ class MainWindow(Background):
             except Exception as exc:
                 self.thermalStatusCompleted.emit({"data": None, "error": str(exc)})
 
-        threading.Thread(target=worker, name="thermal-status-refresh", daemon=True).start()
+        self._submit_status_worker(worker)
 
     def _handle_thermal_status_completed(self, info: object):
         self._thermal_status_running = False
         data = info if isinstance(info, dict) else {}
         if data.get("error"):
+            self._update_thermal_poll_interval(error=True)
             return
         payload = data.get("data")
         if isinstance(payload, dict):
+            self._update_thermal_poll_interval(payload)
             self.apply_thermal_protection_state(payload)
 
     def refresh_status(self):
@@ -15235,7 +15373,7 @@ class MainWindow(Background):
             except Exception as exc:
                 self.statusRefreshCompleted.emit({"data": None, "error": str(exc), "epoch": refresh_epoch})
 
-        threading.Thread(target=worker, name="thermostat-status-refresh", daemon=True).start()
+        self._submit_status_worker(worker)
 
     def _handle_status_refresh_completed(self, info: object):
         self._status_refresh_running = False
@@ -15300,6 +15438,8 @@ class MainWindow(Background):
             self.s.system_info = system_info
         self.sync_runtime_only()
         self.update_sync_button_state()
+        self._update_screen_motion_poll_interval()
+        QTimer.singleShot(0, self.refresh_screen_motion_status)
         errors = [str(item) for item in (data.get("errors") or []) if str(item)]
         if errors and config_record is None and thermostat is None:
             self.toast.show_message("Reload failed: " + "; ".join(errors[:2]))
