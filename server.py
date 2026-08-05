@@ -228,10 +228,10 @@ LOCAL_TEMP_SENSOR_ADDRESSES = os.environ.get(
     LOCAL_TEMP_SENSOR_ADDRESS or "0x40,0x41",
 ).strip()
 LOCAL_TEMP_SENSOR_TYPE = os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_TYPE", "auto").strip().lower() or "auto"
-# The touchscreen sensor configuration uses sensor 2 as the room-temperature
-# primary and sensor 1 as an independent safety reference/fallback. These are
-# software defaults only; saved panel-config values override them without
-# replacing any unrelated configuration.
+# Sensor 2 remains the software default for backward compatibility, but the
+# touchscreen setting can persist either onboard sensor as the preferred room
+# temperature source. The other channel automatically becomes the safety
+# comparison/fallback without replacing any unrelated panel configuration.
 LOCAL_TEMP_SENSOR_DEFAULT_SENSOR1_OFFSET_F = float(os.environ.get("SMART_THERMOSTAT_SENSOR1_OFFSET_F", "-5.2") or "-5.2")
 LOCAL_TEMP_SENSOR_DEFAULT_SENSOR2_OFFSET_F = float(os.environ.get("SMART_THERMOSTAT_SENSOR2_OFFSET_F", "-7.3") or "-7.3")
 LOCAL_TEMP_SENSOR_DEFAULT_MAX_PAIR_DELTA_F = max(0.5, float(os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_MAX_PAIR_DELTA_F", "3") or "3"))
@@ -6769,15 +6769,21 @@ def _normalize_temperature_sensor_config(value: object) -> dict:
         fallback_parsed = _parse_i2c_address(fallback) or 0x40
         return f"0x{(parsed if parsed is not None else fallback_parsed):02X}"
 
+    try:
+        primary_sensor = int(source.get("primarySensor", 2))
+    except (TypeError, ValueError):
+        primary_sensor = 2
+    if primary_sensor not in (1, 2):
+        primary_sensor = 2
+    fallback_sensor = 1 if primary_sensor == 2 else 2
+
     return {
         "sensor1Address": normalized_address(source.get("sensor1Address"), address_1),
         "sensor2Address": normalized_address(source.get("sensor2Address"), address_2),
         "sensor1OffsetF": round(_number(source.get("sensor1OffsetF"), LOCAL_TEMP_SENSOR_DEFAULT_SENSOR1_OFFSET_F, -20.0, 20.0), 1),
         "sensor2OffsetF": round(_number(source.get("sensor2OffsetF"), LOCAL_TEMP_SENSOR_DEFAULT_SENSOR2_OFFSET_F, -20.0, 20.0), 1),
-        # Sensor 2 is intentionally fixed as the preferred room-temperature
-        # source. Sensor 1 is the independent comparison/fallback channel.
-        "primarySensor": 2,
-        "fallbackSensor": 1,
+        "primarySensor": primary_sensor,
+        "fallbackSensor": fallback_sensor,
         "maxDisagreementF": round(_number(source.get("maxDisagreementF"), LOCAL_TEMP_SENSOR_DEFAULT_MAX_PAIR_DELTA_F, 0.5, 20.0), 1),
         "maxJumpF": round(_number(source.get("maxJumpF"), LOCAL_TEMP_SENSOR_DEFAULT_MAX_JUMP_F, 3.0, 40.0), 1),
         "holdLastSeconds": int(round(_number(source.get("holdLastSeconds"), LOCAL_TEMP_SENSOR_DEFAULT_HOLD_LAST_SECONDS, 15.0, 600.0))),
@@ -6935,6 +6941,10 @@ def _select_hdc2080_pair_reading(
     max_disagreement = float(config.get("maxDisagreementF") or LOCAL_TEMP_SENSOR_DEFAULT_MAX_PAIR_DELTA_F)
     max_jump = float(config.get("maxJumpF") or LOCAL_TEMP_SENSOR_DEFAULT_MAX_JUMP_F)
     hold_last_seconds = float(config.get("holdLastSeconds") or LOCAL_TEMP_SENSOR_DEFAULT_HOLD_LAST_SECONDS)
+    primary_number = int(config.get("primarySensor") or 2)
+    if primary_number not in (1, 2):
+        primary_number = 2
+    fallback_number = 1 if primary_number == 2 else 2
     valid = sorted(
         [item for item in readings if item.get("available") and item.get("temperatureF") is not None],
         key=lambda item: int(item.get("sensorNumber") or 99),
@@ -7011,14 +7021,20 @@ def _select_hdc2080_pair_reading(
         for item in valid
         if bool(item.get("healthy", True))
     }
-    primary = healthy_by_number.get(2)
-    fallback = healthy_by_number.get(1)
+    primary = healthy_by_number.get(primary_number)
+    fallback = healthy_by_number.get(fallback_number)
     pair_delta = None
     if len(valid) >= 2:
         pair_delta = abs(float(valid[0]["temperatureF"]) - float(valid[1]["temperatureF"]))
 
     selected: dict | None = primary or fallback
-    strategy = "primary-sensor-2" if primary is not None else "fallback-sensor-1" if fallback is not None else ""
+    strategy = (
+        f"primary-sensor-{primary_number}"
+        if primary is not None
+        else f"fallback-sensor-{fallback_number}"
+        if fallback is not None
+        else ""
+    )
     health_flag = False
     health_status = "ok"
     health_messages: list[str] = []
@@ -7046,15 +7062,18 @@ def _select_hdc2080_pair_reading(
     if selected is fallback and primary is None:
         health_flag = True
         health_status = "fallback"
-        health_messages.append("Panel temperature is using sensor 1 because sensor 2 is unavailable or failed its health check.")
+        health_messages.append(
+            f"Panel temperature is using sensor {fallback_number} because primary sensor {primary_number} is unavailable or failed its health check."
+        )
 
     if selected is not None:
         selected_number = int(selected.get("sensorNumber") or 0)
         for item in valid:
             item["used"] = item is selected
             if item is not selected and not item.get("ignoredReason"):
-                if int(item.get("sensorNumber") or 0) == 1 and selected_number == 2:
-                    item["ignoredReason"] = "comparison sensor; panel temperature uses sensor 2"
+                item_number = int(item.get("sensorNumber") or 0)
+                if item_number == fallback_number and selected_number == primary_number:
+                    item["ignoredReason"] = f"comparison/fallback sensor; panel temperature uses sensor {primary_number}"
                 else:
                     item["ignoredReason"] = "not selected"
         temp_f = float(selected["temperatureF"])
@@ -7063,7 +7082,7 @@ def _select_hdc2080_pair_reading(
         _LOCAL_TEMP_SENSOR_HEALTH["lastAcceptedF"] = round(temp_f, 2)
         _LOCAL_TEMP_SENSOR_HEALTH["lastAcceptedAt"] = now
         _LOCAL_TEMP_SENSOR_HEALTH["selectedAddress"] = str(selected.get("address") or "")
-        label = f"HDC2080 sensor {selected_number} ({'primary' if selected_number == 2 else 'fallback'})"
+        label = f"HDC2080 sensor {selected_number} ({'primary' if selected_number == primary_number else 'fallback'})"
         if health_flag and not health_messages:
             health_messages.append("Temperature sensor health warning.")
         return {
@@ -7076,7 +7095,8 @@ def _select_hdc2080_pair_reading(
             "label": label,
             "addresses": [str(selected.get("address") or "")],
             "strategy": strategy,
-            "primarySensor": 2,
+            "primarySensor": primary_number,
+            "fallbackSensor": fallback_number,
             "activeSensor": selected_number,
             "degraded": bool(health_flag),
             "healthFlag": bool(health_flag),
@@ -7108,7 +7128,8 @@ def _select_hdc2080_pair_reading(
             "label": "HDC2080 sensors (holding last trusted reading)",
             "addresses": [],
             "strategy": "hold-last-good",
-            "primarySensor": 2,
+            "primarySensor": primary_number,
+            "fallbackSensor": fallback_number,
             "activeSensor": None,
             "degraded": True,
             "healthFlag": True,
@@ -7133,7 +7154,8 @@ def _select_hdc2080_pair_reading(
         "label": "HDC2080 sensors unavailable",
         "addresses": [],
         "strategy": "unavailable",
-        "primarySensor": 2,
+        "primarySensor": primary_number,
+        "fallbackSensor": fallback_number,
         "activeSensor": None,
         "degraded": True,
         "healthFlag": True,
@@ -7582,13 +7604,15 @@ def _start_thermostat_control_loop() -> None:
 
 
 def _temperature_sensor_configuration_payload(force: bool = False) -> dict:
+    config = _temperature_sensor_config()
     temperature = _read_local_temperature_sensor(force=force)
     return {
         "ok": True,
-        "config": _temperature_sensor_config(),
+        "config": config,
         "temperature": temperature,
         "panelTemperature": temperature.get("temperatureF") if isinstance(temperature, dict) else None,
-        "primarySensor": 2,
+        "primarySensor": int(config.get("primarySensor") or 2),
+        "fallbackSensor": int(config.get("fallbackSensor") or 1),
         "activeSensor": temperature.get("activeSensor") if isinstance(temperature, dict) else None,
         "healthFlag": bool(temperature.get("healthFlag")) if isinstance(temperature, dict) else True,
         "healthStatus": str(temperature.get("healthStatus") or "unknown") if isinstance(temperature, dict) else "unknown",

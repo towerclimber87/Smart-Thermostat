@@ -10572,6 +10572,13 @@ class SettingsDialog(QDialog):
             "maxDisagreementF": temp_number("maxDisagreementF", 3.0),
             "maxJumpF": temp_number("maxJumpF", 15.0),
         }
+        try:
+            self.source_temp_primary_sensor = int(temp_cfg.get("primarySensor", 2))
+        except (TypeError, ValueError):
+            self.source_temp_primary_sensor = 2
+        if self.source_temp_primary_sensor not in (1, 2):
+            self.source_temp_primary_sensor = 2
+        self.source_temp_primary_buttons: dict[int, RoundButton] = {}
         self.source_temp_sensor_labels: dict[int, dict[str, QLabel]] = {}
         self.source_temp_offset_labels: dict[int, QLabel] = {}
         self.source_temp_threshold_labels: dict[str, QLabel] = {}
@@ -11650,6 +11657,7 @@ class SettingsDialog(QDialog):
             label.setStyleSheet("color:#f7fbff; background:rgba(5,10,20,0.32); border-radius:7px; padding:4px 7px;")
             layout.addWidget(label)
         self.source_temp_sensor_labels[sensor_number] = {
+            "role": role_label,
             "adjusted": adjusted,
             "raw": raw,
             "humidity": humidity,
@@ -11720,6 +11728,41 @@ class SettingsDialog(QDialog):
             suffix = str(label.property("suffix") or "")
             label.setText(f"{self.source_temp_thresholds.get(key, 0.0):.1f}{suffix}")
 
+    def refresh_source_temp_primary_widgets(self):
+        primary = self.source_temp_primary_sensor if self.source_temp_primary_sensor in (1, 2) else 2
+        fallback = 1 if primary == 2 else 2
+        for number, button in self.source_temp_primary_buttons.items():
+            button.setActive(number == primary)
+            button.setText(f"Sensor {number}" + ("  ·  PRIMARY" if number == primary else ""))
+        for number, labels in self.source_temp_sensor_labels.items():
+            role_label = labels.get("role")
+            if role_label is not None:
+                role_label.setText(
+                    "Primary panel temperature"
+                    if number == primary
+                    else "Comparison / automatic fallback"
+                )
+        if hasattr(self, "source_temp_primary_summary"):
+            self.source_temp_primary_summary.setText(
+                f"Sensor {primary} controls panel temperature. Sensor {fallback} remains the automatic fallback."
+            )
+        if hasattr(self, "source_temp_health_note"):
+            self.source_temp_health_note.setText(
+                f"Corrected sensor {primary} is the primary panel temperature. Sensor {fallback} remains an independent comparison and automatic fallback. A failed sensor or sudden jump at or above the fault limit is ignored."
+            )
+
+    def set_source_temp_primary_sensor(self, sensor_number: int):
+        if sensor_number not in (1, 2):
+            return
+        changed = self.source_temp_primary_sensor != sensor_number
+        self.source_temp_primary_sensor = sensor_number
+        self.refresh_source_temp_primary_widgets()
+        if changed:
+            self._source_temp_dirty = True
+            self.source_temp_footer.setText(
+                f"Sensor {sensor_number} selected as primary. Tap Save Sensors to apply."
+            )
+
     def adjust_source_temp_offset(self, sensor_number: int, delta: float):
         current = float(self.source_temp_offsets.get(sensor_number, 0.0))
         self.source_temp_offsets[sensor_number] = round(clamp(current + delta, -20.0, 20.0), 1)
@@ -11738,12 +11781,14 @@ class SettingsDialog(QDialog):
     def restore_source_temp_defaults(self):
         self.source_temp_offsets = {1: -5.2, 2: -7.3}
         self.source_temp_thresholds = {"maxDisagreementF": 3.0, "maxJumpF": 15.0}
+        self.source_temp_primary_sensor = 2
         for number in (1, 2):
             self.refresh_source_temp_offset_label(number)
         for key in self.source_temp_thresholds:
             self.refresh_source_temp_threshold_label(key)
+        self.refresh_source_temp_primary_widgets()
         self._source_temp_dirty = True
-        self.source_temp_footer.setText("Default offsets and health limits loaded. Tap Save Sensors to apply.")
+        self.source_temp_footer.setText("Default primary sensor, offsets, and health limits loaded. Tap Save Sensors to apply.")
 
     def refresh_source_temp_sensors(self, force: bool = False):
         if self._source_temp_loading or self._source_temp_saving:
@@ -11768,12 +11813,15 @@ class SettingsDialog(QDialog):
             self.source_temp_offsets[2] = round(float(config.get("sensor2OffsetF", self.source_temp_offsets.get(2, -7.3))), 1)
             self.source_temp_thresholds["maxDisagreementF"] = round(float(config.get("maxDisagreementF", self.source_temp_thresholds.get("maxDisagreementF", 3.0))), 1)
             self.source_temp_thresholds["maxJumpF"] = round(float(config.get("maxJumpF", self.source_temp_thresholds.get("maxJumpF", 15.0))), 1)
+            primary_sensor = int(config.get("primarySensor", self.source_temp_primary_sensor))
+            self.source_temp_primary_sensor = primary_sensor if primary_sensor in (1, 2) else 2
         except (TypeError, ValueError):
             return
         for number in (1, 2):
             self.refresh_source_temp_offset_label(number)
         for key in self.source_temp_thresholds:
             self.refresh_source_temp_threshold_label(key)
+        self.refresh_source_temp_primary_widgets()
 
     def handle_source_temp_telemetry_loaded(self, result: object):
         self._source_temp_loading = False
@@ -11866,8 +11914,8 @@ class SettingsDialog(QDialog):
             "config": {
                 "sensor1OffsetF": self.source_temp_offsets[1],
                 "sensor2OffsetF": self.source_temp_offsets[2],
-                "primarySensor": 2,
-                "fallbackSensor": 1,
+                "primarySensor": self.source_temp_primary_sensor,
+                "fallbackSensor": 1 if self.source_temp_primary_sensor == 2 else 2,
                 "maxDisagreementF": self.source_temp_thresholds["maxDisagreementF"],
                 "maxJumpF": self.source_temp_thresholds["maxJumpF"],
                 "holdLastSeconds": 120,
@@ -12270,24 +12318,51 @@ class SettingsDialog(QDialog):
         self.source_temp_panel_status.setStyleSheet("color:#dfe9ff; background:rgba(5,10,20,0.52); border:1px solid rgba(85,240,255,0.34); border-radius:10px; padding:7px 10px;")
         source_control.layout().addWidget(self.source_temp_panel_status)
 
+        primary_panel = QFrame()
+        primary_panel.setStyleSheet("background:rgba(5,10,20,0.34); border:1px solid rgba(85,240,255,0.26); border-radius:9px;")
+        primary_layout = QHBoxLayout(primary_panel)
+        primary_layout.setContentsMargins(9, 6, 9, 6)
+        primary_layout.setSpacing(7)
+        primary_text = QVBoxLayout()
+        primary_text.setSpacing(1)
+        primary_title = QLabel("PRIMARY ONBOARD SENSOR")
+        primary_title.setFont(font(8, QFont.Black))
+        primary_title.setStyleSheet("color:#46e8ff; background:transparent; border:0;")
+        self.source_temp_primary_summary = QLabel("")
+        self.source_temp_primary_summary.setFont(font(7, QFont.Bold))
+        self.source_temp_primary_summary.setStyleSheet("color:#aebdd2; background:transparent; border:0;")
+        self.source_temp_primary_summary.setWordWrap(True)
+        primary_text.addWidget(primary_title)
+        primary_text.addWidget(self.source_temp_primary_summary)
+        primary_layout.addLayout(primary_text, 1)
+        for number in (1, 2):
+            button = RoundButton(f"Sensor {number}", active=(number == self.source_temp_primary_sensor), min_h=32)
+            button.setMinimumWidth(128)
+            button.clicked.connect(lambda checked=False, n=number: self.set_source_temp_primary_sensor(n))
+            self.source_temp_primary_buttons[number] = button
+            primary_layout.addWidget(button)
+        source_control.layout().addWidget(primary_panel)
+
         onboard_grid = QGridLayout()
         onboard_grid.setSpacing(8)
-        onboard_grid.addWidget(self.build_source_temp_sensor_card(1, "Comparison / automatic fallback", "0x40"), 0, 0)
-        onboard_grid.addWidget(self.build_source_temp_sensor_card(2, "Primary panel temperature", "0x41"), 0, 1)
+        onboard_grid.addWidget(self.build_source_temp_sensor_card(1, "", "0x40"), 0, 0)
+        onboard_grid.addWidget(self.build_source_temp_sensor_card(2, "", "0x41"), 0, 1)
         onboard_grid.setColumnStretch(0, 1)
         onboard_grid.setColumnStretch(1, 1)
         source_control.layout().addLayout(onboard_grid)
+        self.refresh_source_temp_primary_widgets()
 
         sensor_health_row = QHBoxLayout()
         sensor_health_row.setSpacing(8)
         sensor_health_row.addWidget(self.build_source_temp_threshold_control("maxDisagreementF", "Maximum difference / warning", 0.5, "°F"), 1)
         sensor_health_row.addWidget(self.build_source_temp_threshold_control("maxJumpF", "Sudden jump / fault", 1.0, "°F"), 1)
         source_control.layout().addLayout(sensor_health_row)
-        sensor_health_note = QLabel("Corrected sensor 2 is the primary panel temperature. Sensor 1 remains an independent comparison and automatic fallback. A failed sensor or sudden jump at or above the fault limit is ignored.")
-        sensor_health_note.setWordWrap(True)
-        sensor_health_note.setFont(font(7, QFont.Bold))
-        sensor_health_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
-        source_control.layout().addWidget(sensor_health_note)
+        self.source_temp_health_note = QLabel("")
+        self.source_temp_health_note.setWordWrap(True)
+        self.source_temp_health_note.setFont(font(7, QFont.Bold))
+        self.source_temp_health_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
+        source_control.layout().addWidget(self.source_temp_health_note)
+        self.refresh_source_temp_primary_widgets()
         self.source_temp_footer = QLabel("Sensor settings are stored under hardware.temperatureSensors without replacing other panel configuration.")
         self.source_temp_footer.setWordWrap(True)
         self.source_temp_footer.setFont(font(7, QFont.Bold))
