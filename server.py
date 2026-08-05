@@ -228,9 +228,21 @@ LOCAL_TEMP_SENSOR_ADDRESSES = os.environ.get(
     LOCAL_TEMP_SENSOR_ADDRESS or "0x40,0x41",
 ).strip()
 LOCAL_TEMP_SENSOR_TYPE = os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_TYPE", "auto").strip().lower() or "auto"
-LOCAL_TEMP_SENSOR_MAX_PAIR_DELTA_F = max(0.5, float(os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_MAX_PAIR_DELTA_F", "5") or "5"))
-LOCAL_TEMP_SENSOR_MAX_STEP_F = max(1.0, float(os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_MAX_STEP_F", "6") or "6"))
-LOCAL_TEMP_SENSOR_HOLD_LAST_SECONDS = max(15.0, float(os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_HOLD_LAST_SECONDS", "120") or "120"))
+# The touchscreen sensor configuration uses sensor 2 as the room-temperature
+# primary and sensor 1 as an independent safety reference/fallback. These are
+# software defaults only; saved panel-config values override them without
+# replacing any unrelated configuration.
+LOCAL_TEMP_SENSOR_DEFAULT_SENSOR1_OFFSET_F = float(os.environ.get("SMART_THERMOSTAT_SENSOR1_OFFSET_F", "-5.2") or "-5.2")
+LOCAL_TEMP_SENSOR_DEFAULT_SENSOR2_OFFSET_F = float(os.environ.get("SMART_THERMOSTAT_SENSOR2_OFFSET_F", "-7.3") or "-7.3")
+LOCAL_TEMP_SENSOR_DEFAULT_MAX_PAIR_DELTA_F = max(0.5, float(os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_MAX_PAIR_DELTA_F", "3") or "3"))
+LOCAL_TEMP_SENSOR_DEFAULT_MAX_JUMP_F = max(3.0, float(os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_MAX_STEP_F", "15") or "15"))
+LOCAL_TEMP_SENSOR_DEFAULT_HOLD_LAST_SECONDS = max(15.0, float(os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_HOLD_LAST_SECONDS", "120") or "120"))
+LOCAL_TEMP_SENSOR_RECOVERY_SAMPLES = max(2, int(float(os.environ.get("SMART_THERMOSTAT_LOCAL_TEMP_RECOVERY_SAMPLES", "3") or "3")))
+# Backward-compatible aliases used by older status fields and environment
+# documentation. Runtime selection uses the persisted sensor configuration.
+LOCAL_TEMP_SENSOR_MAX_PAIR_DELTA_F = LOCAL_TEMP_SENSOR_DEFAULT_MAX_PAIR_DELTA_F
+LOCAL_TEMP_SENSOR_MAX_STEP_F = LOCAL_TEMP_SENSOR_DEFAULT_MAX_JUMP_F
+LOCAL_TEMP_SENSOR_HOLD_LAST_SECONDS = LOCAL_TEMP_SENSOR_DEFAULT_HOLD_LAST_SECONDS
 LOCAL_TEMP_SOURCE_NAMES = {"onboard", "local", "i2c", "hardware", "onboard-fallback", "hdc2080", "hdc2080-pair"}
 
 _HARDWARE_LOCK = threading.RLock()
@@ -271,7 +283,10 @@ _LOCAL_TEMP_SENSOR_HEALTH = {
     "lastAcceptedAt": 0.0,
     "selectedAddress": "",
     "sensorLastF": {},
+    "sensorLastAt": {},
+    "sensorFaults": {},
 }
+_LOCAL_TEMP_SENSOR_CONFIG_CACHE = {"mtimeNs": None, "config": None}
 _CONTROL_LOOP_THREAD_STARTED = False
 _CONTROL_LOOP_STOP = threading.Event()
 _THERMAL_PROTECTION_LOCK = threading.RLock()
@@ -6593,6 +6608,151 @@ def _parse_i2c_addresses(value: str, default: tuple[int, ...] = ()) -> list[int]
     return addresses or list(default)
 
 
+
+def _temperature_sensor_default_addresses() -> tuple[str, str]:
+    addresses = _parse_i2c_addresses(LOCAL_TEMP_SENSOR_ADDRESSES, (0x40, 0x41))
+    if not addresses:
+        addresses = [0x40, 0x41]
+    if len(addresses) == 1:
+        fallback = 0x41 if addresses[0] != 0x41 else 0x40
+        addresses.append(fallback)
+    return f"0x{addresses[0]:02X}", f"0x{addresses[1]:02X}"
+
+
+def _normalize_temperature_sensor_config(value: object) -> dict:
+    source = value if isinstance(value, dict) else {}
+    address_1, address_2 = _temperature_sensor_default_addresses()
+
+    def normalized_address(raw: object, fallback: str) -> str:
+        parsed = _parse_i2c_address(str(raw or fallback))
+        fallback_parsed = _parse_i2c_address(fallback) or 0x40
+        return f"0x{(parsed if parsed is not None else fallback_parsed):02X}"
+
+    return {
+        "sensor1Address": normalized_address(source.get("sensor1Address"), address_1),
+        "sensor2Address": normalized_address(source.get("sensor2Address"), address_2),
+        "sensor1OffsetF": round(_number(source.get("sensor1OffsetF"), LOCAL_TEMP_SENSOR_DEFAULT_SENSOR1_OFFSET_F, -20.0, 20.0), 1),
+        "sensor2OffsetF": round(_number(source.get("sensor2OffsetF"), LOCAL_TEMP_SENSOR_DEFAULT_SENSOR2_OFFSET_F, -20.0, 20.0), 1),
+        # Sensor 2 is intentionally fixed as the preferred room-temperature
+        # source. Sensor 1 is the independent comparison/fallback channel.
+        "primarySensor": 2,
+        "fallbackSensor": 1,
+        "maxDisagreementF": round(_number(source.get("maxDisagreementF"), LOCAL_TEMP_SENSOR_DEFAULT_MAX_PAIR_DELTA_F, 0.5, 20.0), 1),
+        "maxJumpF": round(_number(source.get("maxJumpF"), LOCAL_TEMP_SENSOR_DEFAULT_MAX_JUMP_F, 3.0, 40.0), 1),
+        "holdLastSeconds": int(round(_number(source.get("holdLastSeconds"), LOCAL_TEMP_SENSOR_DEFAULT_HOLD_LAST_SECONDS, 15.0, 600.0))),
+    }
+
+
+def _temperature_sensor_config(force_reload: bool = False) -> dict:
+    """Read sensor settings without mutating or rewriting panel-config.json."""
+    try:
+        mtime_ns = PANEL_CONFIG_FILE.stat().st_mtime_ns if PANEL_CONFIG_FILE.exists() else None
+    except OSError:
+        mtime_ns = None
+    cached = _LOCAL_TEMP_SENSOR_CONFIG_CACHE.get("config")
+    if not force_reload and cached is not None and _LOCAL_TEMP_SENSOR_CONFIG_CACHE.get("mtimeNs") == mtime_ns:
+        return _deepcopy_json(cached)
+
+    record = _read_panel_config_record()
+    panel_config = record.get("config") if isinstance(record, dict) else {}
+    hardware = panel_config.get("hardware") if isinstance(panel_config, dict) and isinstance(panel_config.get("hardware"), dict) else {}
+    saved = hardware.get("temperatureSensors") if isinstance(hardware.get("temperatureSensors"), dict) else {}
+    normalized = _normalize_temperature_sensor_config(saved)
+    _LOCAL_TEMP_SENSOR_CONFIG_CACHE["mtimeNs"] = mtime_ns
+    _LOCAL_TEMP_SENSOR_CONFIG_CACHE["config"] = _deepcopy_json(normalized)
+    return normalized
+
+
+def _reset_local_temperature_runtime_state() -> None:
+    with _LOCAL_TEMP_SENSOR_LOCK:
+        _LOCAL_TEMP_SENSOR_CACHE["at"] = 0.0
+        _LOCAL_TEMP_SENSOR_CACHE["payload"] = None
+        _LOCAL_TEMP_SENSOR_HEALTH.clear()
+        _LOCAL_TEMP_SENSOR_HEALTH.update({
+            "lastAcceptedF": None,
+            "lastAcceptedAt": 0.0,
+            "selectedAddress": "",
+            "sensorLastF": {},
+            "sensorLastAt": {},
+            "sensorFaults": {},
+        })
+
+
+def _save_temperature_sensor_config(value: object) -> dict:
+    requested = value.get("config", value) if isinstance(value, dict) else {}
+    normalized = _normalize_temperature_sensor_config(requested)
+
+    # Preserve the existing panel configuration byte-for-byte at the data-tree
+    # level except for the new hardware.temperatureSensors branch. Using the
+    # general config migration writer here could fill unrelated newly introduced
+    # defaults, which is harmless but violates this screen's narrow-save promise.
+    with _PANEL_CONFIG_LOCK:
+        try:
+            raw_record = json.loads(PANEL_CONFIG_FILE.read_text(encoding="utf-8")) if PANEL_CONFIG_FILE.exists() else {}
+        except (OSError, json.JSONDecodeError):
+            raw_record = {}
+        if not isinstance(raw_record, dict):
+            raw_record = {}
+
+        wrapped = isinstance(raw_record.get("config"), dict)
+        if wrapped:
+            existing_config = _deepcopy_json(raw_record.get("config") or {})
+        else:
+            existing_config = _deepcopy_json(raw_record)
+        hardware = existing_config.setdefault("hardware", {})
+        if not isinstance(hardware, dict):
+            hardware = {}
+            existing_config["hardware"] = hardware
+        hardware["temperatureSensors"] = _deepcopy_json(normalized)
+
+        now = int(time.time())
+        if wrapped or not raw_record:
+            next_version = int(raw_record.get("version", 0) or 0) + 1
+            written = {
+                **raw_record,
+                "version": next_version,
+                "updatedAt": now,
+                "config": existing_config,
+            }
+        else:
+            # Retain legacy unwrapped configuration shape. The normal reader
+            # still supports it, and no unrelated keys are moved or replaced.
+            written = existing_config
+            next_version = int(raw_record.get("version", 0) or 0)
+        _atomic_write_json(PANEL_CONFIG_FILE, written)
+
+    _LOCAL_TEMP_SENSOR_CONFIG_CACHE["mtimeNs"] = None
+    _LOCAL_TEMP_SENSOR_CONFIG_CACHE["config"] = None
+    _reset_local_temperature_runtime_state()
+    result = _temperature_sensor_configuration_payload(force=True)
+    result.update({
+        "message": "Temperature sensor configuration saved.",
+        "configVersion": written.get("version", next_version) if isinstance(written, dict) else next_version,
+        "configUpdatedAt": written.get("updatedAt", now) if isinstance(written, dict) else now,
+    })
+    return result
+
+
+def _apply_hdc2080_sensor_adjustment(measurement: dict, sensor_number: int, config: dict) -> dict:
+    adjusted = dict(measurement)
+    raw_f = float(measurement.get("temperatureF"))
+    raw_c = float(measurement.get("temperatureC"))
+    offset_f = float(config.get(f"sensor{sensor_number}OffsetF") or 0.0)
+    adjusted_f = raw_f + offset_f
+    adjusted.update({
+        "sensorNumber": sensor_number,
+        "rawTemperatureF": round(raw_f, 2),
+        "rawTemperatureC": round(raw_c, 2),
+        "offsetF": round(offset_f, 1),
+        "temperatureF": round(adjusted_f, 2),
+        "temperatureC": round((adjusted_f - 32.0) * 5.0 / 9.0, 2),
+        "healthy": True,
+        "healthStatus": "ok",
+        "jumpDeltaF": None,
+    })
+    return adjusted
+
+
 def _read_hdc2080_measurement(bus, address: int) -> dict:
     """Trigger and read one HDC2080 temperature/humidity conversion."""
     bus.write_byte_data(address, 0x0F, 0x01)
@@ -6624,131 +6784,179 @@ def _read_hdc2080_measurement(bus, address: int) -> dict:
     }
 
 
-def _select_hdc2080_pair_reading(readings: list[dict], errors: list[dict], now: float) -> dict:
-    valid = [item for item in readings if item.get("available") and item.get("temperatureF") is not None]
+def _select_hdc2080_pair_reading(
+    readings: list[dict],
+    errors: list[dict],
+    now: float,
+    config: dict | None = None,
+) -> dict:
+    config = _normalize_temperature_sensor_config(config or _temperature_sensor_config())
+    max_disagreement = float(config.get("maxDisagreementF") or LOCAL_TEMP_SENSOR_DEFAULT_MAX_PAIR_DELTA_F)
+    max_jump = float(config.get("maxJumpF") or LOCAL_TEMP_SENSOR_DEFAULT_MAX_JUMP_F)
+    hold_last_seconds = float(config.get("holdLastSeconds") or LOCAL_TEMP_SENSOR_DEFAULT_HOLD_LAST_SECONDS)
+    valid = sorted(
+        [item for item in readings if item.get("available") and item.get("temperatureF") is not None],
+        key=lambda item: int(item.get("sensorNumber") or 99),
+    )
     sensor_last = _LOCAL_TEMP_SENSOR_HEALTH.setdefault("sensorLastF", {})
+    sensor_last_at = _LOCAL_TEMP_SENSOR_HEALTH.setdefault("sensorLastAt", {})
+    sensor_faults = _LOCAL_TEMP_SENSOR_HEALTH.setdefault("sensorFaults", {})
     previous_accepted = _LOCAL_TEMP_SENSOR_HEALTH.get("lastAcceptedF")
     previous_accepted_at = float(_LOCAL_TEMP_SENSOR_HEALTH.get("lastAcceptedAt") or 0.0)
-    previous_selected = str(_LOCAL_TEMP_SENSOR_HEALTH.get("selectedAddress") or "")
 
-    def finalize(selected: list[dict], strategy: str, ignored: list[dict] | None = None, *, degraded: bool = False) -> dict:
-        ignored = ignored or []
-        temp_f = sum(float(item["temperatureF"]) for item in selected) / len(selected)
-        temp_c = sum(float(item["temperatureC"]) for item in selected) / len(selected)
-        humidities = [float(item["humidity"]) for item in selected if item.get("humidity") is not None]
-        humidity = sum(humidities) / len(humidities) if humidities else None
-        used_addresses = [str(item.get("address") or "") for item in selected]
+    # Detect an actual sudden jump only when the same sensor was read recently.
+    # A sensor returning after a long outage is compared with the live partner
+    # instead of an hours-old sample.
+    recent_window = max(30.0, LOCAL_TEMP_SENSOR_POLL_SECONDS * 4.0)
+    for item in valid:
+        address = str(item.get("address") or "")
+        current_f = float(item["temperatureF"])
+        previous_f = sensor_last.get(address)
+        previous_at = float(sensor_last_at.get(address) or 0.0)
+        jump_delta = None
+        if previous_f is not None and previous_at and now - previous_at <= recent_window:
+            jump_delta = abs(current_f - float(previous_f))
+        item["jumpDeltaF"] = round(jump_delta, 2) if jump_delta is not None else None
+        if jump_delta is not None and jump_delta >= max_jump:
+            sensor_faults[address] = {
+                "reason": f"sudden change of {jump_delta:.1f}F exceeded {max_jump:.1f}F",
+                "since": now,
+                "goodCount": 0,
+            }
+
+    # A jump fault is latched until the sensor agrees with the other channel or
+    # the last trusted panel temperature for several consecutive samples. This
+    # prevents one bad sample from becoming the new accepted baseline.
+    by_number = {int(item.get("sensorNumber") or 0): item for item in valid}
+    for item in valid:
+        address = str(item.get("address") or "")
+        fault = sensor_faults.get(address)
+        if not isinstance(fault, dict):
+            item["healthy"] = True
+            item["healthStatus"] = "ok"
+            continue
+        other_number = 1 if int(item.get("sensorNumber") or 0) == 2 else 2
+        other = by_number.get(other_number)
+        close_to_other = bool(
+            other
+            and str(other.get("address") or "") not in sensor_faults
+            and abs(float(item["temperatureF"]) - float(other["temperatureF"])) <= max_disagreement
+        )
+        close_to_last = bool(
+            previous_accepted is not None
+            and abs(float(item["temperatureF"]) - float(previous_accepted)) <= max_disagreement
+        )
+        stable = item.get("jumpDeltaF") is None or float(item.get("jumpDeltaF") or 0.0) < max_jump / 2.0
+        if stable and (close_to_other or close_to_last):
+            fault["goodCount"] = int(fault.get("goodCount") or 0) + 1
+            if int(fault["goodCount"]) >= LOCAL_TEMP_SENSOR_RECOVERY_SAMPLES:
+                sensor_faults.pop(address, None)
+                item["healthy"] = True
+                item["healthStatus"] = "recovered"
+                continue
+        else:
+            fault["goodCount"] = 0
+        item["healthy"] = False
+        item["healthStatus"] = "fault"
+        item["ignoredReason"] = str(fault.get("reason") or "sensor health fault")
+
+    for item in valid:
+        address = str(item.get("address") or "")
+        sensor_last[address] = float(item["temperatureF"])
+        sensor_last_at[address] = now
+
+    healthy_by_number = {
+        int(item.get("sensorNumber") or 0): item
+        for item in valid
+        if bool(item.get("healthy", True))
+    }
+    primary = healthy_by_number.get(2)
+    fallback = healthy_by_number.get(1)
+    pair_delta = None
+    if len(valid) >= 2:
+        pair_delta = abs(float(valid[0]["temperatureF"]) - float(valid[1]["temperatureF"]))
+
+    selected: dict | None = primary or fallback
+    strategy = "primary-sensor-2" if primary is not None else "fallback-sensor-1" if fallback is not None else ""
+    health_flag = False
+    health_status = "ok"
+    health_messages: list[str] = []
+
+    if pair_delta is not None and pair_delta > max_disagreement:
+        health_flag = True
+        health_status = "warning"
+        health_messages.append(f"Sensor readings differ by {pair_delta:.1f}F (limit {max_disagreement:.1f}F).")
+    if errors:
+        health_flag = True
+        health_status = "warning"
+        failed = ", ".join(
+            f"sensor {item.get('sensorNumber')}" if item.get("sensorNumber") else str(item.get("address") or "sensor")
+            for item in errors
+        )
+        health_messages.append(f"No valid response from {failed}.")
+    unhealthy = [item for item in valid if not bool(item.get("healthy", True))]
+    if unhealthy:
+        health_flag = True
+        health_status = "warning"
+        for item in unhealthy:
+            health_messages.append(
+                f"Sensor {item.get('sensorNumber')} fault: {item.get('ignoredReason') or 'failed health check'}."
+            )
+    if selected is fallback and primary is None:
+        health_flag = True
+        health_status = "fallback"
+        health_messages.append("Panel temperature is using sensor 1 because sensor 2 is unavailable or failed its health check.")
+
+    if selected is not None:
+        selected_number = int(selected.get("sensorNumber") or 0)
         for item in valid:
-            address = str(item.get("address") or "")
-            sensor_last[address] = float(item["temperatureF"])
-            item["used"] = address in used_addresses
-            if not item["used"] and not item.get("ignoredReason"):
-                item["ignoredReason"] = "disagreed with trusted temperature"
-
-        accepted_f = round(temp_f, 2)
-        _LOCAL_TEMP_SENSOR_HEALTH["lastAcceptedF"] = accepted_f
+            item["used"] = item is selected
+            if item is not selected and not item.get("ignoredReason"):
+                if int(item.get("sensorNumber") or 0) == 1 and selected_number == 2:
+                    item["ignoredReason"] = "comparison sensor; panel temperature uses sensor 2"
+                else:
+                    item["ignoredReason"] = "not selected"
+        temp_f = float(selected["temperatureF"])
+        temp_c = float(selected["temperatureC"])
+        humidity = selected.get("humidity")
+        _LOCAL_TEMP_SENSOR_HEALTH["lastAcceptedF"] = round(temp_f, 2)
         _LOCAL_TEMP_SENSOR_HEALTH["lastAcceptedAt"] = now
-        _LOCAL_TEMP_SENSOR_HEALTH["selectedAddress"] = used_addresses[0] if len(used_addresses) == 1 else ",".join(used_addresses)
-        delta = None
-        if len(valid) >= 2:
-            delta = round(max(float(item["temperatureF"]) for item in valid) - min(float(item["temperatureF"]) for item in valid), 2)
-        label = "HDC2080 pair " + "/".join(used_addresses) if len(used_addresses) > 1 else f"HDC2080 {used_addresses[0]}"
-        if ignored:
-            label += " (other sensor ignored)"
+        _LOCAL_TEMP_SENSOR_HEALTH["selectedAddress"] = str(selected.get("address") or "")
+        label = f"HDC2080 sensor {selected_number} ({'primary' if selected_number == 2 else 'fallback'})"
+        if health_flag and not health_messages:
+            health_messages.append("Temperature sensor health warning.")
         return {
             "ok": True,
             "available": True,
             "temperatureF": round(temp_f, 1),
             "temperatureC": round(temp_c, 2),
-            "humidity": round(humidity, 1) if humidity is not None else None,
+            "humidity": round(float(humidity), 1) if humidity is not None else None,
             "source": "hdc2080-pair",
             "label": label,
-            "addresses": used_addresses,
+            "addresses": [str(selected.get("address") or "")],
             "strategy": strategy,
-            "degraded": bool(degraded or ignored or errors),
-            "temperatureDeltaF": delta,
-            "maxAllowedDeltaF": LOCAL_TEMP_SENSOR_MAX_PAIR_DELTA_F,
-            "ignoredAddresses": [str(item.get("address") or "") for item in ignored],
-            "sensors": valid + errors,
+            "primarySensor": 2,
+            "activeSensor": selected_number,
+            "degraded": bool(health_flag),
+            "healthFlag": bool(health_flag),
+            "healthStatus": health_status,
+            "healthMessage": " ".join(dict.fromkeys(health_messages)),
+            "temperatureDeltaF": round(pair_delta, 2) if pair_delta is not None else None,
+            "maxAllowedDeltaF": round(max_disagreement, 1),
+            "maxJumpF": round(max_jump, 1),
+            "ignoredAddresses": [str(item.get("address") or "") for item in valid if item is not selected],
+            "sensors": sorted(valid + errors, key=lambda item: int(item.get("sensorNumber") or 99)),
             "error": "; ".join(str(item.get("error") or "") for item in errors if item.get("error")),
         }
 
-    if not valid:
-        if previous_accepted is not None and now - previous_accepted_at <= LOCAL_TEMP_SENSOR_HOLD_LAST_SECONDS:
-            return {
-                "ok": True,
-                "available": True,
-                "temperatureF": round(float(previous_accepted), 1),
-                "temperatureC": round((float(previous_accepted) - 32.0) * 5.0 / 9.0, 2),
-                "humidity": None,
-                "source": "hdc2080-pair",
-                "label": "HDC2080 pair (holding last trusted reading)",
-                "addresses": [],
-                "strategy": "hold-last-good",
-                "degraded": True,
-                "temperatureDeltaF": None,
-                "maxAllowedDeltaF": LOCAL_TEMP_SENSOR_MAX_PAIR_DELTA_F,
-                "ignoredAddresses": [],
-                "sensors": errors,
-                "error": "; ".join(str(item.get("error") or "") for item in errors if item.get("error")),
-            }
-        return {
-            "ok": False,
-            "available": False,
-            "temperatureF": None,
-            "temperatureC": None,
-            "humidity": None,
-            "source": "hdc2080-pair",
-            "label": "HDC2080 pair unavailable",
-            "addresses": [],
-            "strategy": "unavailable",
-            "degraded": True,
-            "temperatureDeltaF": None,
-            "maxAllowedDeltaF": LOCAL_TEMP_SENSOR_MAX_PAIR_DELTA_F,
-            "ignoredAddresses": [],
-            "sensors": errors,
-            "error": "; ".join(str(item.get("error") or "") for item in errors if item.get("error")) or "No HDC2080 readings",
-        }
-
-    if len(valid) == 1:
-        return finalize(valid, "single-sensor", degraded=True)
-
-    ordered = sorted(valid, key=lambda item: str(item.get("address") or ""))
-    pair_delta = abs(float(ordered[0]["temperatureF"]) - float(ordered[1]["temperatureF"]))
-    if pair_delta <= LOCAL_TEMP_SENSOR_MAX_PAIR_DELTA_F:
-        return finalize(ordered, "average-pair")
-
-    # With only two sensors, disagreement alone cannot prove which unit is bad.
-    # Use continuity from the last trusted pair value and the previously selected
-    # sensor to reject a sudden outlier. If there is no defensible winner, hold
-    # the last trusted temperature briefly instead of averaging a bad reading.
-    winner: dict | None = None
-    if previous_accepted is not None:
-        ranked = sorted(ordered, key=lambda item: abs(float(item["temperatureF"]) - float(previous_accepted)))
-        near_distance = abs(float(ranked[0]["temperatureF"]) - float(previous_accepted))
-        far_distance = abs(float(ranked[1]["temperatureF"]) - float(previous_accepted))
-        if near_distance <= LOCAL_TEMP_SENSOR_MAX_STEP_F and far_distance - near_distance >= 1.0:
-            winner = ranked[0]
-
-    if winner is None and previous_selected and "," not in previous_selected:
-        previous_addresses = {previous_selected}
-        prior = next((item for item in ordered if str(item.get("address") or "") in previous_addresses), None)
-        if prior is not None:
-            prior_address = str(prior.get("address") or "")
-            prior_raw = sensor_last.get(prior_address)
-            if prior_raw is None or abs(float(prior["temperatureF"]) - float(prior_raw)) <= LOCAL_TEMP_SENSOR_MAX_STEP_F:
-                winner = prior
-
-    if winner is not None:
-        ignored = [item for item in ordered if item is not winner]
-        for item in ignored:
-            item["ignoredReason"] = f"pair disagreement exceeded {LOCAL_TEMP_SENSOR_MAX_PAIR_DELTA_F:.1f}F"
-        return finalize([winner], "outlier-rejected", ignored, degraded=True)
-
-    if previous_accepted is not None and now - previous_accepted_at <= LOCAL_TEMP_SENSOR_HOLD_LAST_SECONDS:
-        for item in ordered:
+    # Neither channel is currently trustworthy. Hold the most recent accepted
+    # temperature briefly so one I2C glitch cannot stop HVAC control instantly.
+    if previous_accepted is not None and now - previous_accepted_at <= hold_last_seconds:
+        for item in valid:
             item["used"] = False
-            item["ignoredReason"] = "pair disagreement; no trustworthy winner"
+            if not item.get("ignoredReason"):
+                item["ignoredReason"] = "no healthy sensor available"
+        message = "Both temperature sensors are unavailable or failed health checks; holding the last trusted panel temperature."
         return {
             "ok": True,
             "available": True,
@@ -6756,20 +6964,24 @@ def _select_hdc2080_pair_reading(readings: list[dict], errors: list[dict], now: 
             "temperatureC": round((float(previous_accepted) - 32.0) * 5.0 / 9.0, 2),
             "humidity": None,
             "source": "hdc2080-pair",
-            "label": "HDC2080 pair (holding last trusted reading)",
+            "label": "HDC2080 sensors (holding last trusted reading)",
             "addresses": [],
             "strategy": "hold-last-good",
+            "primarySensor": 2,
+            "activeSensor": None,
             "degraded": True,
-            "temperatureDeltaF": round(pair_delta, 2),
-            "maxAllowedDeltaF": LOCAL_TEMP_SENSOR_MAX_PAIR_DELTA_F,
-            "ignoredAddresses": [str(item.get("address") or "") for item in ordered],
-            "sensors": ordered + errors,
-            "error": f"HDC2080 readings disagree by {pair_delta:.2f}F",
+            "healthFlag": True,
+            "healthStatus": "hold",
+            "healthMessage": message,
+            "temperatureDeltaF": round(pair_delta, 2) if pair_delta is not None else None,
+            "maxAllowedDeltaF": round(max_disagreement, 1),
+            "maxJumpF": round(max_jump, 1),
+            "ignoredAddresses": [str(item.get("address") or "") for item in valid],
+            "sensors": sorted(valid + errors, key=lambda item: int(item.get("sensorNumber") or 99)),
+            "error": message,
         }
 
-    for item in ordered:
-        item["used"] = False
-        item["ignoredReason"] = "startup disagreement; no trusted history"
+    message = "No trustworthy onboard temperature sensor is available."
     return {
         "ok": False,
         "available": False,
@@ -6777,20 +6989,29 @@ def _select_hdc2080_pair_reading(readings: list[dict], errors: list[dict], now: 
         "temperatureC": None,
         "humidity": None,
         "source": "hdc2080-pair",
-        "label": "HDC2080 pair disagreement",
+        "label": "HDC2080 sensors unavailable",
         "addresses": [],
-        "strategy": "unresolved-disagreement",
+        "strategy": "unavailable",
+        "primarySensor": 2,
+        "activeSensor": None,
         "degraded": True,
-        "temperatureDeltaF": round(pair_delta, 2),
-        "maxAllowedDeltaF": LOCAL_TEMP_SENSOR_MAX_PAIR_DELTA_F,
-        "ignoredAddresses": [str(item.get("address") or "") for item in ordered],
-        "sensors": ordered + errors,
-        "error": f"HDC2080 readings disagree by {pair_delta:.2f}F and no trusted history exists",
+        "healthFlag": True,
+        "healthStatus": "unavailable",
+        "healthMessage": message,
+        "temperatureDeltaF": round(pair_delta, 2) if pair_delta is not None else None,
+        "maxAllowedDeltaF": round(max_disagreement, 1),
+        "maxJumpF": round(max_jump, 1),
+        "ignoredAddresses": [str(item.get("address") or "") for item in valid],
+        "sensors": sorted(valid + errors, key=lambda item: int(item.get("sensorNumber") or 99)),
+        "error": "; ".join(str(item.get("error") or "") for item in errors if item.get("error")) or message,
     }
 
 
 def _read_hdc2080_pair_sensor() -> dict | None:
-    addresses = _parse_i2c_addresses(LOCAL_TEMP_SENSOR_ADDRESSES, (0x40, 0x41))
+    config = _temperature_sensor_config()
+    address_values = [config.get("sensor1Address"), config.get("sensor2Address")]
+    addresses = [_parse_i2c_address(value) for value in address_values]
+    addresses = [address for address in addresses if address is not None]
     if not addresses:
         return None
     try:
@@ -6803,41 +7024,58 @@ def _read_hdc2080_pair_sensor() -> dict | None:
             "temperatureC": None,
             "humidity": None,
             "source": "hdc2080-pair",
-            "label": "HDC2080 pair unavailable",
+            "label": "HDC2080 sensors unavailable",
             "error": str(exc),
             "sensors": [],
+            "healthFlag": True,
+            "healthStatus": "unavailable",
+            "healthMessage": str(exc),
         }
 
     readings: list[dict] = []
     errors: list[dict] = []
     try:
         with SMBus(HARDWARE_I2C_BUS) as bus:
-            for address in addresses:
+            for sensor_number, address in enumerate(addresses, start=1):
                 try:
-                    readings.append(_read_hdc2080_measurement(bus, address))
+                    reading = _read_hdc2080_measurement(bus, address)
+                    readings.append(_apply_hdc2080_sensor_adjustment(reading, sensor_number, config))
                 except Exception as exc:
                     errors.append({
                         "ok": False,
                         "available": False,
+                        "sensorNumber": sensor_number,
                         "address": f"0x{address:02X}",
                         "temperatureF": None,
                         "temperatureC": None,
+                        "rawTemperatureF": None,
+                        "rawTemperatureC": None,
+                        "offsetF": config.get(f"sensor{sensor_number}OffsetF"),
                         "humidity": None,
+                        "healthy": False,
+                        "healthStatus": "unavailable",
                         "used": False,
                         "error": str(exc),
                     })
     except Exception as exc:
-        errors.append({
-            "ok": False,
-            "available": False,
-            "address": "bus",
-            "temperatureF": None,
-            "temperatureC": None,
-            "humidity": None,
-            "used": False,
-            "error": str(exc),
-        })
-    return _select_hdc2080_pair_reading(readings, errors, time.time())
+        for sensor_number, address in enumerate(addresses, start=1):
+            errors.append({
+                "ok": False,
+                "available": False,
+                "sensorNumber": sensor_number,
+                "address": f"0x{address:02X}",
+                "temperatureF": None,
+                "temperatureC": None,
+                "rawTemperatureF": None,
+                "rawTemperatureC": None,
+                "offsetF": config.get(f"sensor{sensor_number}OffsetF"),
+                "humidity": None,
+                "healthy": False,
+                "healthStatus": "unavailable",
+                "used": False,
+                "error": str(exc),
+            })
+    return _select_hdc2080_pair_reading(readings, errors, time.time(), config)
 
 
 def _read_direct_i2c_temperature_sensor() -> dict | None:
@@ -7148,8 +7386,15 @@ def _apply_local_temperature_sensor_if_needed(
             pass
     updated["onboardTempSensorStatus"] = {
         "strategy": str(sensor.get("strategy") or "single"),
+        "primarySensor": sensor.get("primarySensor", 2),
+        "activeSensor": sensor.get("activeSensor"),
         "degraded": bool(sensor.get("degraded")),
+        "healthFlag": bool(sensor.get("healthFlag")),
+        "healthStatus": str(sensor.get("healthStatus") or "ok"),
+        "healthMessage": str(sensor.get("healthMessage") or ""),
         "temperatureDeltaF": sensor.get("temperatureDeltaF"),
+        "maxAllowedDeltaF": sensor.get("maxAllowedDeltaF"),
+        "maxJumpF": sensor.get("maxJumpF"),
         "ignoredAddresses": list(sensor.get("ignoredAddresses") or []),
     }
     if commit and updated != thermostat:
@@ -7193,6 +7438,22 @@ def _start_thermostat_control_loop() -> None:
     _CONTROL_LOOP_THREAD_STARTED = True
     thread = threading.Thread(target=_thermostat_control_loop, name="thermostat-control-loop", daemon=True)
     thread.start()
+
+
+def _temperature_sensor_configuration_payload(force: bool = False) -> dict:
+    temperature = _read_local_temperature_sensor(force=force)
+    return {
+        "ok": True,
+        "config": _temperature_sensor_config(),
+        "temperature": temperature,
+        "panelTemperature": temperature.get("temperatureF") if isinstance(temperature, dict) else None,
+        "primarySensor": 2,
+        "activeSensor": temperature.get("activeSensor") if isinstance(temperature, dict) else None,
+        "healthFlag": bool(temperature.get("healthFlag")) if isinstance(temperature, dict) else True,
+        "healthStatus": str(temperature.get("healthStatus") or "unknown") if isinstance(temperature, dict) else "unknown",
+        "healthMessage": str(temperature.get("healthMessage") or "") if isinstance(temperature, dict) else "",
+    }
+
 
 def _hardware_telemetry_payload() -> dict:
     """Return read-only onboard sensor telemetry for Home Assistant.
@@ -12957,6 +13218,9 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
             return _json(self, 200, _hardware_status_payload(force_i2c=True))
         if path == "/api/hardware/telemetry":
             return _json(self, 200, _hardware_telemetry_payload())
+        if path == "/api/hardware/temperature-sensors":
+            refresh = str((query.get("refresh") or [""])[0]).strip().lower() in {"1", "true", "yes", "on"}
+            return _json(self, 200, _temperature_sensor_configuration_payload(force=refresh))
         if path == "/api/hardware/motion":
             # GET is strictly read-only. Configuration is applied at startup and
             # only changed by an explicit POST from the panel or Home Assistant.
@@ -13017,7 +13281,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/playback", "/api/assistant/config", "/api/assistant/knowledge", "/api/settings/web"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/hardware/temperature-sensors", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/playback", "/api/assistant/config", "/api/assistant/knowledge", "/api/settings/web"}:
             self.send_error(404, "Not found")
             return
 
@@ -13093,6 +13357,13 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
             if path == "/api/system/config-import-usb":
                 result = _config_import_usb_payload()
+                return _json(self, 200 if result.get("ok") else 400, result)
+
+            if path == "/api/hardware/temperature-sensors":
+                try:
+                    result = _save_temperature_sensor_config(payload)
+                except ValueError as exc:
+                    result = {"ok": False, "error": str(exc)}
                 return _json(self, 200 if result.get("ok") else 400, result)
 
             if path == "/api/hardware/relay":

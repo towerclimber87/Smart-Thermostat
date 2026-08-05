@@ -3507,6 +3507,20 @@ class ThermostatScreen(Page):
             letter-spacing:1px;
         """)
         self.door_countdown.hide()
+        self.sensor_warning_badge = QLabel("TEMP SENSOR WARNING")
+        self.sensor_warning_badge.setAlignment(Qt.AlignCenter)
+        self.sensor_warning_badge.setFont(font(9, QFont.Black, 10))
+        self.sensor_warning_badge.setStyleSheet("""
+            color:#fff1d6;
+            background:qlineargradient(x1:0,y1:0,x2:1,y2:1,
+                stop:0 rgba(190,91,22,0.94),
+                stop:1 rgba(80,33,18,0.94));
+            border:1px solid rgba(255,198,116,0.72);
+            border-radius:13px;
+            padding:7px 13px;
+            letter-spacing:1px;
+        """)
+        self.sensor_warning_badge.hide()
         self.person_presence_strip = PersonPresenceStrip(self)
         self.person_presence_strip.hide()
         self.notice = ThermostatNoticeCard(self)
@@ -4004,6 +4018,12 @@ class ThermostatScreen(Page):
             by = max(70, min(by, max(70, h - self.bypass_pill.height() - 18)))
             self.bypass_pill.move(bx, by)
             self.bypass_pill.raise_()
+        if hasattr(self, "sensor_warning_badge") and self.sensor_warning_badge.isVisible():
+            self.sensor_warning_badge.adjustSize()
+            warning_x = max(18, w - self.sensor_warning_badge.width() - 24)
+            warning_y = 18
+            self.sensor_warning_badge.move(warning_x, warning_y)
+            self.sensor_warning_badge.raise_()
         if hasattr(self, "notice_action_popup") and self.notice_action_popup.isVisible():
             self.notice_action_popup.raise_()
 
@@ -5849,6 +5869,21 @@ class ThermostatScreen(Page):
         unit = t.get("outdoorWindUnit") or t.get("outdoor_wind_unit") or "mph"
         self.outdoor.setText(f"OUTDOOR  {fmt_temp(out)}   WIND  {wind} {unit}".upper())
         self.update_status_badge()
+        sensor_status = t.get("onboardTempSensorStatus") if isinstance(t.get("onboardTempSensorStatus"), dict) else {}
+        sensor_warning = bool(sensor_status.get("healthFlag") or sensor_status.get("degraded"))
+        if sensor_warning:
+            active_sensor = sensor_status.get("activeSensor")
+            status_text = "TEMP SENSOR WARNING"
+            if active_sensor == 1:
+                status_text += "  ·  USING SENSOR 1 FALLBACK"
+            elif str(sensor_status.get("healthStatus") or "").lower() == "hold":
+                status_text += "  ·  HOLDING LAST READING"
+            self.sensor_warning_badge.setText(status_text)
+            self.sensor_warning_badge.setToolTip(str(sensor_status.get("healthMessage") or ""))
+            self.sensor_warning_badge.show()
+        else:
+            self.sensor_warning_badge.hide()
+        self.position_main_controls()
         if hasattr(self, "person_presence_strip"):
             self.person_presence_strip.update_people(t.get("people") or [])
         self.notice.hide()
@@ -10165,6 +10200,435 @@ class AudioSettingsDialog(QDialog):
             QMessageBox.warning(self, "Save failed", str(exc))
 
 
+
+class TemperatureSensorConfigurationDialog(QDialog):
+    telemetryLoaded = pyqtSignal(object)
+    saveCompleted = pyqtSignal(object)
+
+    DEFAULTS = {
+        "sensor1OffsetF": -5.2,
+        "sensor2OffsetF": -7.3,
+        "maxDisagreementF": 3.0,
+        "maxJumpF": 15.0,
+        "holdLastSeconds": 120,
+        "primarySensor": 2,
+        "fallbackSensor": 1,
+    }
+
+    def __init__(self, state: AppState, parent=None):
+        super().__init__(parent)
+        self.s = state
+        self.setWindowTitle("Temperature Sensor Configuration")
+        self.setModal(True)
+        self.setWindowFlag(Qt.FramelessWindowHint, True)
+        self.setMinimumSize(760, 520)
+        self.resize(1180, 760)
+        self.setStyleSheet("""
+            QDialog { background:#07101f; color:#f7fbff; }
+            QLabel { color:#f7fbff; font-family:Arial; background:transparent; border:0; }
+            QScrollArea { background:transparent; border:0; }
+            QScrollArea > QWidget > QWidget { background:transparent; }
+        """)
+        self._closing = False
+        self._loading = False
+        self._saving = False
+        self._config_loaded = False
+        self._dirty = False
+        self.offset_values = {1: -5.2, 2: -7.3}
+        self.threshold_values = {"maxDisagreementF": 3.0, "maxJumpF": 15.0}
+        self.latest_payload: dict = {}
+        self.sensor_labels: dict[int, dict[str, QLabel]] = {}
+        self.offset_value_labels: dict[int, QLabel] = {}
+        self.threshold_value_labels: dict[str, QLabel] = {}
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 14, 18, 16)
+        root.setSpacing(10)
+
+        header = QHBoxLayout()
+        title = QLabel(
+            "<span style='color:#46e8ff; letter-spacing:2px; font-size:10px; font-weight:900'>ONBOARD SENSORS</span>"
+            "<br><span style='font-size:25px; font-weight:1000; color:#ffffff'>Temperature Sensor Configuration</span>"
+        )
+        title.setTextFormat(Qt.RichText)
+        header.addWidget(title, 1)
+        self.reset_button = RoundButton("Defaults", active=True, min_h=34)
+        self.refresh_button = RoundButton("Refresh", active=True, min_h=34)
+        self.save_button = RoundButton("Save", active=True, min_h=34)
+        self.done_button = RoundButton("Done", active=True, min_h=34)
+        for button, width in ((self.reset_button, 104), (self.refresh_button, 104), (self.save_button, 96), (self.done_button, 90)):
+            button.setMinimumWidth(width)
+            header.addWidget(button)
+        root.addLayout(header)
+
+        self.panel_status = QLabel("Loading sensor readings...")
+        self.panel_status.setWordWrap(True)
+        self.panel_status.setFont(font(11, QFont.Black))
+        self.panel_status.setStyleSheet(
+            "color:#dfe9ff; background:rgba(5,10,20,0.52); border:1px solid rgba(85,240,255,0.34); "
+            "border-radius:12px; padding:10px 14px;"
+        )
+        root.addWidget(self.panel_status)
+
+        sensor_grid = QGridLayout()
+        sensor_grid.setSpacing(12)
+        sensor_grid.addWidget(self._build_sensor_card(1, "Comparison / fallback", "0x40"), 0, 0)
+        sensor_grid.addWidget(self._build_sensor_card(2, "Primary panel temperature", "0x41"), 0, 1)
+        sensor_grid.setColumnStretch(0, 1)
+        sensor_grid.setColumnStretch(1, 1)
+        root.addLayout(sensor_grid, 1)
+
+        health_panel = QFrame()
+        health_panel.setStyleSheet("""
+            QFrame {
+                background:qlineargradient(x1:0,y1:0,x2:1,y2:1,
+                    stop:0 rgba(27,39,59,0.96), stop:1 rgba(8,15,29,0.96));
+                border:1px solid rgba(111,139,166,0.38);
+                border-radius:14px;
+            }
+        """)
+        health_layout = QVBoxLayout(health_panel)
+        health_layout.setContentsMargins(14, 10, 14, 12)
+        health_layout.setSpacing(8)
+        health_title = QLabel("SENSOR HEALTH LIMITS")
+        health_title.setFont(font(9, QFont.Black))
+        health_title.setStyleSheet("color:#46e8ff; letter-spacing:1px;")
+        health_layout.addWidget(health_title)
+        threshold_row = QHBoxLayout()
+        threshold_row.setSpacing(14)
+        threshold_row.addWidget(self._build_threshold_control("maxDisagreementF", "Maximum difference", 0.5, "°F"), 1)
+        threshold_row.addWidget(self._build_threshold_control("maxJumpF", "Sudden jump fault", 1.0, "°F"), 1)
+        health_layout.addLayout(threshold_row)
+        note = QLabel(
+            "Panel temperature uses corrected sensor 2. Sensor 1 is compared independently. "
+            "A large disagreement raises a warning; a failed/non-responsive sensor or a sudden jump at or above the configured limit causes automatic fallback."
+        )
+        note.setWordWrap(True)
+        note.setFont(font(8, QFont.Bold))
+        note.setStyleSheet("color:#9fb0c8;")
+        health_layout.addWidget(note)
+        root.addWidget(health_panel)
+
+        self.footer_status = QLabel("Offsets are saved separately without replacing the rest of panel-config.json.")
+        self.footer_status.setWordWrap(True)
+        self.footer_status.setFont(font(8, QFont.Bold))
+        self.footer_status.setStyleSheet("color:#9fb0c8; padding:1px 4px;")
+        root.addWidget(self.footer_status)
+
+        self.telemetryLoaded.connect(self._handle_telemetry_loaded)
+        self.saveCompleted.connect(self._handle_save_completed)
+        self.reset_button.clicked.connect(self.restore_defaults)
+        self.refresh_button.clicked.connect(lambda checked=False: self.refresh(force=True))
+        self.save_button.clicked.connect(self.save)
+        self.done_button.clicked.connect(self.accept)
+
+        self.refresh_timer = QTimer(self)
+        self.refresh_timer.setInterval(3000)
+        self.refresh_timer.timeout.connect(self.refresh)
+        self.refresh_timer.start()
+        self.finished.connect(self._finish_cleanup)
+        QTimer.singleShot(0, self.fit_to_screen)
+        QTimer.singleShot(50, lambda: self.refresh(force=True))
+
+    def fit_to_screen(self):
+        fit_dialog_to_available_screen(self, margin=0)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.fit_to_screen()
+
+    def _finish_cleanup(self, *_args):
+        self._closing = True
+        self.refresh_timer.stop()
+
+    def closeEvent(self, event):
+        self._finish_cleanup()
+        super().closeEvent(event)
+
+    def _card_style(self) -> str:
+        return """
+            QFrame {
+                background:qlineargradient(x1:0,y1:0,x2:1,y2:1,
+                    stop:0 rgba(27,39,59,0.96), stop:1 rgba(8,15,29,0.96));
+                border:1px solid rgba(111,139,166,0.38);
+                border-radius:14px;
+            }
+        """
+
+    def _build_sensor_card(self, sensor_number: int, role: str, address: str) -> QFrame:
+        card = QFrame()
+        card.setStyleSheet(self._card_style())
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 12, 16, 14)
+        layout.setSpacing(7)
+        title = QLabel(f"TEMP SENSOR {sensor_number}  ·  {address}")
+        title.setFont(font(12, QFont.Black))
+        title.setStyleSheet("color:#46e8ff;")
+        role_label = QLabel(role)
+        role_label.setFont(font(8, QFont.Black))
+        role_label.setStyleSheet("color:#9fb0c8;")
+        layout.addWidget(title)
+        layout.addWidget(role_label)
+
+        adjusted = QLabel("Adjusted temperature: --")
+        raw = QLabel("Raw temperature: --")
+        humidity = QLabel("Humidity: --")
+        health = QLabel("Status: waiting for reading")
+        for label in (adjusted, raw, humidity, health):
+            label.setWordWrap(True)
+            label.setFont(font(10 if label is adjusted else 9, QFont.Black))
+            label.setStyleSheet("color:#f7fbff; background:rgba(5,10,20,0.32); border-radius:8px; padding:6px 8px;")
+            layout.addWidget(label)
+        self.sensor_labels[sensor_number] = {
+            "adjusted": adjusted,
+            "raw": raw,
+            "humidity": humidity,
+            "health": health,
+        }
+
+        offset_title = QLabel("Temperature offset")
+        offset_title.setFont(font(8, QFont.Black))
+        offset_title.setStyleSheet("color:#c4d0e5; margin-top:4px;")
+        layout.addWidget(offset_title)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        minus = RoundButton("− 0.1", active=True, min_h=34)
+        plus = RoundButton("+ 0.1", active=True, min_h=34)
+        value = QLabel("")
+        value.setAlignment(Qt.AlignCenter)
+        value.setMinimumHeight(34)
+        value.setFont(font(12, QFont.Black))
+        value.setStyleSheet("color:#ffffff; background:rgba(5,10,20,0.62); border:1px solid rgba(85,240,255,0.38); border-radius:9px;")
+        minus.clicked.connect(lambda checked=False, n=sensor_number: self.adjust_offset(n, -0.1))
+        plus.clicked.connect(lambda checked=False, n=sensor_number: self.adjust_offset(n, 0.1))
+        row.addWidget(minus)
+        row.addWidget(value, 1)
+        row.addWidget(plus)
+        layout.addLayout(row)
+        self.offset_value_labels[sensor_number] = value
+        self._refresh_offset_label(sensor_number)
+        return card
+
+    def _build_threshold_control(self, key: str, title: str, step: float, suffix: str) -> QFrame:
+        panel = QFrame()
+        panel.setStyleSheet("background:rgba(5,10,20,0.34); border:1px solid rgba(160,180,210,0.18); border-radius:10px;")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(10, 7, 10, 9)
+        layout.setSpacing(5)
+        label = QLabel(title)
+        label.setFont(font(8, QFont.Black))
+        label.setStyleSheet("color:#c4d0e5;")
+        layout.addWidget(label)
+        row = QHBoxLayout()
+        minus = RoundButton(f"− {step:g}", active=True, min_h=31)
+        plus = RoundButton(f"+ {step:g}", active=True, min_h=31)
+        value = QLabel("")
+        value.setAlignment(Qt.AlignCenter)
+        value.setFont(font(10, QFont.Black))
+        value.setMinimumHeight(31)
+        value.setStyleSheet("color:#ffffff; background:rgba(5,10,20,0.62); border-radius:8px;")
+        minus.clicked.connect(lambda checked=False, k=key, amount=-step: self.adjust_threshold(k, amount))
+        plus.clicked.connect(lambda checked=False, k=key, amount=step: self.adjust_threshold(k, amount))
+        row.addWidget(minus)
+        row.addWidget(value, 1)
+        row.addWidget(plus)
+        layout.addLayout(row)
+        self.threshold_value_labels[key] = value
+        value.setProperty("suffix", suffix)
+        self._refresh_threshold_label(key)
+        return panel
+
+    def _refresh_offset_label(self, sensor_number: int):
+        label = self.offset_value_labels.get(sensor_number)
+        if label is not None:
+            label.setText(f"{self.offset_values.get(sensor_number, 0.0):+.1f}°F")
+
+    def _refresh_threshold_label(self, key: str):
+        label = self.threshold_value_labels.get(key)
+        if label is not None:
+            suffix = str(label.property("suffix") or "")
+            label.setText(f"{self.threshold_values.get(key, 0.0):.1f}{suffix}")
+
+    def adjust_offset(self, sensor_number: int, delta: float):
+        self.offset_values[sensor_number] = round(clamp(self.offset_values.get(sensor_number, 0.0) + delta, -20.0, 20.0), 1)
+        self._refresh_offset_label(sensor_number)
+        self._dirty = True
+        self.footer_status.setText("Unsaved sensor configuration changes.")
+
+    def adjust_threshold(self, key: str, delta: float):
+        low, high = (0.5, 20.0) if key == "maxDisagreementF" else (3.0, 40.0)
+        self.threshold_values[key] = round(clamp(self.threshold_values.get(key, low) + delta, low, high), 1)
+        self._refresh_threshold_label(key)
+        self._dirty = True
+        self.footer_status.setText("Unsaved sensor configuration changes.")
+
+    def restore_defaults(self):
+        self.offset_values = {1: -5.2, 2: -7.3}
+        self.threshold_values = {"maxDisagreementF": 3.0, "maxJumpF": 15.0}
+        for number in (1, 2):
+            self._refresh_offset_label(number)
+        for key in self.threshold_values:
+            self._refresh_threshold_label(key)
+        self._dirty = True
+        self.footer_status.setText("Default offsets and health limits loaded. Press Save to apply them.")
+
+    def refresh(self, force: bool = False):
+        if self._closing or self._loading or self._saving:
+            return
+        self._loading = True
+        self.refresh_button.setEnabled(False)
+        path = "/api/hardware/temperature-sensors?refresh=1" if force else "/api/hardware/temperature-sensors"
+
+        def worker():
+            try:
+                data = self.s.api.get(path)
+                self.telemetryLoaded.emit({"data": data, "error": None})
+            except Exception as exc:
+                self.telemetryLoaded.emit({"data": None, "error": str(exc)})
+
+        threading.Thread(target=worker, name="temperature-sensor-refresh", daemon=True).start()
+
+    def _apply_config(self, config: dict):
+        self.offset_values[1] = round(float(config.get("sensor1OffsetF", -5.2)), 1)
+        self.offset_values[2] = round(float(config.get("sensor2OffsetF", -7.3)), 1)
+        self.threshold_values["maxDisagreementF"] = round(float(config.get("maxDisagreementF", 3.0)), 1)
+        self.threshold_values["maxJumpF"] = round(float(config.get("maxJumpF", 15.0)), 1)
+        for number in (1, 2):
+            self._refresh_offset_label(number)
+        for key in self.threshold_values:
+            self._refresh_threshold_label(key)
+
+    def _handle_telemetry_loaded(self, result: object):
+        if self._closing:
+            return
+        self._loading = False
+        self.refresh_button.setEnabled(True)
+        info = result if isinstance(result, dict) else {}
+        error = str(info.get("error") or "")
+        if error:
+            self.footer_status.setText(f"Sensor refresh failed: {error}")
+            return
+        data = info.get("data") if isinstance(info.get("data"), dict) else {}
+        self.latest_payload = data
+        config = data.get("config") if isinstance(data.get("config"), dict) else {}
+        if config and not self._config_loaded:
+            self._apply_config(config)
+            self._config_loaded = True
+        if config:
+            hardware = self.s.config.setdefault("hardware", {})
+            if isinstance(hardware, dict):
+                hardware["temperatureSensors"] = copy.deepcopy(config)
+        self._render_telemetry(data)
+
+    def _render_telemetry(self, data: dict):
+        temperature = data.get("temperature") if isinstance(data.get("temperature"), dict) else {}
+        sensors = temperature.get("sensors") if isinstance(temperature.get("sensors"), list) else []
+        sensor_map: dict[int, dict] = {}
+        for item in sensors:
+            if not isinstance(item, dict):
+                continue
+            try:
+                number = int(item.get("sensorNumber") or 0)
+            except Exception:
+                number = 0
+            if number in (1, 2):
+                sensor_map[number] = item
+
+        for number in (1, 2):
+            item = sensor_map.get(number) or {}
+            labels = self.sensor_labels[number]
+            if item.get("available") and item.get("temperatureF") is not None:
+                labels["adjusted"].setText(f"Adjusted temperature: {float(item.get('temperatureF')):.1f}°F")
+                raw_f = item.get("rawTemperatureF")
+                labels["raw"].setText(f"Raw temperature: {float(raw_f):.1f}°F" if raw_f is not None else "Raw temperature: --")
+                humidity = item.get("humidity")
+                labels["humidity"].setText(f"Humidity: {float(humidity):.1f}%" if humidity is not None else "Humidity: --")
+                used = bool(item.get("used"))
+                healthy = bool(item.get("healthy", True))
+                status = "ACTIVE PANEL SOURCE" if used else "Healthy comparison sensor" if healthy else "FAULT / IGNORED"
+                reason = str(item.get("ignoredReason") or item.get("error") or "").strip()
+                labels["health"].setText(f"Status: {status}" + (f"\n{reason}" if reason else ""))
+                labels["health"].setStyleSheet(
+                    "color:#ffbe73; background:rgba(70,30,20,0.45); border-radius:8px; padding:6px 8px;"
+                    if not healthy else
+                    "color:#8fffd0; background:rgba(5,40,35,0.40); border-radius:8px; padding:6px 8px;"
+                )
+            else:
+                error = str(item.get("error") or "No response")
+                labels["adjusted"].setText("Adjusted temperature: unavailable")
+                labels["raw"].setText("Raw temperature: unavailable")
+                labels["humidity"].setText("Humidity: unavailable")
+                labels["health"].setText(f"Status: UNAVAILABLE\n{error}")
+                labels["health"].setStyleSheet("color:#ff9b9b; background:rgba(60,12,20,0.48); border-radius:8px; padding:6px 8px;")
+
+        panel_temp = temperature.get("temperatureF")
+        active = temperature.get("activeSensor")
+        delta = temperature.get("temperatureDeltaF")
+        health_flag = bool(temperature.get("healthFlag"))
+        health_message = str(temperature.get("healthMessage") or "").strip()
+        panel_line = f"Panel temperature: {float(panel_temp):.1f}°F" if panel_temp is not None else "Panel temperature: unavailable"
+        source_line = f"Active source: temp sensor {active}" if active in (1, 2) else "Active source: holding last trusted reading or unavailable"
+        delta_line = f"Sensor difference: {float(delta):.1f}°F" if delta is not None else "Sensor difference: unavailable"
+        self.panel_status.setText(f"{panel_line}  ·  {source_line}  ·  {delta_line}" + (f"\n{health_message}" if health_message else ""))
+        self.panel_status.setStyleSheet(
+            "color:#ffe0a8; background:rgba(65,35,10,0.58); border:1px solid rgba(255,183,91,0.65); border-radius:12px; padding:10px 14px;"
+            if health_flag else
+            "color:#dfffee; background:rgba(5,40,35,0.52); border:1px solid rgba(85,240,190,0.48); border-radius:12px; padding:10px 14px;"
+        )
+        if not self._dirty:
+            self.footer_status.setText("Live readings refresh every 3 seconds. Configuration is saved without replacing other panel settings.")
+
+    def save(self):
+        if self._saving:
+            return
+        self._saving = True
+        self.save_button.setEnabled(False)
+        self.footer_status.setText("Saving temperature sensor configuration...")
+        payload = {
+            "config": {
+                "sensor1OffsetF": self.offset_values[1],
+                "sensor2OffsetF": self.offset_values[2],
+                "primarySensor": 2,
+                "fallbackSensor": 1,
+                "maxDisagreementF": self.threshold_values["maxDisagreementF"],
+                "maxJumpF": self.threshold_values["maxJumpF"],
+                "holdLastSeconds": 120,
+            }
+        }
+
+        def worker():
+            try:
+                data = self.s.api.post("/api/hardware/temperature-sensors", payload)
+                self.saveCompleted.emit({"data": data, "error": None})
+            except Exception as exc:
+                self.saveCompleted.emit({"data": None, "error": str(exc)})
+
+        threading.Thread(target=worker, name="temperature-sensor-save", daemon=True).start()
+
+    def _handle_save_completed(self, result: object):
+        if self._closing:
+            return
+        self._saving = False
+        self.save_button.setEnabled(True)
+        info = result if isinstance(result, dict) else {}
+        error = str(info.get("error") or "")
+        if error:
+            self.footer_status.setText(f"Save failed: {error}")
+            return
+        data = info.get("data") if isinstance(info.get("data"), dict) else {}
+        config = data.get("config") if isinstance(data.get("config"), dict) else {}
+        if config:
+            self._apply_config(config)
+            hardware = self.s.config.setdefault("hardware", {})
+            if isinstance(hardware, dict):
+                hardware["temperatureSensors"] = copy.deepcopy(config)
+        self._dirty = False
+        self._config_loaded = True
+        self.latest_payload = data
+        self._render_telemetry(data)
+        self.footer_status.setText(str(data.get("message") or "Temperature sensor configuration saved."))
+
+
 class SettingsDialog(QDialog):
     saved = pyqtSignal()
     thermostatUpdateCompleted = pyqtSignal(object)
@@ -10232,14 +10696,17 @@ class SettingsDialog(QDialog):
         title.setMaximumHeight(38)
         header.addWidget(title)
         header.addStretch(1)
+        self.temp_sensors = RoundButton("Temp Sensors", active=True, min_h=32)
         self.hardware = RoundButton("Hardware", active=True, min_h=32)
         self.history = RoundButton("History", active=True, min_h=32)
         self.bottom_save = RoundButton("Save Settings", active=True, min_h=32)
         self.done = RoundButton("Done", active=True, min_h=32)
+        self.temp_sensors.setMinimumWidth(122)
         self.hardware.setMinimumWidth(110)
         self.history.setMinimumWidth(96)
         self.bottom_save.setMinimumWidth(142)
         self.done.setMinimumWidth(92)
+        header.addWidget(self.temp_sensors)
         header.addWidget(self.hardware)
         header.addWidget(self.history)
         header.addWidget(self.bottom_save)
@@ -10292,6 +10759,7 @@ class SettingsDialog(QDialog):
         self.build()
         self.finalize_section_index()
         self.done.clicked.connect(self.close_settings)
+        self.temp_sensors.clicked.connect(self.show_temperature_sensor_configuration)
         self.hardware.clicked.connect(self.show_hardware)
         self.history.clicked.connect(self.show_history)
         self.bottom_save.clicked.connect(self.save_all)
@@ -12096,6 +12564,11 @@ class SettingsDialog(QDialog):
             except Exception as exc:
                 QMessageBox.warning(self, "Outside Temperature", str(exc))
         dlg.selected.connect(apply)
+        dlg.exec_()
+
+
+    def show_temperature_sensor_configuration(self):
+        dlg = TemperatureSensorConfigurationDialog(self.s, self)
         dlg.exec_()
 
 
