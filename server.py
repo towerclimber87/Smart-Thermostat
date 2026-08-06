@@ -5912,6 +5912,58 @@ def _handle_thermostat_update(payload: dict) -> dict:
     return response
 
 
+
+def _run_thermostat_schedule_payload(payload: object) -> dict:
+    """Run one saved thermostat schedule by stable id or exact name."""
+    incoming = payload if isinstance(payload, dict) else {}
+    schedule_id = str(
+        incoming.get("scheduleId")
+        or incoming.get("schedule_id")
+        or incoming.get("id")
+        or ""
+    ).strip()
+    schedule_name = str(
+        incoming.get("scheduleName")
+        or incoming.get("schedule_name")
+        or incoming.get("name")
+        or ""
+    ).strip()
+    if not schedule_id and not schedule_name:
+        return {"ok": False, "error": "A schedule id or schedule name is required."}
+
+    thermostat = _read_thermostat_record().get("thermostat") or {}
+    schedules = _normalize_schedule_entries(thermostat.get("schedules"))
+    selected = None
+    if schedule_id:
+        selected = next((item for item in schedules if str(item.get("id") or "") == schedule_id), None)
+    if selected is None and schedule_name:
+        wanted = schedule_name.casefold()
+        selected = next(
+            (item for item in schedules if str(item.get("name") or "").strip().casefold() == wanted),
+            None,
+        )
+    if selected is None:
+        return {"ok": False, "error": "The requested thermostat schedule was not found."}
+
+    mode = str(thermostat.get("mode") or "cool").strip().lower()
+    active_mode = str(thermostat.get("autoActiveMode") or "").strip().lower()
+    effective_mode = active_mode if mode == "auto" and active_mode in {"heat", "cool"} else mode
+    target_key = "heatSetpoint" if effective_mode == "heat" else "coolSetpoint"
+    target = _intish(selected.get(target_key), 71 if effective_mode == "heat" else 68, 45, 95)
+
+    result = _handle_thermostat_update({
+        "targetTemp": target,
+        "lastComfortTarget": target,
+        "targetChangeSource": "home-assistant-schedule",
+    })
+    result["scheduleRun"] = {
+        "id": str(selected.get("id") or ""),
+        "name": str(selected.get("name") or "Schedule"),
+        "effectiveMode": effective_mode,
+        "targetTemp": target,
+    }
+    return result
+
 def _local_host_name() -> str:
     try:
         return socket.gethostname()
@@ -8757,6 +8809,7 @@ def _discovery_payload() -> dict:
         "endpoints": {
             "status": "/api/thermostat/status",
             "control": "/api/thermostat/control",
+            "runSchedule": "/api/thermostat/run-schedule",
             "hardwareTelemetry": "/api/hardware/telemetry",
             "motionControl": "/api/hardware/motion",
             "discovery": "/api/discovery",
@@ -13737,7 +13790,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/hardware/temperature-sensors", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply", "/api/house-sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/playback", "/api/assistant/config", "/api/assistant/knowledge", "/api/settings/web"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/thermostat/run-schedule", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/hardware/temperature-sensors", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply", "/api/house-sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/playback", "/api/assistant/config", "/api/assistant/knowledge", "/api/settings/web"}:
             self.send_error(404, "Not found")
             return
 
@@ -13788,6 +13841,10 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                     return _json(self, 400, {"ok": False, "error": "config must be an object"})
                 record = _write_panel_config_record(config_payload)
                 return _json(self, 200, {"ok": True, "version": record["version"], "updatedAt": record["updatedAt"], "config": record["config"]})
+
+            if path == "/api/thermostat/run-schedule":
+                result = _run_thermostat_schedule_payload(payload)
+                return _json(self, 200 if result.get("ok") else 400, result)
 
             if path == "/api/system/fetch-update":
                 result = _fetch_update_payload()
