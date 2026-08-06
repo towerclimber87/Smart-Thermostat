@@ -1263,25 +1263,113 @@ class Page(QWidget):
 
 class ScreenLockButton(QAbstractButton):
     """Top-left control lock pill for the wall-panel guest-safe mode."""
+    longPressed = pyqtSignal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.locked = False
+        self.secure_locked = False
+        self._press_inside = False
+        self._long_press_triggered = False
+        self._flash_phase: str | None = None
+        self._flash_step = 0
+        self._hold_timer = QTimer(self)
+        self._hold_timer.setSingleShot(True)
+        self._hold_timer.setInterval(700)
+        self._hold_timer.timeout.connect(self._trigger_long_press)
+        self._flash_timer = QTimer(self)
+        self._flash_timer.setInterval(500)
+        self._flash_timer.timeout.connect(self._advance_confirmation_flash)
         self.setCursor(Qt.PointingHandCursor)
         self.setFixedSize(154, 48)
         self.setFont(font(9, QFont.Black, 18))
 
-    def setLocked(self, locked: bool):
+    def setLocked(self, locked: bool, secure: bool = False):
         self.locked = bool(locked)
+        self.secure_locked = bool(self.locked and secure)
         self.setToolTip(
-            "Locked: temperature and alarm controls only"
-            if self.locked
-            else "Tap to lock all controls except temperature and alarm"
+            "Security locked: alarm control only; tap to unlock with the Settings code"
+            if self.secure_locked
+            else (
+                "Locked: temperature and alarm controls only; tap to unlock with the Alarm code"
+                if self.locked
+                else "Tap for guest lock, or hold 700 ms for the security lock"
+            )
         )
         self.update()
 
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton and self.rect().contains(event.pos()):
+    def begin_press(self):
+        self._press_inside = True
+        self._long_press_triggered = False
+        self.setDown(True)
+        self.update()
+        self._hold_timer.start()
+
+    def update_press(self, inside: bool):
+        self._press_inside = bool(inside)
+        self.setDown(self._press_inside)
+        if not self._press_inside:
+            self._hold_timer.stop()
+        self.update()
+
+    def end_press(self, inside: bool, *, emit_click: bool = True) -> bool:
+        self._hold_timer.stop()
+        self._press_inside = False
+        self.setDown(False)
+        self.update()
+        should_click = bool(inside and not self._long_press_triggered)
+        if should_click and emit_click:
             self.clicked.emit()
+        self._long_press_triggered = False
+        return should_click
+
+    def cancel_press(self):
+        self._hold_timer.stop()
+        self._press_inside = False
+        self._long_press_triggered = False
+        self.setDown(False)
+        self.update()
+
+    def _trigger_long_press(self):
+        if not self._press_inside or not self.isEnabled():
+            return
+        self._long_press_triggered = True
+        self.longPressed.emit()
+
+    def start_security_confirmation_flash(self):
+        """Show three red/green confirmation cycles at 500 ms per color."""
+        self._flash_timer.stop()
+        self._flash_step = 0
+        self._flash_phase = "red"
+        self.update()
+        self._flash_timer.start()
+
+    def _advance_confirmation_flash(self):
+        self._flash_step += 1
+        if self._flash_step >= 6:
+            self._flash_timer.stop()
+            self._flash_phase = None
+        else:
+            self._flash_phase = "green" if self._flash_step % 2 else "red"
+        self.update()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self.rect().contains(event.pos()):
+            self.begin_press()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._hold_timer.isActive() or self._press_inside or self._long_press_triggered:
+            self.update_press(self.rect().contains(event.pos()))
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and (self._press_inside or self._long_press_triggered or self._hold_timer.isActive()):
+            self.end_press(self.rect().contains(event.pos()))
             event.accept()
             return
         super().mouseReleaseEvent(event)
@@ -1292,7 +1380,27 @@ class ScreenLockButton(QAbstractButton):
         r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
 
         g = QLinearGradient(r.topLeft(), r.bottomRight())
-        if self.locked:
+        flash_red = self._flash_phase == "red"
+        flash_green = self._flash_phase == "green"
+        if flash_red:
+            g.setColorAt(0.0, QColor(180, 28, 53, 248))
+            g.setColorAt(0.58, QColor(105, 14, 34, 242))
+            g.setColorAt(1.0, QColor(39, 8, 19, 246))
+            border = QColor(255, 112, 139, 230)
+            icon_bg = QColor(255, 82, 118, 95)
+            icon_fg = QColor(255, 235, 241, 245)
+            txt = QColor(255, 242, 246)
+            label = "SECURE LOCK"
+        elif flash_green:
+            g.setColorAt(0.0, QColor(23, 145, 103, 248))
+            g.setColorAt(0.58, QColor(12, 91, 77, 242))
+            g.setColorAt(1.0, QColor(7, 41, 48, 246))
+            border = QColor(108, 255, 205, 230)
+            icon_bg = QColor(84, 255, 196, 92)
+            icon_fg = QColor(224, 255, 246, 245)
+            txt = QColor(230, 255, 249)
+            label = "SECURE LOCK"
+        elif self.locked:
             g.setColorAt(0.0, QColor(92, 22, 39, 238))
             g.setColorAt(0.58, QColor(51, 16, 29, 230))
             g.setColorAt(1.0, QColor(18, 10, 18, 238))
@@ -1300,7 +1408,7 @@ class ScreenLockButton(QAbstractButton):
             icon_bg = QColor(255, 74, 111, 62)
             icon_fg = QColor(255, 210, 221, 230)
             txt = QColor(255, 230, 236)
-            label = "LOCKED"
+            label = "SECURE LOCK" if self.secure_locked else "LOCKED"
         else:
             g.setColorAt(0.0, QColor(19, 82, 74, 232))
             g.setColorAt(0.55, QColor(14, 57, 64, 226))
@@ -1330,7 +1438,7 @@ class ScreenLockButton(QAbstractButton):
         cy = icon.center().y()
         p.setPen(QPen(icon_fg, 2.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
         p.setBrush(Qt.NoBrush)
-        if self.locked:
+        if self.locked or flash_red or flash_green:
             p.drawArc(QRectF(cx - 7, cy - 11, 14, 15), 0, 180 * 16)
         else:
             p.drawArc(QRectF(cx - 10, cy - 11, 14, 15), 18 * 16, 155 * 16)
@@ -1846,6 +1954,7 @@ class Header(QWidget):
     infoClicked = pyqtSignal()
     settingsClicked = pyqtSignal()
     lockClicked = pyqtSignal()
+    lockLongPressed = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1882,6 +1991,7 @@ class Header(QWidget):
         self.info.clicked.connect(self.infoClicked.emit)
         self.gear.clicked.connect(self.settingsClicked.emit)
         self.lock_button.clicked.connect(self.lockClicked.emit)
+        self.lock_button.longPressed.connect(self.lockLongPressed.emit)
         self.clock = QTimer(self)
         self.clock.timeout.connect(self.update_time)
         self.clock.start(1000)
@@ -1889,14 +1999,17 @@ class Header(QWidget):
 
 
 
-    def set_locked(self, locked: bool):
-        self.lock_button.setLocked(locked)
+    def set_locked(self, locked: bool, secure: bool = False):
+        self.lock_button.setLocked(locked, secure)
         # The lock pill itself remains available so the owner can unlock. Every
         # other header action is disabled while the panel is in guest-safe mode.
         for btn in self.nav.buttons.values():
             btn.setEnabled(not locked)
         self.info.setEnabled(not locked)
         self.gear.setEnabled(not locked)
+
+    def flash_security_lock_confirmation(self):
+        self.lock_button.start_security_confirmation_flash()
 
     def update_time(self):
         try:
@@ -3811,6 +3924,7 @@ class ThermostatScreen(Page):
     def __init__(self, app_state: AppState, parent=None):
         super().__init__(app_state, parent)
         self._screen_locked = False
+        self._screen_security_locked = False
         self.dial = ThermostatDial()
         self.dial.setMaximumSize(470, 470)
         self.mode_buttons: dict[str, RoundButton] = {}
@@ -4094,23 +4208,31 @@ class ThermostatScreen(Page):
     def screen_control_locked(self) -> bool:
         return bool(getattr(self, "_screen_locked", False))
 
+    def screen_security_locked(self) -> bool:
+        return bool(getattr(self, "_screen_security_locked", False))
+
     def reject_locked_control(self) -> bool:
         if not self.screen_control_locked():
             return False
-        self.requestToast.emit("Screen locked: temperature and alarm controls only")
+        if self.screen_security_locked():
+            self.requestToast.emit("Security lock active: alarm control only")
+        else:
+            self.requestToast.emit("Screen locked: temperature and alarm controls only")
         return True
 
-    def set_screen_locked(self, locked: bool):
+    def set_screen_locked(self, locked: bool, secure: bool = False):
         self._screen_locked = bool(locked)
+        self._screen_security_locked = bool(self._screen_locked and secure)
         self.apply_screen_lock_state()
 
     def apply_screen_lock_state(self):
-        """Apply guest-safe lockout without disabling +/- or Alarmo.
+        """Apply guest-safe or security lockout while preserving Alarmo.
 
         This is repeated after each thermostat sync because schedule shortcuts
         and Away overlays can be recreated or shown from fresh runtime state.
         """
         locked = self.screen_control_locked()
+        secure_locked = self.screen_security_locked()
 
         # These controls can change operating mode, fan mode, schedules, pause
         # behavior, diagnostics, or test values and are therefore unavailable.
@@ -4149,14 +4271,15 @@ class ThermostatScreen(Page):
         if locked and self.away_overlay.isVisible():
             self.away_overlay.hide()
 
-        # Temperature +/- and Alarmo are the only thermostat-page actions that
-        # remain usable. Preserve the existing rule that +/- are unavailable
-        # when the thermostat is Off and not in Away.
+        # Guest lock keeps temperature +/- available. Security lock disables
+        # them as well, leaving Alarmo as the only interactive thermostat card.
+        # Preserve the existing rule that +/- are unavailable when the
+        # thermostat is Off and not in Away.
         t = self.thermostat_view()
         mode = str(t.get("mode") or "cool").lower()
         setpoint_available = mode != "off" or bool(t.get("away"))
-        self.minus.setEnabled(setpoint_available)
-        self.plus.setEnabled(setpoint_available)
+        self.minus.setEnabled(setpoint_available and not secure_locked)
+        self.plus.setEnabled(setpoint_available and not secure_locked)
         self.alarm_card.setEnabled(True)
 
     def showEvent(self, event):
@@ -5914,6 +6037,9 @@ class ThermostatScreen(Page):
         return name or "Climate Control"
 
     def change_target(self, delta: int):
+        if self.screen_security_locked():
+            self.requestToast.emit("Security lock active: alarm control only")
+            return
         t = self.thermostat_view()
         # One physical tap should move the main setpoint by exactly 1°F.
         # IconCircle now emits clicked() once, but keep this explicit so future
@@ -5927,6 +6053,9 @@ class ThermostatScreen(Page):
         self.set_target(value)
 
     def set_target(self, value: float):
+        if self.screen_security_locked():
+            self.requestToast.emit("Security lock active: alarm control only")
+            return
         try:
             t = self.thermostat_view()
             before_tap = copy.deepcopy(t)
@@ -14168,6 +14297,7 @@ class MainWindow(Background):
         self.setAttribute(Qt.WA_AcceptTouchEvents, True)
         self.toast = StatusToast(self)
         self.navigation_locked = False
+        self.security_lock_active = False
         self._thermal_protection_active = False
         self._thermal_suspended_timers: dict[str, tuple[QTimer, int, bool, bool]] = {}
         self._display_sleeping = False
@@ -14229,9 +14359,10 @@ class MainWindow(Background):
         self.header.infoClicked.connect(self.show_info)
         self.header.settingsClicked.connect(self.show_settings)
         self.header.lockClicked.connect(self.toggle_navigation_lock)
+        self.header.lockLongPressed.connect(self.activate_security_lock)
         self.current_name = "Thermostat"
         self.header.set_page(self.current_name)
-        self.header.set_locked(self.navigation_locked)
+        self.header.set_locked(self.navigation_locked, self.security_lock_active)
         self.stack.setCurrentWidget(self.pages[self.current_name])
 
         self._brightness_drag_active = False
@@ -14585,7 +14716,7 @@ class MainWindow(Background):
 
     def toggle_sync_mode(self):
         if getattr(self, "navigation_locked", False):
-            self.toast.show_message("Screen locked: temperature and alarm controls only")
+            self.toast.show_message(self.lock_restriction_message())
             return
         peers = self.sync_peer_entities()
         if not peers:
@@ -14825,8 +14956,11 @@ class MainWindow(Background):
             self._direct_touch_last_global = point
             self._touch_input_active = True
             try:
-                button.setDown(True)
-                button.update()
+                if isinstance(button, ScreenLockButton):
+                    button.begin_press()
+                else:
+                    button.setDown(True)
+                    button.update()
             except RuntimeError:
                 self._direct_touch_button = None
                 self._touch_input_active = False
@@ -14847,8 +14981,11 @@ class MainWindow(Background):
 
         if event_type == QEvent.TouchUpdate:
             try:
-                button.setDown(bool(inside))
-                button.update()
+                if isinstance(button, ScreenLockButton):
+                    button.update_press(bool(inside))
+                else:
+                    button.setDown(bool(inside))
+                    button.update()
             except RuntimeError:
                 pass
             event.accept()
@@ -14856,8 +14993,14 @@ class MainWindow(Background):
 
         accepted = bool(event_type == QEvent.TouchEnd and inside)
         try:
-            button.setDown(False)
-            button.update()
+            if isinstance(button, ScreenLockButton):
+                if event_type == QEvent.TouchEnd:
+                    accepted = button.end_press(bool(inside), emit_click=False)
+                else:
+                    button.cancel_press()
+            else:
+                button.setDown(False)
+                button.update()
         except RuntimeError:
             accepted = False
         self._direct_touch_button = None
@@ -15237,7 +15380,7 @@ class MainWindow(Background):
 
     def enter_display_sleep(self, manual: bool = False):
         if manual and getattr(self, "navigation_locked", False):
-            self.toast.show_message("Screen locked: temperature and alarm controls only")
+            self.toast.show_message(self.lock_restriction_message())
             return
         if getattr(self, "_display_sleeping", False):
             return
@@ -15490,7 +15633,7 @@ class MainWindow(Background):
             self.current_name = "Thermostat"
             self.stack.setCurrentWidget(self.pages["Thermostat"])
             self.header.set_page("Thermostat")
-            self.toast.show_message("Screen locked: temperature and alarm controls only")
+            self.toast.show_message(self.lock_restriction_message())
             QTimer.singleShot(60, lambda: self.sync_visible_page("Thermostat"))
             return
         previous_name = self.current_name
@@ -15533,16 +15676,27 @@ class MainWindow(Background):
         alarm = self.s.config.get("alarm") or {}
         return str(alarm.get("disarmCode") or "").strip()
 
-    def set_navigation_locked(self, locked: bool, *, show_toast: bool = False):
+    def lock_restriction_message(self) -> str:
+        if bool(getattr(self, "security_lock_active", False)):
+            return "Security lock active: alarm control only"
+        return "Screen locked: temperature and alarm controls only"
+
+    def set_navigation_locked(self, locked: bool, *, secure: bool | None = None, show_toast: bool = False):
         was_locked = bool(getattr(self, "navigation_locked", False))
         self.navigation_locked = bool(locked)
-        self.header.set_locked(self.navigation_locked)
+        if self.navigation_locked:
+            if secure is None:
+                secure = bool(getattr(self, "security_lock_active", False)) if was_locked else False
+            self.security_lock_active = bool(secure)
+        else:
+            self.security_lock_active = False
+        self.header.set_locked(self.navigation_locked, self.security_lock_active)
         self.sleep_button.setEnabled(not self.navigation_locked)
         self.sync_button.setEnabled(not self.navigation_locked)
 
         thermostat_page = self.pages.get("Thermostat")
         if isinstance(thermostat_page, ThermostatScreen):
-            thermostat_page.set_screen_locked(self.navigation_locked)
+            thermostat_page.set_screen_locked(self.navigation_locked, self.security_lock_active)
 
         if self.navigation_locked:
             if self.current_name != "Thermostat":
@@ -15568,7 +15722,7 @@ class MainWindow(Background):
                     lambda _err: None,
                 )
             if show_toast:
-                self.toast.show_message("Screen locked: temperature and alarm controls only")
+                self.toast.show_message(self.lock_restriction_message())
         else:
             if isinstance(thermostat_page, ThermostatScreen):
                 thermostat_page.sync(self.s.config, self.s.thermostat)
@@ -15577,14 +15731,22 @@ class MainWindow(Background):
 
     def toggle_navigation_lock(self):
         if not getattr(self, "navigation_locked", False):
-            self.set_navigation_locked(True, show_toast=True)
+            self.set_navigation_locked(True, secure=False, show_toast=True)
             return
-        code = self.alarm_disarm_code()
+        secure = bool(getattr(self, "security_lock_active", False))
+        code = self.settings_code() if secure else self.alarm_disarm_code()
         if code:
-            entered = CodeKeypadDialog.get_code(self, "Screen Locked", "Enter Alarm Disarm Code", code)
+            title = "Security Lock" if secure else "Screen Locked"
+            prompt = "Enter Settings Code" if secure else "Enter Alarm Disarm Code"
+            entered = CodeKeypadDialog.get_code(self, title, prompt, code)
             if entered is None:
                 return
         self.set_navigation_locked(False, show_toast=True)
+
+    def activate_security_lock(self):
+        self.set_navigation_locked(True, secure=True, show_toast=False)
+        self.header.flash_security_lock_confirmation()
+        self.toast.show_message("Security lock active: alarm control only")
 
     def run_async(self, name: str, worker: Callable[[], Any], on_success: Callable[[Any], None] | None = None, on_error: Callable[[str], None] | None = None):
         job_id = f"{name}-{time.monotonic_ns()}"
@@ -16179,7 +16341,7 @@ class MainWindow(Background):
 
     def show_settings(self):
         if getattr(self, "navigation_locked", False):
-            self.toast.show_message("Screen locked: temperature and alarm controls only")
+            self.toast.show_message(self.lock_restriction_message())
             return
         now = time.monotonic()
         if getattr(self, "_settings_dialog_open", False):
@@ -16223,7 +16385,7 @@ class MainWindow(Background):
 
     def show_info(self):
         if getattr(self, "navigation_locked", False):
-            self.toast.show_message("Screen locked: temperature and alarm controls only")
+            self.toast.show_message(self.lock_restriction_message())
             return
         now = time.monotonic()
         if now < getattr(self, "_ignore_info_until", 0):
