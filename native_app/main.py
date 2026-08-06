@@ -1281,7 +1281,7 @@ class ScreenLockButton(QAbstractButton):
         self._flash_timer.setInterval(500)
         self._flash_timer.timeout.connect(self._advance_confirmation_flash)
         self.setCursor(Qt.PointingHandCursor)
-        self.setFixedSize(154, 48)
+        self.setFixedSize(180, 48)
         self.setFont(font(9, QFont.Black, 18))
 
     def setLocked(self, locked: bool, secure: bool = False):
