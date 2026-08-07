@@ -7056,6 +7056,29 @@ class RoomScreen(Page):
         ctl["state"] = incoming_state
         ctl["on"] = room_control_active(ctl.get("state"), domain)
 
+    def _latest_room_control_config(self, ctl: dict) -> dict:
+        """Return the freshest saved config record for a Room control.
+
+        Room cards intentionally keep live HA state locally, while Settings saves
+        replace ``AppState.config`` with the backend's newly returned config object.
+        Resolve PIN policy from that newest object so On/Off protection changes take
+        effect immediately instead of being read from an older card/config snapshot.
+        """
+        entity_id = self._room_eid(ctl)
+        control_id = str((ctl or {}).get("id") or "").strip()
+        rooms = nested_get(self.s.config, "roomControl", "rooms", default={}) or {}
+        for room in rooms.values():
+            for saved in (room or {}).get("controls") or []:
+                if not isinstance(saved, dict):
+                    continue
+                saved_entity_id = str(saved.get("haEntityId") or "").strip()
+                saved_control_id = str(saved.get("id") or "").strip()
+                if entity_id and saved_entity_id == entity_id:
+                    return saved
+                if control_id and saved_control_id == control_id:
+                    return saved
+        return ctl or {}
+
     def _entry_code_for_action(self, ctl: dict, action: str) -> str | None:
         code = str((ctl or {}).get("accessCode") or "").strip()
         if not code or not room_control_action_requires_code(ctl, action):
@@ -7071,7 +7094,11 @@ class RoomScreen(Page):
             self.requestToast.emit("Still updating Home Assistant…")
             return
         action = room_control_next_action(ctl)
-        required_code = self._entry_code_for_action(ctl, action)
+        # The live card owns current on/off state, but the saved config owns PIN
+        # policy.  Keeping those sources separate prevents a stale Room page from
+        # treating both On and Off as protected after Settings changed one of them.
+        policy_ctl = self._latest_room_control_config(ctl)
+        required_code = self._entry_code_for_action(policy_ctl, action)
         entered_code = None
         if required_code:
             label = ctl.get("haName") or ctl.get("name") or "Entry"

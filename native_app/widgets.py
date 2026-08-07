@@ -767,6 +767,8 @@ class HoldCard(GlassPanel):
         super().__init__(parent, radius=24, dashed=dashed)
         self.setCursor(Qt.PointingHandCursor)
         self._held_fired = False
+        self._press_started_inside = False
+        self._release_slop = 10
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setInterval(hold_ms)
@@ -779,14 +781,30 @@ class HoldCard(GlassPanel):
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self._held_fired = False
+            self._press_started_inside = self.rect().contains(event.pos())
             self._timer.start()
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
         if self._timer.isActive():
             self._timer.stop()
-        if event.button() == Qt.LeftButton and not self._held_fired and self.rect().contains(event.pos()):
+        inside_or_touch_slop = bool(
+            self.rect().contains(event.pos())
+            or (
+                self._press_started_inside
+                and QRectF(self.rect()).adjusted(
+                    -self._release_slop,
+                    -self._release_slop,
+                    self._release_slop,
+                    self._release_slop,
+                ).contains(QPointF(event.pos()))
+            )
+        )
+        if event.button() == Qt.LeftButton and not self._held_fired and inside_or_touch_slop:
+            # The whole card is the tap target.  RoomControlCard uses this signal
+            # for its on/off action; long-press remains reserved for assignment.
             self.clicked.emit()
+        self._press_started_inside = False
         super().mouseReleaseEvent(event)
 
 
@@ -926,6 +944,16 @@ class RoomControlCard(HoldCard):
         assigned = bool(self.control.get("haEntityId"))
         protected = self._code_protected()
 
+        if assigned and not active:
+            # Off devices should be obvious at a glance without overpowering the
+            # room UI.  Use a soft red wash/border while preserving the glass card.
+            off_glow = QLinearGradient(r.topLeft(), r.bottomRight())
+            off_glow.setColorAt(0, QColor(255, 92, 92, 42))
+            off_glow.setColorAt(1, QColor(185, 42, 62, 24))
+            p.setBrush(off_glow)
+            p.setPen(QPen(QColor(255, 118, 118, 105), 1.8))
+            p.drawRoundedRect(r.adjusted(1.5, 1.5, -1.5, -1.5), self.radius, self.radius)
+
         if active:
             glow = QRadialGradient(QPointF(r.width()*0.28, r.height()*0.28), r.width()*0.58)
             glow.setColorAt(0, QColor(84, 255, 197, 95))
@@ -949,11 +977,14 @@ class RoomControlCard(HoldCard):
 
         badge_w = max(42, min(54, int(r.width() * 0.36)))
         badge = QRectF(r.width()-badge_w-pad, 18, badge_w, 24)
-        p.setBrush(QColor(93, 255, 206, 90 if active else 45))
+        if assigned and not active:
+            p.setBrush(QColor(255, 105, 105, 78))
+        else:
+            p.setBrush(QColor(93, 255, 206, 90 if active else 45))
         p.setPen(Qt.NoPen)
         p.drawRoundedRect(badge, 14, 14)
         p.setFont(font(7, QFont.Black, 10))
-        p.setPen(T.TEXT if active else T.TEXT_DIM)
+        p.setPen(T.TEXT if active else (QColor(255, 205, 205) if assigned else T.TEXT_DIM))
         p.drawText(badge, Qt.AlignCenter, "ON" if active else "OFF" if assigned else "ASSIGN")
 
         name = self.control.get("haName") or self.control.get("name") or "Unassigned"
