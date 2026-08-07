@@ -1315,6 +1315,8 @@ class MiniTextKeyboardDialog(QDialog):
         self.display.setStyleSheet("background:rgba(255,255,255,0.08); border:1px solid rgba(85,240,255,0.34); border-radius:18px; padding:12px;")
         root.addWidget(self.display)
 
+        self.uppercase = False
+        self.letter_buttons: list[tuple[KeypadButton, str]] = []
         rows = [
             "1234567890",
             "QWERTYUIOP",
@@ -1325,35 +1327,62 @@ class MiniTextKeyboardDialog(QDialog):
             row = QHBoxLayout()
             row.setSpacing(6)
             for ch in row_text:
-                b = KeypadButton(ch, active=True, min_h=42)
+                is_letter = ch.isalpha()
+                label = ch.lower() if is_letter else ch
+                b = KeypadButton(label, active=True, min_h=42)
                 b.setFixedHeight(42)
-                b.clicked.connect(lambda checked=False, c=ch: self.add_char(c.lower()))
+                if is_letter:
+                    b.clicked.connect(lambda checked=False, c=ch: self.add_letter(c))
+                    self.letter_buttons.append((b, ch))
+                else:
+                    b.clicked.connect(lambda checked=False, c=ch: self.add_char(c))
                 row.addWidget(b)
             root.addLayout(row)
 
         bottom = QHBoxLayout()
+        bottom.setSpacing(6)
+        self.shift = KeypadButton("ABC", active=False, min_h=46)
         space = KeypadButton("Space", active=False, min_h=46)
         back = KeypadButton("⌫", active=False, min_h=46)
         clear = KeypadButton("Clear", active=False, min_h=46)
         cancel = KeypadButton("Cancel", active=False, kind="danger", min_h=46)
         done = KeypadButton("Done", active=True, min_h=46)
-        for b in [space, back, clear, cancel, done]:
+        for b in [self.shift, space, back, clear, cancel, done]:
             b.setFixedHeight(46)
+        self.shift.clicked.connect(self.toggle_uppercase)
         space.clicked.connect(lambda: self.add_char(" "))
         back.clicked.connect(self.backspace)
         clear.clicked.connect(self.clear_text)
         cancel.clicked.connect(self.reject)
         done.clicked.connect(self.accept)
+        bottom.addWidget(self.shift)
         bottom.addWidget(space, 2)
         bottom.addWidget(back)
         bottom.addWidget(clear)
         bottom.addWidget(cancel)
         bottom.addWidget(done)
         root.addLayout(bottom)
+        self.refresh_keyboard()
         self.refresh()
+
+    def refresh_keyboard(self):
+        for button, ch in self.letter_buttons:
+            button.setText(ch if self.uppercase else ch.lower())
+            if hasattr(button, "setActive"):
+                button.setActive(True)
+        self.shift.setText("abc" if self.uppercase else "ABC")
+        if hasattr(self.shift, "setActive"):
+            self.shift.setActive(self.uppercase)
+
+    def toggle_uppercase(self):
+        self.uppercase = not self.uppercase
+        self.refresh_keyboard()
 
     def refresh(self):
         self.display.setText(self.result_text or "Search")
+
+    def add_letter(self, ch: str):
+        self.add_char(ch if self.uppercase else ch.lower())
 
     def add_char(self, ch: str):
         if len(self.result_text) < 80:
