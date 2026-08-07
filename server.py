@@ -11940,6 +11940,7 @@ def _normalize_media_player_item(ha_url: str, item: dict) -> dict:
         "mediaDuration": attrs.get("media_duration"),
         "source": attrs.get("source") or "",
         "sourceList": source_list,
+        "groupMembers": [str(value) for value in (attrs.get("group_members") or []) if str(value).startswith("media_player.")],
         "pictureUrl": picture,
         "supportedFeatures": attrs.get("supported_features"),
     }
@@ -12041,6 +12042,7 @@ def _normalize_generic_entity(item: dict) -> dict:
             "mediaTitle": attrs.get("media_title") or "",
             "mediaArtist": attrs.get("media_artist") or "",
             "mediaAlbum": attrs.get("media_album_name") or attrs.get("media_album") or "",
+            "groupMembers": [str(value) for value in (attrs.get("group_members") or []) if str(value).startswith("media_player.")],
         })
         payload["domain"] = domain
     return payload
@@ -13612,6 +13614,63 @@ def _call_media_service(ha_url: str, token: str, entity_id: str, action: str, va
         return {"entityId": entity_id, "name": entity_id, "state": action}
 
 
+def _call_media_group_service(ha_url: str, token: str, members: list[str], coordinator_id: str = "", action: str = "toggle") -> dict:
+    normalized: list[str] = []
+    for value in members if isinstance(members, list) else []:
+        entity_id = str(value or "").strip()
+        if entity_id.startswith("media_player.") and entity_id not in normalized:
+            normalized.append(entity_id)
+    if len(normalized) < 2:
+        raise ValueError("A media group needs at least two media_player.* entities")
+
+    coordinator = str(coordinator_id or "").strip()
+    if coordinator not in normalized:
+        coordinator = normalized[0]
+    others = [entity_id for entity_id in normalized if entity_id != coordinator]
+    action = str(action or "toggle").strip().lower()
+    if action not in {"toggle", "join", "unjoin"}:
+        raise ValueError("Unsupported media group action")
+
+    current = _fetch_ha_media_state(ha_url, token, coordinator)
+    current_members = current.get("groupMembers") if isinstance(current.get("groupMembers"), list) else []
+    currently_active = set(normalized).issubset(set(current_members))
+    should_join = action == "join" or (action == "toggle" and not currently_active)
+
+    if should_join:
+        _ha_json_request(ha_url, token, "POST", "/api/services/media_player/join", {
+            "entity_id": coordinator,
+            "group_members": others,
+        })
+        active = True
+    else:
+        # Unjoin each follower rather than the coordinator. This leaves the
+        # coordinator playing normally and avoids disturbing unrelated members
+        # that may have been added to its Sonos group outside this panel.
+        for entity_id in others:
+            _ha_json_request(ha_url, token, "POST", "/api/services/media_player/unjoin", {
+                "entity_id": entity_id,
+            })
+        active = False
+
+    _invalidate_ha_state_cache(ha_url, token)
+    states: list[dict] = []
+    try:
+        # Return refreshed states for the UI, but keep the service result
+        # optimistic. Sonos can publish group_members a moment after the REST
+        # service returns; recomputing here can otherwise make a successful
+        # press flash back to the old state until the next Audio-page poll.
+        states = _fetch_ha_media_states_for_entities(ha_url, token, normalized)
+    except Exception:
+        pass
+    return {
+        "active": bool(active),
+        "action": "join" if should_join else "unjoin",
+        "coordinatorId": coordinator,
+        "members": normalized,
+        "states": states,
+    }
+
+
 def _fetch_ha_state(ha_url: str, token: str, entity_id: str) -> dict:
     entity_id = (entity_id or "").strip()
     if not entity_id.startswith("cover."):
@@ -13790,7 +13849,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/thermostat/run-schedule", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/hardware/temperature-sensors", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply", "/api/house-sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/playback", "/api/assistant/config", "/api/assistant/knowledge", "/api/settings/web"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/thermostat/run-schedule", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/hardware/temperature-sensors", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/group", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply", "/api/house-sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/playback", "/api/assistant/config", "/api/assistant/knowledge", "/api/settings/web"}:
             self.send_error(404, "Not found")
             return
 
@@ -14096,6 +14155,16 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                     payload.get("action", "toggle"),
                 )
                 return _json(self, 200, {"ok": True, "control": control})
+
+            if path == "/api/ha/media/group":
+                result = _call_media_group_service(
+                    payload.get("url", ""),
+                    payload.get("token", ""),
+                    payload.get("members", []),
+                    payload.get("coordinatorId", ""),
+                    payload.get("action", "toggle"),
+                )
+                return _json(self, 200, {"ok": True, **result})
 
             if path == "/api/ha/media/action":
                 state = _call_media_service(

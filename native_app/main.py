@@ -509,6 +509,44 @@ def audio_ui_config(config: dict | None) -> dict:
     }
 
 
+def audio_group_definitions(config: dict | None) -> list[dict]:
+    """Return normalized saved Audio-page speaker groups."""
+    cfg = config if isinstance(config, dict) else {}
+    audio = cfg.get("audio") if isinstance(cfg.get("audio"), dict) else {}
+    raw_groups = audio.get("groups") if isinstance(audio.get("groups"), list) else []
+    groups: list[dict] = []
+    seen_ids: set[str] = set()
+    for index, raw in enumerate(raw_groups):
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("name") or "").strip()
+        members_raw = raw.get("members") if isinstance(raw.get("members"), list) else []
+        members: list[str] = []
+        for value in members_raw:
+            entity_id = str(value or "").strip()
+            if entity_id.startswith("media_player.") and entity_id not in members:
+                members.append(entity_id)
+        if not name or len(members) < 2:
+            continue
+        coordinator = str(raw.get("coordinatorId") or "").strip()
+        if coordinator not in members:
+            coordinator = members[0]
+        group_id = str(raw.get("id") or "").strip() or f"audio-group-{index + 1}"
+        base_id = group_id
+        suffix = 2
+        while group_id in seen_ids:
+            group_id = f"{base_id}-{suffix}"
+            suffix += 1
+        seen_ids.add(group_id)
+        groups.append({
+            "id": group_id,
+            "name": name,
+            "members": members,
+            "coordinatorId": coordinator,
+        })
+    return groups
+
+
 def audio_control_enabled(config: dict | None, key: str) -> bool:
     return bool(audio_ui_config(config).get("enabledControls", {}).get(key, True))
 
@@ -7900,6 +7938,9 @@ class AudioScreen(Page):
         self._audio_detected_player_id = ""
         self._audio_detect_running_player_id = ""
         self._audio_detect_last_attempt: dict[str, float] = {}
+        self.group_player_states: dict[str, dict] = {}
+        self.group_buttons: dict[str, RoundButton] = {}
+        self._group_signature: tuple = ()
         root = QHBoxLayout(self)
         root.setContentsMargins(28, 6, 28, 18)
         root.setSpacing(18)
@@ -7967,6 +8008,21 @@ class AudioScreen(Page):
         text_col.addStretch(1)
         now_lay.addLayout(text_col, 1)
         lay.addWidget(self.now_card, 1)
+
+        self.groups_strip = GlassPanel(radius=18)
+        self.groups_strip.setMaximumHeight(66)
+        groups_strip_lay = QHBoxLayout(self.groups_strip)
+        groups_strip_lay.setContentsMargins(14, 8, 12, 8)
+        groups_strip_lay.setSpacing(8)
+        groups_label = QLabel("GROUPS")
+        groups_label.setFont(font(8, QFont.Black))
+        groups_label.setStyleSheet("color:#49e6ff; letter-spacing:2px;")
+        groups_strip_lay.addWidget(groups_label)
+        self.group_buttons_layout = QHBoxLayout()
+        self.group_buttons_layout.setSpacing(8)
+        groups_strip_lay.addLayout(self.group_buttons_layout, 1)
+        lay.addWidget(self.groups_strip, 0)
+        self.rebuild_audio_group_buttons()
 
         self.progress = QFrame()
         self.progress.setFixedHeight(10)
@@ -8151,6 +8207,110 @@ class AudioScreen(Page):
         self.tv_power.held.connect(lambda: self.assign_audio_control("tv_power"))
         self.projector.held.connect(lambda: self.assign_audio_control("projector"))
 
+    def configured_audio_groups(self) -> list[dict]:
+        return audio_group_definitions(self.config)
+
+    def _audio_group_signature(self) -> tuple:
+        return tuple(
+            (str(group.get("id") or ""), str(group.get("name") or ""), tuple(group.get("members") or []), str(group.get("coordinatorId") or ""))
+            for group in self.configured_audio_groups()
+        )
+
+    def rebuild_audio_group_buttons(self):
+        if not hasattr(self, "group_buttons_layout"):
+            return
+        signature = self._audio_group_signature()
+        if signature == self._group_signature and self.group_buttons:
+            self.update_audio_group_buttons()
+            return
+        self._group_signature = signature
+        while self.group_buttons_layout.count():
+            item = self.group_buttons_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.group_buttons = {}
+        groups = self.configured_audio_groups()
+        self.groups_strip.setVisible(bool(groups))
+        for group in groups:
+            group_id = str(group.get("id") or "")
+            btn = RoundButton(str(group.get("name") or "Group"), min_h=42)
+            btn.setMaximumHeight(46)
+            btn.setMinimumWidth(110)
+            btn.setToolTip("Press to group. Press again to ungroup.")
+            btn.clicked.connect(lambda checked=False, g=copy.deepcopy(group): self.toggle_audio_group(g))
+            self.group_buttons[group_id] = btn
+            self.group_buttons_layout.addWidget(btn)
+        self.group_buttons_layout.addStretch(1)
+        self.update_audio_group_buttons()
+
+    def audio_group_is_active(self, group: dict) -> bool:
+        members = [str(value or "").strip() for value in group.get("members") or [] if str(value or "").strip().startswith("media_player.")]
+        if len(members) < 2:
+            return False
+        coordinator = str(group.get("coordinatorId") or "").strip()
+        candidates = []
+        if coordinator:
+            candidates.append(self.group_player_states.get(coordinator) or {})
+        for member in members:
+            state = self.group_player_states.get(member) or {}
+            if state and state not in candidates:
+                candidates.append(state)
+        wanted = set(members)
+        for state in candidates:
+            group_members = state.get("groupMembers") or state.get("group_members") or []
+            if isinstance(group_members, str):
+                group_members = [group_members]
+            if wanted.issubset({str(value) for value in group_members if value}):
+                return True
+        return False
+
+    def update_audio_group_buttons(self):
+        for group in self.configured_audio_groups():
+            group_id = str(group.get("id") or "")
+            button = self.group_buttons.get(group_id)
+            if button is not None:
+                button.setActive(self.audio_group_is_active(group))
+
+    def toggle_audio_group(self, group: dict):
+        members = list(group.get("members") or [])
+        if len(members) < 2:
+            self.requestToast.emit("Audio group needs at least two players")
+            return
+        group_id = str(group.get("id") or "")
+        button = self.group_buttons.get(group_id)
+        if button is not None:
+            button.setEnabled(False)
+        payload = self.s.ha_payload({
+            "members": members,
+            "coordinatorId": group.get("coordinatorId") or members[0],
+            "action": "toggle",
+        })
+
+        def done(result):
+            states = (result or {}).get("states") if isinstance(result, dict) else []
+            for state in states or []:
+                if isinstance(state, dict) and state.get("entityId"):
+                    self.group_player_states[str(state.get("entityId"))] = state
+            active = bool((result or {}).get("active")) if isinstance(result, dict) else False
+            if button is not None:
+                button.setEnabled(True)
+                button.setActive(active)
+            name = str(group.get("name") or "Audio group")
+            self.requestToast.emit(f"{name}: {'grouped' if active else 'ungrouped'}")
+
+        def failed(message):
+            if button is not None:
+                button.setEnabled(True)
+            self.requestToast.emit(f"Group failed: {message}")
+
+        self.run_async(
+            f"audio-group-{group_id or 'toggle'}",
+            lambda: self.s.api.post("/api/ha/media/group", payload),
+            done,
+            failed,
+        )
+
     def player_id(self):
         ha = self.s.ha()
         return ha.get("selectedMediaPlayerId") or nested_get(ha, "mediaPlayerEntity", "entityId", default="") or ""
@@ -8171,6 +8331,7 @@ class AudioScreen(Page):
         if not self.player_state:
             self.artist_label.setText(title)
         self.apply_audio_control_state()
+        self.rebuild_audio_group_buttons()
 
         # Discover tone-control entities once for each selected player. The
         # returned number.* records include Home Assistant's live min/max/step,
@@ -8940,15 +9101,26 @@ class AudioScreen(Page):
 
     def poll_player_only(self):
         eid = self.player_id()
-        if not eid:
+        groups = self.configured_audio_groups()
+        entity_ids: list[str] = []
+        if eid:
+            entity_ids.append(eid)
+        for group in groups:
+            coordinator = str(group.get("coordinatorId") or "").strip()
+            if coordinator.startswith("media_player.") and coordinator not in entity_ids:
+                entity_ids.append(coordinator)
+        if not entity_ids:
             return
-        payload = self.s.ha_payload({"entityIds": [eid]})
+        payload = self.s.ha_payload({"entityIds": entity_ids})
 
         def done(result):
             players = (result or {}).get("players") or []
-            if players:
-                self.player_state = players[0]
+            by_id = {str(player.get("entityId")): player for player in players if isinstance(player, dict) and player.get("entityId")}
+            self.group_player_states.update(by_id)
+            if eid and eid in by_id:
+                self.player_state = by_id[eid]
                 self.apply_player_state()
+            self.update_audio_group_buttons()
 
         self.run_async("audio-poll", lambda: self.s.api.post("/api/ha/media/states", payload), done, None)
 
@@ -10425,7 +10597,136 @@ class SimplePageSettingsDialog(QDialog):
 
 
 
+class AudioGroupEditorDialog(QDialog):
+    def __init__(self, players: list[dict], group: dict | None = None, preferred_coordinator: str = "", parent=None):
+        super().__init__(parent)
+        self.group = copy.deepcopy(group) if isinstance(group, dict) else {}
+        self.preferred_coordinator = str(preferred_coordinator or "").strip()
+        self.result_group: dict | None = None
+        self.checks: dict[str, QCheckBox] = {}
+        self.setWindowTitle("Audio Group")
+        self.setModal(True)
+        self.setWindowFlag(Qt.FramelessWindowHint, True)
+        self.setMinimumSize(720, 520)
+        self.resize(960, 700)
+        self.setStyleSheet("""
+            QDialog { background:#07101f; color:#f7fbff; }
+            QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
+            QLineEdit { background:rgba(7,13,25,0.96); color:#ffffff; border:1px solid rgba(100,229,255,0.30); border-radius:12px; padding:8px 11px; font-weight:900; font-size:15px; min-height:38px; }
+            QCheckBox { color:#f7fbff; font-family:Arial; font-weight:900; font-size:15px; spacing:12px; padding:8px; }
+            QCheckBox::indicator { width:28px; height:28px; border-radius:8px; border:2px solid rgba(107,226,255,0.42); background:rgba(7,13,25,0.86); }
+            QCheckBox::indicator:checked { background:#49e6ff; border:2px solid rgba(255,255,255,0.55); }
+            QScrollArea { background:transparent; border:0; }
+            QScrollArea > QWidget > QWidget { background:transparent; }
+        """)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(22, 16, 22, 18)
+        root.setSpacing(12)
+
+        header = QHBoxLayout()
+        title = QLabel("Edit Audio Group" if self.group else "Add Audio Group")
+        title.setFont(font(27, QFont.Black))
+        header.addWidget(title, 1)
+        cancel = RoundButton("Cancel", min_h=44)
+        save = RoundButton("Save Group", active=True, min_h=44)
+        cancel.clicked.connect(self.reject)
+        save.clicked.connect(self.save_group)
+        header.addWidget(cancel)
+        header.addWidget(save)
+        root.addLayout(header)
+
+        name_label = QLabel("GROUP NAME")
+        name_label.setFont(font(9, QFont.Black))
+        name_label.setStyleSheet("color:#49e6ff; letter-spacing:2px;")
+        root.addWidget(name_label)
+        self.name_edit = QLineEdit(str(self.group.get("name") or ""))
+        self.name_edit.setPlaceholderText("Example: Whole House")
+        self.name_edit.mousePressEvent = lambda event: self.open_name_keyboard()
+        root.addWidget(self.name_edit)
+
+        members_label = QLabel("MEDIA PLAYERS")
+        members_label.setFont(font(9, QFont.Black))
+        members_label.setStyleSheet("color:#49e6ff; letter-spacing:2px; margin-top:4px;")
+        root.addWidget(members_label)
+        hint = QLabel("Select at least two Home Assistant media players. Pressing the group tile on Audio will group them; pressing it again will ungroup them.")
+        hint.setWordWrap(True)
+        hint.setFont(font(10, QFont.Black))
+        hint.setStyleSheet("color:rgba(219,227,244,0.72);")
+        root.addWidget(hint)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        member_body = QWidget()
+        member_layout = QVBoxLayout(member_body)
+        member_layout.setContentsMargins(0, 0, 0, 0)
+        member_layout.setSpacing(7)
+        selected = set(self.group.get("members") or [])
+        normalized_players: list[dict] = []
+        seen: set[str] = set()
+        for player in players or []:
+            if not isinstance(player, dict):
+                continue
+            entity_id = str(player.get("entityId") or player.get("entity_id") or "").strip()
+            if not entity_id.startswith("media_player.") or entity_id in seen:
+                continue
+            seen.add(entity_id)
+            normalized_players.append({"entityId": entity_id, "name": str(player.get("name") or entity_id)})
+        for entity_id in selected:
+            if entity_id.startswith("media_player.") and entity_id not in seen:
+                normalized_players.append({"entityId": entity_id, "name": entity_id.split(".", 1)[-1].replace("_", " ").title()})
+        normalized_players.sort(key=lambda item: str(item.get("name") or item.get("entityId") or "").lower())
+        for player in normalized_players:
+            entity_id = player["entityId"]
+            row = GlassPanel(radius=16)
+            row_lay = QHBoxLayout(row)
+            row_lay.setContentsMargins(12, 4, 12, 4)
+            cb = QCheckBox(str(player.get("name") or entity_id))
+            cb.setChecked(entity_id in selected)
+            cb.setToolTip(entity_id)
+            self.checks[entity_id] = cb
+            row_lay.addWidget(cb, 1)
+            entity = QLabel(entity_id)
+            entity.setFont(font(8, QFont.Black))
+            entity.setStyleSheet("color:rgba(219,227,244,0.56);")
+            row_lay.addWidget(entity)
+            member_layout.addWidget(row)
+        member_layout.addStretch(1)
+        scroll.setWidget(member_body)
+        root.addWidget(scroll, 1)
+        QTimer.singleShot(0, self.fit_to_screen)
+
+    def fit_to_screen(self):
+        fit_dialog_to_available_screen(self, margin=0)
+
+    def open_name_keyboard(self):
+        value = MiniTextKeyboardDialog.get_text(self, "Audio Group Name", self.name_edit.text())
+        if value is not None:
+            self.name_edit.setText(value.strip())
+
+    def save_group(self):
+        name = self.name_edit.text().strip()
+        members = [entity_id for entity_id, checkbox in self.checks.items() if checkbox.isChecked()]
+        if not name:
+            QMessageBox.warning(self, "Audio Group", "Enter a name for this group.")
+            return
+        if len(members) < 2:
+            QMessageBox.warning(self, "Audio Group", "Select at least two media players.")
+            return
+        existing_coordinator = str(self.group.get("coordinatorId") or "").strip()
+        if self.preferred_coordinator in members:
+            coordinator = self.preferred_coordinator
+        elif existing_coordinator in members:
+            coordinator = existing_coordinator
+        else:
+            coordinator = members[0]
+        group_id = str(self.group.get("id") or "").strip() or f"audio-group-{int(time.time() * 1000)}"
+        self.result_group = {"id": group_id, "name": name, "members": members, "coordinatorId": coordinator}
+        self.accept()
+
+
 class AudioSettingsDialog(QDialog):
+    mediaPlayersLoaded = pyqtSignal(object)
     saved = pyqtSignal()
 
     def __init__(self, state: AppState, parent=None):
@@ -10442,6 +10743,11 @@ class AudioSettingsDialog(QDialog):
             for preset, _label, _icon, _kind in AUDIO_PRESET_ORDER
         }
         self.scene_mode = False
+        self.settings_mode = "options"
+        self.group_edits = audio_group_definitions(self.s.config)
+        self.available_media_players = self._cached_media_players()
+        self._media_players_loading = False
+        self.mediaPlayersLoaded.connect(self.handle_media_players_loaded)
         self.setWindowTitle("Audio Settings")
         self.setModal(True)
         self.setWindowFlag(Qt.FramelessWindowHint, True)
@@ -10495,12 +10801,16 @@ class AudioSettingsDialog(QDialog):
         header.addLayout(title_col, 1)
         self.options_btn = RoundButton("Audio Options", active=True, min_h=42)
         self.options_btn.setMinimumWidth(150)
-        self.options_btn.clicked.connect(lambda checked=False: self.set_scene_mode(False))
+        self.options_btn.clicked.connect(lambda checked=False: self.set_settings_mode("options"))
         self.set_scenes_btn = RoundButton("Set Scenes", min_h=42)
         self.set_scenes_btn.setMinimumWidth(140)
-        self.set_scenes_btn.clicked.connect(lambda checked=False: self.set_scene_mode(True))
+        self.set_scenes_btn.clicked.connect(lambda checked=False: self.set_settings_mode("scenes"))
+        self.groups_btn = RoundButton("Groups", min_h=42)
+        self.groups_btn.setMinimumWidth(120)
+        self.groups_btn.clicked.connect(lambda checked=False: self.set_settings_mode("groups"))
         header.addWidget(self.options_btn)
         header.addWidget(self.set_scenes_btn)
+        header.addWidget(self.groups_btn)
         cancel = RoundButton("Cancel", min_h=42)
         cancel.setMinimumWidth(120)
         cancel.clicked.connect(self.reject)
@@ -10613,8 +10923,57 @@ class AudioSettingsDialog(QDialog):
         scene_lay.addWidget(self.scene_editor, 1)
         root.addWidget(scene_panel, 2)
 
+        self.groups_widget = QWidget()
+        groups_root = QVBoxLayout(self.groups_widget)
+        groups_root.setContentsMargins(0, 0, 0, 0)
+        groups_root.setSpacing(10)
+        groups_panel = GlassPanel(radius=24, strong=True)
+        groups_lay = QVBoxLayout(groups_panel)
+        groups_lay.setContentsMargins(20, 16, 20, 18)
+        groups_lay.setSpacing(10)
+        groups_top = QHBoxLayout()
+        groups_title_col = QVBoxLayout()
+        groups_title_col.setSpacing(3)
+        groups_title = QLabel("Speaker Groups")
+        groups_title.setFont(font(20, QFont.Black))
+        groups_hint = QLabel("Create named Home Assistant media-player groups for one-touch group / ungroup control on the Audio page.")
+        groups_hint.setWordWrap(True)
+        groups_hint.setFont(font(10, QFont.Black))
+        groups_hint.setStyleSheet("color:rgba(219,227,244,0.72);")
+        groups_title_col.addWidget(groups_title)
+        groups_title_col.addWidget(groups_hint)
+        groups_top.addLayout(groups_title_col, 1)
+        self.refresh_players_btn = RoundButton("Refresh Players", min_h=40)
+        self.refresh_players_btn.setMinimumWidth(150)
+        self.refresh_players_btn.clicked.connect(lambda checked=False: self.refresh_media_players(True))
+        self.add_group_btn = RoundButton("+ Add Group", active=True, min_h=40)
+        self.add_group_btn.setMinimumWidth(140)
+        self.add_group_btn.clicked.connect(lambda checked=False: self.edit_audio_group(None))
+        groups_top.addWidget(self.refresh_players_btn)
+        groups_top.addWidget(self.add_group_btn)
+        groups_lay.addLayout(groups_top)
+
+        self.groups_status = QLabel("")
+        self.groups_status.setWordWrap(True)
+        self.groups_status.setFont(font(9, QFont.Black))
+        self.groups_status.setStyleSheet("color:#9fb0c8;")
+        groups_lay.addWidget(self.groups_status)
+
+        group_scroll = QScrollArea()
+        group_scroll.setWidgetResizable(True)
+        group_scroll.setFrameShape(QFrame.NoFrame)
+        self.groups_list_body = QWidget()
+        self.groups_list_lay = QVBoxLayout(self.groups_list_body)
+        self.groups_list_lay.setContentsMargins(0, 0, 0, 0)
+        self.groups_list_lay.setSpacing(8)
+        group_scroll.setWidget(self.groups_list_body)
+        groups_lay.addWidget(group_scroll, 1)
+        groups_root.addWidget(groups_panel, 1)
+        root.addWidget(self.groups_widget, 2)
+
         self.build_scene_editor()
-        self.set_scene_mode(False)
+        self.render_audio_groups()
+        self.set_settings_mode("options")
         QTimer.singleShot(0, self.fit_to_screen)
 
     def showEvent(self, event):
@@ -10625,16 +10984,164 @@ class AudioSettingsDialog(QDialog):
         fit_dialog_to_available_screen(self, margin=0)
 
     def set_scene_mode(self, enabled: bool):
-        self.scene_mode = bool(enabled)
+        self.set_settings_mode("scenes" if enabled else "options")
+
+    def set_settings_mode(self, mode: str):
+        mode = str(mode or "options").strip().lower()
+        if mode not in {"options", "scenes", "groups"}:
+            mode = "options"
+        self.settings_mode = mode
+        self.scene_mode = mode == "scenes"
         if hasattr(self, "options_widget"):
-            self.options_widget.setVisible(not self.scene_mode)
+            self.options_widget.setVisible(mode == "options")
         if hasattr(self, "scene_panel"):
-            self.scene_panel.setVisible(self.scene_mode)
+            self.scene_panel.setVisible(mode == "scenes")
+        if hasattr(self, "groups_widget"):
+            self.groups_widget.setVisible(mode == "groups")
         if hasattr(self, "options_btn"):
-            self.options_btn.setActive(not self.scene_mode)
+            self.options_btn.setActive(mode == "options")
         if hasattr(self, "set_scenes_btn"):
-            self.set_scenes_btn.setActive(self.scene_mode)
+            self.set_scenes_btn.setActive(mode == "scenes")
+        if hasattr(self, "groups_btn"):
+            self.groups_btn.setActive(mode == "groups")
+        if mode == "groups":
+            self.render_audio_groups()
+            self.refresh_media_players(False)
         self.fit_to_screen()
+
+    def _cached_media_players(self) -> list[dict]:
+        ha = self.s.ha()
+        values = ha.get("mediaPlayerEntities") or (ha.get("audioAvailableEntities") or {}).get("mediaPlayers") or []
+        players: list[dict] = []
+        seen: set[str] = set()
+        for item in values if isinstance(values, list) else []:
+            if not isinstance(item, dict):
+                continue
+            entity_id = str(item.get("entityId") or item.get("entity_id") or "").strip()
+            if entity_id.startswith("media_player.") and entity_id not in seen:
+                seen.add(entity_id)
+                players.append({"entityId": entity_id, "name": item.get("name") or item.get("friendly_name") or entity_id})
+        selected = str(ha.get("selectedMediaPlayerId") or "").strip()
+        if selected.startswith("media_player.") and selected not in seen:
+            selected_name = nested_get(ha, "mediaPlayerEntity", "name", default="") or selected
+            players.append({"entityId": selected, "name": selected_name})
+            seen.add(selected)
+        for group in self.group_edits:
+            for entity_id in group.get("members") or []:
+                if entity_id not in seen:
+                    players.append({"entityId": entity_id, "name": entity_id.split(".", 1)[-1].replace("_", " ").title()})
+                    seen.add(entity_id)
+        players.sort(key=lambda item: str(item.get("name") or item.get("entityId") or "").lower())
+        return players
+
+    def refresh_media_players(self, notify: bool = False):
+        if self._media_players_loading:
+            return
+        self._media_players_loading = True
+        if hasattr(self, "refresh_players_btn"):
+            self.refresh_players_btn.setEnabled(False)
+        if hasattr(self, "groups_status"):
+            self.groups_status.setText("Refreshing Home Assistant media players…")
+
+        def worker():
+            try:
+                data = self.s.api.post("/api/ha/media_players", self.s.ha_payload())
+                self.mediaPlayersLoaded.emit({"players": data.get("players") or [], "error": "", "notify": notify})
+            except Exception as exc:
+                self.mediaPlayersLoaded.emit({"players": [], "error": str(exc), "notify": notify})
+
+        threading.Thread(target=worker, name="audio-settings-media-players", daemon=True).start()
+
+    def handle_media_players_loaded(self, result: object):
+        self._media_players_loading = False
+        if hasattr(self, "refresh_players_btn"):
+            self.refresh_players_btn.setEnabled(True)
+        info = result if isinstance(result, dict) else {}
+        error = str(info.get("error") or "")
+        players = info.get("players") if isinstance(info.get("players"), list) else []
+        if players:
+            self.available_media_players = players
+            try:
+                ha = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
+                ha["mediaPlayerEntities"] = copy.deepcopy(players)
+            except Exception:
+                pass
+        elif not self.available_media_players:
+            self.available_media_players = self._cached_media_players()
+        if error:
+            self.groups_status.setText(f"Could not refresh Home Assistant players: {error}")
+        else:
+            self.groups_status.setText(f"{len(self.available_media_players)} media player(s) available.")
+
+    def render_audio_groups(self):
+        if not hasattr(self, "groups_list_lay"):
+            return
+        self._clear_layout(self.groups_list_lay)
+        if not self.group_edits:
+            empty = QLabel("No groups created yet. Tap + Add Group to choose two or more media players.")
+            empty.setWordWrap(True)
+            empty.setAlignment(Qt.AlignCenter)
+            empty.setFont(font(12, QFont.Black))
+            empty.setStyleSheet("color:rgba(219,227,244,0.68); padding:28px;")
+            self.groups_list_lay.addWidget(empty)
+            self.groups_list_lay.addStretch(1)
+            return
+        for index, group in enumerate(self.group_edits):
+            card = GlassPanel(radius=18)
+            row = QHBoxLayout(card)
+            row.setContentsMargins(14, 9, 12, 9)
+            row.setSpacing(10)
+            detail = QVBoxLayout()
+            detail.setSpacing(2)
+            name = QLabel(str(group.get("name") or "Audio Group"))
+            name.setFont(font(14, QFont.Black))
+            members = list(group.get("members") or [])
+            member_text = "  ·  ".join(entity_id.split(".", 1)[-1].replace("_", " ").title() for entity_id in members)
+            member_label = QLabel(member_text)
+            member_label.setWordWrap(True)
+            member_label.setFont(font(9, QFont.Black))
+            member_label.setStyleSheet("color:rgba(219,227,244,0.66);")
+            detail.addWidget(name)
+            detail.addWidget(member_label)
+            row.addLayout(detail, 1)
+            edit = RoundButton("Edit", active=True, min_h=38)
+            delete = RoundButton("Delete", min_h=38)
+            edit.setMinimumWidth(92)
+            delete.setMinimumWidth(96)
+            edit.clicked.connect(lambda checked=False, i=index: self.edit_audio_group(i))
+            delete.clicked.connect(lambda checked=False, i=index: self.delete_audio_group(i))
+            row.addWidget(edit)
+            row.addWidget(delete)
+            self.groups_list_lay.addWidget(card)
+        self.groups_list_lay.addStretch(1)
+
+    def edit_audio_group(self, index: int | None):
+        players = self.available_media_players or self._cached_media_players()
+        if not players:
+            QMessageBox.warning(self, "Audio Groups", "No Home Assistant media players are available yet. Tap Refresh Players and try again.")
+            return
+        existing = self.group_edits[index] if isinstance(index, int) and 0 <= index < len(self.group_edits) else None
+        preferred = str(self.s.ha().get("selectedMediaPlayerId") or "").strip()
+        dlg = AudioGroupEditorDialog(players, existing, preferred, self)
+        if dlg.exec_() != QDialog.Accepted or not isinstance(dlg.result_group, dict):
+            return
+        if existing is None:
+            self.group_edits.append(copy.deepcopy(dlg.result_group))
+        else:
+            self.group_edits[index] = copy.deepcopy(dlg.result_group)
+        self.render_audio_groups()
+        self.groups_status.setText("Group changes are ready. Press Save to keep them.")
+
+    def delete_audio_group(self, index: int):
+        if not (0 <= index < len(self.group_edits)):
+            return
+        group = self.group_edits[index]
+        name = str(group.get("name") or "this group")
+        if QMessageBox.question(self, "Delete Audio Group", f"Delete {name}?") != QMessageBox.Yes:
+            return
+        self.group_edits.pop(index)
+        self.render_audio_groups()
+        self.groups_status.setText("Group removed. Press Save to keep the change.")
 
     def _clear_layout(self, layout: QHBoxLayout | QVBoxLayout | QGridLayout):
         while layout.count():
@@ -10843,6 +11350,7 @@ class AudioSettingsDialog(QDialog):
             audio["enabledControls"] = {key: bool(cb.isChecked()) for key, cb in self.checks.items()}
             audio["autoNavigate"] = bool(self.auto_nav.isChecked())
             audio["presets"] = copy.deepcopy(self.preset_edits)
+            audio["groups"] = copy.deepcopy(self.group_edits)
             self.s.save_config()
             self.saved.emit()
             self.accept()
@@ -11190,6 +11698,7 @@ class SettingsDialog(QDialog):
             "Security Codes": "Alarm disarm and settings-access PINs",
             "Thermostat Unit": "The name used to identify this thermostat",
             "Screen Settings": "Rotation, inactivity sleep, and motion-based screen control",
+            "Audio Settings": "Create media-player groups and configure Audio-page controls",
             "Jarvis": "Home Assistant speech volume, response, and screen-display controls",
         }
         return descriptions.get(str(title or ""), "Open this section to view its settings")
@@ -11356,6 +11865,20 @@ class SettingsDialog(QDialog):
             "panel": panel,
         })
         return panel
+
+    def add_section_link(self, title: str, row: int, col: int, callback, rowspan: int = 1, colspan: int = 1):
+        header = self.section_header_button(title)
+        header.clicked.connect(callback)
+        self._section_entries.append({
+            "title": title,
+            "row": int(row),
+            "col": int(col),
+            "rowspan": int(rowspan),
+            "colspan": int(colspan),
+            "header": header,
+            "panel": None,
+        })
+        return header
 
     def finalize_section_index(self):
         entries = sorted(self._section_entries, key=lambda item: (item["row"], item["col"], item["title"]))
@@ -12479,6 +13002,12 @@ class SettingsDialog(QDialog):
         self.saved.emit()
 
 
+    def open_audio_settings_from_comfort(self):
+        dlg = AudioSettingsDialog(self.s, self)
+        dlg.set_settings_mode("groups")
+        dlg.saved.connect(self.saved.emit)
+        dlg.exec_()
+
     def screen_checkbox_style(self) -> str:
         return """
             QCheckBox {
@@ -13113,6 +13642,11 @@ class SettingsDialog(QDialog):
         sleep_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
         display.layout().addWidget(sleep_note)
         self.refresh_screen_setting_controls()
+
+        # Keep Audio Settings directly to the right of Screen Settings in the
+        # two-column Comfort Setup index. It opens the existing Audio settings
+        # dialog on the new speaker-groups page so there is one source of truth.
+        self.add_section_link("Audio Settings", 7, 2, self.open_audio_settings_from_comfort, 1, 2)
 
         # Section headers are positioned after all panels have been built.
 
