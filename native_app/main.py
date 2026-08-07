@@ -10180,6 +10180,27 @@ class RoomManagerSettingsDialog(QDialog):
         self.code_hint.setFont(font(10, QFont.Black))
         self.code_hint.setStyleSheet("color:#c9d5ea; background:transparent; border:0;")
         code_root.addWidget(self.code_hint)
+
+        # Keep Code settings manageable as Room Control grows. Each room gets a
+        # compact filter tab so only that room's entries are shown below.
+        self.code_room_filter = str(self.selected_key or "")
+        self.code_room_buttons: dict[str, RoundButton] = {}
+        self.code_room_tabs = QScrollArea()
+        self.code_room_tabs.setObjectName("roomCodeTabs")
+        self.code_room_tabs.setFixedHeight(54)
+        self.code_room_tabs.setFrameShape(QFrame.NoFrame)
+        self.code_room_tabs.setWidgetResizable(True)
+        self.code_room_tabs.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.code_room_tabs.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.code_room_tabs.setStyleSheet("QScrollArea#roomCodeTabs { background:transparent; border:0; }")
+        self.code_room_tabs_content = QWidget()
+        self.code_room_tabs_content.setStyleSheet("background:transparent; border:0;")
+        self.code_room_tabs_lay = QHBoxLayout(self.code_room_tabs_content)
+        self.code_room_tabs_lay.setContentsMargins(0, 2, 0, 2)
+        self.code_room_tabs_lay.setSpacing(8)
+        self.code_room_tabs.setWidget(self.code_room_tabs_content)
+        code_root.addWidget(self.code_room_tabs)
+
         self.code_scroll = QScrollArea()
         self.code_scroll.setWidgetResizable(True)
         self.code_scroll.setFrameShape(QFrame.NoFrame)
@@ -10242,7 +10263,40 @@ class RoomManagerSettingsDialog(QDialog):
             "Add/delete rooms, then select a room and set how many entries it should show. New empty entries appear on that page so they can be assigned to Home Assistant devices."
         )
         if is_code:
+            self.rebuild_code_room_tabs()
             self.rebuild_code_entries()
+
+    def rebuild_code_room_tabs(self):
+        if self.page_name != "Room" or not hasattr(self, "code_room_tabs_lay"):
+            return
+        while self.code_room_tabs_lay.count():
+            item = self.code_room_tabs_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.code_room_buttons = {}
+        _section, rooms = self.ensure_model()
+        if self.code_room_filter not in rooms:
+            self.code_room_filter = self.selected_key if self.selected_key in rooms else next(iter(rooms), "")
+        for room_key, room in rooms.items():
+            room_key = str(room_key)
+            label = str(room.get("label") or room_key.replace("-", " ").title())
+            count = len(room.get("controls") or [])
+            btn = RoundButton(f"{label}  {count}", active=room_key == self.code_room_filter, min_h=40)
+            btn.setMinimumWidth(130)
+            btn.clicked.connect(lambda checked=False, k=room_key: self.select_code_room(k))
+            self.code_room_buttons[room_key] = btn
+            self.code_room_tabs_lay.addWidget(btn)
+        self.code_room_tabs_lay.addStretch(1)
+
+    def select_code_room(self, room_key: str):
+        _section, rooms = self.ensure_model()
+        room_key = str(room_key or "")
+        if room_key not in rooms:
+            return
+        self.code_room_filter = room_key
+        for key, btn in self.code_room_buttons.items():
+            btn.setActive(key == room_key)
+        self.rebuild_code_entries()
 
     def _all_room_control_entries(self) -> list[tuple[str, str, dict, int]]:
         section, rooms = self.ensure_model()
@@ -10262,8 +10316,13 @@ class RoomManagerSettingsDialog(QDialog):
             if item.widget():
                 item.widget().deleteLater()
         entries = self._all_room_control_entries()
+        if self.code_room_filter:
+            entries = [entry for entry in entries if entry[0] == self.code_room_filter]
         if not entries:
-            empty = QLabel("No Room entries yet. Go to Rooms, add entries, then assign Home Assistant devices on the Room page.")
+            _section, rooms = self.ensure_model()
+            room = rooms.get(self.code_room_filter) or {}
+            room_label = str(room.get("label") or self.code_room_filter or "this room")
+            empty = QLabel(f"No Room entries in {room_label}. Go to Rooms, add entries, then assign Home Assistant devices on the Room page.")
             empty.setWordWrap(True)
             empty.setAlignment(Qt.AlignCenter)
             empty.setFont(font(14, QFont.Black))
@@ -10372,11 +10431,11 @@ class RoomManagerSettingsDialog(QDialog):
         try:
             self.s.save_config()
             self.saved.emit()
-            # The tapped checkbox already shows the new state. Rebuilding the whole
-            # scroll list from inside that checkbox signal can briefly tear down the
-            # active widget and make the settings modal appear to disappear/flicker
-            # on the Pi touchscreen. The list will be rebuilt when the user changes
-            # tabs, sets/clears a code, or closes and reopens settings.
+            # Refresh immediately after the keypad closes so the row changes from
+            # NO CODE / Set Code to CODE SET / Change Code and enables the state
+            # protection choices. Without this refresh the save succeeded but the
+            # UI looked like the OK action had done nothing.
+            self.rebuild_code_entries()
         except Exception as exc:
             QMessageBox.warning(self, "Save failed", str(exc))
 
@@ -10472,10 +10531,13 @@ class RoomManagerSettingsDialog(QDialog):
         self.delete_btn.setEnabled(len(rooms) > 1)
         self.update_entry_controls()
         if self.page_name == "Room" and self.active_tab == "code":
+            self.rebuild_code_room_tabs()
             self.rebuild_code_entries()
 
     def select_room(self, key: str):
         self.selected_key = key
+        if self.page_name == "Room":
+            self.code_room_filter = key
         self.s.config.setdefault(self.domain, {})["room"] = key
         try:
             self.s.save_config()
@@ -10525,6 +10587,8 @@ class RoomManagerSettingsDialog(QDialog):
         rooms[key] = {"label": label, self.item_key: []}
         section["room"] = key
         self.selected_key = key
+        if self.page_name == "Room":
+            self.code_room_filter = key
         try:
             self.s.save_config()
             self.saved.emit()
@@ -10546,6 +10610,8 @@ class RoomManagerSettingsDialog(QDialog):
         rooms.pop(key, None)
         section["room"] = next(iter(rooms))
         self.selected_key = section["room"]
+        if self.page_name == "Room":
+            self.code_room_filter = self.selected_key
         try:
             self.s.save_config()
             self.saved.emit()
