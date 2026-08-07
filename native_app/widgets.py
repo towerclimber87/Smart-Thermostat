@@ -1341,7 +1341,7 @@ class MiniTextKeyboardDialog(QDialog):
 
         bottom = QHBoxLayout()
         bottom.setSpacing(6)
-        self.shift = KeypadButton("ABC", active=False, min_h=46)
+        self.shift = KeypadButton("⇧ UPPER", active=False, min_h=46)
         space = KeypadButton("Space", active=False, min_h=46)
         back = KeypadButton("⌫", active=False, min_h=46)
         clear = KeypadButton("Clear", active=False, min_h=46)
@@ -1349,6 +1349,7 @@ class MiniTextKeyboardDialog(QDialog):
         done = KeypadButton("Done", active=True, min_h=46)
         for b in [self.shift, space, back, clear, cancel, done]:
             b.setFixedHeight(46)
+        self.shift.setMinimumWidth(92)
         self.shift.clicked.connect(self.toggle_uppercase)
         space.clicked.connect(lambda: self.add_char(" "))
         back.clicked.connect(self.backspace)
@@ -1370,7 +1371,7 @@ class MiniTextKeyboardDialog(QDialog):
             button.setText(ch if self.uppercase else ch.lower())
             if hasattr(button, "setActive"):
                 button.setActive(True)
-        self.shift.setText("abc" if self.uppercase else "ABC")
+        self.shift.setText("abc lower" if self.uppercase else "⇧ UPPER")
         if hasattr(self.shift, "setActive"):
             self.shift.setActive(self.uppercase)
 

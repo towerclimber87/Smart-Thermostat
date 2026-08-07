@@ -2883,7 +2883,7 @@ class TextKeyboardDialog(QDialog):
             root.addLayout(row)
         bottom = QHBoxLayout()
         bottom.setSpacing(8)
-        self.shift = KeypadButton("Uppercase", active=False, min_h=46)
+        self.shift = KeypadButton("⇧ UPPER", active=False, min_h=46)
         space = KeypadButton("Space", active=False, min_h=46)
         back = KeypadButton("⌫", active=False, min_h=46)
         clear = KeypadButton("Clear", active=False, min_h=46)
@@ -2911,7 +2911,7 @@ class TextKeyboardDialog(QDialog):
             button.setText(ch if self.uppercase else ch.lower())
             if hasattr(button, "setActive"):
                 button.setActive(True)
-        self.shift.setText("lowercase" if self.uppercase else "Uppercase")
+        self.shift.setText("abc lower" if self.uppercase else "⇧ UPPER")
         if hasattr(self.shift, "setActive"):
             self.shift.setActive(self.uppercase)
 
