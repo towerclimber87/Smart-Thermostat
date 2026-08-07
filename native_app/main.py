@@ -9776,8 +9776,11 @@ class HouseSyncSelectionDialog(QDialog):
         title.setFont(font(22, QFont.Black))
         title.setStyleSheet("color:#55f0ff; letter-spacing:3px;")
         refresh = RoundButton("Refresh", active=True, min_h=40)
+        self.use_button = RoundButton("Use Selected Source", active=True, min_h=40)
+        self.use_button.setEnabled(bool(self.current_id()))
         header.addWidget(title)
         header.addStretch(1)
+        header.addWidget(self.use_button)
         header.addWidget(refresh)
         root.addLayout(header)
 
@@ -9799,11 +9802,8 @@ class HouseSyncSelectionDialog(QDialog):
 
         bottom = QHBoxLayout()
         cancel = RoundButton("Cancel", active=False, min_h=42)
-        self.use_button = RoundButton("Use Selected Source", active=True, min_h=42)
-        self.use_button.setEnabled(bool(self.current_id()))
         bottom.addStretch(1)
         bottom.addWidget(cancel)
-        bottom.addWidget(self.use_button)
         root.addLayout(bottom)
 
         refresh.clicked.connect(self.reload_peers)
