@@ -498,7 +498,7 @@ THERMAL_STATUS_NEAR_MARGIN_C = 5.0
 
 
 def screen_display_settings(config: dict | None) -> dict:
-    """Return normalized display sleep settings without mutating panel config."""
+    """Return normalized display sleep/brightness settings without mutating panel config."""
     cfg = config if isinstance(config, dict) else {}
     display = cfg.get("display") if isinstance(cfg.get("display"), dict) else {}
 
@@ -508,6 +508,13 @@ def screen_display_settings(config: dict | None) -> dict:
         except (TypeError, ValueError):
             value = int(default)
         return int(clamp(value, low, high))
+
+    def as_percent(key: str, default: int) -> int:
+        try:
+            value = int(round(float(display.get(key, default))))
+        except (TypeError, ValueError):
+            value = int(default)
+        return int(clamp(value, SCREEN_BRIGHTNESS_MIN_PERCENT, SCREEN_BRIGHTNESS_MAX_PERCENT))
 
     def as_bool(key: str, default: bool) -> bool:
         value = display.get(key, default)
@@ -522,12 +529,40 @@ def screen_display_settings(config: dict | None) -> dict:
             return False
         return bool(default)
 
+    def as_time(key: str, default: str) -> str:
+        hour, minute = parse_schedule_time_24h(display.get(key, default), *parse_schedule_time_24h(default))
+        return f"{hour:02d}:{minute:02d}"
+
     try:
         step = int(round(float(display.get("timeoutAdjustmentStepMinutes", 1))))
     except (TypeError, ValueError):
         step = 1
     if step not in {1, 5}:
         step = 1
+
+    brightness_rules: list[dict] = []
+    raw_rules = display.get("brightnessEntityRules") if isinstance(display.get("brightnessEntityRules"), list) else []
+    for raw in raw_rules:
+        if not isinstance(raw, dict):
+            continue
+        entity_id = str(raw.get("entityId") or raw.get("entity_id") or "").strip()
+        if not entity_id or "." not in entity_id:
+            continue
+        state = str(raw.get("state") or "on").strip().lower()
+        if state not in {"on", "off"}:
+            state = "on"
+        try:
+            brightness = int(round(float(raw.get("brightnessPercent", raw.get("brightness", 40)))))
+        except (TypeError, ValueError):
+            brightness = 40
+        brightness_rules.append({
+            "entityId": entity_id,
+            "name": str(raw.get("name") or raw.get("friendly_name") or entity_id),
+            "domain": str(raw.get("domain") or entity_id.split(".", 1)[0]),
+            "state": state,
+            "brightnessPercent": int(clamp(brightness, SCREEN_BRIGHTNESS_MIN_PERCENT, SCREEN_BRIGHTNESS_MAX_PERCENT)),
+        })
+
     return {
         "inactivityAutoOffEnabled": as_bool("inactivityAutoOffEnabled", SCREEN_SLEEP_IDLE_SECONDS > 0),
         "inactivityAutoOffMinutes": as_minutes("inactivityAutoOffMinutes", DEFAULT_SCREEN_INACTIVITY_MINUTES),
@@ -535,6 +570,12 @@ def screen_display_settings(config: dict | None) -> dict:
         "motionAutoSleepMinutes": as_minutes("motionAutoSleepMinutes", 5),
         "motionAutoWakeEnabled": as_bool("motionAutoWakeEnabled", False),
         "timeoutAdjustmentStepMinutes": step,
+        "brightnessNormalPercent": as_percent("brightnessNormalPercent", SCREEN_BRIGHTNESS_DEFAULT_PERCENT),
+        "brightnessTimeEnabled": as_bool("brightnessTimeEnabled", False),
+        "brightnessTimeStart": as_time("brightnessTimeStart", "22:00"),
+        "brightnessTimeEnd": as_time("brightnessTimeEnd", "07:00"),
+        "brightnessTimePercent": as_percent("brightnessTimePercent", 40),
+        "brightnessEntityRules": brightness_rules,
     }
 
 
@@ -11558,6 +11599,7 @@ class SettingsDialog(QDialog):
     tempSensorTelemetryLoaded = pyqtSignal(object)
     tempSensorSaveCompleted = pyqtSignal(object)
     houseSyncCompleted = pyqtSignal(object)
+    brightnessEntitiesLoaded = pyqtSignal(object)
 
     def __init__(self, state: AppState, parent=None):
         super().__init__(parent)
@@ -11715,6 +11757,8 @@ class SettingsDialog(QDialog):
         self.tempSensorTelemetryLoaded.connect(self.handle_source_temp_telemetry_loaded)
         self.tempSensorSaveCompleted.connect(self.handle_source_temp_save_completed)
         self.houseSyncCompleted.connect(self.handle_house_sync_completed)
+        self.brightnessEntitiesLoaded.connect(self.handle_brightness_entities_loaded)
+        self._brightness_entities_loading = False
         self.house_sync_source: dict | None = None
         self.house_sync_running = False
         self.build()
@@ -11888,7 +11932,7 @@ class SettingsDialog(QDialog):
             "Doors / Comfort Pause": "Door sensor and delay before heating or cooling pauses",
             "Security Codes": "Alarm disarm and settings-access PINs",
             "Thermostat Unit": "The name used to identify this thermostat",
-            "Screen Settings": "Rotation, inactivity sleep, and motion-based screen control",
+            "Screen Settings": "Rotation, compact auto on/off, and automatic brightness rules",
             "Audio Settings": "Create media-player groups and configure Audio-page controls",
             "Jarvis": "Home Assistant speech volume, response, and screen-display controls",
         }
@@ -13224,6 +13268,291 @@ class SettingsDialog(QDialog):
             }
         """
 
+    def screen_compact_checkbox_style(self) -> str:
+        return """
+            QCheckBox {
+                color:#f7fbff;
+                font-weight:900;
+                font-size:10px;
+                spacing:7px;
+                padding:2px 4px;
+                background:transparent;
+                border:0;
+            }
+            QCheckBox::indicator {
+                width:20px;
+                height:20px;
+                border:2px solid rgba(85,240,255,0.60);
+                border-radius:5px;
+                background:rgba(4,10,20,0.92);
+            }
+            QCheckBox::indicator:checked {
+                background:#36d99c;
+                border:2px solid #8fffd0;
+            }
+        """
+
+    def screen_brightness_rules(self) -> list[dict]:
+        rules = self.screen_setting_values.get("brightnessEntityRules")
+        if not isinstance(rules, list):
+            rules = []
+            self.screen_setting_values["brightnessEntityRules"] = rules
+        return rules
+
+    def adjust_screen_brightness_setting(self, key: str, direction: int):
+        try:
+            current = int(round(float(self.screen_setting_values.get(key, 40))))
+        except (TypeError, ValueError):
+            current = 40
+        self.screen_setting_values[key] = int(clamp(current + (5 * int(direction)), SCREEN_BRIGHTNESS_MIN_PERCENT, SCREEN_BRIGHTNESS_MAX_PERCENT))
+        self.mark_display_settings_dirty()
+
+    def adjust_brightness_rule_percent(self, index: int, direction: int):
+        rules = self.screen_brightness_rules()
+        if index < 0 or index >= len(rules):
+            return
+        try:
+            current = int(round(float(rules[index].get("brightnessPercent", 40))))
+        except (TypeError, ValueError):
+            current = 40
+        rules[index]["brightnessPercent"] = int(clamp(current + (5 * int(direction)), SCREEN_BRIGHTNESS_MIN_PERCENT, SCREEN_BRIGHTNESS_MAX_PERCENT))
+        self.mark_display_settings_dirty()
+
+    def toggle_brightness_rule_state(self, index: int):
+        rules = self.screen_brightness_rules()
+        if index < 0 or index >= len(rules):
+            return
+        rule = rules[index]
+        next_state = "off" if str(rule.get("state") or "on").lower() == "on" else "on"
+        entity_id = str(rule.get("entityId") or "")
+        if any(i != index and str(item.get("entityId") or "") == entity_id and str(item.get("state") or "on").lower() == next_state for i, item in enumerate(rules)):
+            QMessageBox.information(self, "Brightness Rule", f"A {next_state.upper()} rule already exists for this entry.")
+            return
+        rule["state"] = next_state
+        self.mark_display_settings_dirty()
+
+    def remove_brightness_rule(self, index: int):
+        rules = self.screen_brightness_rules()
+        if index < 0 or index >= len(rules):
+            return
+        rules.pop(index)
+        self.mark_display_settings_dirty()
+
+    def set_screen_brightness_time(self, key: str, combo: QComboBox):
+        value = str(combo.currentData() or "").strip()
+        hour, minute = parse_schedule_time_24h(value, 22 if key == "brightnessTimeStart" else 7, 0)
+        self.screen_setting_values[key] = f"{hour:02d}:{minute:02d}"
+        self.mark_display_settings_dirty()
+
+    def populate_brightness_time_combo(self, combo: QComboBox, value: str):
+        combo.blockSignals(True)
+        try:
+            combo.clear()
+            values = [f"{hour:02d}:{minute:02d}" for hour in range(24) for minute in (0, 15, 30, 45)]
+            current_hour, current_minute = parse_schedule_time_24h(value)
+            current = f"{current_hour:02d}:{current_minute:02d}"
+            if current not in values:
+                values.append(current)
+                values.sort()
+            for item in values:
+                combo.addItem(format_schedule_time_12h(item), item)
+            index = combo.findData(current)
+            combo.setCurrentIndex(max(0, index))
+        finally:
+            combo.blockSignals(False)
+
+    def add_brightness_entity_rule(self):
+        if self._brightness_entities_loading:
+            return
+        self._brightness_entities_loading = True
+        if hasattr(self, "screen_brightness_add_rule_button"):
+            self.screen_brightness_add_rule_button.setEnabled(False)
+            self.screen_brightness_add_rule_button.setText("Loading…")
+
+        saved = [copy.deepcopy(rule) for rule in self.screen_brightness_rules() if isinstance(rule, dict)]
+
+        def worker():
+            try:
+                data = self.s.api.post(
+                    "/api/ha/entities",
+                    self.s.ha_payload({"domains": ["binary_sensor", "input_boolean", "switch"]}),
+                )
+                self.brightnessEntitiesLoaded.emit({"entities": data.get("entities") or [], "saved": saved, "error": None})
+            except Exception as exc:
+                self.brightnessEntitiesLoaded.emit({"entities": [], "saved": saved, "error": str(exc)})
+
+        threading.Thread(target=worker, name="screen-brightness-entities", daemon=True).start()
+
+    def handle_brightness_entities_loaded(self, info: object):
+        self._brightness_entities_loading = False
+        if hasattr(self, "screen_brightness_add_rule_button"):
+            self.screen_brightness_add_rule_button.setEnabled(True)
+            self.screen_brightness_add_rule_button.setText("Add Entity Rule")
+        data = info if isinstance(info, dict) else {}
+        by_id: dict[str, dict] = {}
+        for item in list(data.get("entities") or []) + list(data.get("saved") or []):
+            if not isinstance(item, dict):
+                continue
+            entity_id = str(item.get("entityId") or item.get("entity_id") or "").strip()
+            if not entity_id or "." not in entity_id:
+                continue
+            domain = str(item.get("domain") or entity_id.split(".", 1)[0]).strip().lower()
+            if domain not in {"binary_sensor", "input_boolean", "switch"}:
+                continue
+            by_id[entity_id] = {
+                "entityId": entity_id,
+                "name": str(item.get("name") or item.get("friendly_name") or entity_id),
+                "domain": domain,
+                "state": str(item.get("state") or ""),
+            }
+        entities = sorted(by_id.values(), key=lambda item: str(item.get("name") or item.get("entityId") or "").lower())
+        if not entities:
+            error = str(data.get("error") or "").strip()
+            QMessageBox.warning(self, "Brightness Rule", error or "No Home Assistant binary sensor, input boolean, or switch entries were found.")
+            return
+        dlg = EntityPickerDialog("Choose Brightness Trigger", entities, self)
+        dlg.selected.connect(self.add_selected_brightness_rule)
+        dlg.exec_()
+
+    def add_selected_brightness_rule(self, entity: dict):
+        entity_id = str(entity.get("entityId") or entity.get("entity_id") or "").strip()
+        if not entity_id:
+            return
+        rules = self.screen_brightness_rules()
+        existing_states = {
+            str(rule.get("state") or "on").lower()
+            for rule in rules
+            if str(rule.get("entityId") or "") == entity_id
+        }
+        if "on" not in existing_states:
+            state = "on"
+        elif "off" not in existing_states:
+            state = "off"
+        else:
+            QMessageBox.information(self, "Brightness Rule", "This entry already has both ON and OFF brightness rules.")
+            return
+        rules.append({
+            "entityId": entity_id,
+            "name": str(entity.get("name") or entity.get("friendly_name") or entity_id),
+            "domain": str(entity.get("domain") or entity_id.split(".", 1)[0]),
+            "state": state,
+            "brightnessPercent": 40 if state == "on" else int(self.screen_setting_values.get("brightnessNormalPercent", SCREEN_BRIGHTNESS_DEFAULT_PERCENT)),
+        })
+        self.mark_display_settings_dirty()
+
+    def refresh_brightness_rule_rows(self):
+        layout = getattr(self, "screen_brightness_rules_layout", None)
+        if layout is None:
+            return
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        rules = self.screen_brightness_rules()
+        if not rules:
+            empty = QLabel("No entity rules. Add one to change brightness when a Home Assistant entry turns ON or OFF.")
+            empty.setWordWrap(True)
+            empty.setFont(font(8, QFont.Bold))
+            empty.setStyleSheet("color:#91a5c0; background:rgba(5,10,20,0.26); border:1px dashed rgba(160,180,210,0.20); border-radius:8px; padding:7px;")
+            layout.addWidget(empty)
+            return
+        for index, rule in enumerate(rules):
+            row = QFrame()
+            row.setStyleSheet("background:rgba(5,10,20,0.36); border:1px solid rgba(160,180,210,0.18); border-radius:9px;")
+            row_lay = QHBoxLayout(row)
+            row_lay.setContentsMargins(8, 5, 8, 5)
+            row_lay.setSpacing(6)
+            name = str(rule.get("name") or rule.get("entityId") or "Brightness trigger")
+            entity_id = str(rule.get("entityId") or "")
+            label = QLabel(f"{name}\n{entity_id}")
+            label.setFont(font(8, QFont.Black))
+            label.setStyleSheet("color:#e8f1ff; background:transparent; border:0;")
+            label.setWordWrap(True)
+            state = str(rule.get("state") or "on").lower()
+            state_button = RoundButton(f"When {state.upper()}", active=(state == "on"), min_h=32)
+            state_button.setMinimumWidth(104)
+            state_button.clicked.connect(lambda checked=False, i=index: self.toggle_brightness_rule_state(i))
+            minus = RoundButton("−", active=False, min_h=32)
+            plus = RoundButton("+", active=True, min_h=32)
+            minus.setFixedWidth(42)
+            plus.setFixedWidth(42)
+            value = QLabel(f"{int(rule.get('brightnessPercent', 40))}%")
+            value.setAlignment(Qt.AlignCenter)
+            value.setMinimumWidth(58)
+            value.setFont(font(10, QFont.Black))
+            value.setStyleSheet("color:#ffffff; background:rgba(85,240,255,0.10); border:1px solid rgba(85,240,255,0.28); border-radius:7px; padding:4px;")
+            minus.clicked.connect(lambda checked=False, i=index: self.adjust_brightness_rule_percent(i, -1))
+            plus.clicked.connect(lambda checked=False, i=index: self.adjust_brightness_rule_percent(i, 1))
+            remove = RoundButton("Remove", active=False, kind="danger", min_h=32)
+            remove.setMinimumWidth(86)
+            remove.clicked.connect(lambda checked=False, i=index: self.remove_brightness_rule(i))
+            row_lay.addWidget(label, 1)
+            row_lay.addWidget(state_button)
+            row_lay.addWidget(minus)
+            row_lay.addWidget(value)
+            row_lay.addWidget(plus)
+            row_lay.addWidget(remove)
+            layout.addWidget(row)
+
+    def build_compact_screen_timeout_row(self, checkbox: QCheckBox, key: str) -> QFrame:
+        row = QFrame()
+        row.setStyleSheet("background:rgba(5,10,20,0.30); border:1px solid rgba(160,180,210,0.16); border-radius:9px;")
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(7, 4, 7, 4)
+        lay.setSpacing(6)
+        checkbox.setStyleSheet(self.screen_compact_checkbox_style())
+        minus = RoundButton("−", active=False, min_h=30)
+        plus = RoundButton("+", active=True, min_h=30)
+        minus.setFixedWidth(40)
+        plus.setFixedWidth(40)
+        value = QLabel("")
+        value.setAlignment(Qt.AlignCenter)
+        value.setMinimumWidth(76)
+        value.setFont(font(9, QFont.Black))
+        value.setStyleSheet("color:#ffffff; background:rgba(5,10,20,0.56); border:1px solid rgba(85,240,255,0.28); border-radius:7px; padding:3px;")
+        minus.clicked.connect(lambda checked=False, k=key: self.adjust_screen_timeout(k, -1))
+        plus.clicked.connect(lambda checked=False, k=key: self.adjust_screen_timeout(k, 1))
+        lay.addWidget(checkbox, 1)
+        lay.addWidget(minus)
+        lay.addWidget(value)
+        lay.addWidget(plus)
+        if key == "inactivityAutoOffMinutes":
+            self.screen_inactivity_value = value
+        else:
+            self.screen_motion_sleep_value = value
+        return row
+
+    def build_brightness_percent_row(self, label_text: str, key: str) -> QFrame:
+        row = QFrame()
+        row.setStyleSheet("background:rgba(5,10,20,0.30); border:1px solid rgba(160,180,210,0.16); border-radius:9px;")
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(8, 4, 8, 4)
+        lay.setSpacing(6)
+        label = QLabel(label_text)
+        label.setFont(font(9, QFont.Black))
+        label.setStyleSheet("color:#e6efff; background:transparent; border:0;")
+        minus = RoundButton("−", active=False, min_h=31)
+        plus = RoundButton("+", active=True, min_h=31)
+        minus.setFixedWidth(42)
+        plus.setFixedWidth(42)
+        value = QLabel("")
+        value.setAlignment(Qt.AlignCenter)
+        value.setMinimumWidth(64)
+        value.setFont(font(10, QFont.Black))
+        value.setStyleSheet("color:#ffffff; background:rgba(85,240,255,0.10); border:1px solid rgba(85,240,255,0.28); border-radius:7px; padding:4px;")
+        minus.clicked.connect(lambda checked=False, k=key: self.adjust_screen_brightness_setting(k, -1))
+        plus.clicked.connect(lambda checked=False, k=key: self.adjust_screen_brightness_setting(k, 1))
+        lay.addWidget(label, 1)
+        lay.addWidget(minus)
+        lay.addWidget(value)
+        lay.addWidget(plus)
+        if key == "brightnessNormalPercent":
+            self.screen_brightness_normal_value = value
+        elif key == "brightnessTimePercent":
+            self.screen_brightness_time_value = value
+        return row
+
     def write_screen_setting_values_to_config(self):
         display = self.s.config.setdefault("display", {})
         if not isinstance(display, dict):
@@ -13236,6 +13565,12 @@ class SettingsDialog(QDialog):
             "motionAutoSleepMinutes": int(self.screen_setting_values.get("motionAutoSleepMinutes", 5)),
             "motionAutoWakeEnabled": bool(self.screen_setting_values.get("motionAutoWakeEnabled", False)),
             "timeoutAdjustmentStepMinutes": int(self.screen_setting_values.get("timeoutAdjustmentStepMinutes", 1)),
+            "brightnessNormalPercent": int(self.screen_setting_values.get("brightnessNormalPercent", SCREEN_BRIGHTNESS_DEFAULT_PERCENT)),
+            "brightnessTimeEnabled": bool(self.screen_setting_values.get("brightnessTimeEnabled", False)),
+            "brightnessTimeStart": str(self.screen_setting_values.get("brightnessTimeStart", "22:00")),
+            "brightnessTimeEnd": str(self.screen_setting_values.get("brightnessTimeEnd", "07:00")),
+            "brightnessTimePercent": int(self.screen_setting_values.get("brightnessTimePercent", 40)),
+            "brightnessEntityRules": copy.deepcopy(self.screen_brightness_rules()),
         })
 
     def mark_display_settings_dirty(self):
@@ -13287,6 +13622,19 @@ class SettingsDialog(QDialog):
             self.screen_motion_wake_checkbox.blockSignals(True)
             self.screen_motion_wake_checkbox.setChecked(bool(self.screen_setting_values.get("motionAutoWakeEnabled", False)))
             self.screen_motion_wake_checkbox.blockSignals(False)
+        if hasattr(self, "screen_brightness_normal_value"):
+            self.screen_brightness_normal_value.setText(f"{int(self.screen_setting_values.get('brightnessNormalPercent', SCREEN_BRIGHTNESS_DEFAULT_PERCENT))}%")
+        if hasattr(self, "screen_brightness_time_value"):
+            self.screen_brightness_time_value.setText(f"{int(self.screen_setting_values.get('brightnessTimePercent', 40))}%")
+        if hasattr(self, "screen_brightness_time_checkbox"):
+            self.screen_brightness_time_checkbox.blockSignals(True)
+            self.screen_brightness_time_checkbox.setChecked(bool(self.screen_setting_values.get("brightnessTimeEnabled", False)))
+            self.screen_brightness_time_checkbox.blockSignals(False)
+        if hasattr(self, "screen_brightness_time_start_combo"):
+            self.populate_brightness_time_combo(self.screen_brightness_time_start_combo, str(self.screen_setting_values.get("brightnessTimeStart", "22:00")))
+        if hasattr(self, "screen_brightness_time_end_combo"):
+            self.populate_brightness_time_combo(self.screen_brightness_time_end_combo, str(self.screen_setting_values.get("brightnessTimeEnd", "07:00")))
+        self.refresh_brightness_rule_rows()
 
     def build_screen_timeout_control(self, title: str, key: str) -> QFrame:
         panel = QFrame()
@@ -13792,46 +14140,113 @@ class SettingsDialog(QDialog):
         sleep_title.setStyleSheet("color:#46e8ff; letter-spacing:1px; background:transparent; border:0;")
         display.layout().addWidget(sleep_title)
 
-        self.screen_inactivity_checkbox = QCheckBox("Screen inactivity auto off")
-        self.screen_motion_sleep_checkbox = QCheckBox("Auto-sleep when no motion is detected")
-        self.screen_motion_wake_checkbox = QCheckBox("Auto-awake immediately when motion is detected")
-        for checkbox in (self.screen_inactivity_checkbox, self.screen_motion_sleep_checkbox, self.screen_motion_wake_checkbox):
-            checkbox.setStyleSheet(self.screen_checkbox_style())
+        self.screen_inactivity_checkbox = QCheckBox("Inactivity auto off")
+        self.screen_motion_sleep_checkbox = QCheckBox("No-motion auto off")
+        self.screen_motion_wake_checkbox = QCheckBox("Motion auto on")
         self.screen_inactivity_checkbox.toggled.connect(lambda checked: self.toggle_screen_setting("inactivityAutoOffEnabled", checked))
         self.screen_motion_sleep_checkbox.toggled.connect(lambda checked: self.toggle_screen_setting("motionAutoSleepEnabled", checked))
         self.screen_motion_wake_checkbox.toggled.connect(lambda checked: self.toggle_screen_setting("motionAutoWakeEnabled", checked))
-        display.layout().addWidget(self.screen_inactivity_checkbox)
 
-        timeout_grid = QGridLayout()
-        timeout_grid.setHorizontalSpacing(8)
-        timeout_grid.setVerticalSpacing(6)
-        timeout_grid.addWidget(self.build_screen_timeout_control("Turn off after no touchscreen activity", "inactivityAutoOffMinutes"), 0, 0)
-        timeout_grid.addWidget(self.build_screen_timeout_control("Turn off after no detected motion", "motionAutoSleepMinutes"), 0, 1)
-        timeout_grid.setColumnStretch(0, 1)
-        timeout_grid.setColumnStretch(1, 1)
-        display.layout().addLayout(timeout_grid)
-        display.layout().addWidget(self.screen_motion_sleep_checkbox)
-        display.layout().addWidget(self.screen_motion_wake_checkbox)
+        auto_grid = QGridLayout()
+        auto_grid.setHorizontalSpacing(7)
+        auto_grid.setVerticalSpacing(5)
+        auto_grid.addWidget(self.build_compact_screen_timeout_row(self.screen_inactivity_checkbox, "inactivityAutoOffMinutes"), 0, 0)
+        auto_grid.addWidget(self.build_compact_screen_timeout_row(self.screen_motion_sleep_checkbox, "motionAutoSleepMinutes"), 0, 1)
+        auto_grid.setColumnStretch(0, 1)
+        auto_grid.setColumnStretch(1, 1)
+        display.layout().addLayout(auto_grid)
 
-        step_row = QHBoxLayout()
-        step_row.setSpacing(8)
-        step_label = QLabel("PLUS / MINUS STEP")
+        auto_bottom = QHBoxLayout()
+        auto_bottom.setSpacing(7)
+        self.screen_motion_wake_checkbox.setStyleSheet(self.screen_compact_checkbox_style())
+        step_label = QLabel("TIME STEP")
         step_label.setFont(font(8, QFont.Black))
-        step_label.setStyleSheet("color:#c4d0e5; background:transparent; border:0;")
-        self.screen_step_one_button = RoundButton("1 Minute", active=True, min_h=31)
-        self.screen_step_five_button = RoundButton("5 Minutes", active=False, min_h=31)
+        step_label.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
+        self.screen_step_one_button = RoundButton("1 min", active=True, min_h=29)
+        self.screen_step_five_button = RoundButton("5 min", active=False, min_h=29)
         self.screen_step_one_button.clicked.connect(lambda checked=False: self.set_screen_timeout_step(1))
         self.screen_step_five_button.clicked.connect(lambda checked=False: self.set_screen_timeout_step(5))
-        step_row.addWidget(step_label)
-        step_row.addStretch(1)
-        step_row.addWidget(self.screen_step_one_button)
-        step_row.addWidget(self.screen_step_five_button)
-        display.layout().addLayout(step_row)
-        sleep_note = QLabel("Touch always wakes a sleeping screen. Motion wake is optional. Motion-based sleep begins counting after the last motion or touchscreen activity and only runs while the motion sensor is available. Settings are saved without replacing other display or panel configuration.")
-        sleep_note.setWordWrap(True)
-        sleep_note.setFont(font(7, QFont.Black))
-        sleep_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
-        display.layout().addWidget(sleep_note)
+        auto_bottom.addWidget(self.screen_motion_wake_checkbox, 1)
+        auto_bottom.addWidget(step_label)
+        auto_bottom.addWidget(self.screen_step_one_button)
+        auto_bottom.addWidget(self.screen_step_five_button)
+        display.layout().addLayout(auto_bottom)
+
+        brightness_divider = QFrame()
+        brightness_divider.setFixedHeight(1)
+        brightness_divider.setStyleSheet("background:rgba(85,240,255,0.26); border:0; margin-top:4px;")
+        display.layout().addWidget(brightness_divider)
+        brightness_title_row = QHBoxLayout()
+        brightness_title = QLabel("BRIGHTNESS")
+        brightness_title.setFont(font(9, QFont.Black))
+        brightness_title.setStyleSheet("color:#46e8ff; letter-spacing:1px; background:transparent; border:0;")
+        brightness_help = QLabel("Normal is the fallback; if multiple rules match, the lowest brightness wins.")
+        brightness_help.setWordWrap(True)
+        brightness_help.setFont(font(7, QFont.Bold))
+        brightness_help.setStyleSheet("color:#8fa5c2; background:transparent; border:0;")
+        brightness_title_row.addWidget(brightness_title)
+        brightness_title_row.addWidget(brightness_help, 1)
+        display.layout().addLayout(brightness_title_row)
+
+        display.layout().addWidget(self.build_brightness_percent_row("Normal brightness", "brightnessNormalPercent"))
+
+        time_panel = QFrame()
+        time_panel.setStyleSheet("background:rgba(5,10,20,0.30); border:1px solid rgba(160,180,210,0.16); border-radius:9px;")
+        time_lay = QGridLayout(time_panel)
+        time_lay.setContentsMargins(8, 5, 8, 5)
+        time_lay.setHorizontalSpacing(7)
+        time_lay.setVerticalSpacing(4)
+        self.screen_brightness_time_checkbox = QCheckBox("Time-based brightness")
+        self.screen_brightness_time_checkbox.setStyleSheet(self.screen_compact_checkbox_style())
+        self.screen_brightness_time_checkbox.toggled.connect(lambda checked: self.toggle_screen_setting("brightnessTimeEnabled", checked))
+        time_lay.addWidget(self.screen_brightness_time_checkbox, 0, 0, 1, 2)
+        start_label = QLabel("From")
+        end_label = QLabel("Until")
+        for label in (start_label, end_label):
+            label.setFont(font(8, QFont.Black))
+            label.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
+        combo_style = "QComboBox{background:rgba(7,13,25,0.96); color:#ffffff; border:1px solid rgba(85,240,255,0.28); border-radius:7px; padding:4px 7px; font-weight:900; min-height:24px;} QAbstractItemView{background:#182235; color:#fff; selection-background-color:#45e5ff; selection-color:#071420;}"
+        self.screen_brightness_time_start_combo = QComboBox()
+        self.screen_brightness_time_end_combo = QComboBox()
+        self.screen_brightness_time_start_combo.setStyleSheet(combo_style)
+        self.screen_brightness_time_end_combo.setStyleSheet(combo_style)
+        self.populate_brightness_time_combo(self.screen_brightness_time_start_combo, str(self.screen_setting_values.get("brightnessTimeStart", "22:00")))
+        self.populate_brightness_time_combo(self.screen_brightness_time_end_combo, str(self.screen_setting_values.get("brightnessTimeEnd", "07:00")))
+        self.screen_brightness_time_start_combo.currentIndexChanged.connect(lambda _index: self.set_screen_brightness_time("brightnessTimeStart", self.screen_brightness_time_start_combo))
+        self.screen_brightness_time_end_combo.currentIndexChanged.connect(lambda _index: self.set_screen_brightness_time("brightnessTimeEnd", self.screen_brightness_time_end_combo))
+        time_lay.addWidget(start_label, 1, 0)
+        time_lay.addWidget(self.screen_brightness_time_start_combo, 1, 1)
+        time_lay.addWidget(end_label, 1, 2)
+        time_lay.addWidget(self.screen_brightness_time_end_combo, 1, 3)
+        time_brightness = self.build_brightness_percent_row("Brightness", "brightnessTimePercent")
+        time_lay.addWidget(time_brightness, 2, 0, 1, 4)
+        time_lay.setColumnStretch(1, 1)
+        time_lay.setColumnStretch(3, 1)
+        display.layout().addWidget(time_panel)
+
+        rules_header = QHBoxLayout()
+        rules_header.setSpacing(7)
+        rules_label = QLabel("HOME ASSISTANT BRIGHTNESS RULES")
+        rules_label.setFont(font(8, QFont.Black))
+        rules_label.setStyleSheet("color:#c4d0e5; background:transparent; border:0;")
+        self.screen_brightness_add_rule_button = RoundButton("Add Entity Rule", active=True, min_h=31)
+        self.screen_brightness_add_rule_button.setMinimumWidth(148)
+        self.screen_brightness_add_rule_button.clicked.connect(self.add_brightness_entity_rule)
+        rules_header.addWidget(rules_label, 1)
+        rules_header.addWidget(self.screen_brightness_add_rule_button)
+        display.layout().addLayout(rules_header)
+
+        rules_widget = QWidget()
+        self.screen_brightness_rules_layout = QVBoxLayout(rules_widget)
+        self.screen_brightness_rules_layout.setContentsMargins(0, 0, 0, 0)
+        self.screen_brightness_rules_layout.setSpacing(5)
+        display.layout().addWidget(rules_widget)
+
+        brightness_note = QLabel("Entity rules are read-only triggers. Add the same entry twice to define separate ON and OFF brightness levels. Time ranges can cross midnight; outside the range the screen returns to Normal unless another rule matches.")
+        brightness_note.setWordWrap(True)
+        brightness_note.setFont(font(7, QFont.Black))
+        brightness_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
+        display.layout().addWidget(brightness_note)
         self.refresh_screen_setting_controls()
 
         # Keep Audio Settings directly to the right of Screen Settings in the
@@ -14107,6 +14522,12 @@ class SettingsDialog(QDialog):
                 "motionAutoSleepMinutes",
                 "motionAutoWakeEnabled",
                 "timeoutAdjustmentStepMinutes",
+                "brightnessNormalPercent",
+                "brightnessTimeEnabled",
+                "brightnessTimeStart",
+                "brightnessTimeEnd",
+                "brightnessTimePercent",
+                "brightnessEntityRules",
             )
         }
 
@@ -15010,6 +15431,7 @@ class MainWindow(Background):
     assistantStatusCompleted = pyqtSignal(object)
     mainAsyncCompleted = pyqtSignal(object)
     screenBrightnessCompleted = pyqtSignal(object)
+    screenBrightnessRuleStatesCompleted = pyqtSignal(object)
     screenMotionCompleted = pyqtSignal(object)
     reloadAllCompleted = pyqtSignal(object)
 
@@ -15102,6 +15524,13 @@ class MainWindow(Background):
         self.screen_brightness_timer.setSingleShot(True)
         self.screen_brightness_timer.timeout.connect(self.flush_screen_brightness)
         self.screenBrightnessCompleted.connect(self.handle_screen_brightness_completed)
+        self.screenBrightnessRuleStatesCompleted.connect(self.handle_screen_brightness_rule_states_completed)
+        self._screen_brightness_rule_states: dict[str, str] = {}
+        self._screen_brightness_rule_poll_running = False
+        self._screen_brightness_automation_target: int | None = None
+        self.screen_brightness_automation_timer = QTimer(self)
+        self.screen_brightness_automation_timer.timeout.connect(self.refresh_screen_brightness_automation)
+        self.screen_brightness_automation_timer.start(5000)
 
         self.poll_timer = QTimer(self)
         self.poll_timer.timeout.connect(self.poll)
@@ -16158,6 +16587,116 @@ class MainWindow(Background):
 
     def current_screen_display_settings(self) -> dict:
         return screen_display_settings(self.s.config if hasattr(self, "s") else {})
+
+    def screen_brightness_time_is_active(self, settings: dict, now: datetime | None = None) -> bool:
+        current = now or datetime.now()
+        start_h, start_m = parse_schedule_time_24h(settings.get("brightnessTimeStart", "22:00"), 22, 0)
+        end_h, end_m = parse_schedule_time_24h(settings.get("brightnessTimeEnd", "07:00"), 7, 0)
+        current_minutes = current.hour * 60 + current.minute
+        start_minutes = start_h * 60 + start_m
+        end_minutes = end_h * 60 + end_m
+        if start_minutes == end_minutes:
+            return True
+        if start_minutes < end_minutes:
+            return start_minutes <= current_minutes < end_minutes
+        return current_minutes >= start_minutes or current_minutes < end_minutes
+
+    def evaluate_screen_brightness_automation(self):
+        settings = self.current_screen_display_settings()
+        rules = settings.get("brightnessEntityRules") if isinstance(settings.get("brightnessEntityRules"), list) else []
+        time_enabled = bool(settings.get("brightnessTimeEnabled", False))
+        if not time_enabled and not rules:
+            self._screen_brightness_automation_target = None
+            return
+
+        normal = int(clamp(settings.get("brightnessNormalPercent", SCREEN_BRIGHTNESS_DEFAULT_PERCENT), SCREEN_BRIGHTNESS_MIN_PERCENT, SCREEN_BRIGHTNESS_MAX_PERCENT))
+        matching_targets: list[int] = []
+        if time_enabled and self.screen_brightness_time_is_active(settings):
+            matching_targets.append(int(clamp(settings.get("brightnessTimePercent", 40), SCREEN_BRIGHTNESS_MIN_PERCENT, SCREEN_BRIGHTNESS_MAX_PERCENT)))
+
+        states = getattr(self, "_screen_brightness_rule_states", {}) or {}
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+            entity_id = str(rule.get("entityId") or "").strip()
+            if not entity_id:
+                continue
+            expected = str(rule.get("state") or "on").strip().lower()
+            actual = str(states.get(entity_id) or "").strip().lower()
+            if actual != expected:
+                continue
+            try:
+                target = int(round(float(rule.get("brightnessPercent", 40))))
+            except (TypeError, ValueError):
+                target = 40
+            matching_targets.append(int(clamp(target, SCREEN_BRIGHTNESS_MIN_PERCENT, SCREEN_BRIGHTNESS_MAX_PERCENT)))
+
+        target = min(matching_targets) if matching_targets else normal
+        self._screen_brightness_automation_target = target
+        if int(getattr(self, "_screen_brightness_pct", target)) != target:
+            self.set_screen_brightness_percent(target, show_feedback=False)
+
+    def refresh_screen_brightness_automation(self):
+        settings = self.current_screen_display_settings()
+        rules = settings.get("brightnessEntityRules") if isinstance(settings.get("brightnessEntityRules"), list) else []
+        time_enabled = bool(settings.get("brightnessTimeEnabled", False))
+        if not time_enabled and not rules:
+            self._screen_brightness_automation_target = None
+            self._screen_brightness_rule_states = {}
+            return
+
+        # Time rules do not need Home Assistant and should continue to evaluate
+        # even when HA is offline or an entity-state request is still in flight.
+        self.evaluate_screen_brightness_automation()
+
+        entity_ids: list[str] = []
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+            entity_id = str(rule.get("entityId") or "").strip()
+            if entity_id and entity_id not in entity_ids:
+                entity_ids.append(entity_id)
+        if not entity_ids:
+            self._screen_brightness_rule_states = {}
+            return
+
+        ha = self.s.ha()
+        if not str(ha.get("url") or "").strip() or not str(ha.get("token") or "").strip():
+            self._screen_brightness_rule_states = {}
+            self.evaluate_screen_brightness_automation()
+            return
+        if getattr(self, "_screen_brightness_rule_poll_running", False):
+            return
+        self._screen_brightness_rule_poll_running = True
+
+        def worker():
+            try:
+                result = self.s.api.post(
+                    "/api/ha/room/states",
+                    self.s.ha_payload({"entityIds": entity_ids}),
+                )
+                self.screenBrightnessRuleStatesCompleted.emit({"result": result, "error": None})
+            except Exception as exc:
+                self.screenBrightnessRuleStatesCompleted.emit({"result": None, "error": str(exc)})
+
+        self._submit_status_worker(worker)
+
+    def handle_screen_brightness_rule_states_completed(self, info: object):
+        self._screen_brightness_rule_poll_running = False
+        data = info if isinstance(info, dict) else {}
+        error = str(data.get("error") or "").strip()
+        if not error:
+            result = data.get("result") if isinstance(data.get("result"), dict) else {}
+            controls = result.get("controls") if isinstance(result.get("controls"), list) else []
+            states: dict[str, str] = {}
+            for item in controls:
+                if not isinstance(item, dict):
+                    continue
+                entity_id = str(item.get("entityId") or item.get("entity_id") or "").strip()
+                if entity_id:
+                    states[entity_id] = str(item.get("state") or "").strip().lower()
+            self._screen_brightness_rule_states = states
+        self.evaluate_screen_brightness_automation()
 
     def refresh_screen_motion_status(self):
         settings = self.current_screen_display_settings()
