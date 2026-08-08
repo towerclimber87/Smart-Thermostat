@@ -25,6 +25,55 @@ write_if_changed() {
   rm -f "$tmp"
 }
 
+configure_sd_endurance_logging() {
+  # This unit is an appliance, so retaining logs after a reboot is less valuable
+  # than avoiding constant flash writes. Current-boot journalctl remains fully
+  # available in RAM. ForwardToSyslog=no also prevents a traditional rsyslog
+  # daemon from duplicating journal traffic into /var/log on the SD card.
+  local target="/etc/systemd/journald.conf.d/90-smart-thermostat-sd-endurance.conf"
+  local tmp
+  local changed=0
+  tmp="$(mktemp)"
+  cat >"$tmp" <<'EOF'
+[Journal]
+Storage=volatile
+ForwardToSyslog=no
+RuntimeMaxUse=32M
+RuntimeMaxFileSize=8M
+MaxRetentionSec=2d
+EOF
+  if [[ ! -f "$target" ]] || ! cmp -s "$tmp" "$target"; then
+    install -d -m 0755 "$(dirname "$target")"
+    install -m 0644 "$tmp" "$target"
+    changed=1
+  fi
+  rm -f "$tmp"
+  if [[ "$changed" -eq 1 ]]; then
+    systemctl restart systemd-journald.service 2>/dev/null || true
+    echo "Configured volatile system journal for SD-card endurance."
+  else
+    echo "Volatile system journal already configured."
+  fi
+}
+
+report_sd_endurance_risks() {
+  # Report higher-risk OS settings but do not change them automatically. Disk
+  # swap and root-filesystem mount options depend on the Pi's RAM/image layout;
+  # changing either blindly can reduce stability or make the unit unbootable.
+  if command -v swapon >/dev/null 2>&1; then
+    if swapon --noheadings --show=NAME,TYPE 2>/dev/null | grep -Eq '[[:space:]]file$'; then
+      echo "SD endurance note: disk-backed swap is active. It was left unchanged for safety."
+    fi
+  fi
+  if command -v findmnt >/dev/null 2>&1; then
+    local root_opts
+    root_opts="$(findmnt -no OPTIONS / 2>/dev/null || true)"
+    if [[ -n "$root_opts" && ",$root_opts," != *,noatime,* ]]; then
+      echo "SD endurance note: root filesystem is not mounted noatime. It was left unchanged for boot safety."
+    fi
+  fi
+}
+
 # Prefer the real owner of the project folder. The panel Fetch Update path runs
 # this installer from a root-owned transient systemd unit, where SUDO_USER and
 # logname can be empty or wrong. If we guess the wrong user here, the native
@@ -110,6 +159,9 @@ if (( ${#MISSING_PACKAGES[@]} )); then
 else
   echo "Native UI dependencies already installed; skipping apt package refresh."
 fi
+
+configure_sd_endurance_logging
+report_sd_endurance_risks
 
 # Let systemd launch the appliance X server as the pi user. Only touch the
 # config file when content actually changes, so updates do not create avoidable
@@ -198,7 +250,7 @@ for mount in sorted(mounts, key=lambda p: len(str(p)), reverse=True):
 shutil.rmtree(root, ignore_errors=True)
 PY_CLEANUP
 fi
-RUNTIME_USB_ROOT="/tmp/smart-thermostat-usb"
+RUNTIME_USB_ROOT="/run/smart-thermostat-backend/usb-mounts"
 mkdir -p "$RUNTIME_USB_ROOT"
 chown "$APP_USER:$APP_USER" "$RUNTIME_USB_ROOT" 2>/dev/null || true
 

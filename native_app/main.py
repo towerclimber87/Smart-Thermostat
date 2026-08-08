@@ -29,17 +29,22 @@ def runtime_log_dir() -> Path:
     configured = str(os.environ.get("SMART_THERMOSTAT_LOG_DIR") or "").strip()
     if configured:
         return Path(configured)
-    # Freeze traces must survive a forced reboot. They are written only on
-    # process start, crashes, or a confirmed UI stall, so persistent storage
-    # here does not create steady-state SD-card traffic.
-    persistent = ROOT_DIR / "data" / "logs"
-    try:
-        persistent.mkdir(parents=True, exist_ok=True)
-        if os.access(str(persistent), os.W_OK):
-            return persistent
-    except Exception:
-        pass
-    return Path(os.environ.get("SMART_THERMOSTAT_RUNTIME_DIR", "/tmp/smart-thermostat-native")) / "logs"
+    # Diagnostics are intentionally volatile on the appliance. A restart loop
+    # or repeated UI-stall trace must not turn into continuous SD-card writes.
+    # The installed X launcher explicitly uses /dev/shm; keep the same safe
+    # behavior when main.py is started by hand.
+    candidates = [
+        Path("/dev/shm/smart-thermostat-native/logs"),
+        Path(os.environ.get("SMART_THERMOSTAT_RUNTIME_DIR", "/tmp/smart-thermostat-native")) / "logs",
+    ]
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            if os.access(str(candidate), os.W_OK):
+                return candidate
+        except Exception:
+            continue
+    return Path("/tmp/smart-thermostat-native/logs")
 
 
 def runtime_log_path(name: str) -> Path:

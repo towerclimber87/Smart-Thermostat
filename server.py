@@ -34,7 +34,13 @@ ROOT = Path(__file__).resolve().parent
 PUBLIC = ROOT / "public"
 DATA_DIR = ROOT / "data"
 VERSION_FILE = ROOT / "VERSION"
-UPDATE_RUNTIME_DIR = Path(os.environ.get("SMART_THERMOSTAT_UPDATE_RUNTIME_DIR", "/tmp/smart-thermostat-self-update")).expanduser()
+# High-churn runtime artifacts belong in RAM, not beside the persistent config.
+# systemd overrides RUNTIME_DIR to /run; /dev/shm is used for self-update state
+# because it must survive a backend service restart while the transient updater
+# finishes the deployment.
+RUNTIME_DIR = Path(os.environ.get("SMART_THERMOSTAT_RUNTIME_DIR", "/tmp/smart-thermostat-runtime")).expanduser()
+_DEFAULT_UPDATE_RUNTIME_DIR = Path("/dev/shm/smart-thermostat-self-update") if Path("/dev/shm").is_dir() else (RUNTIME_DIR / "self-update")
+UPDATE_RUNTIME_DIR = Path(os.environ.get("SMART_THERMOSTAT_UPDATE_RUNTIME_DIR", str(_DEFAULT_UPDATE_RUNTIME_DIR))).expanduser()
 UPDATE_STATUS_FILE = UPDATE_RUNTIME_DIR / "update-status.json"
 UPDATE_CHECK_FILE = UPDATE_RUNTIME_DIR / "update-check.json"
 UPDATE_BRANCH = os.environ.get("SMART_THERMOSTAT_UPDATE_BRANCH", "Development").strip() or "Development"
@@ -47,7 +53,12 @@ THERMOSTAT_SCHEDULES_BACKUP_FILE = DATA_DIR / "thermostat-schedules.backup.json"
 PANEL_CONFIG_FILE = DATA_DIR / "panel-config.json"
 PANEL_CONFIG_BACKUP_FILE = DATA_DIR / "panel-config.backup.json"
 HVAC_HISTORY_FILE = DATA_DIR / "hvac-history.json"
-ALARM_ACTION_AUDIT_FILE = DATA_DIR / "alarm-actions.log"
+# Alarm service auditing is diagnostic-only. Keep it RAM-backed so normal arm /
+# disarm activity never causes SD-card writes. Set SMART_THERMOSTAT_ALARM_AUDIT_FILE
+# explicitly if a deployment intentionally wants a persistent audit file.
+ALARM_ACTION_AUDIT_FILE = Path(
+    os.environ.get("SMART_THERMOSTAT_ALARM_AUDIT_FILE", str(RUNTIME_DIR / "alarm-actions.log"))
+).expanduser()
 APP_STARTED_AT = time.time()
 HA_STATES_CACHE_TTL_SECONDS = float(os.environ.get("SMART_THERMOSTAT_HA_STATES_CACHE_TTL_SECONDS", "8.0"))
 HA_ENTITY_STATE_CACHE_TTL_SECONDS = float(os.environ.get("SMART_THERMOSTAT_HA_ENTITY_STATE_CACHE_TTL_SECONDS", "8.0"))
@@ -63,7 +74,6 @@ USB_CONFIG_FILENAME = os.environ.get("SMART_THERMOSTAT_USB_CONFIG_FILENAME", "sm
 # data/usb-mounts, which makes git clean fail with "Device or resource busy"
 # when a thumb drive is still mounted there. Use a runtime folder outside the
 # repo instead.
-RUNTIME_DIR = Path(os.environ.get("SMART_THERMOSTAT_RUNTIME_DIR", "/tmp/smart-thermostat-runtime")).expanduser()
 ASSISTANT_AUDIO_DIR = Path(
     os.environ.get("SMART_THERMOSTAT_ASSISTANT_AUDIO_DIR", str(RUNTIME_DIR / "assistant-audio"))
 ).expanduser()
@@ -94,7 +104,9 @@ JARVIS_PROFILE_CACHE_TTL_SECONDS = max(
     5.0, float(os.environ.get("SMART_THERMOSTAT_JARVIS_PROFILE_CACHE_SECONDS", "60") or "60")
 )
 _SERVER_PORT = int(os.environ.get("PORT", "8080") or "8080")
-USB_RUNTIME_MOUNT_ROOT = Path(os.environ.get("SMART_THERMOSTAT_USB_RUNTIME_MOUNT_ROOT", "/tmp/smart-thermostat-usb")).expanduser()
+USB_RUNTIME_MOUNT_ROOT = Path(
+    os.environ.get("SMART_THERMOSTAT_USB_RUNTIME_MOUNT_ROOT", str(RUNTIME_DIR / "usb-mounts"))
+).expanduser()
 USB_LEGACY_MOUNT_ROOT = DATA_DIR / "usb-mounts"
 USB_MOUNT_ROOTS = tuple(
     x.strip()
@@ -8230,7 +8242,14 @@ def _read_update_check_record() -> dict:
 
 
 def _refresh_remote_update_info(force: bool = False) -> dict:
-    """Refresh the remote VERSION without changing the checked-out files."""
+    """Refresh the remote VERSION while avoiding routine writes to the Git checkout.
+
+    A normal ``git fetch`` updates FETCH_HEAD, refs and sometimes object metadata
+    even when the branch did not change. On an SD-card appliance that is needless
+    wear. First use ``git ls-remote`` (network/read-only) and compare it with the
+    existing tracking ref. Only fetch when the remote branch actually changed.
+    The small update-check JSON itself lives in RAM.
+    """
     installed = _read_version_value()
     cached = _read_update_check_record()
     now = time.time()
@@ -8248,44 +8267,89 @@ def _refresh_remote_update_info(force: bool = False) -> dict:
         branch = _normalized_update_branch()
         latest = str(cached.get("latestVersion") or installed).strip() or installed
         error_message = ""
+        remote_commit = ""
+        tracking_ref = f"refs/remotes/origin/{branch}"
+        remote_ref = f"refs/heads/{branch}"
+        git_env = dict(os.environ)
+        git_env["GIT_TERMINAL_PROMPT"] = "0"
+
         if not (ROOT / ".git").exists():
             error_message = "This thermostat folder is not connected to Git."
         else:
-            fetch_cmd = [
-                "git",
-                "fetch",
-                "--quiet",
-                "origin",
-                f"+{branch}:refs/remotes/origin/{branch}",
-            ]
             try:
-                fetched = subprocess.run(
-                    fetch_cmd,
+                remote = subprocess.run(
+                    ["git", "ls-remote", "--heads", "origin", remote_ref],
                     cwd=str(ROOT),
                     capture_output=True,
                     text=True,
                     timeout=8,
+                    env=git_env,
                 )
-                if fetched.returncode != 0:
-                    error_message = (fetched.stderr or fetched.stdout or "Git fetch failed").strip()
+                if remote.returncode == 0 and remote.stdout.strip():
+                    remote_commit = remote.stdout.strip().split()[0]
+                else:
+                    error_message = (remote.stderr or remote.stdout or "Could not inspect the remote update branch").strip()
             except Exception as exc:
-                error_message = f"Git fetch failed: {exc}"
+                error_message = f"Could not inspect the remote update branch: {exc}"
 
-            try:
-                shown = subprocess.run(
-                    ["git", "show", f"refs/remotes/origin/{branch}:VERSION"],
-                    cwd=str(ROOT),
-                    capture_output=True,
-                    text=True,
-                    timeout=3,
-                )
-                if shown.returncode == 0 and shown.stdout.strip():
-                    latest = shown.stdout.strip().splitlines()[0].strip()
-                elif not error_message:
-                    error_message = (shown.stderr or shown.stdout or "Could not read the remote VERSION file").strip()
-            except Exception as exc:
-                if not error_message:
-                    error_message = f"Could not read the remote VERSION file: {exc}"
+            local_commit = ""
+            if remote_commit:
+                try:
+                    local = subprocess.run(
+                        ["git", "rev-parse", "--verify", tracking_ref],
+                        cwd=str(ROOT),
+                        capture_output=True,
+                        text=True,
+                        timeout=3,
+                        env=git_env,
+                    )
+                    if local.returncode == 0:
+                        local_commit = local.stdout.strip().splitlines()[0].strip()
+                except Exception:
+                    local_commit = ""
+
+                if local_commit != remote_commit:
+                    # A write is justified only when new code really exists.
+                    # --no-write-fetch-head avoids an extra FETCH_HEAD write; the
+                    # tracking ref/object update is needed so VERSION can be read
+                    # and is the same data the eventual updater will consume.
+                    try:
+                        fetched = subprocess.run(
+                            [
+                                "git",
+                                "fetch",
+                                "--quiet",
+                                "--no-write-fetch-head",
+                                "origin",
+                                f"+{branch}:{tracking_ref}",
+                            ],
+                            cwd=str(ROOT),
+                            capture_output=True,
+                            text=True,
+                            timeout=8,
+                            env=git_env,
+                        )
+                        if fetched.returncode != 0:
+                            error_message = (fetched.stderr or fetched.stdout or "Git fetch failed").strip()
+                    except Exception as exc:
+                        error_message = f"Git fetch failed: {exc}"
+
+                try:
+                    shown = subprocess.run(
+                        ["git", "show", f"{tracking_ref}:VERSION"],
+                        cwd=str(ROOT),
+                        capture_output=True,
+                        text=True,
+                        timeout=3,
+                        env=git_env,
+                    )
+                    if shown.returncode == 0 and shown.stdout.strip():
+                        latest = shown.stdout.strip().splitlines()[0].strip()
+                    elif not error_message:
+                        error_message = (shown.stderr or shown.stdout or "Could not read the remote VERSION file").strip()
+                except Exception as exc:
+                    if not error_message:
+                        error_message = f"Could not read the remote VERSION file: {exc}"
 
         record = {
             "ok": True,
@@ -8293,6 +8357,7 @@ def _refresh_remote_update_info(force: bool = False) -> dict:
             "installedVersion": installed,
             "latestVersion": latest,
             "updateAvailable": _update_available(installed, latest),
+            "remoteCommit": remote_commit or None,
             "checkedAt": int(now * 1000),
             "checkedAtEpoch": now,
             "checkError": error_message or None,
@@ -12153,7 +12218,7 @@ def _audit_alarm_action(event: str, **fields) -> None:
             continue
         record[str(key)] = value
     try:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        ALARM_ACTION_AUDIT_FILE.parent.mkdir(parents=True, exist_ok=True)
         line = json.dumps(record, separators=(",", ":"), sort_keys=True)
         with _ALARM_ACTION_AUDIT_LOCK:
             # Keep the appliance log bounded. One megabyte is several thousand
