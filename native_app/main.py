@@ -265,6 +265,49 @@ def schedule_days_text(value: Any, compact: bool = False) -> str:
     return "Runs " + ", ".join(labels)
 
 
+def normalize_schedule_person_names(value: Any, entity_ids: Any = None) -> dict[str, str]:
+    """Keep stable display names for schedule people alongside their entity IDs."""
+    allowed = {str(x or "").strip() for x in (entity_ids or []) if str(x or "").strip()}
+    names: dict[str, str] = {}
+    if isinstance(value, dict):
+        items = value.items()
+    elif isinstance(value, list):
+        items = []
+        for item in value:
+            if isinstance(item, dict):
+                entity_id = str(item.get("entityId") or item.get("entity_id") or "").strip()
+                name = str(item.get("name") or item.get("friendly_name") or "").strip()
+                items.append((entity_id, name))
+    else:
+        items = []
+    for raw_entity_id, raw_name in items:
+        entity_id = str(raw_entity_id or "").strip()
+        name = str(raw_name or "").strip()
+        if not entity_id or not name or entity_id not in allowed:
+            continue
+        names[entity_id] = name[:80]
+    return names
+
+
+def schedule_person_names(schedule: dict, thermostat: dict | None = None) -> list[str]:
+    entity_ids = [str(x or "").strip() for x in (schedule.get("personEntityIds") or []) if str(x or "").strip()]
+    if not entity_ids:
+        return []
+    names = normalize_schedule_person_names(schedule.get("personNames"), entity_ids)
+    if isinstance(thermostat, dict):
+        for group_key in ("people", "autoAwayPeople"):
+            for person in thermostat.get(group_key) or []:
+                if not isinstance(person, dict):
+                    continue
+                entity_id = str(person.get("entityId") or person.get("entity_id") or "").strip()
+                if entity_id not in entity_ids:
+                    continue
+                friendly = str(person.get("name") or person.get("friendly_name") or "").strip()
+                if friendly:
+                    names[entity_id] = friendly
+    return [names.get(entity_id) or entity_id for entity_id in entity_ids]
+
+
 def as_bool_state(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -2983,7 +3026,14 @@ class ScheduleEditDialog(QDialog):
         self.days = normalize_schedule_days(self.schedule.get("days", self.schedule.get("weekdays", self.schedule.get("daysOfWeek"))))
         self.day_buttons: dict[str, RoundButton] = {}
         self.person_ids = [str(x) for x in (self.schedule.get("personEntityIds") or []) if str(x)]
-        self.available_people: list[dict] = []
+        self.person_names = normalize_schedule_person_names(self.schedule.get("personNames"), self.person_ids)
+        # Seed saved schedule people before the HA refresh so Edit always shows
+        # who is already selected, even when that person is not part of the
+        # panel's separate presence/Auto Away lists.
+        self.available_people: list[dict] = [
+            {"entityId": entity_id, "name": self.person_names.get(entity_id) or entity_id}
+            for entity_id in self.person_ids
+        ]
         self.load_people()
         self.build()
         QTimer.singleShot(0, self.fit_to_screen)
@@ -3021,10 +3071,23 @@ class ScheduleEditDialog(QDialog):
                 if not isinstance(person, dict):
                     continue
                 entity_id = str(person.get("entityId") or person.get("entity_id") or "").strip()
-                if entity_id and all(str(x.get("entityId") or x.get("entity_id") or "") != entity_id for x in self.available_people):
+                if not entity_id:
+                    continue
+                existing = next(
+                    (x for x in self.available_people if str(x.get("entityId") or x.get("entity_id") or "") == entity_id),
+                    None,
+                )
+                if existing is None:
                     item = dict(person)
                     item["entityId"] = entity_id
                     self.available_people.append(item)
+                else:
+                    existing.update(person)
+                    existing["entityId"] = entity_id
+                if entity_id in self.person_ids:
+                    friendly = str(person.get("name") or person.get("friendly_name") or "").strip()
+                    if friendly:
+                        self.person_names[entity_id] = friendly
 
     def refresh_people_async(self):
         if self._people_loading:
@@ -3064,6 +3127,11 @@ class ScheduleEditDialog(QDialog):
                 existing.update(person)
                 existing["entityId"] = entity_id
                 changed = changed or existing != before
+            if entity_id in self.person_ids:
+                friendly = str(person.get("name") or person.get("friendly_name") or "").strip()
+                if friendly and self.person_names.get(entity_id) != friendly:
+                    self.person_names[entity_id] = friendly
+                    changed = True
         if changed:
             self.available_people.sort(key=lambda item: str(item.get("name") or item.get("friendly_name") or item.get("entityId") or "").lower())
             self.refresh()
@@ -3208,9 +3276,9 @@ class ScheduleEditDialog(QDialog):
         people_lay.setContentsMargins(12, 8, 12, 8)
         people_lay.setSpacing(6)
         hdr = QHBoxLayout()
-        hdr.addWidget(self.small_label("Only run if these people are home"))
+        hdr.addWidget(self.small_label("Person condition — run if ANY selected person is home"))
         hdr.addStretch(1)
-        add = RoundButton("+ Person", active=True, min_h=34)
+        add = RoundButton("Choose People", active=True, min_h=34)
         add.setFixedHeight(34)
         add.clicked.connect(self.add_person)
         hdr.addWidget(add)
@@ -3311,9 +3379,12 @@ class ScheduleEditDialog(QDialog):
 
     def person_name(self, entity_id: str) -> str:
         for p in self.available_people:
-            if str(p.get("entityId")) == entity_id:
-                return str(p.get("name") or p.get("friendly_name") or entity_id)
-        return entity_id
+            if str(p.get("entityId") or p.get("entity_id") or "") == entity_id:
+                name = str(p.get("name") or p.get("friendly_name") or "").strip()
+                if name:
+                    self.person_names[entity_id] = name
+                    return name
+        return self.person_names.get(entity_id) or entity_id
 
     def edit_name(self):
         value = TextKeyboardDialog.get_text(self, "Schedule Name", self.name)
@@ -3364,13 +3435,32 @@ class ScheduleEditDialog(QDialog):
             message = "Home Assistant people are still loading." if self._people_loading else "No Home Assistant person entities found."
             QMessageBox.warning(self, "People", message)
             return
-        dlg = EntityPickerDialog("Choose Person", entities, self)
-        def selected(e):
-            eid = str(e.get("entityId") or "")
-            if eid and eid not in self.person_ids:
-                self.person_ids.append(eid)
-                self.refresh()
-        dlg.selected.connect(selected)
+        dlg = EntityPickerDialog(
+            "Choose People",
+            entities,
+            self,
+            multi_select=True,
+            selected_entity_ids=self.person_ids,
+        )
+
+        def selected_many(selected_people):
+            next_ids: list[str] = []
+            next_names: dict[str, str] = {}
+            for person in selected_people or []:
+                if not isinstance(person, dict):
+                    continue
+                entity_id = str(person.get("entityId") or person.get("entity_id") or "").strip()
+                if not entity_id or entity_id in next_ids:
+                    continue
+                next_ids.append(entity_id)
+                friendly = str(person.get("name") or person.get("friendly_name") or "").strip()
+                if friendly:
+                    next_names[entity_id] = friendly
+            self.person_ids = next_ids
+            self.person_names = next_names
+            self.refresh()
+
+        dlg.selectedMany.connect(selected_many)
         dlg.exec_()
 
     def remove_person(self, entity_id: str):
@@ -3388,6 +3478,7 @@ class ScheduleEditDialog(QDialog):
             "coolSetpoint": int(self.cool),
             "heatSetpoint": int(self.heat),
             "personEntityIds": list(self.person_ids),
+            "personNames": {entity_id: self.person_name(entity_id) for entity_id in self.person_ids},
             "lastTriggeredDate": str(self.schedule.get("lastTriggeredDate") or ""),
         }
         self.saved.emit(payload)
@@ -3501,11 +3592,18 @@ class ScheduleManagerDialog(QDialog):
         lay.setContentsMargins(14, 12, 14, 12)
         lay.setSpacing(10)
         people = sched.get("personEntityIds") or []
-        people_text = "No person requirement" if not people else f"{len(people)} person{'s' if len(people) != 1 else ''} required"
+        selected_names = schedule_person_names(sched, self.s.thermostat)
+        if not people:
+            people_text = "No person condition"
+        elif len(selected_names) == 1:
+            people_text = f"Person condition: {selected_names[0]} must be home"
+        else:
+            people_text = f"Person condition: ANY one home — {', '.join(selected_names)}"
         day_text = schedule_days_text(sched.get("days"))
         time_text = format_schedule_time_12h(sched.get('time') or '07:00')
         text = QLabel(f"<b>{sched.get('name') or 'Schedule'}</b><br>{day_text} at {time_text} • Cool {sched.get('coolSetpoint')}° • Heat {sched.get('heatSetpoint')}°<br>{people_text}")
         text.setTextFormat(Qt.RichText)
+        text.setWordWrap(True)
         text.setFont(font(11, QFont.Black))
         text.setStyleSheet("background:transparent; border:0; color:#eef4ff;")
         run = RoundButton("Run", active=True, min_h=42)

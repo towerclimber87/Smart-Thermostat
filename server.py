@@ -766,6 +766,31 @@ def _normalize_schedule_person_ids(value: object) -> list[str]:
     return ids
 
 
+def _normalize_schedule_person_names(value: object, entity_ids: list[str]) -> dict[str, str]:
+    """Persist friendly names so the schedule UI can always show selections."""
+    allowed = set(entity_ids or [])
+    names: dict[str, str] = {}
+    if isinstance(value, dict):
+        items = value.items()
+    elif isinstance(value, list):
+        items = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            entity_id = str(item.get("entityId") or item.get("entity_id") or "").strip()
+            name = str(item.get("name") or item.get("friendly_name") or "").strip()
+            items.append((entity_id, name))
+    else:
+        items = []
+    for raw_entity_id, raw_name in items:
+        entity_id = str(raw_entity_id or "").strip()
+        name = str(raw_name or "").strip()
+        if not entity_id or entity_id not in allowed or not name:
+            continue
+        names[entity_id] = name[:80]
+    return names
+
+
 SCHEDULE_DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 SCHEDULE_DAY_ALIASES = {
     "0": "mon", "1": "mon", "m": "mon", "mon": "mon", "monday": "mon",
@@ -835,6 +860,7 @@ def _normalize_schedule_entries(value: object) -> list[dict]:
             continue
         seen.add(schedule_id)
         name = str(item.get("name") or f"Schedule {index + 1}").strip()[:40] or f"Schedule {index + 1}"
+        person_entity_ids = _normalize_schedule_person_ids(item.get("personEntityIds", item.get("people", item.get("persons", []))))
         schedules.append({
             "id": schedule_id,
             "name": name,
@@ -843,7 +869,8 @@ def _normalize_schedule_entries(value: object) -> list[dict]:
             "days": _normalize_schedule_days(item.get("days", item.get("weekdays", item.get("daysOfWeek")))),
             "coolSetpoint": _intish(item.get("coolSetpoint", item.get("coolTarget", 68)), 68, 45, 95),
             "heatSetpoint": _intish(item.get("heatSetpoint", item.get("heatTarget", 71)), 71, 45, 95),
-            "personEntityIds": _normalize_schedule_person_ids(item.get("personEntityIds", item.get("people", item.get("persons", [])))),
+            "personEntityIds": person_entity_ids,
+            "personNames": _normalize_schedule_person_names(item.get("personNames", item.get("person_names", [])), person_entity_ids),
             "lastTriggeredDate": str(item.get("lastTriggeredDate") or item.get("lastRunDate") or "").strip()[:16],
         })
     return schedules
@@ -4352,7 +4379,10 @@ def _schedule_people_are_home(schedule: dict, thermostat: dict) -> bool:
     if not entity_ids:
         return True
     states = _person_states_for_schedule(entity_ids, thermostat)
-    return all(states.get(entity_id) == "home" for entity_id in entity_ids)
+    # Schedule people are an ANY/OR condition: one selected person being home
+    # is enough for the schedule to run. Unknown/unavailable people do not
+    # satisfy the condition, but they also do not block another person at home.
+    return any(states.get(entity_id) == "home" for entity_id in entity_ids)
 
 
 def _away_target_for_current_mode(thermostat: dict) -> int:

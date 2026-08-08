@@ -1440,11 +1440,23 @@ class MiniTextKeyboardDialog(QDialog):
 
 class EntityPickerDialog(QDialog):
     selected = pyqtSignal(dict)
+    selectedMany = pyqtSignal(object)
 
-    def __init__(self, title: str, entities: list[dict], parent=None):
+    def __init__(
+        self,
+        title: str,
+        entities: list[dict],
+        parent=None,
+        *,
+        multi_select: bool = False,
+        selected_entity_ids: Iterable[str] | None = None,
+    ):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.entities = sorted(entities or [], key=lambda e: str(e.get("name") or e.get("entityId") or "").lower())
+        self.multi_select = bool(multi_select)
+        self._selected_entity_ids = {str(x or "").strip() for x in (selected_entity_ids or []) if str(x or "").strip()}
+        self._refreshing_selection = False
         self.setModal(True)
         self.setWindowFlag(Qt.FramelessWindowHint, True)
         self.setMinimumSize(720, 520)
@@ -1469,7 +1481,7 @@ class EntityPickerDialog(QDialog):
         label = QLabel(title)
         label.setFont(font(22, QFont.Black))
         self.cancel = RoundButton("Cancel", active=False, min_h=48)
-        self.use = RoundButton("Assign Selected", active=True, min_h=48)
+        self.use = RoundButton("Use Selected" if self.multi_select else "Assign Selected", active=True, min_h=48)
         self.use.setMinimumWidth(170)
         header.addWidget(label, 1)
         header.addWidget(self.cancel)
@@ -1480,6 +1492,10 @@ class EntityPickerDialog(QDialog):
         self.search.mousePressEvent = lambda event: self.open_search_keyboard()
         lay.addWidget(self.search)
         self.list = QListWidget()
+        if self.multi_select:
+            # MultiSelection works naturally on a touchscreen: each tap toggles
+            # one person without requiring Ctrl/Shift keyboard modifiers.
+            self.list.setSelectionMode(QAbstractItemView.MultiSelection)
         self.list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.list.setAutoScroll(False)
@@ -1494,7 +1510,9 @@ class EntityPickerDialog(QDialog):
         lay.addWidget(self.list, 1)
         self.cancel.clicked.connect(self._cancel)
         self.use.clicked.connect(self._choose_current)
-        self.list.itemDoubleClicked.connect(lambda item: self._choose_item(item))
+        if not self.multi_select:
+            self.list.itemDoubleClicked.connect(lambda item: self._choose_item(item))
+        self.list.itemSelectionChanged.connect(self._selection_changed)
         self.search.textChanged.connect(self.refresh)
         self.refresh()
         QTimer.singleShot(0, self.fit_to_screen)
@@ -1514,23 +1532,71 @@ class EntityPickerDialog(QDialog):
 
     def refresh(self):
         q = self.search.text().strip().lower()
-        self.list.clear()
-        for e in self.entities:
-            name = str(e.get("name") or e.get("friendly_name") or e.get("entityId") or "")
-            entity = str(e.get("entityId") or e.get("entity_id") or "")
-            domain = str(e.get("domain") or entity.split(".")[0] if "." in entity else "")
-            text = f"{name}\n{entity}"
-            if q and q not in text.lower():
+        self._refreshing_selection = True
+        try:
+            self.list.clear()
+            for e in self.entities:
+                name = str(e.get("name") or e.get("friendly_name") or e.get("entityId") or "")
+                entity = str(e.get("entityId") or e.get("entity_id") or "")
+                domain = str(e.get("domain") or entity.split(".")[0] if "." in entity else "")
+                text = f"{name}\n{entity}"
+                if q and q not in text.lower():
+                    continue
+                item = QListWidgetItem(text)
+                item.setData(Qt.UserRole, {"name": name, "entityId": entity, "domain": domain})
+                self.list.addItem(item)
+                if self.multi_select and entity in self._selected_entity_ids:
+                    item.setSelected(True)
+        finally:
+            self._refreshing_selection = False
+        self._update_use_button()
+
+    def _selection_changed(self):
+        if self._refreshing_selection or not self.multi_select:
+            return
+        # Only replace selection state for rows currently visible through the
+        # search filter. Hidden selections remain selected.
+        visible_ids: set[str] = set()
+        selected_visible: set[str] = set()
+        for index in range(self.list.count()):
+            item = self.list.item(index)
+            data = item.data(Qt.UserRole) or {}
+            entity_id = str(data.get("entityId") or "").strip()
+            if not entity_id:
                 continue
-            item = QListWidgetItem(text)
-            item.setData(Qt.UserRole, {"name": name, "entityId": entity, "domain": domain})
-            self.list.addItem(item)
+            visible_ids.add(entity_id)
+            if item.isSelected():
+                selected_visible.add(entity_id)
+        self._selected_entity_ids.difference_update(visible_ids)
+        self._selected_entity_ids.update(selected_visible)
+        self._update_use_button()
+
+    def _update_use_button(self):
+        if self.multi_select and hasattr(self, "use"):
+            count = len(self._selected_entity_ids)
+            self.use.setText(f"Use Selected ({count})" if count else "Use Selected")
 
     def _cancel(self):
         self.reject()
         self.close()
 
     def _choose_current(self):
+        if self.multi_select:
+            self._selection_changed()
+            selected: list[dict] = []
+            wanted = set(self._selected_entity_ids)
+            for entity in self.entities:
+                entity_id = str(entity.get("entityId") or entity.get("entity_id") or "").strip()
+                if entity_id not in wanted:
+                    continue
+                selected.append({
+                    "name": str(entity.get("name") or entity.get("friendly_name") or entity_id),
+                    "entityId": entity_id,
+                    "domain": str(entity.get("domain") or (entity_id.split(".", 1)[0] if "." in entity_id else "")),
+                })
+            self.selectedMany.emit(selected)
+            QTimer.singleShot(0, self.accept)
+            return
         item = self.list.currentItem()
         if item:
             self._choose_item(item)
@@ -1539,5 +1605,5 @@ class EntityPickerDialog(QDialog):
         data = item.data(Qt.UserRole)
         self.selected.emit(data)
         # Close on the next event-loop pass so any connected save handler can
-        # finish first, but every picker closes after Assign Selected.
+        # finish first, but every single-select picker closes after Assign Selected.
         QTimer.singleShot(0, self.accept)
