@@ -4107,6 +4107,15 @@ class ThermostatScreen(Page):
         super().__init__(app_state, parent)
         self._screen_locked = False
         self._screen_security_locked = False
+        # Setpoint taps must never become concurrent absolute-temperature writes.
+        # The UI updates optimistically on every tap, while this tiny queue keeps
+        # only one backend request in flight and coalesces any newer taps into the
+        # next request. Otherwise 72 -> 71 -> 70 -> 69 can be processed as
+        # 71 -> 69 -> 70 when worker threads/network replies arrive out of order.
+        self._target_command_in_flight = False
+        self._target_command_pending_value: int | None = None
+        self._target_command_pending_suppress_peer_sync = False
+        self._target_command_sequence = 0
         self.dial = ThermostatDial()
         self.dial.setMaximumSize(470, 470)
         self.mode_buttons: dict[str, RoundButton] = {}
@@ -6256,27 +6265,80 @@ class ThermostatScreen(Page):
             self.requestToast.emit(f"Set temp failed: {exc}")
             return
         self.s.set_target_override(val)
+        # Invalidate any status GET that started before this tap and keep normal
+        # polling paused until the final queued write is acknowledged. This keeps
+        # an acknowledgement for an earlier tap from clearing the newer local
+        # target override while the final value is still waiting to be sent.
+        self.s.pause_status_refresh(30.0)
         self.apply_local_minimum_runtime_prediction(before_tap, val)
         self.sync(self.s.config, self.s.thermostat)
         if not bool(t.get("away")):
+            # The main-window Sync path already coalesces target changes on a
+            # short timer, so repeated +/- taps also send only the latest peer
+            # target instead of replaying every intermediate degree.
             self.request_peer_sync({"targetTemp": val})
-        suppress_peer_sync = self.screen_control_locked()
+        self.queue_target_update(val, self.screen_control_locked())
+
+    def queue_target_update(self, value: int, suppress_peer_sync: bool = False):
+        """Serialize native setpoint writes while preserving instant touch UI."""
+        self._target_command_pending_value = int(value)
+        self._target_command_pending_suppress_peer_sync = bool(suppress_peer_sync)
+        self._target_command_sequence += 1
+        if not self._target_command_in_flight:
+            self._send_next_target_update()
+
+    def _send_next_target_update(self):
+        if self._target_command_in_flight:
+            return
+        pending = self._target_command_pending_value
+        if pending is None:
+            self.s.resume_status_refresh()
+            return
+
+        value = int(pending)
+        suppress_peer_sync = bool(self._target_command_pending_suppress_peer_sync)
+        sequence = int(self._target_command_sequence)
+        self._target_command_pending_value = None
+        self._target_command_in_flight = True
 
         def done(result):
+            self._target_command_in_flight = False
+            newer_pending = self._target_command_pending_value is not None
+            if newer_pending:
+                # This response confirms an intermediate tap, not the value now
+                # shown on screen. Do not ingest it: ingesting a higher revision
+                # with the older target would clear the latest optimistic hold.
+                # The next queued request is sent immediately and becomes the
+                # only authoritative acknowledgement the UI consumes.
+                self._send_next_target_update()
+                return
             if isinstance(result, dict):
                 self.s.ingest_thermostat(result)
                 self.sync(self.s.config, self.s.thermostat)
+            self.s.resume_status_refresh()
+
+        def failed(err):
+            self._target_command_in_flight = False
+            if self._target_command_pending_value is not None:
+                # A superseded intermediate write failed, but a newer user target
+                # is already queued. Keep the newer target visible and continue.
+                self._send_next_target_update()
+                return
+            self.s.clear_target_override()
+            self.s.resume_status_refresh()
+            self.requestToast.emit(f"Set temp failed: {err}")
 
         self.run_async(
-            "thermostat-target",
+            f"thermostat-target-{sequence}",
             lambda: self.s.api.thermostat_update({
-                "targetTemp": val,
-                "lastComfortTarget": val,
+                "targetTemp": value,
+                "lastComfortTarget": value,
                 "targetChangeSource": "panel",
                 "suppressPeerSync": suppress_peer_sync,
+                "clientCommandId": f"native-panel:{sequence}",
             }),
             done,
-            lambda err: (self.s.clear_target_override(), self.requestToast.emit(f"Set temp failed: {err}")),
+            failed,
         )
 
     def set_virtual_temp(self, value: float):
