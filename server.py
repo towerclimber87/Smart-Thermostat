@@ -181,6 +181,11 @@ _SYNC_ARM_SOURCE = ""
 _SYNC_LAST_RESULT: dict = {}
 _SYNC_LAST_REQUEST_SIGNATURE = ""
 _SYNC_LAST_REQUEST_AT = 0.0
+_AUTO_AWAY_PENDING_LOCK = threading.RLock()
+_AUTO_AWAY_PENDING = {"since": 0.0, "entityIds": (), "states": {}}
+_HA_ROOM_TEMP_RETRY_LOCK = threading.RLock()
+_HA_ROOM_TEMP_RETRY_AFTER: dict[str, float] = {}
+_HA_ROOM_TEMP_LAST_ERROR: dict[str, str] = {}
 
 
 # Onboard HVAC relay outputs use BCM GPIO numbering. These pins are used when
@@ -218,6 +223,17 @@ HARDWARE_I2C_BUS = int(os.environ.get("SMART_THERMOSTAT_I2C_BUS", "1"))
 HARDWARE_I2C_DEVICE = Path(f"/dev/i2c-{HARDWARE_I2C_BUS}")
 CONTROL_LOOP_ENABLED = os.environ.get("SMART_THERMOSTAT_CONTROL_LOOP", "1").strip().lower() not in {"0", "false", "no", "off"}
 CONTROL_LOOP_INTERVAL_SECONDS = max(1.0, float(os.environ.get("SMART_THERMOSTAT_CONTROL_LOOP_SECONDS", "2") or "2"))
+# Presence is inherently less deterministic than a hardwired HVAC input. Do not
+# let a single Home Assistant location refresh move an actively conditioning
+# thermostat to the Away setpoint. All configured Auto-Away people must report
+# a confident away state continuously for this long before Away is committed.
+AUTO_AWAY_CONFIRM_SECONDS = max(30.0, float(os.environ.get("SMART_THERMOSTAT_AUTO_AWAY_CONFIRM_SECONDS", "300") or "300"))
+# A removed/renamed HA room-temperature entity returns HTTP 404. Re-querying it
+# every control-loop pass only floods the RAM journal and adds network traffic.
+# Keep the onboard fallback active and periodically retry in case the entity is
+# restored or Home Assistant is reconfigured.
+HA_ROOM_TEMP_MISSING_RETRY_SECONDS = max(60.0, float(os.environ.get("SMART_THERMOSTAT_HA_TEMP_MISSING_RETRY_SECONDS", "900") or "900"))
+HA_ROOM_TEMP_ERROR_RETRY_SECONDS = max(15.0, float(os.environ.get("SMART_THERMOSTAT_HA_TEMP_ERROR_RETRY_SECONDS", "60") or "60"))
 THERMAL_PROTECTION_ENABLED = os.environ.get("SMART_THERMOSTAT_THERMAL_PROTECTION", "1").strip().lower() not in {"0", "false", "no", "off"}
 THERMAL_PROTECTION_TRIGGER_C = max(50.0, float(os.environ.get("SMART_THERMOSTAT_THERMAL_TRIGGER_C", "70") or "70"))
 THERMAL_PROTECTION_CLEAR_C = min(
@@ -4534,12 +4550,53 @@ def _presence_state_confidently_away(value: object) -> bool:
     return state not in {"", "home", "unknown", "unavailable", "none", "null"}
 
 
+def _clear_auto_away_pending(reason: str = "") -> None:
+    with _AUTO_AWAY_PENDING_LOCK:
+        since = float(_AUTO_AWAY_PENDING.get("since") or 0.0)
+        if since and reason:
+            print(f"Auto Away confirmation cancelled: {reason}", flush=True)
+        _AUTO_AWAY_PENDING["since"] = 0.0
+        _AUTO_AWAY_PENDING["entityIds"] = ()
+        _AUTO_AWAY_PENDING["states"] = {}
+
+
+def _auto_away_confirmation_ready(entity_ids: list[str], states: dict[str, str]) -> bool:
+    signature = tuple(sorted(str(x or "").strip() for x in entity_ids if str(x or "").strip()))
+    if not signature:
+        _clear_auto_away_pending()
+        return False
+    now = time.monotonic()
+    state_snapshot = {entity_id: str(states.get(entity_id) or "unknown").strip().lower() for entity_id in signature}
+    with _AUTO_AWAY_PENDING_LOCK:
+        pending_signature = tuple(_AUTO_AWAY_PENDING.get("entityIds") or ())
+        since = float(_AUTO_AWAY_PENDING.get("since") or 0.0)
+        if pending_signature != signature or since <= 0.0:
+            _AUTO_AWAY_PENDING["since"] = now
+            _AUTO_AWAY_PENDING["entityIds"] = signature
+            _AUTO_AWAY_PENDING["states"] = state_snapshot
+            print(
+                f"Auto Away confirmation started: waiting {AUTO_AWAY_CONFIRM_SECONDS:g}s; states={state_snapshot}",
+                flush=True,
+            )
+            return False
+        _AUTO_AWAY_PENDING["states"] = state_snapshot
+        if now - since < AUTO_AWAY_CONFIRM_SECONDS:
+            return False
+        _AUTO_AWAY_PENDING["since"] = 0.0
+        _AUTO_AWAY_PENDING["entityIds"] = ()
+        _AUTO_AWAY_PENDING["states"] = {}
+    print(f"Auto Away confirmed after {AUTO_AWAY_CONFIRM_SECONDS:g}s; states={state_snapshot}", flush=True)
+    return True
+
+
 def _apply_presence_away_logic(thermostat: dict) -> dict:
     entity_ids = _thermostat_auto_away_entity_ids(thermostat)
     if not entity_ids:
+        _clear_auto_away_pending("Auto Away has no configured people")
         return thermostat
     states = _person_states_for_schedule(entity_ids, thermostat)
     if not states:
+        _clear_auto_away_pending("presence states are unavailable")
         return thermostat
     was_away = bool(thermostat.get("away"))
     home_entity_ids = [entity_id for entity_id in entity_ids if states.get(entity_id) == "home"]
@@ -4557,6 +4614,7 @@ def _apply_presence_away_logic(thermostat: dict) -> dict:
         updated["presenceHomeOverride"] = None
 
     if any_home:
+        _clear_auto_away_pending("at least one selected person is Home")
         home_override_reason = str((home_override or {}).get("reason") or "").strip().lower()
         if home_override and home_override_reason == "arriving":
             # Arriving may be armed before leaving, while the selected person is
@@ -4582,6 +4640,7 @@ def _apply_presence_away_logic(thermostat: dict) -> dict:
                 updated["targetTemp"] = updated.get("lastComfortTarget")
     else:
         if home_override:
+            _clear_auto_away_pending("Home/Arriving override is active")
             # A Home override blocks Auto Away while all assigned people still
             # report Away/unknown. Manual Return Home lasts until a real Home
             # report; Arriving also remembers a confirmed departure so the next
@@ -4596,11 +4655,20 @@ def _apply_presence_away_logic(thermostat: dict) -> dict:
             updated["awaySource"] = ""
             updated["manualAwayPresenceLatch"] = None
             updated["presenceHomeOverride"] = home_override
-        elif not bool(updated.get("away")) and away_source in {"presence", "auto", ""}:
-            updated["away"] = True
-            updated["awaySource"] = "presence"
-            updated["manualAwayPresenceLatch"] = None
+        elif bool(updated.get("away")):
+            _clear_auto_away_pending()
+        elif away_source in {"presence", "auto", ""}:
+            # Never interpret unknown/unavailable/missing HA presence as Away.
+            # Every selected Auto-Away person must continuously report a
+            # confident non-home state for the confirmation window.
+            if not all_confidently_away:
+                _clear_auto_away_pending("presence is not confidently Away for every selected person")
+            elif _auto_away_confirmation_ready(entity_ids, states):
+                updated["away"] = True
+                updated["awaySource"] = "presence"
+                updated["manualAwayPresenceLatch"] = None
     return _apply_away_setpoint_logic(updated, was_away=was_away)
+
 
 def _pause_entry_open_state(entry: dict) -> bool:
     """Return True when a configured inside-door entry should pause comfort."""
@@ -7805,6 +7873,13 @@ def _apply_selected_ha_temperature_sensor_if_needed(thermostat: dict, *, commit:
     entity_id = str(source.get("entityId") or "").strip()
     if not entity_id:
         return thermostat
+
+    now = time.monotonic()
+    with _HA_ROOM_TEMP_RETRY_LOCK:
+        retry_after = float(_HA_ROOM_TEMP_RETRY_AFTER.get(entity_id) or 0.0)
+    if retry_after > now:
+        return thermostat
+
     try:
         item = _ha_state_cached(ha_url, token, entity_id)
         if not isinstance(item, dict):
@@ -7821,11 +7896,38 @@ def _apply_selected_ha_temperature_sensor_if_needed(thermostat: dict, *, commit:
         updated["currentTempSourceName"] = label
         updated["runtimeTempSource"] = "home-assistant"
         updated["runtimeTempSourceName"] = label
+        with _HA_ROOM_TEMP_RETRY_LOCK:
+            _HA_ROOM_TEMP_RETRY_AFTER.pop(entity_id, None)
+            _HA_ROOM_TEMP_LAST_ERROR.pop(entity_id, None)
         if commit and updated != thermostat:
             _write_thermostat_record(updated, persist=False)
         return updated
     except Exception as exc:
-        print(f"Home Assistant temperature sensor update failed for {entity_id}: {exc}", flush=True)
+        message = str(exc)
+        missing = "HTTP 404" in message or "Entity not found" in message
+        retry_seconds = HA_ROOM_TEMP_MISSING_RETRY_SECONDS if missing else HA_ROOM_TEMP_ERROR_RETRY_SECONDS
+        error_key = "missing" if missing else message[:160]
+        should_log = False
+        with _HA_ROOM_TEMP_RETRY_LOCK:
+            previous_error = _HA_ROOM_TEMP_LAST_ERROR.get(entity_id)
+            previous_retry = float(_HA_ROOM_TEMP_RETRY_AFTER.get(entity_id) or 0.0)
+            if previous_error != error_key or previous_retry <= now:
+                should_log = True
+            _HA_ROOM_TEMP_LAST_ERROR[entity_id] = error_key
+            _HA_ROOM_TEMP_RETRY_AFTER[entity_id] = now + retry_seconds
+        if should_log:
+            if missing:
+                print(
+                    f"Home Assistant room temperature entity {entity_id} was not found; "
+                    f"using onboard fallback and retrying in {retry_seconds:g}s.",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"Home Assistant room temperature update failed for {entity_id}: {exc}; "
+                    f"retrying in {retry_seconds:g}s.",
+                    flush=True,
+                )
         return thermostat
 
 
