@@ -6260,6 +6260,8 @@ class ThermostatScreen(Page):
                 # underlying Heat/Cool/Off mode. This is intentionally local: it
                 # must not turn into a synced Return Home command.
                 changes = {
+                    "preset_mode": "home",
+                    "presetChangeSource": "panel",
                     "away": False,
                     "awaySource": "",
                     "manualAwayPresenceLatch": None,
@@ -6277,6 +6279,8 @@ class ThermostatScreen(Page):
             else:
                 arriving_override = self.arriving_override_payload(before_tap)
                 changes = {
+                    "preset_mode": "arriving",
+                    "presetChangeSource": "panel",
                     "away": False,
                     "awaySource": "",
                     "manualAwayPresenceLatch": None,

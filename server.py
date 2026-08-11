@@ -5656,6 +5656,32 @@ def _handle_thermostat_update_locked(payload: dict) -> tuple[dict, dict, dict]:
     incoming_has_schedules = "schedules" in incoming
 
     requested_preset = str(incoming.get("preset_mode", incoming.get("presetMode")) or "").strip().lower()
+    preset_change_source = _incoming_source(
+        incoming,
+        "presetChangeSource",
+        "preset_change_source",
+        "commandSource",
+        "command_source",
+        "source",
+    )
+
+    # Arriving is a deliberate preset, never an inferred presence state.  Older
+    # panel code could send a whole thermostat fragment containing an Arriving
+    # presenceHomeOverride without also naming the requested preset.  That made
+    # a stale fragment capable of resurrecting Arriving after an explicit Home
+    # command.  Only an explicit preset_mode/presetMode=arriving command may
+    # create or refresh the timed Arriving override.
+    incoming_presence_override = _normalize_presence_home_override(incoming.get("presenceHomeOverride"))
+    incoming_presence_reason = str((incoming_presence_override or {}).get("reason") or "").strip().lower()
+    if incoming_presence_reason == "arriving" and requested_preset != "arriving":
+        incoming = dict(incoming)
+        incoming["presenceHomeOverride"] = None
+        print(
+            "Ignored implicit Arriving override without an explicit Arriving preset "
+            f"(source={preset_change_source or 'unknown'}).",
+            flush=True,
+        )
+
     if requested_preset in {"home", "away", "arriving"}:
         # Treat Home Assistant preset commands exactly like the matching wall-panel
         # actions. Arriving may come from temporary peer Sync; Home and Away may
@@ -5675,10 +5701,20 @@ def _handle_thermostat_update_locked(payload: dict) -> tuple[dict, dict, dict]:
                     duration_ms=ARRIVING_AWAY_BYPASS_MS,
                 )
         else:
-            # Explicit Home clears a prior timed Arrival hold. If the thermostat
-            # was Away, the existing return-home guard below replaces this with
-            # the normal presence hold so Auto Away cannot immediately reassert.
-            incoming.setdefault("presenceHomeOverride", None)
+            # Explicit Home must always clear a prior timed Arriving hold.  Do
+            # not use setdefault() here: a stale incoming Arriving override used
+            # to survive the Home command and then repaint the thermostat as
+            # Arriving a short time later. If the thermostat was Away, the
+            # return-home guard below replaces this with the normal non-Arriving
+            # presence hold so Auto Away cannot immediately reassert.
+            incoming["presenceHomeOverride"] = None
+
+        print(
+            "Thermostat preset command accepted: "
+            f"preset={requested_preset} source={preset_change_source or 'unknown'} "
+            f"clientCommandId={str(incoming.get('clientCommandId') or incoming.get('client_command_id') or '').strip() or '-'}",
+            flush=True,
+        )
 
     if (
         bool(existing.get("away"))
