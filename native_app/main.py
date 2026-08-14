@@ -15769,7 +15769,7 @@ class MainWindow(Background):
         self._sync_optimistic_active = False
         self._sync_status_initialized = False
         self._sync_status_retry_after = 0.0
-        self._last_sync_button_render: tuple[bool, int, bool] | None = None
+        self._last_sync_button_render: tuple[bool, int, bool, bool] | None = None
         self._last_sync_notice_at = 0.0
         self._last_sync_result_at = 0
         self.peer_sync_timer = QTimer(self)
@@ -16137,16 +16137,25 @@ class MainWindow(Background):
             if not active:
                 self._sync_active_until = 0.0
             remaining = max(0, int(math.ceil(float(getattr(self, "_sync_active_until", 0.0) or 0.0) - time.monotonic()))) if active else 0
-            render = (active, remaining, has_peers)
+            on_thermostat_page = self.current_name == "Thermostat"
+            render = (active, remaining, has_peers, on_thermostat_page)
             previous = getattr(self, "_last_sync_button_render", None)
             if render != previous:
                 self._last_sync_button_render = render
                 if hasattr(self, "sync_button"):
                     self.sync_button.setActive(active, remaining)
-                # Geometry/visibility only changes when the active state or peer
-                # availability changes; the countdown text does not need a full
-                # overlay reposition every second.
-                if previous is None or previous[0] != active or previous[2] != has_peers:
+                # Sync visibility depends on both peer availability and the
+                # current page. Reconcile the floating controls whenever either
+                # changes so a button hidden on another page cannot remain
+                # stale-hidden after returning to Thermostat. Countdown-only
+                # changes still avoid a full overlay reposition every second.
+                if (
+                    previous is None
+                    or previous[0] != active
+                    or previous[2] != has_peers
+                    or len(previous) < 4
+                    or previous[3] != on_thermostat_page
+                ):
                     self.position_sleep_controls()
 
             initial_retry_due = bool(
@@ -17219,6 +17228,10 @@ class MainWindow(Background):
         # sit on saved config for several seconds after navigation.
         QTimer.singleShot(60, lambda n=name: self.sync_visible_page(n))
         QTimer.singleShot(140, lambda n=name: self.poll_visible_page_now(n))
+        # Sync is a floating control whose visibility depends on current_name.
+        # Reconcile it on every page transition instead of relying solely on
+        # peer/active-state changes in update_sync_button_state().
+        QTimer.singleShot(0, self.position_sleep_controls)
         QTimer.singleShot(0, self.update_sync_button_state)
 
 
