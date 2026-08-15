@@ -1714,6 +1714,93 @@ class SyncButton(QAbstractButton):
         p.drawText(QRectF(3, r.bottom() - 16, r.width() - 6, 14), Qt.AlignCenter, label)
 
 
+class IntimacyHoldButton(QAbstractButton):
+    """Small six-hour 66°F comfort override shown above Thermostat Sync."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedSize(54, 54)
+        self.setToolTip("Intimacy hold: 66°F for 6 hours")
+        self._active = False
+        self._remaining = 0
+
+    def setActive(self, active: bool, remaining: int = 0):
+        self._active = bool(active)
+        self._remaining = max(0, int(remaining or 0))
+        self.update()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self.rect().contains(event.pos()):
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
+        r = QRectF(self.rect()).adjusted(1.5, 1.5, -1.5, -1.5)
+        active = bool(self._active)
+
+        g = QLinearGradient(r.topLeft(), r.bottomRight())
+        if active:
+            g.setColorAt(0.0, QColor(255, 129, 177, 242))
+            g.setColorAt(0.55, QColor(178, 78, 157, 238))
+            g.setColorAt(1.0, QColor(83, 45, 130, 242))
+            border = QColor(255, 227, 241, 225)
+            icon = QColor(255, 249, 252, 242)
+            text = QColor(255, 250, 253, 238)
+        else:
+            g.setColorAt(0.0, QColor(57, 52, 78, 232))
+            g.setColorAt(0.56, QColor(27, 27, 47, 232))
+            g.setColorAt(1.0, QColor(10, 14, 28, 240))
+            border = QColor(229, 151, 201, 120)
+            icon = QColor(246, 226, 240, 230)
+            text = QColor(219, 174, 207, 220)
+
+        p.setBrush(QBrush(g))
+        p.setPen(QPen(border, 1.3))
+        p.drawRoundedRect(r, 18, 18)
+
+        glow = QRadialGradient(r.center(), 31)
+        glow.setColorAt(0.0, QColor(255, 126, 188, 80 if active else 28))
+        glow.setColorAt(0.72, QColor(180, 83, 190, 25 if active else 8))
+        glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.fillRect(self.rect(), glow)
+
+        # Two abstract profiles leaning toward one another with a small heart.
+        # It reads as intimacy/connection without using explicit imagery.
+        cx = r.center().x()
+        cy = r.center().y() - 6
+        p.setPen(QPen(icon, 2.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.setBrush(Qt.NoBrush)
+        p.drawEllipse(QRectF(cx - 15, cy - 12, 11, 11))
+        p.drawEllipse(QRectF(cx + 4, cy - 12, 11, 11))
+        p.drawArc(QRectF(cx - 18, cy - 3, 19, 16), 25 * 16, 130 * 16)
+        p.drawArc(QRectF(cx - 1, cy - 3, 19, 16), 25 * 16, 130 * 16)
+
+        p.setPen(Qt.NoPen)
+        p.setBrush(icon)
+        heart = QPainterPath()
+        heart.moveTo(cx, cy + 6)
+        heart.cubicTo(cx - 7, cy + 1, cx - 8, cy - 5, cx - 3, cy - 6)
+        heart.cubicTo(cx, cy - 7, cx + 1, cy - 4, cx, cy - 2)
+        heart.cubicTo(cx - 1, cy - 4, cx, cy - 7, cx + 3, cy - 6)
+        heart.cubicTo(cx + 8, cy - 5, cx + 7, cy + 1, cx, cy + 6)
+        p.drawPath(heart)
+
+        if active and self._remaining > 0:
+            hours = self._remaining // 3600
+            minutes = (self._remaining % 3600) // 60
+            label = f"{hours}h{minutes:02d}" if hours else f"{max(1, minutes)}m"
+        else:
+            label = "OFF"
+        p.setFont(font(6, QFont.Black, 10))
+        p.setPen(text)
+        p.drawText(QRectF(2, r.bottom() - 14, r.width() - 4, 12), Qt.AlignCenter, label)
+
+
 class ScreenSleepOverlay(QWidget):
     """Black touch shield shown while the appliance display is asleep/waking."""
     def __init__(self, parent=None):
@@ -4029,6 +4116,15 @@ class ScheduleManagerDialog(QDialog):
         self.save_schedules(schedules)
 
     def run_schedule(self, sched: dict):
+        thermostat = self.s.thermostat if isinstance(self.s.thermostat, dict) else {}
+        hold = thermostat.get("intimacyHold") if isinstance(thermostat.get("intimacyHold"), dict) else {}
+        try:
+            hold_active = bool(hold.get("active")) and float(hold.get("expiresAt") or 0) > time.time() * 1000
+        except (TypeError, ValueError):
+            hold_active = False
+        if hold_active:
+            QMessageBox.information(self, "Schedule", "66°F hold is active. Schedules are ignored until it is turned off.")
+            return
         mode = str((self.s.thermostat or {}).get("mode") or "cool").lower()
         active = str((self.s.thermostat or {}).get("autoActiveMode") or "").lower()
         effective = active if mode == "auto" and active in {"heat", "cool"} else mode
@@ -4730,6 +4826,16 @@ class ThermostatScreen(Page):
         if isinstance(src.get("outputs"), dict):
             merged["outputs"] = src.get("outputs")
         return merged
+
+    def intimacy_hold_active(self, snapshot: dict | None = None) -> bool:
+        t = snapshot if isinstance(snapshot, dict) else self.thermostat_view()
+        hold = t.get("intimacyHold") if isinstance(t.get("intimacyHold"), dict) else {}
+        if not bool(hold.get("active")):
+            return False
+        try:
+            return float(hold.get("expiresAt") or 0) > time.time() * 1000
+        except (TypeError, ValueError):
+            return False
 
     def environment_effect_intensity(self, t: dict | None = None) -> float:
         t = t or self.thermostat_view()
@@ -6047,6 +6153,9 @@ class ThermostatScreen(Page):
     def apply_schedule_now(self, sched: dict):
         if self.reject_locked_control():
             return
+        if self.intimacy_hold_active():
+            self.requestToast.emit("66°F hold active — schedules are ignored")
+            return
         mode = str(self.thermostat_view().get("mode") or "cool").lower()
         active = str(self.thermostat_view().get("autoActiveMode") or "").lower()
         effective = active if mode == "auto" and active in {"heat", "cool"} else mode
@@ -6246,6 +6355,9 @@ class ThermostatScreen(Page):
         if mode not in {"off", "heat", "cool", "away", "arriving"}:
             return
         before_tap = copy.deepcopy(self.thermostat_view())
+        if self.intimacy_hold_active(before_tap) and mode in {"away", "arriving"}:
+            self.requestToast.emit("66°F hold active — Away and Arriving are ignored")
+            return
         arriving_was_active = mode == "arriving" and self.arriving_override_active(before_tap)
         if mode == "arriving":
             resume_mode = str(before_tap.get("mode") or "cool").lower()
@@ -6478,6 +6590,9 @@ class ThermostatScreen(Page):
             return
         try:
             t = self.thermostat_view()
+            if self.intimacy_hold_active(t):
+                self.requestToast.emit("66°F hold active — turn it off to change temperature")
+                return
             before_tap = copy.deepcopy(t)
             limits = t.get("limits") or {}
             mode = str(t.get("mode") or "cool").lower()
@@ -15760,6 +15875,10 @@ class MainWindow(Background):
         self.sleep_button.clicked.connect(lambda: self.enter_display_sleep(manual=True))
         self.sync_button = SyncButton(self)
         self.sync_button.clicked.connect(self.toggle_sync_mode)
+        self.intimacy_button = IntimacyHoldButton(self)
+        self.intimacy_button.clicked.connect(self.toggle_intimacy_hold)
+        self._intimacy_toggle_running = False
+        self._intimacy_optimistic_until = 0.0
         self._sync_active_until = 0.0
         self._sync_status_poll_running = False
         self._sync_pending_changes: dict[str, object] = {}
@@ -16008,6 +16127,8 @@ class MainWindow(Background):
             if hasattr(self, "sleep_button"):
                 self.sleep_button.move(sleep_x, sleep_y)
                 self.sleep_button.setVisible(not assistant_active and not getattr(self, "_display_sleeping", False))
+            show_sync = False
+            sync_y = max(0, sleep_y - 58 - 10)
             if hasattr(self, "sync_button"):
                 show_sync = (
                     not assistant_active
@@ -16017,8 +16138,24 @@ class MainWindow(Background):
                 )
                 self.sync_button.setVisible(show_sync)
                 if show_sync:
-                    self.sync_button.move(sleep_x, max(0, sleep_y - self.sync_button.height() - 10))
+                    sync_y = max(0, sleep_y - self.sync_button.height() - 10)
+                    self.sync_button.move(sleep_x, sync_y)
                     self.sync_button.raise_()
+            if hasattr(self, "intimacy_button"):
+                show_intimacy = (
+                    not assistant_active
+                    and not getattr(self, "_display_sleeping", False)
+                    and self.current_name == "Thermostat"
+                )
+                self.intimacy_button.setVisible(show_intimacy)
+                if show_intimacy:
+                    intimacy_x = max(0, self.width() - self.intimacy_button.width() - margin - 2)
+                    anchor_y = sync_y if show_sync else sleep_y
+                    self.intimacy_button.move(
+                        intimacy_x,
+                        max(0, anchor_y - self.intimacy_button.height() - 10),
+                    )
+                    self.intimacy_button.raise_()
 
             # Sleep shield is above the normal UI, but the active assistant screen
             # is deliberately top-most so a terminal command can wake the display
@@ -16036,6 +16173,8 @@ class MainWindow(Background):
                     self.sleep_button.hide()
                 if hasattr(self, "sync_button"):
                     self.sync_button.hide()
+                if hasattr(self, "intimacy_button"):
+                    self.intimacy_button.hide()
                 if hasattr(self, "assistant_overlay"):
                     self.assistant_overlay.hide()
                 if hasattr(self, "sleep_overlay"):
@@ -16130,6 +16269,7 @@ class MainWindow(Background):
         self.run_async("sync-status", lambda: self.s.api.get("/api/sync/status"), done, failed)
 
     def update_sync_button_state(self):
+        self.update_intimacy_button_state()
         try:
             peers = self.sync_peer_entities()
             has_peers = bool(peers)
@@ -16172,6 +16312,89 @@ class MainWindow(Background):
                 self.refresh_sync_status()
         except Exception:
             pass
+
+    def update_intimacy_button_state(self):
+        try:
+            thermostat = self.s.thermostat if isinstance(self.s.thermostat, dict) else {}
+            hold = thermostat.get("intimacyHold") if isinstance(thermostat.get("intimacyHold"), dict) else {}
+            now_ms = int(time.time() * 1000)
+            expires_at = int(float(hold.get("expiresAt") or 0))
+            active = bool(hold.get("active")) and expires_at > now_ms
+            remaining = max(0, int(math.ceil((expires_at - now_ms) / 1000.0))) if active else 0
+
+            optimistic_until = float(getattr(self, "_intimacy_optimistic_until", 0.0) or 0.0)
+            if not active and optimistic_until > time.monotonic():
+                active = True
+                remaining = max(1, int(math.ceil(optimistic_until - time.monotonic())))
+
+            if hasattr(self, "intimacy_button"):
+                self.intimacy_button.setActive(active, remaining)
+        except Exception:
+            pass
+
+    def toggle_intimacy_hold(self):
+        if getattr(self, "navigation_locked", False):
+            self.toast.show_message(self.lock_restriction_message())
+            return
+        if getattr(self, "_intimacy_toggle_running", False):
+            return
+
+        thermostat = self.s.thermostat if isinstance(self.s.thermostat, dict) else {}
+        hold = thermostat.get("intimacyHold") if isinstance(thermostat.get("intimacyHold"), dict) else {}
+        now_ms = int(time.time() * 1000)
+        try:
+            expires_at = int(float(hold.get("expiresAt") or 0))
+        except (TypeError, ValueError):
+            expires_at = 0
+        active = bool(hold.get("active")) and expires_at > now_ms
+        if float(getattr(self, "_intimacy_optimistic_until", 0.0) or 0.0) > time.monotonic():
+            active = True
+        turning_on = not active
+        self._intimacy_toggle_running = True
+
+        if turning_on:
+            self._intimacy_optimistic_until = time.monotonic() + (6 * 60 * 60)
+            thermostat["targetTemp"] = 66
+            thermostat["intimacyHold"] = {
+                "active": True,
+                "startedAt": now_ms,
+                "expiresAt": now_ms + (6 * 60 * 60 * 1000),
+                "targetTemp": 66,
+            }
+            self.intimacy_button.setActive(True, 6 * 60 * 60)
+            self.header.update_values(thermostat.get("currentTemp"), 66)
+            self.sync_visible_page("Thermostat")
+        else:
+            self._intimacy_optimistic_until = 0.0
+            self.intimacy_button.setActive(False, 0)
+
+        def done(result):
+            self._intimacy_toggle_running = False
+            self._intimacy_optimistic_until = 0.0
+            if isinstance(result, dict):
+                self.s.ingest_thermostat(result)
+            self.sync_runtime_only()
+            self.toast.show_message(
+                "66°F hold on for 6 hours" if turning_on else "66°F hold off — normal schedule resumed",
+                2600,
+            )
+
+        def failed(err):
+            self._intimacy_toggle_running = False
+            self._intimacy_optimistic_until = 0.0
+            self.toast.show_message(f"66°F hold failed: {err}", 3200)
+            self.refresh_status()
+
+        self.run_async(
+            "intimacy-hold-on" if turning_on else "intimacy-hold-off",
+            lambda: self.s.api.thermostat_update({
+                "intimacyHoldAction": "on" if turning_on else "off",
+                "intimacyHoldDurationSeconds": 6 * 60 * 60,
+                "commandSource": "touchscreen",
+            }),
+            done,
+            failed,
+        )
 
     def toggle_sync_mode(self):
         if getattr(self, "navigation_locked", False):
@@ -17266,6 +17489,7 @@ class MainWindow(Background):
         self.header.set_locked(self.navigation_locked, self.security_lock_active)
         self.sleep_button.setEnabled(not self.navigation_locked)
         self.sync_button.setEnabled(not self.navigation_locked)
+        self.intimacy_button.setEnabled(not self.navigation_locked)
 
         thermostat_page = self.pages.get("Thermostat")
         if isinstance(thermostat_page, ThermostatScreen):
@@ -17670,6 +17894,7 @@ class MainWindow(Background):
         t = self.s.thermostat or {}
         self.header.update_values(t.get("currentTemp"), t.get("targetTemp"))
         self.sync_visible_page()
+        self.update_intimacy_button_state()
         self.update_sync_button_state()
 
     def reload_all(self):

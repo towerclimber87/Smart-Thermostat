@@ -124,6 +124,8 @@ PANEL_COMMAND_GRACE_MS = int(float(os.environ.get("SMART_THERMOSTAT_PANEL_COMMAN
 # value 30-60 seconds after the user tapped the touchscreen.
 PANEL_TARGET_COMMAND_GRACE_MS = int(float(os.environ.get("SMART_THERMOSTAT_PANEL_TARGET_GRACE_SECONDS", "300") or "300") * 1000)
 ARRIVING_AWAY_BYPASS_MS = int(float(os.environ.get("SMART_THERMOSTAT_ARRIVING_BYPASS_MINUTES", "120") or "120") * 60000)
+INTIMACY_HOLD_TARGET_F = 66
+INTIMACY_HOLD_DURATION_MS = 6 * 60 * 60 * 1000
 SYNC_ARM_DURATION_SECONDS = max(5.0, float(os.environ.get("SMART_THERMOSTAT_SYNC_ARM_SECONDS", "30") or "30"))
 CONFIG_WEB_PORTAL_TIMEOUT_SECONDS = max(60.0, float(os.environ.get("SMART_THERMOSTAT_CONFIG_PORTAL_TIMEOUT_SECONDS", "900") or "900"))
 MANUAL_HARDWARE_TIMEOUT_SECONDS = max(0.0, float(os.environ.get("SMART_THERMOSTAT_MANUAL_HARDWARE_TIMEOUT_SECONDS", "300") or "300"))
@@ -373,6 +375,14 @@ DEFAULT_THERMOSTAT = {
     "away": False,
     "awaySource": "",
     "manualAwayPresenceLatch": None,
+    "intimacyHold": {
+        "active": False,
+        "startedAt": 0,
+        "expiresAt": 0,
+        "targetTemp": INTIMACY_HOLD_TARGET_F,
+        "previousTargetTemp": None,
+        "previousLastComfortTarget": None,
+    },
     "presenceHomeOverride": None,
     "awayHeat": 55,
     "awayCool": 85,
@@ -1208,6 +1218,159 @@ def _normalize_auto_switch_hold(value: object) -> dict:
     }
 
 
+def _normalize_intimacy_hold(value: object) -> dict:
+    default = _deepcopy_json(DEFAULT_THERMOSTAT["intimacyHold"])
+    if not isinstance(value, dict):
+        return default
+    active = bool(value.get("active"))
+    started_at = int(_number(value.get("startedAt"), 0, 0, None) or 0)
+    expires_at = int(_number(value.get("expiresAt"), 0, 0, None) or 0)
+
+    def saved_target(key: str):
+        raw = value.get(key)
+        if raw is None or raw == "":
+            return None
+        return _number(raw, 70, 40, 100)
+
+    if not active:
+        return default
+    if started_at <= 0:
+        started_at = int(time.time() * 1000)
+    if expires_at <= 0:
+        expires_at = started_at + INTIMACY_HOLD_DURATION_MS
+    return {
+        "active": True,
+        "startedAt": started_at,
+        "expiresAt": expires_at,
+        "targetTemp": INTIMACY_HOLD_TARGET_F,
+        "previousTargetTemp": saved_target("previousTargetTemp"),
+        "previousLastComfortTarget": saved_target("previousLastComfortTarget"),
+    }
+
+
+def _intimacy_hold_is_active(thermostat: dict, *, now_ms: int | None = None) -> bool:
+    hold = _normalize_intimacy_hold((thermostat or {}).get("intimacyHold"))
+    if not hold.get("active"):
+        return False
+    now = int(now_ms if now_ms is not None else time.time() * 1000)
+    return int(hold.get("expiresAt") or 0) > now
+
+
+def _intimacy_restore_target(thermostat: dict) -> float:
+    t = thermostat or {}
+    pause = _normalize_pause_function(t.get("pauseFunction"))
+    if pause.get("active") and pause.get("previousTargetTemp") is not None:
+        return _number(pause.get("previousTargetTemp"), t.get("lastComfortTarget", 70), 40, 100)
+    if bool(t.get("away")):
+        return _number(t.get("lastComfortTarget"), t.get("targetTemp", 70), 40, 100)
+    return _number(t.get("targetTemp"), t.get("lastComfortTarget", 70), 40, 100)
+
+
+def _start_intimacy_hold(thermostat: dict, *, duration_ms: int | None = None) -> dict:
+    now_ms = int(time.time() * 1000)
+    duration = int(duration_ms or INTIMACY_HOLD_DURATION_MS)
+    duration = max(60_000, min(duration, 24 * 60 * 60 * 1000))
+    current = _merge_thermostat_state(thermostat)
+    existing_hold = _normalize_intimacy_hold(current.get("intimacyHold"))
+    if existing_hold.get("active"):
+        # Re-arming an already active (or just-expired) hold restarts the six-hour
+        # clock without losing the real comfort target saved by the first press.
+        previous_target = existing_hold.get("previousTargetTemp")
+        if previous_target is None:
+            previous_target = existing_hold.get("previousLastComfortTarget")
+        if previous_target is None:
+            previous_target = _number(current.get("lastComfortTarget"), 70, 40, 100)
+        previous_comfort = existing_hold.get("previousLastComfortTarget")
+        if previous_comfort is None:
+            previous_comfort = previous_target
+    else:
+        previous_target = _intimacy_restore_target(current)
+        previous_comfort = _number(current.get("lastComfortTarget"), previous_target, 40, 100)
+    pause = _normalize_pause_function(current.get("pauseFunction"))
+    if pause.get("active"):
+        pause.update({
+            "active": False,
+            "pausedAt": 0,
+            "previousTargetTemp": None,
+            "previousLastComfortTarget": None,
+            "activeEntityIds": [],
+            "snoozeUntil": now_ms + duration,
+            "countdownAllowed": False,
+            "countdownReason": "intimacy-hold",
+        })
+    current["pauseFunction"] = pause
+    current["away"] = False
+    current["awaySource"] = ""
+    current["manualAwayPresenceLatch"] = None
+    current["presenceHomeOverride"] = None
+    current["targetTemp"] = INTIMACY_HOLD_TARGET_F
+    current["lastComfortTarget"] = previous_comfort
+    current["intimacyHold"] = {
+        "active": True,
+        "startedAt": now_ms,
+        "expiresAt": now_ms + duration,
+        "targetTemp": INTIMACY_HOLD_TARGET_F,
+        "previousTargetTemp": previous_target,
+        "previousLastComfortTarget": previous_comfort,
+    }
+    current["targetRevision"] = int(_number(current.get("targetRevision"), 0, 0, None) or 0) + 1
+    current["lastTargetChangeAt"] = now_ms
+    current["lastTargetChangeSource"] = "intimacy-hold"
+    _clear_auto_away_pending("Intimacy hold activated")
+    return _merge_thermostat_state(current)
+
+
+def _stop_intimacy_hold(thermostat: dict, *, reason: str = "manual") -> dict:
+    current = _merge_thermostat_state(thermostat)
+    hold = _normalize_intimacy_hold(current.get("intimacyHold"))
+    if not hold.get("active"):
+        current["intimacyHold"] = _deepcopy_json(DEFAULT_THERMOSTAT["intimacyHold"])
+        return _merge_thermostat_state(current)
+    restore_target = hold.get("previousTargetTemp")
+    if restore_target is None:
+        restore_target = hold.get("previousLastComfortTarget")
+    if restore_target is None:
+        restore_target = current.get("lastComfortTarget", 70)
+    restore_comfort = hold.get("previousLastComfortTarget")
+    if restore_comfort is None:
+        restore_comfort = restore_target
+    now_ms = int(time.time() * 1000)
+    current["targetTemp"] = _number(restore_target, 70, 40, 100)
+    current["lastComfortTarget"] = _number(restore_comfort, current["targetTemp"], 40, 100)
+    current["intimacyHold"] = _deepcopy_json(DEFAULT_THERMOSTAT["intimacyHold"])
+    current["targetRevision"] = int(_number(current.get("targetRevision"), 0, 0, None) or 0) + 1
+    current["lastTargetChangeAt"] = now_ms
+    current["lastTargetChangeSource"] = f"intimacy-hold-{str(reason or 'manual').strip().lower()[:24]}"
+    return _merge_thermostat_state(current)
+
+
+def _apply_intimacy_hold_runtime(thermostat: dict) -> tuple[dict, bool, bool]:
+    current = _merge_thermostat_state(thermostat)
+    hold = _normalize_intimacy_hold(current.get("intimacyHold"))
+    if not hold.get("active"):
+        return current, False, False
+    now_ms = int(time.time() * 1000)
+    if int(hold.get("expiresAt") or 0) <= now_ms:
+        released = _stop_intimacy_hold(current, reason="expired")
+        return released, False, True
+
+    changed = False
+    if bool(current.get("away")):
+        current["away"] = False
+        current["awaySource"] = ""
+        current["manualAwayPresenceLatch"] = None
+        changed = True
+    if current.get("presenceHomeOverride") is not None:
+        current["presenceHomeOverride"] = None
+        changed = True
+    if abs(_number(current.get("targetTemp"), INTIMACY_HOLD_TARGET_F, 40, 100) - INTIMACY_HOLD_TARGET_F) >= 0.001:
+        current["targetTemp"] = INTIMACY_HOLD_TARGET_F
+        changed = True
+    current["intimacyHold"] = hold
+    _clear_auto_away_pending("Intimacy hold is active")
+    return _merge_thermostat_state(current), True, changed
+
+
 def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None = None) -> dict:
     base = _deepcopy_json(DEFAULT_THERMOSTAT)
     auto_away_people_explicit = False
@@ -1249,6 +1412,8 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             base["manualAwayPresenceLatch"] = _normalize_manual_away_presence_latch(source.get("manualAwayPresenceLatch"))
         if "presenceHomeOverride" in source:
             base["presenceHomeOverride"] = _normalize_presence_home_override(source.get("presenceHomeOverride"))
+        if "intimacyHold" in source:
+            base["intimacyHold"] = _normalize_intimacy_hold(source.get("intimacyHold"))
         if "preAwayTargetTemp" in source:
             raw_pre_away_target = source.get("preAwayTargetTemp")
             if raw_pre_away_target is None or raw_pre_away_target == "":
@@ -1474,6 +1639,15 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
     if not base["away"] and not base.get("pauseFunction", {}).get("active"):
         base["targetTemp"] = _number(base["targetTemp"], 70, mode_limits.get("min"), mode_limits.get("max"))
         base["lastComfortTarget"] = _number(base["lastComfortTarget"], base["targetTemp"], mode_limits.get("min"), mode_limits.get("max"))
+    if _intimacy_hold_is_active(base):
+        # This override intentionally owns the comfort setpoint even when the
+        # configured normal-mode range would otherwise clamp 66°F. Equipment
+        # safety limits remain independent and continue to run normally.
+        base["targetTemp"] = INTIMACY_HOLD_TARGET_F
+        base["away"] = False
+        base["awaySource"] = ""
+        base["manualAwayPresenceLatch"] = None
+        base["presenceHomeOverride"] = None
     # Preserve a meaningful legacy value for older clients. Mixed routing cannot
     # be represented by the old flag, so only report External when both sides are.
     base["airControlMode"] = "external" if (
@@ -1502,6 +1676,7 @@ THERMOSTAT_PERSIST_KEYS = (
     "awaySource",
     "manualAwayPresenceLatch",
     "presenceHomeOverride",
+    "intimacyHold",
     "awayHeat",
     "awayCool",
     "safetyLow",
@@ -4474,6 +4649,8 @@ def _schedule_target_for_current_mode(thermostat: dict, schedule: dict) -> int:
 
 
 def _apply_thermostat_schedules(thermostat: dict) -> dict:
+    if _intimacy_hold_is_active(thermostat):
+        return thermostat
     schedules = _normalize_schedule_entries(thermostat.get("schedules") or [])
     if not schedules:
         return thermostat
@@ -4590,6 +4767,9 @@ def _auto_away_confirmation_ready(entity_ids: list[str], states: dict[str, str])
 
 
 def _apply_presence_away_logic(thermostat: dict) -> dict:
+    if _intimacy_hold_is_active(thermostat):
+        _clear_auto_away_pending("Intimacy hold is active")
+        return thermostat
     entity_ids = _thermostat_auto_away_entity_ids(thermostat)
     if not entity_ids:
         _clear_auto_away_pending("Auto Away has no configured people")
@@ -4976,13 +5156,19 @@ def _calculate_runtime_thermostat_logic(record: dict, *, notify: bool = True) ->
                 thermostat = _apply_selected_ha_temperature_sensor_if_needed(thermostat, commit=False)
 
     thermostat = _apply_selected_ha_outdoor_temperature_sensor_if_needed(thermostat, commit=False)
+    thermostat, intimacy_active, intimacy_changed = _apply_intimacy_hold_runtime(thermostat)
+    if intimacy_active:
+        # Keep temperature sensors and hardware safety alive, but do not let any
+        # comfort automation mutate the held setpoint while this override is on.
+        return thermostat, intimacy_changed
+
     updated = _apply_presence_away_logic(thermostat)
     updated = _apply_door_pause_logic(updated)
     updated = _apply_away_setpoint_logic(updated, was_away=was_away)
     updated = _apply_comfort_auto_switch_logic(updated, notify=notify)
     scheduled = _apply_thermostat_schedules(updated)
     scheduled = _apply_away_setpoint_logic(scheduled, was_away=was_away, finalize_restore=True)
-    return scheduled, scheduled != updated
+    return scheduled, intimacy_changed or scheduled != updated
 
 
 def _apply_runtime_thermostat_logic(record: dict | None = None, *, notify: bool = True) -> dict:
@@ -5654,6 +5840,49 @@ def _handle_thermostat_update_locked(payload: dict) -> tuple[dict, dict, dict]:
     if not isinstance(incoming, dict):
         incoming = {}
     incoming_has_schedules = "schedules" in incoming
+    intimacy_action = str(
+        incoming.get("intimacyHoldAction", incoming.get("intimacy_hold_action", "")) or ""
+    ).strip().lower()
+    intimacy_action_applied = ""
+    intimacy_blocked_target = False
+    intimacy_blocked_preset = False
+
+    if intimacy_action in {"on", "enable", "start"}:
+        duration_seconds = _number(
+            incoming.get("intimacyHoldDurationSeconds", incoming.get("intimacy_hold_duration_seconds")),
+            INTIMACY_HOLD_DURATION_MS / 1000,
+            60,
+            24 * 60 * 60,
+        )
+        existing = _start_intimacy_hold(existing, duration_ms=int(duration_seconds * 1000))
+        intimacy_action_applied = "on"
+    elif intimacy_action in {"off", "disable", "stop"}:
+        existing = _stop_intimacy_hold(existing, reason="manual")
+        intimacy_action_applied = "off"
+
+    if intimacy_action:
+        incoming = {
+            key: value
+            for key, value in incoming.items()
+            if key not in {
+                "intimacyHoldAction",
+                "intimacy_hold_action",
+                "intimacyHoldDurationSeconds",
+                "intimacy_hold_duration_seconds",
+            }
+        }
+
+    if _intimacy_hold_is_active(existing):
+        if _incoming_has_comfort_target_change(incoming):
+            incoming = _strip_comfort_target_changes(dict(incoming))
+            intimacy_blocked_target = True
+        preset_was_explicit = "preset_mode" in incoming or "presetMode" in incoming
+        away_was_requested = "away" in incoming and bool(incoming.get("away"))
+        if any(key in incoming for key in ("away", "preset_mode", "presetMode", "awaySource", "manualAwayPresenceLatch", "presenceHomeOverride", "preAwayTargetTemp")):
+            incoming = dict(incoming)
+            for key in ("away", "preset_mode", "presetMode", "awaySource", "manualAwayPresenceLatch", "presenceHomeOverride", "preAwayTargetTemp"):
+                incoming.pop(key, None)
+            intimacy_blocked_preset = bool(preset_was_explicit or away_was_requested)
 
     requested_preset = str(incoming.get("preset_mode", incoming.get("presetMode")) or "").strip().lower()
     preset_change_source = _incoming_source(
@@ -5768,6 +5997,21 @@ def _handle_thermostat_update_locked(payload: dict) -> tuple[dict, dict, dict]:
         "reason": "",
         "clientCommandId": str(incoming.get("clientCommandId") or incoming.get("client_command_id") or "").strip()[:160],
     }
+    if intimacy_action_applied == "on":
+        command_result["reason"] = "Intimacy hold enabled at 66°F for six hours."
+    elif intimacy_action_applied == "off":
+        command_result["reason"] = "Intimacy hold disabled; normal thermostat behavior resumed."
+    if intimacy_blocked_target:
+        command_result.update({
+            "accepted": False,
+            "targetAccepted": False,
+            "reason": "Intimacy hold is active at 66°F. Turn it off before changing the setpoint.",
+        })
+    if intimacy_blocked_preset and not intimacy_blocked_target:
+        command_result.update({
+            "accepted": False,
+            "reason": "Intimacy hold is active at 66°F. Away and preset changes are ignored until it is off.",
+        })
 
     # Home Assistant sends the revision it most recently read from this panel.
     # If the wall thermostat changed while HA was disconnected—or a delayed HA
@@ -6090,6 +6334,15 @@ def _run_thermostat_schedule_payload(payload: object) -> dict:
         )
     if selected is None:
         return {"ok": False, "error": "The requested thermostat schedule was not found."}
+    if _intimacy_hold_is_active(thermostat):
+        result = _thermostat_status_payload(refresh_runtime=False, apply_hardware=False)
+        result["scheduleRun"] = {
+            "id": str(selected.get("id") or ""),
+            "name": str(selected.get("name") or "Schedule"),
+            "skipped": True,
+            "reason": "Intimacy hold is active at 66°F.",
+        }
+        return result
 
     mode = str(thermostat.get("mode") or "cool").strip().lower()
     active_mode = str(thermostat.get("autoActiveMode") or "").strip().lower()
