@@ -375,6 +375,7 @@ DEFAULT_THERMOSTAT = {
     "away": False,
     "awaySource": "",
     "manualAwayPresenceLatch": None,
+    "intimacyHoldTargetTemp": INTIMACY_HOLD_TARGET_F,
     "intimacyHold": {
         "active": False,
         "startedAt": 0,
@@ -1242,10 +1243,19 @@ def _normalize_intimacy_hold(value: object) -> dict:
         "active": True,
         "startedAt": started_at,
         "expiresAt": expires_at,
-        "targetTemp": INTIMACY_HOLD_TARGET_F,
+        "targetTemp": _number(value.get("targetTemp"), INTIMACY_HOLD_TARGET_F, 40, 100),
         "previousTargetTemp": saved_target("previousTargetTemp"),
         "previousLastComfortTarget": saved_target("previousLastComfortTarget"),
     }
+
+
+def _intimacy_hold_target_f(thermostat: dict | None) -> float:
+    return _number(
+        (thermostat or {}).get("intimacyHoldTargetTemp"),
+        INTIMACY_HOLD_TARGET_F,
+        40,
+        100,
+    )
 
 
 def _intimacy_hold_is_active(thermostat: dict, *, now_ms: int | None = None) -> bool:
@@ -1303,13 +1313,14 @@ def _start_intimacy_hold(thermostat: dict, *, duration_ms: int | None = None) ->
     current["awaySource"] = ""
     current["manualAwayPresenceLatch"] = None
     current["presenceHomeOverride"] = None
-    current["targetTemp"] = INTIMACY_HOLD_TARGET_F
+    hold_target = _intimacy_hold_target_f(current)
+    current["targetTemp"] = hold_target
     current["lastComfortTarget"] = previous_comfort
     current["intimacyHold"] = {
         "active": True,
         "startedAt": now_ms,
         "expiresAt": now_ms + duration,
-        "targetTemp": INTIMACY_HOLD_TARGET_F,
+        "targetTemp": hold_target,
         "previousTargetTemp": previous_target,
         "previousLastComfortTarget": previous_comfort,
     }
@@ -1363,8 +1374,12 @@ def _apply_intimacy_hold_runtime(thermostat: dict) -> tuple[dict, bool, bool]:
     if current.get("presenceHomeOverride") is not None:
         current["presenceHomeOverride"] = None
         changed = True
-    if abs(_number(current.get("targetTemp"), INTIMACY_HOLD_TARGET_F, 40, 100) - INTIMACY_HOLD_TARGET_F) >= 0.001:
-        current["targetTemp"] = INTIMACY_HOLD_TARGET_F
+    hold_target = _intimacy_hold_target_f(current)
+    if abs(_number(current.get("targetTemp"), hold_target, 40, 100) - hold_target) >= 0.001:
+        current["targetTemp"] = hold_target
+        changed = True
+    if abs(_number(hold.get("targetTemp"), hold_target, 40, 100) - hold_target) >= 0.001:
+        hold["targetTemp"] = hold_target
         changed = True
     current["intimacyHold"] = hold
     _clear_auto_away_pending("Intimacy hold is active")
@@ -1412,6 +1427,13 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             base["manualAwayPresenceLatch"] = _normalize_manual_away_presence_latch(source.get("manualAwayPresenceLatch"))
         if "presenceHomeOverride" in source:
             base["presenceHomeOverride"] = _normalize_presence_home_override(source.get("presenceHomeOverride"))
+        if "intimacyHoldTargetTemp" in source:
+            base["intimacyHoldTargetTemp"] = _number(
+                source.get("intimacyHoldTargetTemp"),
+                INTIMACY_HOLD_TARGET_F,
+                40,
+                100,
+            )
         if "intimacyHold" in source:
             base["intimacyHold"] = _normalize_intimacy_hold(source.get("intimacyHold"))
         if "preAwayTargetTemp" in source:
@@ -1641,9 +1663,12 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
         base["lastComfortTarget"] = _number(base["lastComfortTarget"], base["targetTemp"], mode_limits.get("min"), mode_limits.get("max"))
     if _intimacy_hold_is_active(base):
         # This override intentionally owns the comfort setpoint even when the
-        # configured normal-mode range would otherwise clamp 66°F. Equipment
-        # safety limits remain independent and continue to run normally.
-        base["targetTemp"] = INTIMACY_HOLD_TARGET_F
+        # configured normal-mode range would otherwise clamp the selected hold
+        # temperature. Equipment safety limits remain independent.
+        hold_target = _intimacy_hold_target_f(base)
+        base["targetTemp"] = hold_target
+        if isinstance(base.get("intimacyHold"), dict):
+            base["intimacyHold"]["targetTemp"] = hold_target
         base["away"] = False
         base["awaySource"] = ""
         base["manualAwayPresenceLatch"] = None
@@ -1676,6 +1701,7 @@ THERMOSTAT_PERSIST_KEYS = (
     "awaySource",
     "manualAwayPresenceLatch",
     "presenceHomeOverride",
+    "intimacyHoldTargetTemp",
     "intimacyHold",
     "awayHeat",
     "awayCool",
@@ -5997,20 +6023,21 @@ def _handle_thermostat_update_locked(payload: dict) -> tuple[dict, dict, dict]:
         "reason": "",
         "clientCommandId": str(incoming.get("clientCommandId") or incoming.get("client_command_id") or "").strip()[:160],
     }
+    intimacy_target_text = f"{_intimacy_hold_target_f(existing):g}°F"
     if intimacy_action_applied == "on":
-        command_result["reason"] = "Intimacy hold enabled at 66°F for six hours."
+        command_result["reason"] = f"Intimacy hold enabled at {intimacy_target_text} for six hours."
     elif intimacy_action_applied == "off":
         command_result["reason"] = "Intimacy hold disabled; normal thermostat behavior resumed."
     if intimacy_blocked_target:
         command_result.update({
             "accepted": False,
             "targetAccepted": False,
-            "reason": "Intimacy hold is active at 66°F. Turn it off before changing the setpoint.",
+            "reason": f"Intimacy hold is active at {intimacy_target_text}. Turn it off before changing the setpoint.",
         })
     if intimacy_blocked_preset and not intimacy_blocked_target:
         command_result.update({
             "accepted": False,
-            "reason": "Intimacy hold is active at 66°F. Away and preset changes are ignored until it is off.",
+            "reason": f"Intimacy hold is active at {intimacy_target_text}. Away and preset changes are ignored until it is off.",
         })
 
     # Home Assistant sends the revision it most recently read from this panel.
@@ -6340,7 +6367,7 @@ def _run_thermostat_schedule_payload(payload: object) -> dict:
             "id": str(selected.get("id") or ""),
             "name": str(selected.get("name") or "Schedule"),
             "skipped": True,
-            "reason": "Intimacy hold is active at 66°F.",
+            "reason": f"Intimacy hold is active at {_intimacy_hold_target_f(thermostat):g}°F.",
         }
         return result
 

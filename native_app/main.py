@@ -158,6 +158,22 @@ def clamp(n, low, high):
     return max(low, min(high, n))
 
 
+def intimacy_hold_target_f(thermostat: dict | None, default: int = 66) -> int:
+    t = thermostat if isinstance(thermostat, dict) else {}
+    raw = t.get("intimacyHoldTargetTemp")
+    if raw is None:
+        hold = t.get("intimacyHold") if isinstance(t.get("intimacyHold"), dict) else {}
+        raw = hold.get("targetTemp", default)
+    try:
+        return int(clamp(round(float(raw)), 40, 100))
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def intimacy_hold_target_text(thermostat: dict | None, default: int = 66) -> str:
+    return f"{intimacy_hold_target_f(thermostat, default)}°F"
+
+
 def parse_schedule_time_24h(value: Any, default_hour: int = 7, default_minute: int = 0) -> tuple[int, int]:
     """Parse a schedule time into internal 24-hour HH:MM form.
 
@@ -1715,15 +1731,23 @@ class SyncButton(QAbstractButton):
 
 
 class IntimacyHoldButton(QAbstractButton):
-    """Small six-hour 66°F comfort override shown above Thermostat Sync."""
+    """Small six-hour configurable comfort override shown above Thermostat Sync."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setCursor(Qt.PointingHandCursor)
         self.setFixedSize(54, 54)
+        self._target_temp = 66
         self.setToolTip("Intimacy hold: 66°F for 6 hours")
         self._active = False
         self._remaining = 0
+
+    def setTargetTemp(self, target_temp: float | int):
+        try:
+            self._target_temp = int(clamp(round(float(target_temp)), 40, 100))
+        except (TypeError, ValueError):
+            self._target_temp = 66
+        self.setToolTip(f"Intimacy hold: {self._target_temp}°F for 6 hours")
 
     def setActive(self, active: bool, remaining: int = 0):
         self._active = bool(active)
@@ -4123,7 +4147,7 @@ class ScheduleManagerDialog(QDialog):
         except (TypeError, ValueError):
             hold_active = False
         if hold_active:
-            QMessageBox.information(self, "Schedule", "66°F hold is active. Schedules are ignored until it is turned off.")
+            QMessageBox.information(self, "Schedule", f"{intimacy_hold_target_text(thermostat)} hold is active. Schedules are ignored until it is turned off.")
             return
         mode = str((self.s.thermostat or {}).get("mode") or "cool").lower()
         active = str((self.s.thermostat or {}).get("autoActiveMode") or "").lower()
@@ -6154,7 +6178,7 @@ class ThermostatScreen(Page):
         if self.reject_locked_control():
             return
         if self.intimacy_hold_active():
-            self.requestToast.emit("66°F hold active — schedules are ignored")
+            self.requestToast.emit(f"{intimacy_hold_target_text(self.thermostat_view())} hold active — schedules are ignored")
             return
         mode = str(self.thermostat_view().get("mode") or "cool").lower()
         active = str(self.thermostat_view().get("autoActiveMode") or "").lower()
@@ -6356,7 +6380,7 @@ class ThermostatScreen(Page):
             return
         before_tap = copy.deepcopy(self.thermostat_view())
         if self.intimacy_hold_active(before_tap) and mode in {"away", "arriving"}:
-            self.requestToast.emit("66°F hold active — Away and Arriving are ignored")
+            self.requestToast.emit(f"{intimacy_hold_target_text(before_tap)} hold active — Away and Arriving are ignored")
             return
         arriving_was_active = mode == "arriving" and self.arriving_override_active(before_tap)
         if mode == "arriving":
@@ -6591,7 +6615,7 @@ class ThermostatScreen(Page):
         try:
             t = self.thermostat_view()
             if self.intimacy_hold_active(t):
-                self.requestToast.emit("66°F hold active — turn it off to change temperature")
+                self.requestToast.emit(f"{intimacy_hold_target_text(t)} hold active — turn it off to change temperature")
                 return
             before_tap = copy.deepcopy(t)
             limits = t.get("limits") or {}
@@ -12338,7 +12362,8 @@ class SettingsDialog(QDialog):
             "Minimum Runtime": "Minimum equipment on-time and off-time for each cycle",
             "Internal / External Sources": "Choose sources and configure both onboard temperature sensors",
             "Outside Temperature": "Home Assistant source for outdoor temperature and weather",
-            "Sync": "Temporary thermostat control sync and one-time House Sync setup copying",
+            "Sync": "Thermostat control syncing and one-time room setup copying",
+            "Intimacy Hold": "Temperature used by the six-hour two-person hold button",
             "Person Tracking": "People displayed on the main thermostat screen",
             "Doors / Comfort Pause": "Door sensor and delay before heating or cooling pauses",
             "Security Codes": "Alarm disarm and settings-access PINs",
@@ -14391,44 +14416,61 @@ class SettingsDialog(QDialog):
         outdoor_source.layout().addWidget(self.outdoor_source_label)
         outdoor_source.layout().addWidget(choose_outdoor)
         sync_section = self.add_section("Sync", 3, 2, 1, 2)
+        sync_intro = QLabel("Keep temporary thermostat control syncing separate from the one-time House Sync setup copy.")
+        sync_intro.setWordWrap(True)
+        sync_intro.setFont(font(8, QFont.Bold))
+        sync_intro.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
+        sync_section.layout().addWidget(sync_intro)
+
+        thermostat_sync_card = QFrame()
+        thermostat_sync_card.setStyleSheet("background:rgba(5,10,20,0.42); border:1px solid rgba(85,240,255,0.24); border-radius:10px;")
+        thermostat_sync_layout = QVBoxLayout(thermostat_sync_card)
+        thermostat_sync_layout.setContentsMargins(10, 8, 10, 9)
+        thermostat_sync_layout.setSpacing(6)
+        thermostat_sync_title = QLabel("THERMOSTAT SYNC")
+        thermostat_sync_title.setFont(font(9, QFont.Black))
+        thermostat_sync_title.setStyleSheet("color:#55f0ff; letter-spacing:1px; background:transparent; border:0;")
+        thermostat_sync_layout.addWidget(thermostat_sync_title)
         self.sync_peer_summary = QLabel(self.sync_peer_summary_text())
         self.sync_peer_summary.setWordWrap(True)
         self.sync_peer_summary.setFont(font(7, QFont.Black))
-        self.sync_peer_summary.setStyleSheet("color:#c4d0e5; background:rgba(5,10,20,0.42); border:1px dashed rgba(160,180,210,0.26); border-radius:8px; padding:4px;")
-        choose_sync = RoundButton("Choose Thermostats", active=True, min_h=28)
+        self.sync_peer_summary.setStyleSheet("color:#d6e2f5; background:rgba(255,255,255,0.025); border:1px dashed rgba(160,180,210,0.24); border-radius:8px; padding:5px;")
+        choose_sync = RoundButton("Choose Thermostats", active=True, min_h=30)
         choose_sync.setMinimumWidth(156)
         choose_sync.clicked.connect(self.choose_sync_thermostats)
         sync_row = QHBoxLayout()
-        sync_row.setSpacing(6)
+        sync_row.setSpacing(7)
         sync_row.addWidget(self.sync_peer_summary, 1)
         sync_row.addWidget(choose_sync)
-        sync_section.layout().addLayout(sync_row)
-        sync_note = QLabel("When the main Sync button is armed, Heat, Cool, Off, Arriving, and setpoint changes are copied for 30 seconds. Away and Return Home remain local to each thermostat.")
+        thermostat_sync_layout.addLayout(sync_row)
+        sync_note = QLabel("The main-screen Sync button copies Heat, Cool, Off, Arriving, and setpoint changes for 30 seconds. Away and Return Home stay local.")
         sync_note.setWordWrap(True)
         sync_note.setFont(font(7, QFont.Black))
         sync_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
-        sync_section.layout().addWidget(sync_note)
+        thermostat_sync_layout.addWidget(sync_note)
+        sync_section.layout().addWidget(thermostat_sync_card)
 
-        house_divider = QFrame()
-        house_divider.setFixedHeight(1)
-        house_divider.setStyleSheet("background:rgba(85,240,255,0.28); border:0; margin-top:5px; margin-bottom:3px;")
-        sync_section.layout().addWidget(house_divider)
+        house_sync_card = QFrame()
+        house_sync_card.setStyleSheet("background:rgba(5,10,20,0.42); border:1px solid rgba(160,180,210,0.22); border-radius:10px;")
+        house_sync_layout = QVBoxLayout(house_sync_card)
+        house_sync_layout.setContentsMargins(10, 8, 10, 9)
+        house_sync_layout.setSpacing(6)
         house_title = QLabel("HOUSE SYNC")
-        house_title.setFont(font(10, QFont.Black))
-        house_title.setStyleSheet("color:#55f0ff; letter-spacing:2px; background:transparent; border:0;")
-        sync_section.layout().addWidget(house_title)
+        house_title.setFont(font(9, QFont.Black))
+        house_title.setStyleSheet("color:#55f0ff; letter-spacing:1px; background:transparent; border:0;")
+        house_sync_layout.addWidget(house_title)
         self.house_sync_source_summary = QLabel(self.house_sync_source_summary_text())
         self.house_sync_source_summary.setWordWrap(True)
         self.house_sync_source_summary.setFont(font(7, QFont.Black))
-        self.house_sync_source_summary.setStyleSheet("color:#c4d0e5; background:rgba(5,10,20,0.42); border:1px dashed rgba(160,180,210,0.26); border-radius:8px; padding:5px;")
+        self.house_sync_source_summary.setStyleSheet("color:#d6e2f5; background:rgba(255,255,255,0.025); border:1px dashed rgba(160,180,210,0.24); border-radius:8px; padding:5px;")
         self.choose_house_sync_button = RoundButton("Choose Source", active=True, min_h=30)
         self.choose_house_sync_button.setMinimumWidth(140)
         self.choose_house_sync_button.clicked.connect(self.choose_house_sync_source)
         house_source_row = QHBoxLayout()
-        house_source_row.setSpacing(6)
+        house_source_row.setSpacing(7)
         house_source_row.addWidget(self.house_sync_source_summary, 1)
         house_source_row.addWidget(self.choose_house_sync_button)
-        sync_section.layout().addLayout(house_source_row)
+        house_sync_layout.addLayout(house_source_row)
         self.house_sync_button = RoundButton("Sync House Setup", active=True, min_h=34)
         self.house_sync_button.setMinimumWidth(190)
         self.house_sync_button.clicked.connect(self.start_house_sync)
@@ -14436,13 +14478,29 @@ class SettingsDialog(QDialog):
         house_action_row = QHBoxLayout()
         house_action_row.addStretch(1)
         house_action_row.addWidget(self.house_sync_button)
-        sync_section.layout().addLayout(house_action_row)
-        house_note = QLabel("House Sync performs a one-time copy of only the Blinds, Lights, and Room configuration from the selected thermostat. It validates the source first, writes atomically, verifies the saved result, and restores the previous configuration if verification fails.")
+        house_sync_layout.addLayout(house_action_row)
+        house_note = QLabel("One-time copy of Blinds, Lights, and Room setup only. Thermostat, security, Home Assistant, schedules, and JARVIS settings are not copied.")
         house_note.setWordWrap(True)
         house_note.setFont(font(7, QFont.Black))
         house_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
-        sync_section.layout().addWidget(house_note)
+        house_sync_layout.addWidget(house_note)
+        sync_section.layout().addWidget(house_sync_card)
         self.update_house_sync_widgets()
+
+        intimacy = self.add_section("Intimacy Hold", 4, 1, 1, 2)
+        intimacy_note = QLabel("Set the temperature used by the two-person button on the main thermostat screen. The hold remains active for six hours unless you turn it off early.")
+        intimacy_note.setWordWrap(True)
+        intimacy_note.setFont(font(8, QFont.Bold))
+        intimacy_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
+        intimacy.layout().addWidget(intimacy_note)
+        intimacy_grid = self.section_grid(intimacy, 1)
+        intimacy_target = intimacy_hold_target_f(t)
+        self.add_section_value(intimacy_grid, "intimacyHoldTargetTemp", "Hold Temperature", intimacy_target, 0, 0, 40, 100, "°F")
+        intimacy_behavior = QLabel("While active, schedules, Away/Arriving, and manual setpoint changes are ignored. Changing this value while the hold is active moves the active hold to the new temperature after Save Settings.")
+        intimacy_behavior.setWordWrap(True)
+        intimacy_behavior.setFont(font(7, QFont.Black))
+        intimacy_behavior.setStyleSheet("color:#c6d4e7; background:rgba(5,10,20,0.34); border:1px solid rgba(229,151,201,0.20); border-radius:8px; padding:6px 8px;")
+        intimacy.layout().addWidget(intimacy_behavior)
 
         person_tracking = self.add_section("Person Tracking", 4, 2, 1, 2)
         self.person_tracking_summary = QLabel(self.people_summary_text())
@@ -14753,6 +14811,7 @@ class SettingsDialog(QDialog):
             "safetyHigh": self.val_number("safetyHigh"),
             "awayHeat": self.val_number("awayHeat"),
             "awayCool": self.val_number("awayCool"),
+            "intimacyHoldTargetTemp": self.val_number("intimacyHoldTargetTemp"),
             "autoCoolOutdoorTarget": self.val_number("autoCoolOutdoorTarget"),
             "autoHeatOutdoorTarget": self.val_number("autoHeatOutdoorTarget"),
             "autoChangeoverLockoutMinutes": self.val_number("autoChangeoverLockoutMinutes") * 60,
@@ -16328,6 +16387,7 @@ class MainWindow(Background):
                 remaining = max(1, int(math.ceil(optimistic_until - time.monotonic())))
 
             if hasattr(self, "intimacy_button"):
+                self.intimacy_button.setTargetTemp(intimacy_hold_target_f(thermostat))
                 self.intimacy_button.setActive(active, remaining)
         except Exception:
             pass
@@ -16351,18 +16411,20 @@ class MainWindow(Background):
             active = True
         turning_on = not active
         self._intimacy_toggle_running = True
+        hold_target = intimacy_hold_target_f(thermostat)
 
         if turning_on:
             self._intimacy_optimistic_until = time.monotonic() + (6 * 60 * 60)
-            thermostat["targetTemp"] = 66
+            thermostat["targetTemp"] = hold_target
             thermostat["intimacyHold"] = {
                 "active": True,
                 "startedAt": now_ms,
                 "expiresAt": now_ms + (6 * 60 * 60 * 1000),
-                "targetTemp": 66,
+                "targetTemp": hold_target,
             }
+            self.intimacy_button.setTargetTemp(hold_target)
             self.intimacy_button.setActive(True, 6 * 60 * 60)
-            self.header.update_values(thermostat.get("currentTemp"), 66)
+            self.header.update_values(thermostat.get("currentTemp"), hold_target)
             self.sync_visible_page("Thermostat")
         else:
             self._intimacy_optimistic_until = 0.0
@@ -16374,15 +16436,16 @@ class MainWindow(Background):
             if isinstance(result, dict):
                 self.s.ingest_thermostat(result)
             self.sync_runtime_only()
+            target_text = intimacy_hold_target_text(self.s.thermostat if isinstance(self.s.thermostat, dict) else thermostat)
             self.toast.show_message(
-                "66°F hold on for 6 hours" if turning_on else "66°F hold off — normal schedule resumed",
+                f"{target_text} hold on for 6 hours" if turning_on else f"{target_text} hold off — normal schedule resumed",
                 2600,
             )
 
         def failed(err):
             self._intimacy_toggle_running = False
             self._intimacy_optimistic_until = 0.0
-            self.toast.show_message(f"66°F hold failed: {err}", 3200)
+            self.toast.show_message(f"{hold_target}°F hold failed: {err}", 3200)
             self.refresh_status()
 
         self.run_async(
