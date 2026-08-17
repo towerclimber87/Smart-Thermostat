@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 import math
 import html
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -14726,10 +14727,17 @@ class SettingsDialog(QDialog):
         # Section headers are positioned after all panels have been built.
 
     def val_number(self, key):
-        text = self.controls[key].text().split()[0].replace("°", "")
+        # Settings value labels may include compact suffixes such as "66°F",
+        # "5 min", or "45%". Extract the numeric portion instead of
+        # assuming the suffix is separated by whitespace. This keeps +/-
+        # controls from falling back to 0 and then clamping to their minimum.
+        text = str(self.controls[key].text() or "")
+        match = re.search(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)", text)
+        if not match:
+            return 0
         try:
-            return int(float(text))
-        except Exception:
+            return int(float(match.group(0)))
+        except (TypeError, ValueError):
             return 0
 
     def lockout_button_text(self, kind: str) -> str:
