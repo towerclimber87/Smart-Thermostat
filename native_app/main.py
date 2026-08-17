@@ -4579,10 +4579,11 @@ class ThermostatScreen(Page):
         self.minus = IconCircle("−", "minus", 82)
         self.plus = IconCircle("+", "plus", 82)
         self.schedule_button = ScheduleClockButton()
-        # Open on press instead of release. The touchscreen can occasionally
-        # drop the release/click event near screen edges, which made the timer
-        # button appear dead. A guard in open_schedule_manager prevents double-open.
-        self.schedule_button.pressed.connect(self.open_schedule_manager)
+        # Open only after release/click. The main-window touch filter already
+        # provides edge tolerance and synthesizes click() after TouchEnd, so
+        # opening this modal from pressed() only risks carrying an active X11
+        # pointer grab into the dialog.
+        self.schedule_button.clicked.connect(self.open_schedule_manager)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(42, 18, 42, 34)
@@ -5720,8 +5721,17 @@ class ThermostatScreen(Page):
             changes = {"autoSwitchNotice": cleared_notice}
             if dismissed:
                 changes["autoSwitchNoticeDismissed"] = dismissed
-            self.s.update_thermostat(changes)
-            self.sync(self.s.config, self.s.thermostat)
+            def done(result):
+                if isinstance(result, dict):
+                    self.s.ingest_thermostat(result)
+                    self.sync(self.s.config, self.s.thermostat)
+
+            self.run_async(
+                "dismiss-auto-switch",
+                lambda: self.s.api.thermostat_update(changes),
+                done,
+                lambda err: self.requestToast.emit(f"Dismiss failed: {err}"),
+            )
         except Exception as exc:
             self.requestToast.emit(f"Dismiss failed: {exc}")
 
@@ -5742,8 +5752,19 @@ class ThermostatScreen(Page):
             self.s.thermostat["autoSwitchHold"] = copy.deepcopy(next_hold)
             self.s.pause_status_refresh(2.5)
             self.sync(self.s.config, self.s.thermostat)
-            self.s.update_thermostat({"autoSwitchHold": next_hold})
-            self.sync(self.s.config, self.s.thermostat)
+            changes = {"autoSwitchHold": next_hold}
+
+            def done(result):
+                if isinstance(result, dict):
+                    self.s.ingest_thermostat(result)
+                    self.sync(self.s.config, self.s.thermostat)
+
+            self.run_async(
+                "dismiss-manual-override",
+                lambda: self.s.api.thermostat_update(changes),
+                done,
+                lambda err: self.requestToast.emit(f"Dismiss failed: {err}"),
+            )
         except Exception as exc:
             self.requestToast.emit(f"Dismiss failed: {exc}")
 
@@ -5758,14 +5779,29 @@ class ThermostatScreen(Page):
             self.dismiss_auto_switch()
             return
         try:
-            self.s.update_thermostat({
+            changes = {
                 "mode": from_mode,
                 "modeChangeSource": "panel",
                 "away": False,
                 "autoSwitchNotice": {"active": False, "source": "", "fromMode": "", "toMode": "", "switchTemp": 0, "outdoorTemp": 0, "coolTarget": 0, "heatTarget": 0, "createdAt": 0},
                 "autoSwitchHold": {"active": True, "source": "manual", "mode": from_mode, "until": int(time.time() * 1000) + 600000, "reason": "revert"},
-            })
+            }
+            # Optimistic mode feedback keeps the button responsive while the
+            # authoritative update runs off the Qt event loop.
+            self.s.thermostat.update(copy.deepcopy(changes))
             self.sync(self.s.config, self.s.thermostat)
+
+            def done(result):
+                if isinstance(result, dict):
+                    self.s.ingest_thermostat(result)
+                    self.sync(self.s.config, self.s.thermostat)
+
+            self.run_async(
+                "revert-auto-switch",
+                lambda: self.s.api.thermostat_update(changes),
+                done,
+                lambda err: self.requestToast.emit(f"Revert failed: {err}"),
+            )
         except Exception as exc:
             self.requestToast.emit(f"Revert failed: {exc}")
 
@@ -5794,8 +5830,20 @@ class ThermostatScreen(Page):
             else:
                 changes["mode"] = pending
                 changes["modeChangeSource"] = "panel"
-            self.s.update_thermostat(changes)
+            self.s.thermostat.update(copy.deepcopy(changes))
             self.sync(self.s.config, self.s.thermostat)
+
+            def done(result):
+                if isinstance(result, dict):
+                    self.s.ingest_thermostat(result)
+                    self.sync(self.s.config, self.s.thermostat)
+
+            self.run_async(
+                "bypass-changeover",
+                lambda: self.s.api.thermostat_update(changes),
+                done,
+                lambda err: self.requestToast.emit(f"Bypass failed: {err}"),
+            )
         except Exception as exc:
             self.requestToast.emit(f"Bypass failed: {exc}")
 
@@ -5878,6 +5926,8 @@ class ThermostatScreen(Page):
     def choose_door_action_entity(self):
         if self.reject_locked_control():
             return
+        if getattr(self, "_door_action_picker_loading", False):
+            return
 
         allowed_domains = {"switch", "lock", "cover", "button", "input_button"}
         stored: list[dict] = []
@@ -5885,94 +5935,112 @@ class ThermostatScreen(Page):
         if isinstance(ha, dict):
             current = ha.get("doorActionEntity")
             if isinstance(current, dict):
-                stored.append(current)
+                stored.append(copy.deepcopy(current))
             available = ha.get("doorActionAvailableEntities")
             if isinstance(available, list):
-                stored.extend(item for item in available if isinstance(item, dict))
+                stored.extend(copy.deepcopy(item) for item in available if isinstance(item, dict))
 
-        fresh: list[dict] = []
-        try:
-            result = self.s.api.post(
-                "/api/ha/entities",
-                self.s.ha_payload({"domains": ["switch", "lock", "cover", "button", "input_button"]}),
-            )
-            fresh = result.get("entities") or [] if isinstance(result, dict) else []
-        except Exception as exc:
-            if not stored:
-                self.requestToast.emit(f"Could not load Home Assistant actions: {exc}")
-                return
-
-        by_id: dict[str, dict] = {}
-        # Saved records provide an offline fallback; fresh HA records overwrite
-        # them so the picker uses current friendly names and domains.
-        for item in list(stored) + list(fresh):
-            if not isinstance(item, dict):
-                continue
-            entity_id = str(item.get("entityId") or item.get("entity_id") or "").strip()
-            if not entity_id:
-                continue
-            domain = str(item.get("domain") or (entity_id.split(".", 1)[0] if "." in entity_id else "")).strip().lower()
-            if domain not in allowed_domains:
-                continue
-            name = str(item.get("friendlyName") or item.get("friendly_name") or item.get("name") or entity_id).strip() or entity_id
-            by_id[entity_id] = {
-                "entityId": entity_id,
-                "name": name,
-                "friendlyName": name,
-                "domain": domain,
-                "state": str(item.get("state") or "unknown"),
-            }
-
-        entities = list(by_id.values())
-        if not entities:
-            QMessageBox.warning(
-                self,
-                "Door Action",
-                "No Home Assistant switch, lock, cover, or button entities were found.",
-            )
-            return
-
-        dlg = EntityPickerDialog("Choose Door Action", entities, self)
-        current_action = self.selected_door_action_entity() or {}
-        current_id = str(current_action.get("entityId") or current_action.get("entity_id") or "").strip()
-        if current_id:
-            for row in range(dlg.list.count()):
-                item = dlg.list.item(row)
-                data = item.data(Qt.UserRole) if item is not None else None
-                if isinstance(data, dict) and str(data.get("entityId") or "") == current_id:
-                    dlg.list.setCurrentItem(item)
-                    dlg.list.scrollToItem(item)
-                    break
-
-        def apply(entity: dict):
-            try:
-                entity_id = str(entity.get("entityId") or entity.get("entity_id") or "").strip()
+        def open_picker(fresh: list[dict] | None = None, load_error: str = ""):
+            self._door_action_picker_loading = False
+            by_id: dict[str, dict] = {}
+            # Saved records provide an offline fallback; fresh HA records overwrite
+            # them so the picker uses current friendly names and domains.
+            for item in list(stored) + list(fresh or []):
+                if not isinstance(item, dict):
+                    continue
+                entity_id = str(item.get("entityId") or item.get("entity_id") or "").strip()
                 if not entity_id:
-                    return
-                domain = str(entity.get("domain") or (entity_id.split(".", 1)[0] if "." in entity_id else "")).strip().lower()
+                    continue
+                domain = str(item.get("domain") or (entity_id.split(".", 1)[0] if "." in entity_id else "")).strip().lower()
                 if domain not in allowed_domains:
-                    raise ValueError("Choose a switch, lock, cover, or button entity")
-                name = str(entity.get("friendlyName") or entity.get("friendly_name") or entity.get("name") or entity_id).strip() or entity_id
-                selected = {
+                    continue
+                name = str(item.get("friendlyName") or item.get("friendly_name") or item.get("name") or entity_id).strip() or entity_id
+                by_id[entity_id] = {
                     "entityId": entity_id,
                     "name": name,
                     "friendlyName": name,
                     "domain": domain,
-                    "state": str(entity.get("state") or by_id.get(entity_id, {}).get("state") or "unknown"),
+                    "state": str(item.get("state") or "unknown"),
                 }
-                config_ha = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
-                config_ha["doorActionEntity"] = selected
-                config_ha["doorActionAvailableEntities"] = [selected] + [
-                    item for item in entities if str(item.get("entityId") or "") != entity_id
-                ]
-                self.s.save_config()
-                _action, verb = self.door_action_for_domain(domain)
-                self.requestToast.emit(f"Doors action: {verb.lower()} {name}")
-            except Exception as exc:
-                QMessageBox.warning(self, "Door Action", str(exc))
 
-        dlg.selected.connect(apply)
-        dlg.exec_()
+            entities = list(by_id.values())
+            if not entities:
+                message = "No Home Assistant switch, lock, cover, or button entities were found."
+                if load_error:
+                    message += f"\n\nHome Assistant lookup failed: {load_error}"
+                QMessageBox.warning(self, "Door Action", message)
+                return
+
+            dlg = EntityPickerDialog("Choose Door Action", entities, self)
+            current_action = self.selected_door_action_entity() or {}
+            current_id = str(current_action.get("entityId") or current_action.get("entity_id") or "").strip()
+            if current_id:
+                for row in range(dlg.list.count()):
+                    item = dlg.list.item(row)
+                    data = item.data(Qt.UserRole) if item is not None else None
+                    if isinstance(data, dict) and str(data.get("entityId") or "") == current_id:
+                        dlg.list.setCurrentItem(item)
+                        dlg.list.scrollToItem(item)
+                        break
+
+            def apply(entity: dict):
+                try:
+                    entity_id = str(entity.get("entityId") or entity.get("entity_id") or "").strip()
+                    if not entity_id:
+                        return
+                    domain = str(entity.get("domain") or (entity_id.split(".", 1)[0] if "." in entity_id else "")).strip().lower()
+                    if domain not in allowed_domains:
+                        raise ValueError("Choose a switch, lock, cover, or button entity")
+                    name = str(entity.get("friendlyName") or entity.get("friendly_name") or entity.get("name") or entity_id).strip() or entity_id
+                    selected = {
+                        "entityId": entity_id,
+                        "name": name,
+                        "friendlyName": name,
+                        "domain": domain,
+                        "state": str(entity.get("state") or by_id.get(entity_id, {}).get("state") or "unknown"),
+                    }
+                    config_ha = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
+                    config_ha["doorActionEntity"] = selected
+                    config_ha["doorActionAvailableEntities"] = [selected] + [
+                        item for item in entities if str(item.get("entityId") or "") != entity_id
+                    ]
+                    snapshot = copy.deepcopy(self.s.config)
+                    _action, verb = self.door_action_for_domain(domain)
+
+                    def saved(result):
+                        if isinstance(result, dict) and isinstance(result.get("config"), dict):
+                            self.s.config = result.get("config")
+                        self.requestToast.emit(f"Doors action: {verb.lower()} {name}")
+
+                    self.run_async(
+                        "door-action-save",
+                        lambda: self.s.api.save_config(snapshot),
+                        saved,
+                        lambda err: self.requestToast.emit(f"Door action save failed: {err}"),
+                    )
+                except Exception as exc:
+                    QMessageBox.warning(self, "Door Action", str(exc))
+
+            dlg.selected.connect(apply)
+            dlg.exec_()
+
+        self._door_action_picker_loading = True
+        self.requestToast.emit("Loading door actions…")
+        payload = self.s.ha_payload({"domains": ["switch", "lock", "cover", "button", "input_button"]})
+
+        def loaded(result):
+            fresh = result.get("entities") or [] if isinstance(result, dict) else []
+            open_picker(fresh, "")
+
+        def failed(error):
+            open_picker([], str(error or ""))
+
+        self.run_async(
+            "door-action-entities",
+            lambda: self.s.api.post("/api/ha/entities", payload),
+            loaded,
+            failed,
+        )
 
     def run_door_action(self):
         if self.reject_locked_control():
@@ -6725,17 +6793,25 @@ class ThermostatScreen(Page):
         if self.virtual_temp_pending is None:
             return
         value = float(self.virtual_temp_pending)
-        try:
-            self.s.update_thermostat({
-                "currentTemp": value,
-                "currentTempSource": "virtual",
-                "currentTempSourceName": "Virtual Temp Test",
-                "currentTempUpdatedAt": time.time(),
-                "virtualTempOverrideUntil": int(time.time() * 1000) + 120000,
-            })
-            self.sync(self.s.config, self.s.thermostat)
-        except Exception as exc:
-            self.requestToast.emit(f"Virtual temp failed: {exc}")
+        changes = {
+            "currentTemp": value,
+            "currentTempSource": "virtual",
+            "currentTempSourceName": "Virtual Temp Test",
+            "currentTempUpdatedAt": time.time(),
+            "virtualTempOverrideUntil": int(time.time() * 1000) + 120000,
+        }
+
+        def done(result):
+            if isinstance(result, dict):
+                self.s.ingest_thermostat(result)
+                self.sync(self.s.config, self.s.thermostat)
+
+        self.run_async(
+            "virtual-temp",
+            lambda: self.s.api.thermostat_update(changes),
+            done,
+            lambda err: self.requestToast.emit(f"Virtual temp failed: {err}"),
+        )
 
     def cached_alarm_entity(self) -> dict:
         ha = self.s.ha()
@@ -9908,6 +9984,8 @@ class CodeKeypadDialog(QDialog):
 
 class PeopleSelectionDialog(QDialog):
     saved = pyqtSignal(list)
+    loadCompleted = pyqtSignal(object)
+
 
     def __init__(self, state: AppState, selected_people: list[dict] | None = None, parent=None, *, title: str = "Auto Away / Home", note: str | None = None):
         super().__init__(parent)
@@ -9917,6 +9995,7 @@ class PeopleSelectionDialog(QDialog):
         self.note_text = str(note or "Select the Home Assistant person entries to use for this feature.")
         self.available_people: list[dict] = []
         self.buttons: dict[str, RoundButton] = {}
+        self._people_loading = False
         self.setModal(True)
         self.setWindowTitle(self.dialog_title)
         self.setWindowFlag(Qt.FramelessWindowHint, True)
@@ -9926,8 +10005,10 @@ class PeopleSelectionDialog(QDialog):
             QDialog { background:#09111f; color:#f7fbff; }
             QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
         """)
-        self.load_people()
+        self.loadCompleted.connect(self._handle_people_loaded)
+        self._seed_selected_people()
         self.build()
+        QTimer.singleShot(0, self.load_people)
         QTimer.singleShot(0, self.fit_to_screen)
 
     def showEvent(self, event):
@@ -9937,22 +10018,130 @@ class PeopleSelectionDialog(QDialog):
     def fit_to_screen(self):
         fit_dialog_to_available_screen(self, margin=0)
 
-    def load_people(self):
+    def _refresh_config_save_state(self):
+        busy = bool(self._config_save_inflight or self._config_save_pending)
+        if hasattr(self, "close_btn"):
+            self.close_btn.setEnabled(not busy)
+            self.close_btn.setText("Saving…" if busy else "Close")
+
+    def queue_config_save(self):
+        """Persist room settings without blocking Qt touch handling.
+
+        Multiple quick edits are coalesced. If another edit lands while a save
+        is in flight, the latest full config snapshot is written immediately
+        after the first request completes, avoiding out-of-order saves.
+        """
+        self._config_save_pending = True
+        self._refresh_config_save_state()
+        if self._config_save_inflight:
+            return
+        self._start_config_save()
+
+    def _start_config_save(self):
+        if self._config_save_inflight or not self._config_save_pending:
+            return
+        self._config_save_pending = False
+        self._config_save_inflight = True
+        self._refresh_config_save_state()
+        snapshot = copy.deepcopy(self.s.config)
+
+        def worker():
+            try:
+                result = self.s.api.save_config(snapshot)
+                payload = {"result": result, "error": None}
+            except Exception as exc:
+                payload = {"result": None, "error": str(exc)}
+            try:
+                self.configSaveCompleted.emit(payload)
+            except RuntimeError:
+                pass
+
+        threading.Thread(target=worker, name="room-settings-save", daemon=True).start()
+
+    def _handle_config_save_completed(self, info: object):
+        self._config_save_inflight = False
+        data = info if isinstance(info, dict) else {}
+        error = str(data.get("error") or "")
+        if error:
+            self._config_save_pending = False
+            self._refresh_config_save_state()
+            QMessageBox.warning(self, "Save failed", error)
+            return
+        self.saved.emit()
+        if self._config_save_pending:
+            self._start_config_save()
+        else:
+            self._refresh_config_save_state()
+
+
+
+    def _seed_selected_people(self):
         by_id: dict[str, dict] = {}
-        for p in self.selected_people:
-            if isinstance(p, dict):
-                eid = str(p.get("entityId") or p.get("entity_id") or "").strip()
-                if eid:
-                    by_id[eid] = {"entityId": eid, "name": str(p.get("name") or p.get("friendly_name") or eid), "state": str(p.get("state") or "")}
-        try:
-            data = self.s.api.post("/api/ha/entities", self.s.ha_payload({"domains": ["person"]}))
-            for p in data.get("entities") or []:
-                eid = str(p.get("entityId") or p.get("entity_id") or "").strip()
-                if eid:
-                    by_id[eid] = {"entityId": eid, "name": str(p.get("name") or p.get("friendly_name") or eid), "state": str(p.get("state") or "")}
-        except Exception:
-            pass
-        self.available_people = sorted(by_id.values(), key=lambda x: str(x.get("name") or x.get("entityId")).lower())
+        for person in self.selected_people:
+            if not isinstance(person, dict):
+                continue
+            entity_id = str(person.get("entityId") or person.get("entity_id") or "").strip()
+            if not entity_id:
+                continue
+            by_id[entity_id] = {
+                "entityId": entity_id,
+                "name": str(person.get("name") or person.get("friendly_name") or entity_id),
+                "state": str(person.get("state") or ""),
+            }
+        self.available_people = sorted(
+            by_id.values(),
+            key=lambda item: str(item.get("name") or item.get("entityId") or "").lower(),
+        )
+
+    def _handle_people_loaded(self, info: object):
+        self._people_loading = False
+        data = info if isinstance(info, dict) else {}
+        by_id: dict[str, dict] = {}
+        for person in self.selected_people:
+            if not isinstance(person, dict):
+                continue
+            entity_id = str(person.get("entityId") or person.get("entity_id") or "").strip()
+            if entity_id:
+                by_id[entity_id] = {
+                    "entityId": entity_id,
+                    "name": str(person.get("name") or person.get("friendly_name") or entity_id),
+                    "state": str(person.get("state") or ""),
+                }
+        for person in data.get("entities") or []:
+            if not isinstance(person, dict):
+                continue
+            entity_id = str(person.get("entityId") or person.get("entity_id") or "").strip()
+            if entity_id:
+                by_id[entity_id] = {
+                    "entityId": entity_id,
+                    "name": str(person.get("name") or person.get("friendly_name") or entity_id),
+                    "state": str(person.get("state") or ""),
+                }
+        self.available_people = sorted(
+            by_id.values(),
+            key=lambda item: str(item.get("name") or item.get("entityId") or "").lower(),
+        )
+        self.refresh()
+
+    def load_people(self):
+        if self._people_loading:
+            return
+        self._people_loading = True
+        self.refresh()
+        payload = self.s.ha_payload({"domains": ["person"]})
+
+        def worker():
+            try:
+                data = self.s.api.post("/api/ha/entities", payload)
+                result = {"entities": data.get("entities") or [], "error": None}
+            except Exception as exc:
+                result = {"entities": [], "error": str(exc)}
+            try:
+                self.loadCompleted.emit(result)
+            except RuntimeError:
+                pass
+
+        threading.Thread(target=worker, name="people-picker-load", daemon=True).start()
 
     def selected_ids(self) -> set[str]:
         return {str(p.get("entityId") or p.get("entity_id") or "").strip() for p in self.selected_people if isinstance(p, dict)}
@@ -10010,7 +10199,7 @@ class PeopleSelectionDialog(QDialog):
                 item.widget().deleteLater()
         self.buttons = {}
         if not self.available_people:
-            none = QLabel("No Home Assistant person entities found.")
+            none = QLabel("Loading Home Assistant people…" if self._people_loading else "No Home Assistant person entities found.")
             none.setWordWrap(True)
             none.setStyleSheet("color:#c4d0e5; background:rgba(255,255,255,0.05); border-radius:12px; padding:12px;")
             self.body_lay.addWidget(none)
@@ -10052,6 +10241,8 @@ class PeopleSelectionDialog(QDialog):
 
 class ThermostatSyncSelectionDialog(QDialog):
     saved = pyqtSignal(list)
+    loadCompleted = pyqtSignal(object)
+
 
     def __init__(self, state: AppState, selected_peers: list[dict] | None = None, parent=None):
         super().__init__(parent)
@@ -10059,6 +10250,8 @@ class ThermostatSyncSelectionDialog(QDialog):
         self.selected_peers = copy.deepcopy(selected_peers or [])
         self.available_peers: list[dict] = []
         self.buttons: dict[str, RoundButton] = {}
+        self._peers_loading = False
+        self._load_error = ""
         self.setModal(True)
         self.setWindowTitle("Thermostat Sync")
         self.setWindowFlag(Qt.FramelessWindowHint, True)
@@ -10068,8 +10261,10 @@ class ThermostatSyncSelectionDialog(QDialog):
             QDialog { background:#09111f; color:#f7fbff; }
             QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
         """)
-        self.load_peers()
+        self.loadCompleted.connect(self._handle_peers_loaded)
+        self._seed_selected_peers()
         self.build()
+        QTimer.singleShot(0, self.load_peers)
         QTimer.singleShot(0, self.fit_to_screen)
 
     def showEvent(self, event):
@@ -10082,48 +10277,88 @@ class ThermostatSyncSelectionDialog(QDialog):
     def selected_ids(self) -> set[str]:
         return {str(p.get("entityId") or p.get("entity_id") or "").strip() for p in self.selected_peers if isinstance(p, dict)}
 
-    def load_peers(self):
+
+
+    def _normalize_peer(self, peer: object) -> dict | None:
+        if not isinstance(peer, dict):
+            return None
+        entity_id = str(peer.get("entityId") or peer.get("entity_id") or "").strip()
+        if not entity_id.startswith("climate."):
+            return None
+        return {
+            "entityId": entity_id,
+            "name": str(peer.get("name") or peer.get("friendlyName") or peer.get("friendly_name") or entity_id),
+            "state": str(peer.get("state") or "unknown"),
+            "domain": "climate",
+            "away": bool(peer.get("away", False)),
+            "doorPauseActive": bool(peer.get("doorPauseActive", False)),
+            "serial": str(peer.get("serial") or peer.get("ihaSerial") or ""),
+            "panelUrl": str(peer.get("panelUrl") or peer.get("panel_url") or ""),
+            "syncCapable": bool(peer.get("syncCapable", peer.get("ihaPanel", False))),
+        }
+
+    def _seed_selected_peers(self):
         by_id: dict[str, dict] = {}
         for peer in self.selected_peers:
-            if not isinstance(peer, dict):
-                continue
-            eid = str(peer.get("entityId") or peer.get("entity_id") or "").strip()
-            if eid.startswith("climate."):
-                by_id[eid] = {
-                    "entityId": eid,
-                    "name": str(peer.get("name") or peer.get("friendlyName") or peer.get("friendly_name") or eid),
-                    "state": str(peer.get("state") or "unknown"),
-                    "domain": "climate",
-                    "serial": str(peer.get("serial") or peer.get("ihaSerial") or ""),
-                    "panelUrl": str(peer.get("panelUrl") or peer.get("panel_url") or ""),
-                    "syncCapable": bool(peer.get("syncCapable", peer.get("ihaPanel", False))),
-                    "selected": True,
-                }
-        try:
-            data = self.s.api.post("/api/sync/thermostats", self.s.ha_payload({"selected": list(by_id.values())}), timeout=8.0)
-            for peer in data.get("thermostats") or []:
-                if not isinstance(peer, dict):
-                    continue
-                eid = str(peer.get("entityId") or peer.get("entity_id") or "").strip()
-                if eid.startswith("climate."):
-                    by_id[eid] = {
-                        "entityId": eid,
-                        "name": str(peer.get("name") or peer.get("friendlyName") or peer.get("friendly_name") or eid),
-                        "state": str(peer.get("state") or "unknown"),
-                        "domain": "climate",
-                        "away": bool(peer.get("away")),
-                        "doorPauseActive": bool(peer.get("doorPauseActive")),
-                        "serial": str(peer.get("serial") or peer.get("ihaSerial") or ""),
-                        "panelUrl": str(peer.get("panelUrl") or peer.get("panel_url") or ""),
-                        "syncCapable": bool(peer.get("syncCapable", peer.get("ihaPanel", False))),
-                        "selected": eid in self.selected_ids() or bool(peer.get("selected")),
-                    }
-        except Exception as exc:
-            if not by_id:
-                self._load_error = str(exc)
-            else:
-                self._load_error = ""
-        self.available_peers = sorted(by_id.values(), key=lambda x: str(x.get("name") or x.get("entityId") or "").lower())
+            normalized = self._normalize_peer(peer)
+            if normalized:
+                by_id[normalized["entityId"]] = normalized
+        self.available_peers = sorted(
+            by_id.values(),
+            key=lambda item: str(item.get("name") or item.get("entityId") or "").lower(),
+        )
+
+    def _handle_peers_loaded(self, info: object):
+        self._peers_loading = False
+        data = info if isinstance(info, dict) else {}
+        self._load_error = str(data.get("error") or "")
+        by_id: dict[str, dict] = {}
+        for peer in self.selected_peers:
+            normalized = self._normalize_peer(peer)
+            if normalized:
+                by_id[normalized["entityId"]] = normalized
+        for peer in data.get("thermostats") or []:
+            normalized = self._normalize_peer(peer)
+            if normalized:
+                previous = by_id.get(normalized["entityId"]) or {}
+                if not normalized.get("panelUrl") and previous.get("panelUrl"):
+                    normalized["panelUrl"] = previous.get("panelUrl")
+                if not normalized.get("serial") and previous.get("serial"):
+                    normalized["serial"] = previous.get("serial")
+                by_id[normalized["entityId"]] = normalized
+        self.available_peers = sorted(
+            by_id.values(),
+            key=lambda item: str(item.get("name") or item.get("entityId") or "").lower(),
+        )
+        if hasattr(self, "refresh_button"):
+            self.refresh_button.setEnabled(True)
+            self.refresh_button.setText("Refresh")
+        self.refresh()
+
+    def load_peers(self):
+        if self._peers_loading:
+            return
+        self._peers_loading = True
+        self._load_error = ""
+        if hasattr(self, "refresh_button"):
+            self.refresh_button.setEnabled(False)
+            self.refresh_button.setText("Loading…")
+        self.refresh()
+        selected_snapshot = copy.deepcopy(self.selected_peers)
+        payload = self.s.ha_payload({"selected": selected_snapshot})
+
+        def worker():
+            try:
+                data = self.s.api.post("/api/sync/thermostats", payload, timeout=8.0)
+                result = {"thermostats": data.get("thermostats") or [], "error": None}
+            except Exception as exc:
+                result = {"thermostats": [], "error": str(exc)}
+            try:
+                self.loadCompleted.emit(result)
+            except RuntimeError:
+                pass
+
+        threading.Thread(target=worker, name="sync-peer-picker-load", daemon=True).start()
 
     def build(self):
         root = QVBoxLayout(self)
@@ -10133,7 +10368,8 @@ class ThermostatSyncSelectionDialog(QDialog):
         title = QLabel("THERMOSTAT SYNC")
         title.setFont(font(22, QFont.Black))
         title.setStyleSheet("color:#55f0ff; letter-spacing:3px;")
-        refresh = RoundButton("Refresh", active=True, min_h=40)
+        self.refresh_button = RoundButton("Refresh", active=True, min_h=40)
+        refresh = self.refresh_button
         clear = RoundButton("Clear", active=False, kind="danger", min_h=40)
         header.addWidget(title)
         header.addStretch(1)
@@ -10171,9 +10407,9 @@ class ThermostatSyncSelectionDialog(QDialog):
         save.clicked.connect(self.save)
         self.refresh()
 
+
     def reload_peers(self):
         self.load_peers()
-        self.refresh()
 
     def refresh(self):
         while self.body_lay.count():
@@ -10183,8 +10419,8 @@ class ThermostatSyncSelectionDialog(QDialog):
         self.buttons = {}
         if not self.available_peers:
             detail = getattr(self, "_load_error", "")
-            text = "No IHA thermostat climate entities found in Home Assistant."
-            if detail:
+            text = "Loading IHA thermostats…" if self._peers_loading else "No IHA thermostat climate entities found in Home Assistant."
+            if detail and not self._peers_loading:
                 text += f"\n\n{detail}"
             none = QLabel(text)
             none.setWordWrap(True)
@@ -10259,6 +10495,8 @@ class ThermostatSyncSelectionDialog(QDialog):
 
 class HouseSyncSelectionDialog(QDialog):
     selected = pyqtSignal(dict)
+    loadCompleted = pyqtSignal(object)
+
 
     def __init__(self, state: AppState, current_peer: dict | None = None, parent=None):
         super().__init__(parent)
@@ -10267,6 +10505,8 @@ class HouseSyncSelectionDialog(QDialog):
         self.available_peers: list[dict] = []
         self.selected_peer: dict | None = copy.deepcopy(self.current_peer)
         self.buttons: dict[str, RoundButton] = {}
+        self._peers_loading = False
+        self._load_error = ""
         self.setModal(True)
         self.setWindowTitle("House Sync Source")
         self.setWindowFlag(Qt.FramelessWindowHint, True)
@@ -10276,8 +10516,10 @@ class HouseSyncSelectionDialog(QDialog):
             QDialog { background:#09111f; color:#f7fbff; }
             QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
         """)
-        self.load_peers()
+        self.loadCompleted.connect(self._handle_peers_loaded)
+        self._seed_saved_peers()
         self.build()
+        QTimer.singleShot(0, self.load_peers)
         QTimer.singleShot(0, self.fit_to_screen)
 
     def showEvent(self, event):
@@ -10306,7 +10548,9 @@ class HouseSyncSelectionDialog(QDialog):
             "syncCapable": bool(peer.get("syncCapable", peer.get("ihaPanel", False))),
         }
 
-    def load_peers(self):
+
+
+    def _seed_saved_peers(self):
         by_id: dict[str, dict] = {}
         saved = self.normalize_peer(self.current_peer)
         if saved:
@@ -10318,29 +10562,68 @@ class HouseSyncSelectionDialog(QDialog):
                     peer = self.normalize_peer(raw)
                     if peer:
                         by_id[peer["entityId"]] = peer
-        try:
-            selected = [saved] if saved else []
-            data = self.s.api.post(
-                "/api/sync/thermostats",
-                self.s.ha_payload({"selected": selected}),
-                timeout=8.0,
-            )
-            for raw in data.get("thermostats") or []:
-                peer = self.normalize_peer(raw)
-                if peer:
-                    previous = by_id.get(peer["entityId"]) or {}
-                    if not peer.get("panelUrl") and previous.get("panelUrl"):
-                        peer["panelUrl"] = previous.get("panelUrl")
-                    if not peer.get("serial") and previous.get("serial"):
-                        peer["serial"] = previous.get("serial")
-                    by_id[peer["entityId"]] = peer
-            self._load_error = ""
-        except Exception as exc:
-            self._load_error = str(exc)
         self.available_peers = sorted(
             by_id.values(),
-            key=lambda x: str(x.get("name") or x.get("entityId") or "").lower(),
+            key=lambda item: str(item.get("name") or item.get("entityId") or "").lower(),
         )
+
+    def _handle_peers_loaded(self, info: object):
+        self._peers_loading = False
+        data = info if isinstance(info, dict) else {}
+        self._load_error = str(data.get("error") or "")
+        by_id: dict[str, dict] = {}
+        saved = self.normalize_peer(self.current_peer)
+        if saved:
+            by_id[saved["entityId"]] = saved
+        ha = self.s.ha()
+        if isinstance(ha, dict):
+            for key in ("syncThermostatEntities", "syncAvailableThermostatEntities"):
+                for raw in ha.get(key) or []:
+                    peer = self.normalize_peer(raw)
+                    if peer:
+                        by_id[peer["entityId"]] = peer
+        for raw in data.get("thermostats") or []:
+            peer = self.normalize_peer(raw)
+            if peer:
+                previous = by_id.get(peer["entityId"]) or {}
+                if not peer.get("panelUrl") and previous.get("panelUrl"):
+                    peer["panelUrl"] = previous.get("panelUrl")
+                if not peer.get("serial") and previous.get("serial"):
+                    peer["serial"] = previous.get("serial")
+                by_id[peer["entityId"]] = peer
+        self.available_peers = sorted(
+            by_id.values(),
+            key=lambda item: str(item.get("name") or item.get("entityId") or "").lower(),
+        )
+        if hasattr(self, "refresh_button"):
+            self.refresh_button.setEnabled(True)
+            self.refresh_button.setText("Refresh")
+        self.refresh()
+
+    def load_peers(self):
+        if self._peers_loading:
+            return
+        self._peers_loading = True
+        self._load_error = ""
+        if hasattr(self, "refresh_button"):
+            self.refresh_button.setEnabled(False)
+            self.refresh_button.setText("Loading…")
+        self.refresh()
+        selected = [copy.deepcopy(self.selected_peer)] if isinstance(self.selected_peer, dict) else []
+        payload = self.s.ha_payload({"selected": selected})
+
+        def worker():
+            try:
+                data = self.s.api.post("/api/sync/thermostats", payload, timeout=8.0)
+                result = {"thermostats": data.get("thermostats") or [], "error": None}
+            except Exception as exc:
+                result = {"thermostats": [], "error": str(exc)}
+            try:
+                self.loadCompleted.emit(result)
+            except RuntimeError:
+                pass
+
+        threading.Thread(target=worker, name="house-sync-peer-picker-load", daemon=True).start()
 
     def build(self):
         root = QVBoxLayout(self)
@@ -10350,7 +10633,8 @@ class HouseSyncSelectionDialog(QDialog):
         title = QLabel("HOUSE SYNC SOURCE")
         title.setFont(font(22, QFont.Black))
         title.setStyleSheet("color:#55f0ff; letter-spacing:3px;")
-        refresh = RoundButton("Refresh", active=True, min_h=40)
+        self.refresh_button = RoundButton("Refresh", active=True, min_h=40)
+        refresh = self.refresh_button
         self.use_button = RoundButton("Use Selected Source", active=True, min_h=40)
         self.use_button.setEnabled(bool(self.current_id()))
         header.addWidget(title)
@@ -10386,9 +10670,9 @@ class HouseSyncSelectionDialog(QDialog):
         self.use_button.clicked.connect(self.save)
         self.refresh()
 
+
     def reload_peers(self):
         self.load_peers()
-        self.refresh()
 
     def refresh(self):
         while self.body_lay.count():
@@ -10397,9 +10681,9 @@ class HouseSyncSelectionDialog(QDialog):
                 item.widget().deleteLater()
         self.buttons = {}
         if not self.available_peers:
-            text = "No other IHA thermostat screens were found in Home Assistant."
+            text = "Loading IHA thermostats…" if self._peers_loading else "No other IHA thermostat screens were found in Home Assistant."
             detail = str(getattr(self, "_load_error", "") or "").strip()
-            if detail:
+            if detail and not self._peers_loading:
                 text += f"\n\n{detail}"
             none = QLabel(text)
             none.setWordWrap(True)
@@ -10670,6 +10954,7 @@ class LightColorDialog(QDialog):
 
 class RoomManagerSettingsDialog(QDialog):
     saved = pyqtSignal()
+    configSaveCompleted = pyqtSignal(object)
 
     PROFILES = {
         "Blinds": ("blinds", "Shade Rooms", "blinds", "Blind", 6),
@@ -10680,6 +10965,9 @@ class RoomManagerSettingsDialog(QDialog):
     def __init__(self, state: AppState, page_name: str, parent=None):
         super().__init__(parent)
         self.s = state
+        self._config_save_inflight = False
+        self._config_save_pending = False
+        self.configSaveCompleted.connect(self._handle_config_save_completed)
         self.page_name = page_name
         self.domain, title, self.item_key, self.item_label, self.max_entries = self.PROFILES.get(page_name, self.PROFILES["Room"])
         self.selected_key = str((self.s.config.get(self.domain) or {}).get("room") or "")
@@ -11030,16 +11318,11 @@ class RoomManagerSettingsDialog(QDialog):
         ctl["accessCode"] = str(code)
         if not isinstance(ctl.get("codeRequiredStates"), dict):
             ctl["codeRequiredStates"] = self._default_code_required_states(ctl)
-        try:
-            self.s.save_config()
-            self.saved.emit()
-            # Refresh immediately after the keypad closes so the row changes from
-            # NO CODE / Set Code to CODE SET / Change Code and enables the state
-            # protection choices. Without this refresh the save succeeded but the
-            # UI looked like the OK action had done nothing.
-            self.rebuild_code_entries()
-        except Exception as exc:
-            QMessageBox.warning(self, "Save failed", str(exc))
+        self.queue_config_save()
+        # Refresh immediately after the keypad closes so the row changes from
+        # NO CODE / Set Code to CODE SET / Change Code and enables the state
+        # protection choices. Persistence now runs off the UI thread.
+        self.rebuild_code_entries()
 
     def set_code_required_state(self, ctl: dict, action: str, required: bool):
         if not str((ctl or {}).get("accessCode") or "").strip():
@@ -11053,22 +11336,14 @@ class RoomManagerSettingsDialog(QDialog):
             states = self._default_code_required_states(ctl)
         ctl["codeRequiredStates"] = {state_action: bool(states.get(state_action, False)) for state_action in choices}
         ctl["codeRequiredStates"][action] = bool(required)
-        try:
-            self.s.save_config()
-            self.saved.emit()
-            self.rebuild_code_entries()
-        except Exception as exc:
-            QMessageBox.warning(self, "Save failed", str(exc))
+        self.queue_config_save()
+        self.rebuild_code_entries()
 
     def clear_entry_code(self, ctl: dict):
         ctl.pop("accessCode", None)
         ctl.pop("codeRequiredStates", None)
-        try:
-            self.s.save_config()
-            self.saved.emit()
-            self.rebuild_code_entries()
-        except Exception as exc:
-            QMessageBox.warning(self, "Save failed", str(exc))
+        self.queue_config_save()
+        self.rebuild_code_entries()
 
     def ensure_model(self) -> tuple[dict, dict]:
         section = self.s.config.setdefault(self.domain, {})
@@ -11103,8 +11378,7 @@ class RoomManagerSettingsDialog(QDialog):
         return {"id": f"{safe_key}-control-{n}", "name": f"Control {n}", "domain": "switch", "on": False}
 
     def save_and_refresh(self):
-        self.s.save_config()
-        self.saved.emit()
+        self.queue_config_save()
         self.rebuild()
 
     def update_entry_controls(self):
@@ -11141,11 +11415,7 @@ class RoomManagerSettingsDialog(QDialog):
         if self.page_name == "Room":
             self.code_room_filter = key
         self.s.config.setdefault(self.domain, {})["room"] = key
-        try:
-            self.s.save_config()
-            self.saved.emit()
-        except Exception:
-            pass
+        self.queue_config_save()
         self.rebuild()
 
     def set_entry_count(self, target: int):
@@ -11171,10 +11441,7 @@ class RoomManagerSettingsDialog(QDialog):
         else:
             for idx in range(current, target):
                 items.append(self.make_entry(key, idx))
-        try:
-            self.save_and_refresh()
-        except Exception as exc:
-            QMessageBox.warning(self, "Save failed", str(exc))
+        self.save_and_refresh()
 
     def adjust_entry_count(self, delta: int):
         self.set_entry_count(self.entry_count() + int(delta))
@@ -11191,12 +11458,8 @@ class RoomManagerSettingsDialog(QDialog):
         self.selected_key = key
         if self.page_name == "Room":
             self.code_room_filter = key
-        try:
-            self.s.save_config()
-            self.saved.emit()
-            self.rebuild()
-        except Exception as exc:
-            QMessageBox.warning(self, "Save failed", str(exc))
+        self.queue_config_save()
+        self.rebuild()
 
     def delete_selected_room(self):
         section, rooms = self.ensure_model()
@@ -11214,12 +11477,8 @@ class RoomManagerSettingsDialog(QDialog):
         self.selected_key = section["room"]
         if self.page_name == "Room":
             self.code_room_filter = self.selected_key
-        try:
-            self.s.save_config()
-            self.saved.emit()
-            self.rebuild()
-        except Exception as exc:
-            QMessageBox.warning(self, "Save failed", str(exc))
+        self.queue_config_save()
+        self.rebuild()
 
 
 class SimplePageSettingsDialog(QDialog):
@@ -11395,6 +11654,7 @@ class AudioGroupEditorDialog(QDialog):
 
 class AudioSettingsDialog(QDialog):
     mediaPlayersLoaded = pyqtSignal(object)
+    configSaveCompleted = pyqtSignal(object)
     saved = pyqtSignal()
 
     def __init__(self, state: AppState, parent=None):
@@ -11415,7 +11675,9 @@ class AudioSettingsDialog(QDialog):
         self.group_edits = audio_group_definitions(self.s.config)
         self.available_media_players = self._cached_media_players()
         self._media_players_loading = False
+        self._config_saving = False
         self.mediaPlayersLoaded.connect(self.handle_media_players_loaded)
+        self.configSaveCompleted.connect(self._handle_config_save_completed)
         self.setWindowTitle("Audio Settings")
         self.setModal(True)
         self.setWindowFlag(Qt.FramelessWindowHint, True)
@@ -11480,9 +11742,11 @@ class AudioSettingsDialog(QDialog):
         header.addWidget(self.set_scenes_btn)
         header.addWidget(self.groups_btn)
         cancel = RoundButton("Cancel", min_h=42)
+        self.cancel_button = cancel
         cancel.setMinimumWidth(120)
         cancel.clicked.connect(self.reject)
         save = RoundButton("Save", active=True, min_h=42)
+        self.save_button = save
         save.setMinimumWidth(140)
         save.clicked.connect(self.save)
         header.addWidget(cancel)
@@ -12012,6 +12276,8 @@ class AudioSettingsDialog(QDialog):
         self.scene_dirty = False
 
     def save(self):
+        if self._config_saving:
+            return
         try:
             self.store_scene_editor_values()
             audio = self.s.config.setdefault("audio", {})
@@ -12019,17 +12285,51 @@ class AudioSettingsDialog(QDialog):
             audio["autoNavigate"] = bool(self.auto_nav.isChecked())
             audio["presets"] = copy.deepcopy(self.preset_edits)
             audio["groups"] = copy.deepcopy(self.group_edits)
-            self.s.save_config()
-            self.saved.emit()
-            self.accept()
+            snapshot = copy.deepcopy(self.s.config)
         except Exception as exc:
             QMessageBox.warning(self, "Save failed", str(exc))
+            return
+
+        self._config_saving = True
+        self.save_button.setEnabled(False)
+        self.save_button.setText("Saving…")
+        self.cancel_button.setEnabled(False)
+
+        def worker():
+            try:
+                result = self.s.api.save_config(snapshot)
+                payload = {"result": result, "error": None}
+            except Exception as exc:
+                payload = {"result": None, "error": str(exc)}
+            try:
+                self.configSaveCompleted.emit(payload)
+            except RuntimeError:
+                pass
+
+        threading.Thread(target=worker, name="audio-settings-save", daemon=True).start()
+
+    def _handle_config_save_completed(self, info: object):
+        self._config_saving = False
+        data = info if isinstance(info, dict) else {}
+        error = str(data.get("error") or "")
+        if error:
+            self.save_button.setEnabled(True)
+            self.save_button.setText("Save")
+            self.cancel_button.setEnabled(True)
+            QMessageBox.warning(self, "Save failed", error)
+            return
+        record = data.get("result")
+        if isinstance(record, dict) and isinstance(record.get("config"), dict):
+            self.s.config = record.get("config")
+        self.saved.emit()
+        self.accept()
 
 
 
 
 class SettingsDialog(QDialog):
     saved = pyqtSignal()
+    settingsAsyncCompleted = pyqtSignal(object)
     thermostatUpdateCompleted = pyqtSignal(object)
     settingsSaveCompleted = pyqtSignal(object)
     tempSensorTelemetryLoaded = pyqtSignal(object)
@@ -12154,6 +12454,9 @@ class SettingsDialog(QDialog):
         self._jarvis_dirty = False
         self._display_settings_dirty = False
         self._settings_update_seq = 0
+        self._settings_async_jobs: dict[str, tuple[Callable | None, Callable | None]] = {}
+        self._settings_write_jobs = 0
+        self.settingsAsyncCompleted.connect(self._handle_settings_async_completed)
 
         temp_cfg = nested_get(self.s.config, "hardware", "temperatureSensors", default={})
         temp_cfg = temp_cfg if isinstance(temp_cfg, dict) else {}
@@ -12215,6 +12518,95 @@ class SettingsDialog(QDialog):
     def fit_to_screen(self):
         fit_dialog_to_available_screen(self, margin=0)
 
+
+    def run_settings_async(
+        self,
+        name: str,
+        worker: Callable[[], Any],
+        on_success: Callable[[Any], None] | None = None,
+        on_error: Callable[[str], None] | None = None,
+    ):
+        job_id = f"{name}-{time.monotonic_ns()}"
+        self._settings_async_jobs[job_id] = (on_success, on_error)
+
+        def target():
+            try:
+                result = worker()
+                payload = {"id": job_id, "result": result, "error": None}
+            except Exception as exc:
+                payload = {"id": job_id, "result": None, "error": str(exc)}
+            try:
+                self.settingsAsyncCompleted.emit(payload)
+            except RuntimeError:
+                pass
+
+        threading.Thread(target=target, name=f"settings-{name}", daemon=True).start()
+        return job_id
+
+    def _handle_settings_async_completed(self, info: object):
+        data = info if isinstance(info, dict) else {}
+        callbacks = self._settings_async_jobs.pop(str(data.get("id") or ""), None)
+        if not callbacks:
+            return
+        on_success, on_error = callbacks
+        error = str(data.get("error") or "")
+        if error:
+            if on_error:
+                on_error(error)
+            return
+        if on_success:
+            on_success(data.get("result"))
+
+
+    def _refresh_settings_write_controls(self):
+        busy = bool(getattr(self, "_settings_write_jobs", 0) or getattr(self, "_settings_saving", False))
+        if hasattr(self, "bottom_save"):
+            self.bottom_save.setEnabled(not busy and not getattr(self, "house_sync_running", False))
+            if not getattr(self, "_settings_saving", False):
+                self.bottom_save.setText("Saving…" if busy else "Save Settings")
+        if hasattr(self, "done"):
+            self.done.setEnabled(not busy and not getattr(self, "house_sync_running", False))
+
+    def run_settings_write(
+        self,
+        name: str,
+        worker: Callable[[], Any],
+        on_success: Callable[[Any], None] | None = None,
+        on_error: Callable[[str], None] | None = None,
+    ):
+        self._settings_write_jobs = int(getattr(self, "_settings_write_jobs", 0) or 0) + 1
+        self._refresh_settings_write_controls()
+
+        def finish_success(result):
+            self._settings_write_jobs = max(0, int(getattr(self, "_settings_write_jobs", 0) or 0) - 1)
+            self._refresh_settings_write_controls()
+            if on_success:
+                on_success(result)
+
+        def finish_error(error):
+            self._settings_write_jobs = max(0, int(getattr(self, "_settings_write_jobs", 0) or 0) - 1)
+            self._refresh_settings_write_controls()
+            if on_error:
+                on_error(error)
+
+        return self.run_settings_async(name, worker, finish_success, finish_error)
+
+
+    def load_ha_entities_async(
+        self,
+        name: str,
+        domains: list[str],
+        on_success: Callable[[list[dict]], None],
+        on_error: Callable[[str], None] | None = None,
+    ):
+        payload = self.s.ha_payload({"domains": list(domains)})
+
+        def worker():
+            data = self.s.api.post("/api/ha/entities", payload)
+            return data.get("entities") or []
+
+        self.run_settings_async(name, worker, on_success, on_error)
+
     def settings_panel(self, radius: int = 14) -> QFrame:
         p = QFrame()
         p.setStyleSheet(f"""
@@ -12250,26 +12642,22 @@ class SettingsDialog(QDialog):
         """
 
     def pop_value_control(self, key: str):
+        """Show tap feedback without changing the active touch target geometry.
+
+        On the X11 touchscreen, resizing/restyling the pressed widget before the
+        release event can leave a stale pointer grab. Keep the panel/button
+        geometry fixed and apply this feedback only after clicked() returns.
+        """
         meta = self.value_control_widgets.get(key) or {}
         panel = meta.get("panel")
         val = meta.get("value")
-        minus = meta.get("minus")
-        plus = meta.get("plus")
         if not panel or not val:
             return
         seq = int(meta.get("popSeq") or 0) + 1
         meta["popSeq"] = seq
-        panel.setMinimumHeight(50)
-        panel.setMaximumHeight(58)
         panel.setStyleSheet(self.value_control_style(True))
-        val.setMinimumWidth(68)
-        val.setFont(font(14, QFont.Black))
+        val.setFont(font(13, QFont.Black))
         val.setStyleSheet("color:#ffffff; background:rgba(85,240,255,0.16); border:1px solid rgba(85,240,255,0.45); border-radius:10px; padding:2px 6px;")
-        for button in (minus, plus):
-            if button:
-                button.setFixedSize(48, 40)
-                button.setFont(font(16, QFont.Black))
-        panel.updateGeometry()
         val.repaint()
         QTimer.singleShot(900, lambda k=key, s=seq: self.reset_value_control(k, s))
 
@@ -12279,23 +12667,12 @@ class SettingsDialog(QDialog):
             return
         panel = meta.get("panel")
         val = meta.get("value")
-        minus = meta.get("minus")
-        plus = meta.get("plus")
         if panel:
-            panel.setMinimumHeight(44)
-            panel.setMaximumHeight(50)
             panel.setStyleSheet(self.value_control_style(False))
-            panel.updateGeometry()
         if val:
-            val.setMinimumWidth(56)
             val.setFont(font(11, QFont.Black))
             val.setStyleSheet("color:#ffffff; background:transparent; border:0;")
-        for button in (minus, plus):
-            if button:
-                button.setFixedSize(40, 34)
-                button.setFont(font(13, QFont.Black))
-                if hasattr(button, "refresh"):
-                    button.refresh()
+            val.repaint()
 
     def mark_settings_dirty(self):
         self._settings_dirty = True
@@ -12331,10 +12708,8 @@ class SettingsDialog(QDialog):
         lay.addWidget(plus)
         self.controls[key] = val
         self.value_control_widgets[key] = {"panel": panel, "minus": minus, "plus": plus, "value": val, "popSeq": 0}
-        minus.pressed.connect(lambda k=key: self.pop_value_control(k))
-        plus.pressed.connect(lambda k=key: self.pop_value_control(k))
-        minus.clicked.connect(lambda: self.adjust_value(key, -1, low, high, suffix))
-        plus.clicked.connect(lambda: self.adjust_value(key, 1, low, high, suffix))
+        minus.clicked.connect(lambda checked=False: self.adjust_value(key, -1, low, high, suffix))
+        plus.clicked.connect(lambda checked=False: self.adjust_value(key, 1, low, high, suffix))
         return panel
 
     def build_value(self, key: str, label: str, value, row: int, col: int, low=None, high=None, suffix="°"):
@@ -12701,19 +13076,36 @@ class SettingsDialog(QDialog):
         field.mousePressEvent = lambda event: callback()
         return field
 
+
     def edit_security_code(self):
         code = CodeKeypadDialog.get_code(self, "Security Code", "New 4-Digit Code")
         if code is None:
             return
-        self.s.config.setdefault("alarm", {})["disarmCode"] = code
-        try:
-            self.s.save_config()
-        except Exception as exc:
-            QMessageBox.warning(self, "Save failed", str(exc))
-            return
+        alarm = self.s.config.setdefault("alarm", {})
+        previous = str(alarm.get("disarmCode") or "")
+        alarm["disarmCode"] = code
         if hasattr(self, "security_code_field"):
             self.security_code_field.setText(self.masked_code(code))
-        self.saved.emit()
+        config_snapshot = copy.deepcopy(self.s.config)
+
+        def done(record):
+            if isinstance(record, dict):
+                self.s.config = record.get("config") or self.s.config
+            self.saved.emit()
+
+        def failed(error):
+            self.s.config.setdefault("alarm", {})["disarmCode"] = previous
+            if hasattr(self, "security_code_field"):
+                self.security_code_field.setText(self.masked_code(previous))
+            QMessageBox.warning(self, "Save failed", error)
+
+        self.run_settings_write(
+            "security-code",
+            lambda: self.s.api.save_config(config_snapshot),
+            done,
+            failed,
+        )
+
 
     def edit_settings_code(self):
         code = CodeKeypadDialog.get_code(self, "Settings Code", "New 4-Digit Code")
@@ -12722,15 +13114,30 @@ class SettingsDialog(QDialog):
         confirmed = CodeKeypadDialog.get_code(self, "Confirm Settings Code", "Re-enter New Code", verify_code=code)
         if confirmed is None:
             return
-        self.s.config.setdefault("security", {})["settingsCode"] = code
-        try:
-            self.s.save_config()
-        except Exception as exc:
-            QMessageBox.warning(self, "Save failed", str(exc))
-            return
+        security = self.s.config.setdefault("security", {})
+        previous = str(security.get("settingsCode") or "")
+        security["settingsCode"] = code
         if hasattr(self, "settings_code_field"):
             self.settings_code_field.setText(self.masked_code(code))
-        self.saved.emit()
+        config_snapshot = copy.deepcopy(self.s.config)
+
+        def done(record):
+            if isinstance(record, dict):
+                self.s.config = record.get("config") or self.s.config
+            self.saved.emit()
+
+        def failed(error):
+            self.s.config.setdefault("security", {})["settingsCode"] = previous
+            if hasattr(self, "settings_code_field"):
+                self.settings_code_field.setText(self.masked_code(previous))
+            QMessageBox.warning(self, "Save failed", error)
+
+        self.run_settings_write(
+            "settings-code",
+            lambda: self.s.api.save_config(config_snapshot),
+            done,
+            failed,
+        )
 
 
     def person_names_summary(self, people: object, *, empty: str, prefix: str) -> str:
@@ -12797,45 +13204,73 @@ class SettingsDialog(QDialog):
             shown += f" +{len(names)-3} more"
         return f"Sync sends changes to: {shown}"
 
+
     def choose_sync_thermostats(self):
         current = self.selected_sync_peers()
         dlg = ThermostatSyncSelectionDialog(self.s, current, self)
 
         def apply(peers):
-            try:
-                clean = []
-                seen = set()
-                for peer in peers if isinstance(peers, list) else []:
-                    if not isinstance(peer, dict):
-                        continue
-                    entity_id = str(peer.get("entityId") or peer.get("entity_id") or "").strip()
-                    if not entity_id.startswith("climate.") or entity_id in seen:
-                        continue
-                    seen.add(entity_id)
-                    clean.append({
-                        "entityId": entity_id,
-                        "name": str(peer.get("name") or peer.get("friendly_name") or entity_id),
-                        "state": str(peer.get("state") or "unknown"),
-                        "available": bool(peer.get("available", True)),
-                        "away": bool(peer.get("away", False)),
-                        "doorPauseActive": bool(peer.get("doorPauseActive", False)),
-                        "serial": str(peer.get("serial") or peer.get("ihaSerial") or ""),
-                        "panelUrl": str(peer.get("panelUrl") or peer.get("panel_url") or ""),
-                        "syncCapable": bool(peer.get("syncCapable", peer.get("ihaPanel", False))),
-                    })
-                ha = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
-                ha["syncThermostatEntities"] = copy.deepcopy(clean)
-                ha["syncAvailableThermostatEntities"] = copy.deepcopy(clean)
-                self.s.save_config()
+            clean = []
+            seen = set()
+            for peer in peers if isinstance(peers, list) else []:
+                if not isinstance(peer, dict):
+                    continue
+                entity_id = str(peer.get("entityId") or peer.get("entity_id") or "").strip()
+                if not entity_id.startswith("climate.") or entity_id in seen:
+                    continue
+                seen.add(entity_id)
+                clean.append({
+                    "entityId": entity_id,
+                    "name": str(peer.get("name") or peer.get("friendly_name") or entity_id),
+                    "state": str(peer.get("state") or "unknown"),
+                    "available": bool(peer.get("available", True)),
+                    "away": bool(peer.get("away", False)),
+                    "doorPauseActive": bool(peer.get("doorPauseActive", False)),
+                    "serial": str(peer.get("serial") or peer.get("ihaSerial") or ""),
+                    "panelUrl": str(peer.get("panelUrl") or peer.get("panel_url") or ""),
+                    "syncCapable": bool(peer.get("syncCapable", peer.get("ihaPanel", False))),
+                })
+
+            ha = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
+            previous_selected = copy.deepcopy(ha.get("syncThermostatEntities") or [])
+            previous_available = copy.deepcopy(ha.get("syncAvailableThermostatEntities") or [])
+            ha["syncThermostatEntities"] = copy.deepcopy(clean)
+            ha["syncAvailableThermostatEntities"] = copy.deepcopy(clean)
+            if hasattr(self, "sync_peer_summary"):
+                self.sync_peer_summary.setText(self.sync_peer_summary_text())
+                self.sync_peer_summary.repaint()
+            top = self.window()
+            if hasattr(top, "update_sync_button_state"):
+                top.update_sync_button_state()
+            config_snapshot = copy.deepcopy(self.s.config)
+
+            def done(record):
+                if isinstance(record, dict):
+                    self.s.config = record.get("config") or self.s.config
                 if hasattr(self, "sync_peer_summary"):
                     self.sync_peer_summary.setText(self.sync_peer_summary_text())
-                    self.sync_peer_summary.repaint()
                 top = self.window()
                 if hasattr(top, "update_sync_button_state"):
                     top.update_sync_button_state()
                 self.saved.emit()
-            except Exception as exc:
-                QMessageBox.warning(self, "Sync", str(exc))
+
+            def failed(error):
+                ha_now = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
+                ha_now["syncThermostatEntities"] = previous_selected
+                ha_now["syncAvailableThermostatEntities"] = previous_available
+                if hasattr(self, "sync_peer_summary"):
+                    self.sync_peer_summary.setText(self.sync_peer_summary_text())
+                top = self.window()
+                if hasattr(top, "update_sync_button_state"):
+                    top.update_sync_button_state()
+                QMessageBox.warning(self, "Sync", error)
+
+            self.run_settings_write(
+                "sync-peers-save",
+                lambda: self.s.api.save_config(config_snapshot),
+                done,
+                failed,
+            )
 
         dlg.saved.connect(apply)
         dlg.exec_()
@@ -12939,6 +13374,7 @@ class SettingsDialog(QDialog):
         )
 
 
+
     def choose_auto_away_people(self):
         current = self.s.thermostat.get("autoAwayPeople") if isinstance(self.s.thermostat, dict) else []
         dlg = PeopleSelectionDialog(
@@ -12948,18 +13384,38 @@ class SettingsDialog(QDialog):
             title="Auto Away Users",
             note="Select the Home Assistant person entries that control Auto Away/Home. If none of these selected people are home, the thermostat can enter Away. When any selected Auto Away user comes home, it returns to Home automatically.",
         )
+
         def apply(people):
-            try:
-                self.s.update_thermostat({"autoAwayPeople": people})
-                summary = self.auto_away_people_summary_text()
+            previous = copy.deepcopy(self.s.thermostat.get("autoAwayPeople") or [])
+            clean = copy.deepcopy(people if isinstance(people, list) else [])
+            self.s.thermostat["autoAwayPeople"] = clean
+            if hasattr(self, "people_summary"):
+                self.people_summary.setText(self.auto_away_people_summary_text())
+                self.people_summary.repaint()
+
+            def done(result):
+                if isinstance(result, dict):
+                    self.s.ingest_thermostat(result)
                 if hasattr(self, "people_summary"):
-                    self.people_summary.setText(summary)
-                    self.people_summary.repaint()
+                    self.people_summary.setText(self.auto_away_people_summary_text())
                 self.saved.emit()
-            except Exception as exc:
-                QMessageBox.warning(self, "Auto Away / Home", str(exc))
+
+            def failed(error):
+                self.s.thermostat["autoAwayPeople"] = previous
+                if hasattr(self, "people_summary"):
+                    self.people_summary.setText(self.auto_away_people_summary_text())
+                QMessageBox.warning(self, "Auto Away / Home", error)
+
+            self.run_settings_write(
+                "auto-away-people",
+                lambda: self.s.api.thermostat_update({"autoAwayPeople": clean}),
+                done,
+                failed,
+            )
+
         dlg.saved.connect(apply)
         dlg.exec_()
+
 
     def choose_person_tracking_people(self):
         current = self.s.thermostat.get("people") if isinstance(self.s.thermostat, dict) else []
@@ -12970,21 +13426,35 @@ class SettingsDialog(QDialog):
             title="Person Tracking",
             note="Select the Home Assistant person entries that appear on the main thermostat screen. This list is display-only and does not control Auto Away/Home.",
         )
+
         def apply(people):
-            try:
-                self.s.update_thermostat({"people": people})
-                summary = self.people_summary_text()
+            previous = copy.deepcopy(self.s.thermostat.get("people") or [])
+            clean = copy.deepcopy(people if isinstance(people, list) else [])
+            self.s.thermostat["people"] = clean
+            if hasattr(self, "person_tracking_summary"):
+                self.person_tracking_summary.setText(self.people_summary_text())
+                self.person_tracking_summary.repaint()
+
+            def done(result):
+                if isinstance(result, dict):
+                    self.s.ingest_thermostat(result)
                 if hasattr(self, "person_tracking_summary"):
-                    self.person_tracking_summary.setText(summary)
-                    self.person_tracking_summary.repaint()
-                top = self.window()
-                thermo_page = getattr(top, "thermostat", None)
-                strip = getattr(thermo_page, "person_presence_strip", None)
-                if strip is not None:
-                    strip.update_people(self.s.thermostat.get("people") or [])
+                    self.person_tracking_summary.setText(self.people_summary_text())
                 self.saved.emit()
-            except Exception as exc:
-                QMessageBox.warning(self, "Person Tracking", str(exc))
+
+            def failed(error):
+                self.s.thermostat["people"] = previous
+                if hasattr(self, "person_tracking_summary"):
+                    self.person_tracking_summary.setText(self.people_summary_text())
+                QMessageBox.warning(self, "Person Tracking", error)
+
+            self.run_settings_write(
+                "person-tracking",
+                lambda: self.s.api.thermostat_update({"people": clean}),
+                done,
+                failed,
+            )
+
         dlg.saved.connect(apply)
         dlg.exec_()
 
@@ -13015,85 +13485,117 @@ class SettingsDialog(QDialog):
                 pass
         return 5
 
+
     def choose_inside_door_entry(self):
+        if getattr(self, "_door_entities_loading", False):
+            return
         ha = self.s.ha()
         stored = []
         if isinstance(ha, dict):
             for key in ("doorAvailableEntities", "pauseFunctionAvailableEntities"):
                 if isinstance(ha.get(key), list):
-                    stored.extend(ha.get(key) or [])
+                    stored.extend(copy.deepcopy(ha.get(key) or []))
             current = ha.get("doorEntity")
             if isinstance(current, dict):
-                stored.insert(0, current)
+                stored.insert(0, copy.deepcopy(current))
         current_entry = self.current_inside_door_entry()
         if isinstance(current_entry, dict):
-            stored.insert(0, current_entry)
+            stored.insert(0, copy.deepcopy(current_entry))
 
-        entities = []
-        try:
-            data = self.s.api.post("/api/ha/entities", self.s.ha_payload({"domains": ["binary_sensor", "cover"]}))
-            entities = data.get("entities") or []
-        except Exception:
-            entities = []
+        self._door_entities_loading = True
+        button = getattr(self, "inside_door_choose_button", None)
+        if button is not None:
+            button.setEnabled(False)
+            button.setText("Loading…")
 
-        by_id = {}
-        # Load saved entries first, then let the live HA entity list overwrite
-        # them. That keeps the picker and the saved selection on HA's current
-        # friendly_name instead of an older/raw entry label.
-        for item in list(stored) + list(entities):
-            if not isinstance(item, dict):
-                continue
-            eid = str(item.get("entityId") or item.get("entity_id") or "").strip()
-            if not eid:
-                continue
-            domain = str(item.get("domain") or (eid.split(".", 1)[0] if "." in eid else "")).strip()
-            if domain not in {"binary_sensor", "cover"}:
-                continue
-            name = str(item.get("friendlyName") or item.get("friendly_name") or item.get("name") or eid).strip() or eid
-            by_id[eid] = {
-                "entityId": eid,
-                "name": name,
-                "friendlyName": name,
-                "domain": domain,
-                "state": item.get("state"),
-                "deviceClass": item.get("deviceClass") or item.get("device_class") or "",
-                "currentPosition": item.get("currentPosition") or item.get("current_position"),
-                "isClosed": item.get("isClosed") if isinstance(item.get("isClosed"), bool) else item.get("is_closed"),
-            }
-        entities = list(by_id.values())
-        if not entities:
-            QMessageBox.warning(self, "Doors", "No Home Assistant binary_sensor or cover entries found.")
-            return
+        def restore_button():
+            self._door_entities_loading = False
+            button = getattr(self, "inside_door_choose_button", None)
+            if button is not None:
+                button.setEnabled(True)
+                button.setText("Choose Entry")
 
-        dlg = EntityPickerDialog("Choose Doors Entry", entities, self)
-        def apply(e):
-            try:
+        def open_picker(live_entities: list[dict], load_error: str = ""):
+            restore_button()
+            by_id: dict[str, dict] = {}
+            for item in list(stored) + list(live_entities or []):
+                if not isinstance(item, dict):
+                    continue
+                eid = str(item.get("entityId") or item.get("entity_id") or "").strip()
+                if not eid:
+                    continue
+                domain = str(item.get("domain") or (eid.split(".", 1)[0] if "." in eid else "")).strip()
+                if domain not in {"binary_sensor", "cover"}:
+                    continue
+                name = str(item.get("friendlyName") or item.get("friendly_name") or item.get("name") or eid).strip() or eid
+                record = copy.deepcopy(item)
+                record.update({
+                    "entityId": eid,
+                    "name": name,
+                    "friendlyName": name,
+                    "domain": domain,
+                })
+                by_id[eid] = record
+            entities = list(by_id.values())
+            if not entities:
+                detail = f"\n\n{load_error}" if load_error else ""
+                QMessageBox.warning(self, "Doors", "No Home Assistant binary_sensor or cover entries found." + detail)
+                return
+
+            dlg = EntityPickerDialog("Choose Doors Entry", entities, self)
+
+            def apply(e):
                 eid = str(e.get("entityId") or e.get("entity_id") or "").strip()
                 if not eid:
                     return
-                domain = str(e.get("domain") or (eid.split(".", 1)[0] if "." in eid else "binary_sensor"))
-                selected_name = str(e.get("friendlyName") or e.get("friendly_name") or e.get("name") or eid).strip() or eid
+                source = next(
+                    (item for item in entities if str(item.get("entityId") or item.get("entity_id") or "").strip() == eid),
+                    {},
+                )
+                merged = copy.deepcopy(source)
+                merged.update(e if isinstance(e, dict) else {})
+                domain = str(merged.get("domain") or (eid.split(".", 1)[0] if "." in eid else "binary_sensor"))
+                selected_name = str(
+                    merged.get("friendlyName")
+                    or merged.get("friendly_name")
+                    or merged.get("name")
+                    or eid
+                ).strip() or eid
                 selected = {
                     "entityId": eid,
                     "name": selected_name,
                     "friendlyName": selected_name,
                     "domain": domain,
-                    "state": str(e.get("state") or "unknown"),
-                    "deviceClass": str(e.get("deviceClass") or e.get("device_class") or ""),
-                    "currentPosition": e.get("currentPosition") or e.get("current_position"),
-                    "isClosed": e.get("isClosed") if isinstance(e.get("isClosed"), bool) else e.get("is_closed"),
+                    "state": str(merged.get("state") or "unknown"),
+                    "deviceClass": str(merged.get("deviceClass") or merged.get("device_class") or ""),
+                    "currentPosition": merged.get("currentPosition")
+                    if merged.get("currentPosition") is not None
+                    else merged.get("current_position"),
+                    "isClosed": merged.get("isClosed")
+                    if isinstance(merged.get("isClosed"), bool)
+                    else merged.get("is_closed"),
                 }
-                ha = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
-                ha["doorEntity"] = selected
-                available = [selected]
-                for item in entities:
-                    if isinstance(item, dict) and str(item.get("entityId") or "") != eid:
-                        available.append(item)
-                ha["doorAvailableEntities"] = available
-                ha["pauseFunctionAvailableEntities"] = available
-                self.s.save_config()
-                duration = self.val_number("doorPauseDurationMinutes") if "doorPauseDurationMinutes" in self.controls else self.current_door_pause_duration()
-                self.s.update_thermostat({
+
+                ha_config = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
+                previous_ha = {
+                    key: copy.deepcopy(ha_config.get(key))
+                    for key in ("doorEntity", "doorAvailableEntities", "pauseFunctionAvailableEntities")
+                }
+                previous_pause = copy.deepcopy(self.s.thermostat.get("pauseFunction"))
+                ha_config["doorEntity"] = selected
+                available = [selected] + [
+                    copy.deepcopy(item)
+                    for item in entities
+                    if isinstance(item, dict) and str(item.get("entityId") or "") != eid
+                ]
+                ha_config["doorAvailableEntities"] = copy.deepcopy(available)
+                ha_config["pauseFunctionAvailableEntities"] = copy.deepcopy(available)
+                duration = (
+                    self.val_number("doorPauseDurationMinutes")
+                    if "doorPauseDurationMinutes" in self.controls
+                    else self.current_door_pause_duration()
+                )
+                changes = {
                     "pauseFunction": {
                         "durationMinutes": duration,
                         "entries": [selected],
@@ -13104,14 +13606,55 @@ class SettingsDialog(QDialog):
                         "activeEntityIds": [],
                         "snoozeUntil": 0,
                     }
-                })
+                }
+                self.apply_thermostat_changes_locally(changes)
                 if hasattr(self, "inside_door_label"):
                     self.inside_door_label.setText(self.inside_door_summary_text())
-                self.saved.emit()
-            except Exception as exc:
-                QMessageBox.warning(self, "Doors", str(exc))
-        dlg.selected.connect(apply)
-        dlg.exec_()
+                config_snapshot = copy.deepcopy(self.s.config)
+
+                def worker():
+                    config_record = self.s.api.save_config(config_snapshot)
+                    thermostat_result = self.s.api.thermostat_update(changes)
+                    return {"config": config_record, "thermostat": thermostat_result}
+
+                def done(result):
+                    data = result if isinstance(result, dict) else {}
+                    config_record = data.get("config")
+                    if isinstance(config_record, dict):
+                        self.s.config = config_record.get("config") or self.s.config
+                    thermostat_result = data.get("thermostat")
+                    if isinstance(thermostat_result, dict):
+                        self.s.ingest_thermostat(thermostat_result)
+                    if hasattr(self, "inside_door_label"):
+                        self.inside_door_label.setText(self.inside_door_summary_text())
+                    self.saved.emit()
+
+                def failed(error):
+                    ha_now = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
+                    for key, value in previous_ha.items():
+                        if value is None:
+                            ha_now.pop(key, None)
+                        else:
+                            ha_now[key] = value
+                    if previous_pause is None:
+                        self.s.thermostat.pop("pauseFunction", None)
+                    else:
+                        self.s.thermostat["pauseFunction"] = previous_pause
+                    if hasattr(self, "inside_door_label"):
+                        self.inside_door_label.setText(self.inside_door_summary_text())
+                    QMessageBox.warning(self, "Doors", error)
+
+                self.run_settings_write("door-entry-save", worker, done, failed)
+
+            dlg.selected.connect(apply)
+            dlg.exec_()
+
+        self.load_ha_entities_async(
+            "door-entities",
+            ["binary_sensor", "cover"],
+            lambda entities: open_picker(entities, ""),
+            lambda error: open_picker([], error),
+        )
 
 
     def source_mode_key(self, kind: str) -> str:
@@ -13200,6 +13743,7 @@ class SettingsDialog(QDialog):
         cool_mode = changed_mode if changed_kind == "cool" else self.source_control_mode("cool")
         return "external" if heat_mode == "external" and cool_mode == "external" else "internal"
 
+
     def set_source_control_mode(self, kind: str, mode: str):
         kind = str(kind or "").strip().lower()
         if kind not in {"room", "heat", "cool", "fan"}:
@@ -13211,6 +13755,7 @@ class SettingsDialog(QDialog):
             else:
                 self.choose_external_air_entry(kind)
             return
+
         changes = {self.source_mode_key(kind): mode}
         if kind in {"heat", "cool"}:
             changes["airControlMode"] = self.legacy_air_mode_with(kind, mode)
@@ -13231,20 +13776,45 @@ class SettingsDialog(QDialog):
                     "runtimeTempSource": "home-assistant",
                     "runtimeTempSourceName": name,
                 })
-        try:
-            self.s.update_thermostat(changes)
+
+        sentinel = object()
+        previous = {key: copy.deepcopy(self.s.thermostat.get(key, sentinel)) for key in changes}
+        self.apply_thermostat_changes_locally(changes)
+        self.update_source_control_widgets()
+
+        def done(result):
+            if isinstance(result, dict):
+                self.s.ingest_thermostat(result)
             self.update_source_control_widgets()
             self.saved.emit()
-        except Exception as exc:
-            QMessageBox.warning(self, f"{self.source_label(kind)} Source", str(exc))
+
+        def failed(error):
+            for key, value in previous.items():
+                if value is sentinel:
+                    self.s.thermostat.pop(key, None)
+                else:
+                    self.s.thermostat[key] = value
+            self.update_source_control_widgets()
+            QMessageBox.warning(self, f"{self.source_label(kind)} Source", error)
+
+        self.run_settings_write(
+            f"{kind}-source-mode",
+            lambda: self.s.api.thermostat_update(changes),
+            done,
+            failed,
+        )
 
     def toggle_source_control_mode(self, kind: str):
         next_mode = "internal" if self.source_control_mode(kind) == "external" else "external"
         self.set_source_control_mode(kind, next_mode)
 
+
     def choose_external_air_entry(self, kind: str):
         kind = str(kind or "").strip().lower()
         if kind not in {"heat", "cool", "fan"}:
+            return
+        loading_key = f"_external_{kind}_entities_loading"
+        if getattr(self, loading_key, False):
             return
         label = self.source_label(kind)
         ha = self.s.ha()
@@ -13257,89 +13827,158 @@ class SettingsDialog(QDialog):
         if isinstance(ha, dict):
             current = ha.get(selected_key)
             if isinstance(current, dict):
-                stored.append(current)
+                stored.append(copy.deepcopy(current))
             if isinstance(ha.get("externalAirControlAvailableEntities"), list):
-                stored.extend(ha.get("externalAirControlAvailableEntities") or [])
+                stored.extend(copy.deepcopy(ha.get("externalAirControlAvailableEntities") or []))
         current_entry = self.external_source_entity(kind)
         if isinstance(current_entry, dict):
-            stored.insert(0, current_entry)
+            stored.insert(0, copy.deepcopy(current_entry))
 
-        entities = []
-        domains = ["switch", "input_boolean"]
-        allowed_domains = set(domains)
-        try:
-            data = self.s.api.post("/api/ha/entities", self.s.ha_payload({"domains": domains}))
-            entities = data.get("entities") or []
-        except Exception:
-            entities = []
+        button = getattr(self, f"{kind}_source_choose_button", None)
+        setattr(self, loading_key, True)
+        if button is not None:
+            button.setEnabled(False)
+            button.setText("Loading…")
 
-        by_id = {}
-        for item in list(entities) + list(stored):
-            if not isinstance(item, dict):
-                continue
-            eid = str(item.get("entityId") or item.get("entity_id") or "").strip()
-            if not eid or "." not in eid:
-                continue
-            domain = str(item.get("domain") or eid.split(".", 1)[0]).strip().lower()
-            if domain not in allowed_domains:
-                continue
-            by_id[eid] = {
-                "entityId": eid,
-                "name": str(item.get("name") or item.get("friendly_name") or eid),
-                "domain": domain,
-                "state": item.get("state"),
-            }
-        entities = list(by_id.values())
-        if not entities:
-            QMessageBox.warning(self, f"External {label} Entry", "No Home Assistant switch or input_boolean entries found.")
-            return
+        def restore_button():
+            setattr(self, loading_key, False)
+            button = getattr(self, f"{kind}_source_choose_button", None)
+            if button is not None:
+                button.setEnabled(True)
+                button.setText("Choose HA")
 
-        dlg = EntityPickerDialog(f"Choose External {label} Entry", entities, self)
-        def apply(e):
-            try:
+        def open_picker(live_entities: list[dict], load_error: str = ""):
+            restore_button()
+            domains = {"switch", "input_boolean"}
+            by_id: dict[str, dict] = {}
+            for item in list(stored) + list(live_entities or []):
+                if not isinstance(item, dict):
+                    continue
+                eid = str(item.get("entityId") or item.get("entity_id") or "").strip()
+                if not eid or "." not in eid:
+                    continue
+                domain = str(item.get("domain") or eid.split(".", 1)[0]).strip().lower()
+                if domain not in domains:
+                    continue
+                record = copy.deepcopy(item)
+                record.update({
+                    "entityId": eid,
+                    "name": str(item.get("name") or item.get("friendly_name") or eid),
+                    "domain": domain,
+                })
+                by_id[eid] = record
+            entities = list(by_id.values())
+            if not entities:
+                detail = f"\n\n{load_error}" if load_error else ""
+                QMessageBox.warning(
+                    self,
+                    f"External {label} Entry",
+                    "No Home Assistant switch or input_boolean entries found." + detail,
+                )
+                return
+
+            dlg = EntityPickerDialog(f"Choose External {label} Entry", entities, self)
+
+            def apply(e):
                 eid = str(e.get("entityId") or e.get("entity_id") or "").strip()
                 if not eid:
                     return
-                domain = str(e.get("domain") or (eid.split(".", 1)[0] if "." in eid else "switch")).strip().lower()
-                if domain not in allowed_domains:
-                    QMessageBox.warning(self, f"External {label} Entry", "External control can only use switch or input_boolean entries.")
+                source = next(
+                    (item for item in entities if str(item.get("entityId") or item.get("entity_id") or "").strip() == eid),
+                    {},
+                )
+                merged = copy.deepcopy(source)
+                merged.update(e if isinstance(e, dict) else {})
+                domain = str(merged.get("domain") or (eid.split(".", 1)[0] if "." in eid else "switch")).strip().lower()
+                if domain not in domains:
+                    QMessageBox.warning(
+                        self,
+                        f"External {label} Entry",
+                        "External control can only use switch or input_boolean entries.",
+                    )
                     return
                 selected = {
                     "entityId": eid,
-                    "name": str(e.get("name") or e.get("friendly_name") or eid),
+                    "name": str(merged.get("name") or merged.get("friendly_name") or eid),
                     "domain": domain,
-                    "state": str(e.get("state") or "unknown"),
+                    "state": str(merged.get("state") or "unknown"),
                 }
+
                 ha_config = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
+                previous_selected = copy.deepcopy(ha_config.get(selected_key))
+                previous_available = copy.deepcopy(ha_config.get("externalAirControlAvailableEntities"))
                 thermostat_key = {
                     "heat": "externalHeatEntity",
                     "cool": "externalCoolEntity",
                     "fan": "externalFanEntity",
                 }[kind]
+                previous_thermostat = {
+                    key: (key in self.s.thermostat, copy.deepcopy(self.s.thermostat.get(key)))
+                    for key in (self.source_mode_key(kind), thermostat_key, "airControlMode")
+                }
+
                 ha_config[selected_key] = selected
-                available = [selected]
-                for item in entities:
-                    if isinstance(item, dict) and str(item.get("entityId") or "") != eid:
-                        available.append(item)
+                available = [selected] + [
+                    copy.deepcopy(item)
+                    for item in entities
+                    if isinstance(item, dict) and str(item.get("entityId") or "") != eid
+                ]
                 ha_config["externalAirControlAvailableEntities"] = available
-                self.s.save_config()
                 changes = {
                     self.source_mode_key(kind): "external",
                     thermostat_key: selected,
                 }
                 if kind in {"heat", "cool"}:
                     changes["airControlMode"] = self.legacy_air_mode_with(kind, "external")
-                self.s.update_thermostat(changes)
+                self.apply_thermostat_changes_locally(changes)
                 self.update_source_control_widgets()
-                self.saved.emit()
-                try:
-                    dlg.accept()
-                except Exception:
-                    pass
-            except Exception as exc:
-                QMessageBox.warning(self, f"External {label} Entry", str(exc))
-        dlg.selected.connect(apply)
-        dlg.exec_()
+                config_snapshot = copy.deepcopy(self.s.config)
+
+                def worker():
+                    config_record = self.s.api.save_config(config_snapshot)
+                    thermostat_result = self.s.api.thermostat_update(changes)
+                    return {"config": config_record, "thermostat": thermostat_result}
+
+                def done(result):
+                    data = result if isinstance(result, dict) else {}
+                    config_record = data.get("config")
+                    if isinstance(config_record, dict):
+                        self.s.config = config_record.get("config") or self.s.config
+                    thermostat_result = data.get("thermostat")
+                    if isinstance(thermostat_result, dict):
+                        self.s.ingest_thermostat(thermostat_result)
+                    self.update_source_control_widgets()
+                    self.saved.emit()
+
+                def failed(error):
+                    ha_now = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
+                    if previous_selected is None:
+                        ha_now.pop(selected_key, None)
+                    else:
+                        ha_now[selected_key] = previous_selected
+                    if previous_available is None:
+                        ha_now.pop("externalAirControlAvailableEntities", None)
+                    else:
+                        ha_now["externalAirControlAvailableEntities"] = previous_available
+                    for key, (existed, value) in previous_thermostat.items():
+                        if existed:
+                            self.s.thermostat[key] = value
+                        else:
+                            self.s.thermostat.pop(key, None)
+                    self.update_source_control_widgets()
+                    QMessageBox.warning(self, f"External {label} Entry", error)
+
+                self.run_settings_write(f"external-{kind}-entry-save", worker, done, failed)
+
+            dlg.selected.connect(apply)
+            dlg.exec_()
+
+        self.load_ha_entities_async(
+            f"external-{kind}-entities",
+            ["switch", "input_boolean"],
+            lambda entities: open_picker(entities, ""),
+            lambda error: open_picker([], error),
+        )
 
 
     def source_temp_card_style(self) -> str:
@@ -14152,31 +14791,72 @@ class SettingsDialog(QDialog):
             return False, output or f"rotation command exited {result.returncode}"
         return True, output
 
+
     def set_screen_orientation(self, orientation: str):
+        if getattr(self, "_screen_orientation_saving", False):
+            return
         orientation = normalize_screen_orientation(orientation)
         display = self.s.config.setdefault("display", {})
         if not isinstance(display, dict):
             display = {}
             self.s.config["display"] = display
+        previous_orientation = normalize_screen_orientation(display.get("screenOrientation"))
+        previous_rotation = str(display.get("xrandrRotation") or screen_orientation_to_xrandr(previous_orientation))
         display["screenOrientation"] = orientation
         display["xrandrRotation"] = screen_orientation_to_xrandr(orientation)
         self.refresh_screen_orientation_buttons()
-        try:
-            self.s.save_config()
-        except Exception as exc:
-            QMessageBox.warning(self, "Screen Settings", f"Saved locally, but config save failed:\n{exc}")
-            return
-        ok, detail = self.apply_screen_orientation_now(orientation)
-        top = self.window()
-        if hasattr(top, "force_panel_geometry"):
-            QTimer.singleShot(150, top.force_panel_geometry)
-            QTimer.singleShot(550, top.force_panel_geometry)
-            QTimer.singleShot(1100, top.force_panel_geometry)
-        self.saved.emit()
-        if ok:
+
+        self._screen_orientation_saving = True
+        for attr in ("screen_upright_button", "screen_upside_button"):
+            button = getattr(self, attr, None)
+            if button is not None:
+                button.setEnabled(False)
+
+        config_snapshot = copy.deepcopy(self.s.config)
+
+        def worker():
+            config_record = self.s.api.save_config(config_snapshot)
+            ok, detail = self.apply_screen_orientation_now(orientation)
+            return {"config": config_record, "ok": bool(ok), "detail": str(detail or "")}
+
+        def finish_buttons():
+            self._screen_orientation_saving = False
+            for attr in ("screen_upright_button", "screen_upside_button"):
+                button = getattr(self, attr, None)
+                if button is not None:
+                    button.setEnabled(True)
+
+        def done(result):
+            finish_buttons()
+            data = result if isinstance(result, dict) else {}
+            config_record = data.get("config")
+            if isinstance(config_record, dict):
+                self.s.config = config_record.get("config") or self.s.config
+            top = self.window()
+            if hasattr(top, "force_panel_geometry"):
+                QTimer.singleShot(150, top.force_panel_geometry)
+                QTimer.singleShot(550, top.force_panel_geometry)
+                QTimer.singleShot(1100, top.force_panel_geometry)
+            self.saved.emit()
             self.refresh_screen_orientation_buttons()
-        else:
-            QMessageBox.warning(self, "Screen Settings", "The setting was saved, but the live rotation command failed. Rebooting or restarting the native service should apply it.\n\n" + str(detail))
+            if not bool(data.get("ok")):
+                QMessageBox.warning(
+                    self,
+                    "Screen Settings",
+                    "The setting was saved, but the live rotation command failed. Rebooting or restarting the native service should apply it.\n\n"
+                    + str(data.get("detail") or ""),
+                )
+
+        def failed(error):
+            finish_buttons()
+            current = self.s.config.setdefault("display", {})
+            if isinstance(current, dict):
+                current["screenOrientation"] = previous_orientation
+                current["xrandrRotation"] = previous_rotation
+            self.refresh_screen_orientation_buttons()
+            QMessageBox.warning(self, "Screen Settings", f"Could not save/apply rotation:\n{error}")
+
+        self.run_settings_write("screen-orientation", worker, done, failed)
 
     def build(self):
         t = self.s.thermostat or {}
@@ -14412,6 +15092,7 @@ class SettingsDialog(QDialog):
         self.outdoor_source_label.setFont(font(7, QFont.Black))
         self.outdoor_source_label.setStyleSheet("color:#dfe9ff; background:rgba(5,10,20,0.28); border:1px solid rgba(160,180,210,0.16); border-radius:8px; padding:4px;")
         choose_outdoor = RoundButton("Choose HA", active=True, min_h=28)
+        self.outdoor_source_choose_button = choose_outdoor
         choose_outdoor.setMinimumWidth(112)
         choose_outdoor.clicked.connect(self.choose_outdoor_temp_sensor)
         outdoor_source.layout().addWidget(self.outdoor_source_label)
@@ -14532,6 +15213,7 @@ class SettingsDialog(QDialog):
         door_grid = self.section_grid(door_source, 2)
         self.add_section_value(door_grid, "doorPauseDurationMinutes", "Door Delay", int(float(pause.get("durationMinutes") or 5)), 0, 0, 1, 60, " min")
         choose_door = RoundButton("Choose Entry", active=True, min_h=28)
+        self.inside_door_choose_button = choose_door
         choose_door.clicked.connect(self.choose_inside_door_entry)
         door_grid.addWidget(choose_door, 0, 1)
 
@@ -14800,6 +15482,10 @@ class SettingsDialog(QDialog):
         # Keeping the API out of the tap path makes repeated touchscreen taps
         # immediate and avoids waiting on a thermostat round-trip.
         self.controls[key].repaint()
+        # Return from the current X11 touch release/click before changing visual
+        # styles. This follows the same pointer-grab safety rule used by the
+        # motion settings controls elsewhere in the native app.
+        QTimer.singleShot(0, lambda k=key: self.pop_value_control(k))
         if str(key).startswith("jarvis"):
             self._jarvis_dirty = True
         self.mark_settings_dirty()
@@ -14934,6 +15620,9 @@ class SettingsDialog(QDialog):
             self.s.pause_status_refresh(0.2)
 
     def close_settings(self):
+        if int(getattr(self, "_settings_write_jobs", 0) or 0) > 0:
+            QMessageBox.information(self, "Settings", "A settings change is still saving. Keep Settings open until it finishes.")
+            return
         if self.house_sync_running:
             QMessageBox.information(self, "House Sync", "House Sync is still running. Keep settings open until it finishes.")
             return
@@ -15030,6 +15719,9 @@ class SettingsDialog(QDialog):
         threading.Thread(target=worker, name="settings-display-save", daemon=True).start()
 
     def save_all(self):
+        if int(getattr(self, "_settings_write_jobs", 0) or 0) > 0:
+            QMessageBox.information(self, "Settings", "A settings change is still saving. Save Settings after it finishes.")
+            return
         if self.house_sync_running:
             QMessageBox.information(self, "House Sync", "House Sync is still running. Save Settings after it finishes.")
             return
@@ -15101,164 +15793,360 @@ class SettingsDialog(QDialog):
         self.saved.emit()
         self.show_saved_then_close()
 
+
     def choose_temp_sensor(self):
-        ha = self.s.ha()
-        stored = ha.get("currentTempAvailableEntities") or []
-        entities = []
-        try:
-            data = self.s.api.post("/api/ha/entities", self.s.ha_payload({"domains": ["sensor", "climate"]}))
-            entities = data.get("entities") or []
-        except Exception:
-            entities = []
-
-        by_id = {}
-        for item in list(entities) + list(stored):
-            if not isinstance(item, dict):
-                continue
-            eid = str(item.get("entityId") or item.get("entity_id") or "").strip()
-            if not eid:
-                continue
-            by_id[eid] = {
-                "entityId": eid,
-                "name": str(item.get("name") or item.get("friendly_name") or eid),
-                "domain": str(item.get("domain") or (eid.split(".", 1)[0] if "." in eid else "sensor")),
-                "state": item.get("state"),
-                "unitOfMeasurement": item.get("unitOfMeasurement") or item.get("unit_of_measurement") or "",
-            }
-        entities = list(by_id.values())
-        if not entities:
-            QMessageBox.warning(self, "Failed", "No Home Assistant sensor or climate entities found.")
+        if getattr(self, "_room_temp_entities_loading", False):
             return
+        ha = self.s.ha()
+        stored = copy.deepcopy(ha.get("currentTempAvailableEntities") or [])
+        current = ha.get("currentTempEntity")
+        if isinstance(current, dict):
+            stored.insert(0, copy.deepcopy(current))
+        button = getattr(self, "room_source_choose_button", None)
+        self._room_temp_entities_loading = True
+        if button is not None:
+            button.setEnabled(False)
+            button.setText("Loading…")
 
-        dlg = EntityPickerDialog("Choose Room Temperature Entity", entities, self)
-        def apply(e):
-            try:
+        def restore_button():
+            self._room_temp_entities_loading = False
+            button = getattr(self, "room_source_choose_button", None)
+            if button is not None:
+                button.setEnabled(True)
+                button.setText("Choose HA")
+
+        def open_picker(live_entities: list[dict], load_error: str = ""):
+            restore_button()
+            by_id: dict[str, dict] = {}
+            for item in list(stored) + list(live_entities or []):
+                if not isinstance(item, dict):
+                    continue
+                eid = str(item.get("entityId") or item.get("entity_id") or "").strip()
+                if not eid:
+                    continue
+                record = copy.deepcopy(item)
+                record.update({
+                    "entityId": eid,
+                    "name": str(item.get("name") or item.get("friendly_name") or eid),
+                    "domain": str(item.get("domain") or (eid.split(".", 1)[0] if "." in eid else "sensor")),
+                    "unitOfMeasurement": item.get("unitOfMeasurement") or item.get("unit_of_measurement") or "",
+                })
+                by_id[eid] = record
+            entities = list(by_id.values())
+            if not entities:
+                detail = f"\n\n{load_error}" if load_error else ""
+                QMessageBox.warning(self, "Choose Sensor", "No Home Assistant sensor or climate entities found." + detail)
+                return
+
+            dlg = EntityPickerDialog("Choose Room Temperature Entity", entities, self)
+
+            def apply(e):
                 eid = str(e.get("entityId") or e.get("entity_id") or "").strip()
                 if not eid:
                     return
+                source = next(
+                    (item for item in entities if str(item.get("entityId") or item.get("entity_id") or "").strip() == eid),
+                    {},
+                )
+                merged = copy.deepcopy(source)
+                merged.update(e if isinstance(e, dict) else {})
                 selected = {
                     "entityId": eid,
-                    "name": str(e.get("name") or e.get("friendly_name") or eid),
-                    "domain": str(e.get("domain") or (eid.split(".", 1)[0] if "." in eid else "sensor")),
-                    "unitOfMeasurement": str(e.get("unitOfMeasurement") or e.get("unit_of_measurement") or ""),
+                    "name": str(merged.get("name") or merged.get("friendly_name") or eid),
+                    "domain": str(merged.get("domain") or (eid.split(".", 1)[0] if "." in eid else "sensor")),
+                    "unitOfMeasurement": str(merged.get("unitOfMeasurement") or merged.get("unit_of_measurement") or ""),
                 }
-                ha = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
-                # Force replace the selected current temp source. Do not keep
-                # using the previous sensor just because it is still in the list.
-                ha["currentTempEntity"] = selected
-                available = [selected]
-                for item in entities:
-                    if isinstance(item, dict) and str(item.get("entityId") or "") != eid:
-                        available.append(item)
-                ha["currentTempAvailableEntities"] = available
-                self.s.save_config()
-                self.s.update_thermostat({
+
+                ha_config = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
+                previous_selected = copy.deepcopy(ha_config.get("currentTempEntity"))
+                previous_available = copy.deepcopy(ha_config.get("currentTempAvailableEntities"))
+                thermostat_keys = (
+                    "roomTempControlMode",
+                    "currentTempSource",
+                    "currentTempSourceName",
+                    "runtimeTempSource",
+                    "runtimeTempSourceName",
+                )
+                previous_thermostat = {
+                    key: (key in self.s.thermostat, copy.deepcopy(self.s.thermostat.get(key)))
+                    for key in thermostat_keys
+                }
+
+                ha_config["currentTempEntity"] = selected
+                ha_config["currentTempAvailableEntities"] = [selected] + [
+                    copy.deepcopy(item)
+                    for item in entities
+                    if isinstance(item, dict) and str(item.get("entityId") or "") != eid
+                ]
+                changes = {
                     "roomTempControlMode": "external",
                     "currentTempSource": "home-assistant",
                     "currentTempSourceName": selected["name"],
                     "runtimeTempSource": "home-assistant",
                     "runtimeTempSourceName": selected["name"],
-                })
+                }
+                self.apply_thermostat_changes_locally(changes)
                 self.update_source_control_widgets()
-                self.saved.emit()
-                try:
-                    dlg.accept()
-                except Exception:
-                    pass
-            except Exception as exc:
-                QMessageBox.warning(self, "Choose Sensor", str(exc))
-        dlg.selected.connect(apply)
-        dlg.exec_()
+                config_snapshot = copy.deepcopy(self.s.config)
+
+                def worker():
+                    config_record = self.s.api.save_config(config_snapshot)
+                    thermostat_result = self.s.api.thermostat_update(changes)
+                    return {"config": config_record, "thermostat": thermostat_result}
+
+                def done(result):
+                    data = result if isinstance(result, dict) else {}
+                    config_record = data.get("config")
+                    if isinstance(config_record, dict):
+                        self.s.config = config_record.get("config") or self.s.config
+                    thermostat_result = data.get("thermostat")
+                    if isinstance(thermostat_result, dict):
+                        self.s.ingest_thermostat(thermostat_result)
+                    self.update_source_control_widgets()
+                    self.saved.emit()
+
+                def failed(error):
+                    ha_now = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
+                    if previous_selected is None:
+                        ha_now.pop("currentTempEntity", None)
+                    else:
+                        ha_now["currentTempEntity"] = previous_selected
+                    if previous_available is None:
+                        ha_now.pop("currentTempAvailableEntities", None)
+                    else:
+                        ha_now["currentTempAvailableEntities"] = previous_available
+                    for key, (existed, value) in previous_thermostat.items():
+                        if existed:
+                            self.s.thermostat[key] = value
+                        else:
+                            self.s.thermostat.pop(key, None)
+                    self.update_source_control_widgets()
+                    QMessageBox.warning(self, "Choose Sensor", error)
+
+                self.run_settings_write("room-temp-sensor-save", worker, done, failed)
+
+            dlg.selected.connect(apply)
+            dlg.exec_()
+
+        self.load_ha_entities_async(
+            "room-temp-entities",
+            ["sensor", "climate"],
+            lambda entities: open_picker(entities, ""),
+            lambda error: open_picker([], error),
+        )
+
 
     def choose_outdoor_temp_sensor(self):
+        if getattr(self, "_outdoor_temp_entities_loading", False):
+            return
         ha = self.s.ha()
-        stored = ha.get("weatherAvailableEntities") or []
+        stored = copy.deepcopy(ha.get("weatherAvailableEntities") or [])
         existing = ha.get("outdoorTempEntity") or ha.get("weatherEntity")
         if isinstance(existing, dict):
-            stored = [existing] + list(stored)
-        entities = []
-        try:
-            data = self.s.api.post("/api/ha/entities", self.s.ha_payload({"domains": ["sensor", "weather"]}))
-            entities = data.get("entities") or []
-        except Exception:
-            entities = []
+            stored.insert(0, copy.deepcopy(existing))
+        button = getattr(self, "outdoor_source_choose_button", None)
+        self._outdoor_temp_entities_loading = True
+        if button is not None:
+            button.setEnabled(False)
+            button.setText("Loading…")
 
-        by_id = {}
-        for item in list(entities) + list(stored):
-            if not isinstance(item, dict):
-                continue
-            eid = str(item.get("entityId") or item.get("entity_id") or "").strip()
-            if not eid:
-                continue
-            domain = str(item.get("domain") or (eid.split(".", 1)[0] if "." in eid else "") or "sensor")
-            by_id[eid] = {
-                "entityId": eid,
-                "name": str(item.get("name") or item.get("friendly_name") or eid),
-                "domain": domain,
-                "state": item.get("state"),
-                "unitOfMeasurement": item.get("unitOfMeasurement") or item.get("unit_of_measurement") or "",
-            }
-        entities = list(by_id.values())
-        if not entities:
-            QMessageBox.warning(self, "Outside Temperature", "No Home Assistant sensor/weather entries found.")
-            return
+        def restore_button():
+            self._outdoor_temp_entities_loading = False
+            button = getattr(self, "outdoor_source_choose_button", None)
+            if button is not None:
+                button.setEnabled(True)
+                button.setText("Choose HA")
 
-        dlg = EntityPickerDialog("Choose Outside Temperature", entities, self)
-        def apply(e):
-            try:
+        def open_picker(live_entities: list[dict], load_error: str = ""):
+            restore_button()
+            by_id: dict[str, dict] = {}
+            for item in list(stored) + list(live_entities or []):
+                if not isinstance(item, dict):
+                    continue
+                eid = str(item.get("entityId") or item.get("entity_id") or "").strip()
+                if not eid:
+                    continue
+                domain = str(item.get("domain") or (eid.split(".", 1)[0] if "." in eid else "") or "sensor")
+                record = copy.deepcopy(item)
+                record.update({
+                    "entityId": eid,
+                    "name": str(item.get("name") or item.get("friendly_name") or eid),
+                    "domain": domain,
+                    "unitOfMeasurement": item.get("unitOfMeasurement") or item.get("unit_of_measurement") or "",
+                })
+                by_id[eid] = record
+            entities = list(by_id.values())
+            if not entities:
+                detail = f"\n\n{load_error}" if load_error else ""
+                QMessageBox.warning(self, "Outside Temperature", "No Home Assistant sensor/weather entries found." + detail)
+                return
+
+            dlg = EntityPickerDialog("Choose Outside Temperature", entities, self)
+
+            def apply(e):
                 eid = str(e.get("entityId") or e.get("entity_id") or "").strip()
                 if not eid:
                     return
-                domain = str(e.get("domain") or (eid.split(".", 1)[0] if "." in eid else "sensor"))
+                source = next(
+                    (item for item in entities if str(item.get("entityId") or item.get("entity_id") or "").strip() == eid),
+                    {},
+                )
+                merged = copy.deepcopy(source)
+                merged.update(e if isinstance(e, dict) else {})
+                domain = str(merged.get("domain") or (eid.split(".", 1)[0] if "." in eid else "sensor"))
                 selected = {
                     "entityId": eid,
-                    "name": str(e.get("name") or e.get("friendly_name") or eid),
+                    "name": str(merged.get("name") or merged.get("friendly_name") or eid),
                     "domain": domain,
-                    "unitOfMeasurement": str(e.get("unitOfMeasurement") or e.get("unit_of_measurement") or ""),
+                    "unitOfMeasurement": str(merged.get("unitOfMeasurement") or merged.get("unit_of_measurement") or ""),
                 }
-                ha = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
-                ha["outdoorTempEntity"] = selected
+
+                ha_config = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
+                previous = {
+                    key: copy.deepcopy(ha_config.get(key))
+                    for key in ("outdoorTempEntity", "weatherEntity", "weatherAvailableEntities")
+                }
+                previous_thermostat = {
+                    key: (key in self.s.thermostat, copy.deepcopy(self.s.thermostat.get(key)))
+                    for key in ("outdoorTempSource", "outdoorTempSourceName")
+                }
+
+                ha_config["outdoorTempEntity"] = selected
                 if domain == "weather":
-                    ha["weatherEntity"] = selected
-                available = [selected]
-                for item in entities:
-                    if isinstance(item, dict) and str(item.get("entityId") or "") != eid:
-                        available.append(item)
-                ha["weatherAvailableEntities"] = available
-                self.s.save_config()
-                self.s.update_thermostat({
+                    ha_config["weatherEntity"] = selected
+                ha_config["weatherAvailableEntities"] = [selected] + [
+                    copy.deepcopy(item)
+                    for item in entities
+                    if isinstance(item, dict) and str(item.get("entityId") or "") != eid
+                ]
+                changes = {
                     "outdoorTempSource": "home-assistant",
                     "outdoorTempSourceName": selected["name"],
-                })
+                }
+                self.apply_thermostat_changes_locally(changes)
                 if hasattr(self, "outdoor_source_label"):
-                    self.outdoor_source_label.setText(f"{selected['name']}\\nUsing {selected['entityId']}")
-                self.saved.emit()
-            except Exception as exc:
-                QMessageBox.warning(self, "Outside Temperature", str(exc))
-        dlg.selected.connect(apply)
-        dlg.exec_()
+                    self.outdoor_source_label.setText(f"{selected['name']}\nUsing {selected['entityId']}")
+                config_snapshot = copy.deepcopy(self.s.config)
+
+                def worker():
+                    config_record = self.s.api.save_config(config_snapshot)
+                    thermostat_result = self.s.api.thermostat_update(changes)
+                    return {"config": config_record, "thermostat": thermostat_result}
+
+                def done(result):
+                    data = result if isinstance(result, dict) else {}
+                    config_record = data.get("config")
+                    if isinstance(config_record, dict):
+                        self.s.config = config_record.get("config") or self.s.config
+                    thermostat_result = data.get("thermostat")
+                    if isinstance(thermostat_result, dict):
+                        self.s.ingest_thermostat(thermostat_result)
+                    self.saved.emit()
+
+                def failed(error):
+                    ha_now = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
+                    for key, value in previous.items():
+                        if value is None:
+                            ha_now.pop(key, None)
+                        else:
+                            ha_now[key] = value
+                    for key, (existed, value) in previous_thermostat.items():
+                        if existed:
+                            self.s.thermostat[key] = value
+                        else:
+                            self.s.thermostat.pop(key, None)
+                    current = ha_now.get("outdoorTempEntity") or ha_now.get("weatherEntity")
+                    if hasattr(self, "outdoor_source_label"):
+                        if isinstance(current, dict):
+                            name = current.get("name") or current.get("entityId") or "Outside Sensor"
+                            self.outdoor_source_label.setText(f"Outside: {compact_name(name, 26)}\n{current.get('entityId') or 'selected entry'}")
+                        else:
+                            self.outdoor_source_label.setText("Outside: Not selected\nChoose outside temp/weather")
+                    QMessageBox.warning(self, "Outside Temperature", error)
+
+                self.run_settings_write("outdoor-temp-save", worker, done, failed)
+
+            dlg.selected.connect(apply)
+            dlg.exec_()
+
+        self.load_ha_entities_async(
+            "outdoor-temp-entities",
+            ["sensor", "weather"],
+            lambda entities: open_picker(entities, ""),
+            lambda error: open_picker([], error),
+        )
+
 
 
     def show_hardware(self):
-        try:
+        if getattr(self, "_hardware_info_loading", False):
+            return
+        self._hardware_info_loading = True
+        self.hardware.setEnabled(False)
+        self.hardware.setText("Loading…")
+
+        def worker():
             info = self.s.api.get("/api/system/info")
             hw = self.s.api.get("/api/hardware/status")
-            msg = f"{info.get('thermostatName') or info.get('name')}\n{info.get('address')}\nVersion {info.get('version')}\n{info.get('uptime')}\nThermal {info.get('thermal')}\n\nRelays: {hw.get('relays') or hw}"
+            return {"info": info, "hardware": hw}
+
+        def finish():
+            self._hardware_info_loading = False
+            self.hardware.setEnabled(True)
+            self.hardware.setText("Hardware")
+
+        def done(result):
+            finish()
+            data = result if isinstance(result, dict) else {}
+            info = data.get("info") if isinstance(data.get("info"), dict) else {}
+            hw = data.get("hardware") if isinstance(data.get("hardware"), dict) else {}
+            msg = (
+                f"{info.get('thermostatName') or info.get('name')}\n"
+                f"{info.get('address')}\n"
+                f"Version {info.get('version')}\n"
+                f"{info.get('uptime')}\n"
+                f"Thermal {info.get('thermal')}\n\n"
+                f"Relays: {hw.get('relays') or hw}"
+            )
             QMessageBox.information(self, "Hardware Information", msg)
-        except Exception as exc:
-            QMessageBox.warning(self, "Hardware Information", str(exc))
+
+        def failed(error):
+            finish()
+            QMessageBox.warning(self, "Hardware Information", error)
+
+        self.run_settings_async("hardware-info", worker, done, failed)
+
 
     def show_history(self):
-        try:
-            hist = self.s.api.get("/api/history")
+        if getattr(self, "_history_loading", False):
+            return
+        self._history_loading = True
+        self.history.setEnabled(False)
+        self.history.setText("Loading…")
+
+        def worker():
+            return self.s.api.get("/api/history")
+
+        def finish():
+            self._history_loading = False
+            self.history.setEnabled(True)
+            self.history.setText("History")
+
+        def done(result):
+            finish()
+            hist = result if isinstance(result, dict) else {}
             items = hist.get("events") or hist.get("history") or []
             if not items:
                 msg = "No HVAC history entries yet."
             else:
                 msg = "\n".join(str(x)[:180] for x in items[-15:])
             QMessageBox.information(self, "History", msg)
-        except Exception as exc:
-            QMessageBox.warning(self, "History", str(exc))
+
+        def failed(error):
+            finish()
+            QMessageBox.warning(self, "History", error)
+
+        self.run_settings_async("history", worker, done, failed)
 
 
 
@@ -18101,14 +18989,28 @@ class MainWindow(Background):
         return []
 
     def assign_entity(self, group: str, obj: dict, kind: str):
-        entities = self.cached_entities_for(group)
-        try:
-            data = self.s.api.post("/api/ha/entities", self.s.ha_payload({"domains": self.domains_for(group)}))
-            fresh = data.get("entities") or []
-            if fresh:
-                entities = fresh
-        except Exception:
-            pass
+        if getattr(self, "_entity_picker_loading", False):
+            return
+        cached = copy.deepcopy(self.cached_entities_for(group))
+        payload = self.s.ha_payload({"domains": self.domains_for(group)})
+        self._entity_picker_loading = True
+
+        def open_with(entities):
+            self._entity_picker_loading = False
+            self._open_entity_assignment_picker(group, obj, kind, entities or cached)
+
+        def failed(_error):
+            self._entity_picker_loading = False
+            self._open_entity_assignment_picker(group, obj, kind, cached)
+
+        self.run_async(
+            "entity-picker-load",
+            lambda: self.s.api.post("/api/ha/entities", payload),
+            lambda data: open_with((data or {}).get("entities") or [] if isinstance(data, dict) else []),
+            failed,
+        )
+
+    def _open_entity_assignment_picker(self, group: str, obj: dict, kind: str, entities: list[dict]):
         if not entities:
             self.toast.show_message("No Home Assistant entities available")
             return
@@ -18132,16 +19034,25 @@ class MainWindow(Background):
                     audio_page = self.pages.get("Audio")
                     if audio_page is not None:
                         audio_page.player_state = {}
-                    self.s.save_config()
+                    snapshot = copy.deepcopy(self.s.config)
                     self.sync_runtime_only()
-                    self.toast.show_message(f"Audio player: {ent.get('name') or entity_id}")
-                    if audio_page is not None:
-                        audio_page._audio_detected_player_id = ""
-                        QTimer.singleShot(
-                            120,
-                            lambda page=audio_page, eid=entity_id, name=(ent.get("name") or entity_id):
-                                page.auto_detect_audio_number_controls(eid, name, notify=True),
-                        )
+
+                    def saved(_result):
+                        self.toast.show_message(f"Audio player: {ent.get('name') or entity_id}")
+                        if audio_page is not None:
+                            audio_page._audio_detected_player_id = ""
+                            QTimer.singleShot(
+                                120,
+                                lambda page=audio_page, eid=entity_id, name=(ent.get("name") or entity_id):
+                                    page.auto_detect_audio_number_controls(eid, name, notify=True),
+                            )
+
+                    self.run_async(
+                        "entity-assign-primary-save",
+                        lambda: self.s.api.save_config(snapshot),
+                        saved,
+                        lambda err: self.toast.show_message(f"Save failed: {err}"),
+                    )
                 except Exception as exc:
                     self.toast.show_message(f"Save failed: {exc}")
 
@@ -18178,9 +19089,14 @@ class MainWindow(Background):
                     ha = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
                     controls = ha.setdefault("audioControlEntities", {})
                     controls[target_kind] = record
-                    self.s.save_config()
+                    snapshot = copy.deepcopy(self.s.config)
                     self.sync_runtime_only()
-                    self.toast.show_message(f"Assigned {record.get('name') or entity_id}")
+                    self.run_async(
+                        "entity-assign-audio-save",
+                        lambda: self.s.api.save_config(snapshot),
+                        lambda _result: self.toast.show_message(f"Assigned {record.get('name') or entity_id}"),
+                        lambda err: self.toast.show_message(f"Save failed: {err}"),
+                    )
                 except Exception as exc:
                     self.toast.show_message(f"Save failed: {exc}")
 
@@ -18200,9 +19116,14 @@ class MainWindow(Background):
                 if meta_key in ent:
                     obj[meta_key] = ent.get(meta_key)
             try:
-                self.s.save_config()
+                snapshot = copy.deepcopy(self.s.config)
                 self.sync_runtime_only()
-                self.toast.show_message(f"Assigned {obj.get('haName') or obj.get('name')}")
+                self.run_async(
+                    "entity-assign-save",
+                    lambda: self.s.api.save_config(snapshot),
+                    lambda _result: self.toast.show_message(f"Assigned {obj.get('haName') or obj.get('name')}"),
+                    lambda err: self.toast.show_message(f"Save failed: {err}"),
+                )
             except Exception as exc:
                 self.toast.show_message(f"Save failed: {exc}")
         dlg.selected.connect(apply)
@@ -18264,14 +19185,31 @@ class MainWindow(Background):
         if now < getattr(self, "_info_reopen_block_until", 0):
             return
         self._info_dialog_open = True
+
+        settings_code = self.settings_code()
+        if settings_code:
+            entered = CodeKeypadDialog.get_code(self, "Info Locked", "Enter Settings Code", settings_code)
+            if entered is None:
+                self._info_dialog_open = False
+                self._info_reopen_block_until = time.monotonic() + 1.5
+                return
+
+        self.toast.show_message("Loading panel information…", 1800)
+        self.run_async(
+            "info-load",
+            lambda: self.s.api.get("/api/system/info"),
+            self._open_info_dialog,
+            self._info_load_failed,
+        )
+
+    def _info_load_failed(self, error: str):
+        self._info_dialog_open = False
+        self._info_reopen_block_until = time.monotonic() + 1.5
+        self.toast.show_message(f"Info failed: {error}")
+
+    def _open_info_dialog(self, info: object):
+        info = info if isinstance(info, dict) else {}
         try:
-            settings_code = self.settings_code()
-            if settings_code:
-                entered = CodeKeypadDialog.get_code(self, "Info Locked", "Enter Settings Code", settings_code)
-                if entered is None:
-                    self._info_reopen_block_until = time.monotonic() + 1.5
-                    return
-            info = self.s.api.get("/api/system/info")
             dlg = QDialog(self)
             dlg.setModal(True)
             dlg.setWindowTitle("Thermostat Info")
