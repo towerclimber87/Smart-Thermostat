@@ -12827,14 +12827,15 @@ def _fetch_ha_entities(ha_url: str, token: str, domains: list[str] | None = None
 
 
 def _fetch_ha_alexa_lockout_devices(ha_url: str, token: str) -> dict:
-    """Return physical Alexa devices plus UniFi client network-access switches.
+    """Return physical Alexa devices plus UniFi clients and access controls.
 
-    Alexa Devices exposes an event entity for each physical voice-capable device
-    but not for speaker groups. UniFi client block controls are switches attached
-    to UniFi client devices that also have a device_tracker entity.
+    The panel UI deals only in actual Alexa devices.  UniFi client/device data is
+    returned separately so the panel can resolve the matching network-access
+    switch automatically and can explain when that control still needs to be
+    enabled in Home Assistant.
     """
     template = r"""
-{% set ns = namespace(alexa=[], controls=[]) %}
+{% set ns = namespace(alexa=[], clients=[], controls=[]) %}
 {% for entity in integration_entities('alexa_devices') | select('match', '^event[.]') | list %}
   {% set dev = device_id(entity) %}
   {% if dev %}
@@ -12843,6 +12844,14 @@ def _fetch_ha_alexa_lockout_devices(ha_url: str, token: str) -> dict:
     {% set dev_name = device_name(dev) | default('', true) %}
     {% set friendly = state_attr(entity, 'friendly_name') | default('', true) %}
     {% set ns.alexa = ns.alexa + [dict(deviceId=dev, eventEntity=entity, serialNumber=serial, name=(dev_name or friendly or entity))] %}
+  {% endif %}
+{% endfor %}
+{% for entity in integration_entities('unifi') | select('match', '^device_tracker[.]') | list %}
+  {% set dev = device_id(entity) %}
+  {% if dev %}
+    {% set dev_name = device_name(dev) | default('', true) %}
+    {% set friendly = state_attr(entity, 'friendly_name') | default('', true) %}
+    {% set ns.clients = ns.clients + [dict(deviceId=dev, trackerEntity=entity, name=(dev_name or friendly or entity), state=states(entity))] %}
   {% endif %}
 {% endfor %}
 {% for entity in integration_entities('unifi') | select('match', '^switch[.]') | list %}
@@ -12857,7 +12866,7 @@ def _fetch_ha_alexa_lockout_devices(ha_url: str, token: str) -> dict:
     {% endif %}
   {% endif %}
 {% endfor %}
-{{ dict(alexaDevices=ns.alexa, networkControls=ns.controls) | to_json }}
+{{ dict(alexaDevices=ns.alexa, unifiClients=ns.clients, networkControls=ns.controls) | to_json }}
 """
     result = _ha_json_request(
         ha_url,
@@ -12878,9 +12887,12 @@ def _fetch_ha_alexa_lockout_devices(ha_url: str, token: str) -> dict:
         payload = {}
 
     alexa_devices = payload.get("alexaDevices") if isinstance(payload, dict) else []
+    unifi_clients = payload.get("unifiClients") if isinstance(payload, dict) else []
     network_controls = payload.get("networkControls") if isinstance(payload, dict) else []
     if not isinstance(alexa_devices, list):
         alexa_devices = []
+    if not isinstance(unifi_clients, list):
+        unifi_clients = []
     if not isinstance(network_controls, list):
         network_controls = []
 
@@ -12903,6 +12915,24 @@ def _fetch_ha_alexa_lockout_devices(ha_url: str, token: str) -> dict:
             "name": str(item.get("name") or event_entity or device_id).strip(),
         })
 
+    clean_clients: list[dict] = []
+    seen_clients: set[str] = set()
+    for item in unifi_clients:
+        if not isinstance(item, dict):
+            continue
+        device_id = str(item.get("deviceId") or "").strip()
+        tracker_entity = str(item.get("trackerEntity") or "").strip()
+        key = device_id or tracker_entity
+        if not key or key in seen_clients:
+            continue
+        seen_clients.add(key)
+        clean_clients.append({
+            "deviceId": device_id,
+            "trackerEntity": tracker_entity,
+            "name": str(item.get("name") or tracker_entity or device_id).strip(),
+            "state": str(item.get("state") or "unknown").strip().lower(),
+        })
+
     clean_controls: list[dict] = []
     seen_controls: set[str] = set()
     for item in network_controls:
@@ -12920,8 +12950,13 @@ def _fetch_ha_alexa_lockout_devices(ha_url: str, token: str) -> dict:
         })
 
     clean_alexa.sort(key=lambda item: str(item.get("name") or "").lower())
+    clean_clients.sort(key=lambda item: str(item.get("name") or item.get("trackerEntity") or "").lower())
     clean_controls.sort(key=lambda item: str(item.get("name") or item.get("entityId") or "").lower())
-    return {"alexaDevices": clean_alexa, "networkControls": clean_controls}
+    return {
+        "alexaDevices": clean_alexa,
+        "unifiClients": clean_clients,
+        "networkControls": clean_controls,
+    }
 
 
 
