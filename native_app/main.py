@@ -10239,6 +10239,236 @@ class PeopleSelectionDialog(QDialog):
 
 
 
+class AlexaLockoutSelectionDialog(QDialog):
+    """Select Home Assistant switch entities that block individual Alexa devices."""
+
+    saved = pyqtSignal(list)
+    loadCompleted = pyqtSignal(object)
+
+    def __init__(self, state: AppState, selected_entities: list[dict] | None = None, parent=None):
+        super().__init__(parent)
+        self.s = state
+        self.selected_entities = copy.deepcopy(selected_entities or [])
+        self.available_entities: list[dict] = []
+        self.buttons: dict[str, RoundButton] = {}
+        self._loading = False
+        self.setModal(True)
+        self.setWindowTitle("Alexa Lockout")
+        self.setWindowFlag(Qt.FramelessWindowHint, True)
+        self.setMinimumSize(720, 520)
+        self.resize(1280, 800)
+        self.setStyleSheet("""
+            QDialog { background:#09111f; color:#f7fbff; }
+            QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
+        """)
+        self.loadCompleted.connect(self._handle_loaded)
+        self._seed_selected()
+        self.build()
+        QTimer.singleShot(0, self.load_entities)
+        QTimer.singleShot(0, self.fit_to_screen)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.fit_to_screen()
+
+    def fit_to_screen(self):
+        fit_dialog_to_available_screen(self, margin=0)
+
+    @staticmethod
+    def _normalize_entity(item: dict) -> dict | None:
+        if not isinstance(item, dict):
+            return None
+        entity_id = str(item.get("entityId") or item.get("entity_id") or "").strip()
+        if not entity_id.startswith("switch."):
+            return None
+        name = str(item.get("name") or item.get("friendly_name") or entity_id).strip() or entity_id
+        # The user's Alexa network/block controls follow the switch.*_alexa
+        # naming pattern. Also accept friendly names containing Alexa so renamed
+        # helpers still appear without showing unrelated switches.
+        if "alexa" not in entity_id.lower() and "alexa" not in name.lower():
+            return None
+        return {
+            "entityId": entity_id,
+            "name": name,
+            "state": str(item.get("state") or ""),
+        }
+
+    def _seed_selected(self):
+        by_id: dict[str, dict] = {}
+        for item in self.selected_entities:
+            normalized = self._normalize_entity(item)
+            if normalized:
+                by_id[normalized["entityId"]] = normalized
+        self.available_entities = sorted(
+            by_id.values(),
+            key=lambda item: str(item.get("name") or item.get("entityId") or "").lower(),
+        )
+
+    def selected_ids(self) -> set[str]:
+        ids: set[str] = set()
+        for item in self.selected_entities:
+            normalized = self._normalize_entity(item)
+            if normalized:
+                ids.add(normalized["entityId"])
+        return ids
+
+    def load_entities(self):
+        if self._loading:
+            return
+        self._loading = True
+        self.refresh()
+        payload = self.s.ha_payload({"domains": ["switch"]})
+
+        def worker():
+            try:
+                data = self.s.api.post("/api/ha/entities", payload)
+                result = {"entities": data.get("entities") or [], "error": None}
+            except Exception as exc:
+                result = {"entities": [], "error": str(exc)}
+            try:
+                self.loadCompleted.emit(result)
+            except RuntimeError:
+                pass
+
+        threading.Thread(target=worker, name="alexa-lockout-picker-load", daemon=True).start()
+
+    def _handle_loaded(self, info: object):
+        self._loading = False
+        data = info if isinstance(info, dict) else {}
+        by_id: dict[str, dict] = {}
+        for item in self.selected_entities:
+            normalized = self._normalize_entity(item)
+            if normalized:
+                by_id[normalized["entityId"]] = normalized
+        for item in data.get("entities") or []:
+            normalized = self._normalize_entity(item)
+            if normalized:
+                by_id[normalized["entityId"]] = normalized
+        self.available_entities = sorted(
+            by_id.values(),
+            key=lambda item: str(item.get("name") or item.get("entityId") or "").lower(),
+        )
+        self.refresh()
+
+    def build(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(12, 10, 12, 10)
+        root.setSpacing(8)
+
+        header = QHBoxLayout()
+        title = QLabel("ALEXA LOCKOUT")
+        title.setFont(font(22, QFont.Black))
+        title.setStyleSheet("color:#55f0ff; letter-spacing:3px;")
+        select_all = RoundButton("Select All", active=True, min_h=40)
+        clear = RoundButton("Clear", active=False, kind="danger", min_h=40)
+        header.addWidget(title)
+        header.addStretch(1)
+        header.addWidget(select_all)
+        header.addWidget(clear)
+        root.addLayout(header)
+
+        note = QLabel(
+            "Select the Alexa block switches this thermostat should control. "
+            "When this screen is locked, the selected switches are turned ON (blocked). "
+            "When this screen is unlocked, they are turned OFF."
+        )
+        note.setWordWrap(True)
+        note.setFont(font(10, QFont.Black))
+        note.setStyleSheet(
+            "color:#cdd8ee; background:rgba(255,255,255,0.06); "
+            "border:1px solid rgba(255,255,255,0.10); border-radius:12px; padding:8px;"
+        )
+        root.addWidget(note)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea{background:transparent;border:0;}")
+        body = QWidget()
+        self.body_lay = QVBoxLayout(body)
+        self.body_lay.setContentsMargins(0, 0, 0, 0)
+        self.body_lay.setSpacing(8)
+        scroll.setWidget(body)
+        root.addWidget(scroll, 1)
+
+        bottom = QHBoxLayout()
+        cancel = RoundButton("Cancel", active=False, min_h=42)
+        save = RoundButton("Save Selected", active=True, min_h=42)
+        bottom.addStretch(1)
+        bottom.addWidget(cancel)
+        bottom.addWidget(save)
+        root.addLayout(bottom)
+
+        select_all.clicked.connect(self.select_all)
+        clear.clicked.connect(self.clear_all)
+        cancel.clicked.connect(self.reject)
+        save.clicked.connect(self.save)
+        self.refresh()
+
+    def refresh(self):
+        while self.body_lay.count():
+            item = self.body_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.buttons = {}
+        if not self.available_entities:
+            text = "Loading Alexa switches from Home Assistant…" if self._loading else "No Alexa switch entities were found."
+            none = QLabel(text)
+            none.setWordWrap(True)
+            none.setStyleSheet("color:#c4d0e5; background:rgba(255,255,255,0.05); border-radius:12px; padding:12px;")
+            self.body_lay.addWidget(none)
+            return
+        selected = self.selected_ids()
+        for entity in self.available_entities:
+            entity_id = str(entity.get("entityId") or "")
+            name = str(entity.get("name") or entity_id)
+            state = str(entity.get("state") or "").lower()
+            state_text = "Blocked" if state == "on" else "Available" if state == "off" else state
+            suffix = f"  ({state_text})" if state_text else ""
+            button = RoundButton(
+                ("✓  " if entity_id in selected else "○  ") + name + suffix,
+                active=entity_id in selected,
+                min_h=52,
+            )
+            button.clicked.connect(lambda checked=False, e=entity: self.toggle_entity(e))
+            self.buttons[entity_id] = button
+            self.body_lay.addWidget(button)
+        self.body_lay.addStretch(1)
+
+    def toggle_entity(self, entity: dict):
+        normalized = self._normalize_entity(entity)
+        if not normalized:
+            return
+        entity_id = normalized["entityId"]
+        if entity_id in self.selected_ids():
+            self.selected_entities = [
+                item for item in self.selected_entities
+                if str(item.get("entityId") or item.get("entity_id") or "").strip() != entity_id
+            ]
+        else:
+            self.selected_entities.append(normalized)
+        self.refresh()
+
+    def select_all(self):
+        self.selected_entities = [copy.deepcopy(item) for item in self.available_entities]
+        self.refresh()
+
+    def clear_all(self):
+        self.selected_entities = []
+        self.refresh()
+
+    def save(self):
+        clean = []
+        seen = set()
+        for item in self.selected_entities:
+            normalized = self._normalize_entity(item)
+            if not normalized or normalized["entityId"] in seen:
+                continue
+            seen.add(normalized["entityId"])
+            clean.append(normalized)
+        self.saved.emit(clean)
+        self.accept()
+
+
 class ThermostatSyncSelectionDialog(QDialog):
     saved = pyqtSignal(list)
     loadCompleted = pyqtSignal(object)
@@ -12747,6 +12977,7 @@ class SettingsDialog(QDialog):
             "Screen Settings": "Rotation, compact auto on/off, and automatic brightness rules",
             "Audio Settings": "Create media-player groups and configure Audio-page controls",
             "Jarvis": "Home Assistant speech volume, response, and screen-display controls",
+            "Alexa Lockout": "Choose which Alexa devices are blocked while this screen is locked",
         }
         return descriptions.get(str(title or ""), "Open this section to view its settings")
 
@@ -13169,6 +13400,88 @@ class SettingsDialog(QDialog):
             empty="No home-screen people assigned. Tap Choose Tracking to add.",
             prefix="Home screen shows",
         )
+
+    def selected_alexa_lockout_entities(self) -> list[dict]:
+        ha = self.s.ha()
+        raw = ha.get("alexaLockoutEntities") if isinstance(ha, dict) else []
+        clean: list[dict] = []
+        seen: set[str] = set()
+        for item in raw if isinstance(raw, list) else []:
+            if not isinstance(item, dict):
+                continue
+            entity_id = str(item.get("entityId") or item.get("entity_id") or "").strip()
+            if not entity_id.startswith("switch.") or entity_id in seen:
+                continue
+            seen.add(entity_id)
+            clean.append({
+                "entityId": entity_id,
+                "name": str(item.get("name") or item.get("friendly_name") or entity_id),
+                "state": str(item.get("state") or ""),
+            })
+        return clean
+
+    def alexa_lockout_summary_text(self) -> str:
+        entities = self.selected_alexa_lockout_entities()
+        if not entities:
+            return "No Alexa devices selected. Screen lock will not change Alexa access."
+        names = [str(item.get("name") or item.get("entityId") or "Alexa") for item in entities]
+        shown = ", ".join(names[:3])
+        if len(names) > 3:
+            shown += f" +{len(names)-3} more"
+        return f"Blocked while this screen is locked: {shown}"
+
+    def choose_alexa_lockout_entities(self):
+        current = self.selected_alexa_lockout_entities()
+        dlg = AlexaLockoutSelectionDialog(self.s, current, self)
+
+        def apply(entities):
+            clean: list[dict] = []
+            seen: set[str] = set()
+            for item in entities if isinstance(entities, list) else []:
+                if not isinstance(item, dict):
+                    continue
+                entity_id = str(item.get("entityId") or item.get("entity_id") or "").strip()
+                if not entity_id.startswith("switch.") or entity_id in seen:
+                    continue
+                seen.add(entity_id)
+                clean.append({
+                    "entityId": entity_id,
+                    "name": str(item.get("name") or item.get("friendly_name") or entity_id),
+                    "state": str(item.get("state") or ""),
+                })
+
+            ha = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
+            previous = copy.deepcopy(ha.get("alexaLockoutEntities") or [])
+            ha["alexaLockoutEntities"] = copy.deepcopy(clean)
+            if hasattr(self, "alexa_lockout_summary"):
+                self.alexa_lockout_summary.setText(self.alexa_lockout_summary_text())
+                self.alexa_lockout_summary.repaint()
+            config_snapshot = copy.deepcopy(self.s.config)
+
+            def done(record):
+                if isinstance(record, dict):
+                    self.s.config = record.get("config") or self.s.config
+                if hasattr(self, "alexa_lockout_summary"):
+                    self.alexa_lockout_summary.setText(self.alexa_lockout_summary_text())
+                self.saved.emit()
+
+            def failed(error):
+                ha_now = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
+                ha_now["alexaLockoutEntities"] = previous
+                if hasattr(self, "alexa_lockout_summary"):
+                    self.alexa_lockout_summary.setText(self.alexa_lockout_summary_text())
+                QMessageBox.warning(self, "Alexa Lockout", error)
+
+            self.run_settings_write(
+                "alexa-lockout-save",
+                lambda: self.s.api.save_config(config_snapshot),
+                done,
+                failed,
+            )
+
+        dlg.saved.connect(apply)
+        dlg.exec_()
+
 
     def selected_sync_peers(self) -> list[dict]:
         ha = self.s.ha()
@@ -14892,6 +15205,30 @@ class SettingsDialog(QDialog):
         jarvis_save_note.setFont(font(7, QFont.Black))
         jarvis_save_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
         jarvis.layout().addWidget(jarvis_save_note)
+
+        alexa_lockout = self.add_section("Alexa Lockout", -1, 2, 1, 2)
+        alexa_note = QLabel("Choose the Alexa block switches controlled by this thermostat's screen lock. Each thermostat stores its own selection.")
+        alexa_note.setWordWrap(True)
+        alexa_note.setFont(font(8, QFont.Bold))
+        alexa_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
+        alexa_lockout.layout().addWidget(alexa_note)
+        alexa_row = QHBoxLayout()
+        alexa_row.setSpacing(8)
+        self.alexa_lockout_summary = QLabel(self.alexa_lockout_summary_text())
+        self.alexa_lockout_summary.setWordWrap(True)
+        self.alexa_lockout_summary.setFont(font(8, QFont.Black))
+        self.alexa_lockout_summary.setStyleSheet("color:#c4d0e5; background:rgba(5,10,20,0.42); border:1px dashed rgba(160,180,210,0.26); border-radius:8px; padding:7px;")
+        choose_alexa = RoundButton("Choose Alexa Devices", active=True, min_h=34)
+        choose_alexa.setMinimumWidth(176)
+        choose_alexa.clicked.connect(self.choose_alexa_lockout_entities)
+        alexa_row.addWidget(self.alexa_lockout_summary, 1)
+        alexa_row.addWidget(choose_alexa)
+        alexa_lockout.layout().addLayout(alexa_row)
+        alexa_status = QLabel("LOCKED = selected Alexa block switches ON   ·   UNLOCKED = OFF")
+        alexa_status.setWordWrap(True)
+        alexa_status.setFont(font(7, QFont.Black))
+        alexa_status.setStyleSheet("color:#8fffd0; background:transparent; border:0;")
+        alexa_lockout.layout().addWidget(alexa_status)
 
         auto_home = self.add_section("Auto Away / Home", 0, 0, 1, 2)
         auto_grid = self.section_grid(auto_home, 2)
@@ -18443,6 +18780,69 @@ class MainWindow(Background):
             return "Security lock active: alarm control only"
         return "Screen locked: temperature and alarm controls only"
 
+    def selected_alexa_lockout_entities(self) -> list[dict]:
+        """Return this panel's configured Alexa block switches."""
+        ha = self.s.ha()
+        raw = ha.get("alexaLockoutEntities") if isinstance(ha, dict) else []
+        clean: list[dict] = []
+        seen: set[str] = set()
+        for item in raw if isinstance(raw, list) else []:
+            if not isinstance(item, dict):
+                continue
+            entity_id = str(item.get("entityId") or item.get("entity_id") or "").strip()
+            if not entity_id.startswith("switch.") or entity_id in seen:
+                continue
+            seen.add(entity_id)
+            clean.append({
+                "entityId": entity_id,
+                "name": str(item.get("name") or item.get("friendly_name") or entity_id),
+            })
+        return clean
+
+    def apply_alexa_lockout_state(self, locked: bool):
+        """Block/unblock only the Alexa devices selected for this panel.
+
+        The existing backend already has a generic Home Assistant switch action,
+        so this remains a native-app-only feature and does not alter Alexa
+        discovery or the Home Assistant Alexa integration.
+        """
+        entities = self.selected_alexa_lockout_entities()
+        if not entities:
+            return
+
+        self._alexa_lockout_sequence = int(getattr(self, "_alexa_lockout_sequence", 0) or 0) + 1
+        sequence = self._alexa_lockout_sequence
+        action = "on" if bool(locked) else "off"
+        if not hasattr(self, "_alexa_lockout_apply_lock"):
+            self._alexa_lockout_apply_lock = threading.Lock()
+        apply_lock = self._alexa_lockout_apply_lock
+
+        def worker():
+            results = []
+            with apply_lock:
+                if sequence != int(getattr(self, "_alexa_lockout_sequence", 0) or 0):
+                    return {"stale": True, "results": []}
+                for item in entities:
+                    if sequence != int(getattr(self, "_alexa_lockout_sequence", 0) or 0):
+                        return {"stale": True, "results": results}
+                    entity_id = str(item.get("entityId") or "").strip()
+                    if not entity_id:
+                        continue
+                    payload = self.s.ha_payload({"entityId": entity_id, "action": action})
+                    try:
+                        result = self.s.api.post("/api/ha/audio/switch/action", payload, timeout=3.0)
+                        results.append({"entityId": entity_id, "ok": True, "result": result})
+                    except Exception as exc:
+                        results.append({"entityId": entity_id, "ok": False, "error": str(exc)})
+            return {"stale": False, "results": results}
+
+        self.run_async(
+            "alexa-lockout",
+            worker,
+            lambda _result: None,
+            lambda _error: None,
+        )
+
     def report_screen_lock_state(self):
         """Mirror the existing native lock state to the local backend."""
         locked = bool(getattr(self, "navigation_locked", False))
@@ -18482,6 +18882,9 @@ class MainWindow(Background):
         # Report only after the existing lock state and permitted controls have
         # been applied locally. Failure here never changes or blocks the UI lock.
         self.report_screen_lock_state()
+        # Apply this panel's configured Alexa network/device lockouts in parallel.
+        # These are ordinary HA switches, so Alexa discovery is never touched.
+        self.apply_alexa_lockout_state(self.navigation_locked)
 
         if self.navigation_locked:
             if self.current_name != "Thermostat":
