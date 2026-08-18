@@ -16945,6 +16945,10 @@ class MainWindow(Background):
         self.assistantStatusCompleted.connect(self._handle_assistant_status_completed)
         self.mainAsyncCompleted.connect(self._handle_main_async_completed)
         self.screenMotionCompleted.connect(self.handle_screen_motion_completed)
+        self.screen_lock_report_timer = QTimer(self)
+        self.screen_lock_report_timer.setInterval(30000)
+        self.screen_lock_report_timer.timeout.connect(self.report_screen_lock_state)
+        self.screen_lock_report_timer.start()
         self.reloadAllCompleted.connect(self._handle_reload_all_completed)
         self.ui_heartbeat_timer = QTimer(self)
         self.ui_heartbeat_timer.setInterval(500)
@@ -17050,6 +17054,9 @@ class MainWindow(Background):
             self._last_motion_activity_at = time.monotonic()
             QTimer.singleShot(0, self.refresh_assistant_status)
             QTimer.singleShot(0, self.refresh_screen_motion_status)
+            # Mirror the native lock state to the local backend for Home Assistant.
+            # This is reporting only; the backend cannot lock or unlock the panel.
+            QTimer.singleShot(0, self.report_screen_lock_state)
             if not getattr(self, "_thermal_protection_active", False):
                 self.toast.show_message("Native panel ready")
         except Exception as exc:
@@ -18436,6 +18443,24 @@ class MainWindow(Background):
             return "Security lock active: alarm control only"
         return "Screen locked: temperature and alarm controls only"
 
+    def report_screen_lock_state(self):
+        """Mirror the existing native lock state to the local backend."""
+        locked = bool(getattr(self, "navigation_locked", False))
+        security_locked = bool(locked and getattr(self, "security_lock_active", False))
+        payload = {
+            "locked": locked,
+            "securityLocked": security_locked,
+            # Requests run off the UI thread. The sequence lets the backend ignore
+            # an older request if rapid lock/unlock taps complete out of order.
+            "sequence": time.monotonic_ns(),
+        }
+        self.run_async(
+            "screen-lock-state",
+            lambda p=payload: self.s.api.post("/api/screen/lock-status", p, timeout=1.0),
+            lambda _result: None,
+            lambda _err: None,
+        )
+
     def set_navigation_locked(self, locked: bool, *, secure: bool | None = None, show_toast: bool = False):
         was_locked = bool(getattr(self, "navigation_locked", False))
         self.navigation_locked = bool(locked)
@@ -18453,6 +18478,10 @@ class MainWindow(Background):
         thermostat_page = self.pages.get("Thermostat")
         if isinstance(thermostat_page, ThermostatScreen):
             thermostat_page.set_screen_locked(self.navigation_locked, self.security_lock_active)
+
+        # Report only after the existing lock state and permitted controls have
+        # been applied locally. Failure here never changes or blocks the UI lock.
+        self.report_screen_lock_state()
 
         if self.navigation_locked:
             if self.current_name != "Thermostat":

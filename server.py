@@ -308,6 +308,13 @@ _HARDWARE_MOTION_RUNTIME = {
     "lastChangedAt": 0.0,
     "lastReadAt": 0.0,
 }
+_SCREEN_LOCK_STATUS_LOCK = threading.RLock()
+_SCREEN_LOCK_STATUS = {
+    "locked": False,
+    "securityLocked": False,
+    "updatedAt": 0,
+    "sequence": 0,
+}
 _LOCAL_TEMP_SENSOR_LOCK = threading.RLock()
 _LOCAL_TEMP_SENSOR_CACHE = {"at": 0.0, "payload": None}
 _LOCAL_TEMP_SENSOR_HEALTH = {
@@ -8419,13 +8426,58 @@ def _temperature_sensor_configuration_payload(force: bool = False) -> dict:
     }
 
 
+def _screen_lock_status_payload() -> dict:
+    """Return the touchscreen-owned lock state without changing it."""
+    with _SCREEN_LOCK_STATUS_LOCK:
+        locked = bool(_SCREEN_LOCK_STATUS.get("locked"))
+        security_locked = bool(locked and _SCREEN_LOCK_STATUS.get("securityLocked"))
+        updated_at = int(_SCREEN_LOCK_STATUS.get("updatedAt") or 0)
+        sequence = int(_SCREEN_LOCK_STATUS.get("sequence") or 0)
+    return {
+        "locked": locked,
+        "securityLocked": security_locked,
+        "mode": "security" if security_locked else "guest" if locked else "unlocked",
+        "updatedAt": updated_at,
+        "sequence": sequence,
+    }
+
+
+def _set_screen_lock_status(payload: object) -> dict:
+    """Accept a local, read-only mirror of the native screen lock state."""
+    raw = payload if isinstance(payload, dict) else {}
+    locked = _boolish(raw.get("locked"))
+    security_locked = bool(locked and _boolish(raw.get("securityLocked", raw.get("security_locked", False))))
+    try:
+        sequence = max(0, int(raw.get("sequence") or 0))
+    except (TypeError, ValueError):
+        sequence = 0
+
+    with _SCREEN_LOCK_STATUS_LOCK:
+        current_sequence = int(_SCREEN_LOCK_STATUS.get("sequence") or 0)
+        # Native reporting is asynchronous. Ignore an older request that arrives
+        # after a newer lock/unlock state so Home Assistant cannot be rolled back
+        # by thread or network timing. Sequence-less local diagnostics advance
+        # the current sequence instead of weakening that ordering guarantee.
+        if sequence <= 0:
+            sequence = current_sequence + 1
+        elif current_sequence and sequence < current_sequence:
+            return {"ok": True, "stale": True, "screenLock": _screen_lock_status_payload()}
+        _SCREEN_LOCK_STATUS["locked"] = locked
+        _SCREEN_LOCK_STATUS["securityLocked"] = security_locked
+        _SCREEN_LOCK_STATUS["updatedAt"] = int(time.time())
+        _SCREEN_LOCK_STATUS["sequence"] = sequence
+
+    return {"ok": True, "stale": False, "screenLock": _screen_lock_status_payload()}
+
+
 def _hardware_telemetry_payload() -> dict:
-    """Return read-only onboard sensor telemetry for Home Assistant.
+    """Return read-only onboard sensor and screen telemetry for Home Assistant.
 
     This endpoint intentionally avoids the full thermostat status path and any
     Home Assistant proxy lookups. It reads the motion input without reapplying
-    configuration and uses the existing HDC2080 cache, so frequent motion polls
-    cannot create climate-command echoes or hammer the I2C bus.
+    configuration and uses the existing HDC2080 cache, so frequent polls cannot
+    create climate-command echoes or hammer the I2C bus. The screen lock entry
+    is only a mirror reported by the native UI; this endpoint cannot change it.
     """
     temperature = _read_local_temperature_sensor(force=False)
     motion = _motion_status_payload(apply_config=False)
@@ -8433,6 +8485,7 @@ def _hardware_telemetry_payload() -> dict:
         "ok": True,
         "readAt": int(time.time()),
         "motion": motion,
+        "screenLock": _screen_lock_status_payload(),
         "temperature": temperature,
         # Keep the established hardware-status key as an alias for clients that
         # already understand the local sensor payload.
@@ -14362,7 +14415,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/thermostat/run-schedule", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/hardware/temperature-sensors", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/group", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply", "/api/house-sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/playback", "/api/assistant/config", "/api/assistant/knowledge", "/api/settings/web"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/thermostat/run-schedule", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/hardware/temperature-sensors", "/api/screen/lock-status", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/group", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply", "/api/house-sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/playback", "/api/assistant/config", "/api/assistant/knowledge", "/api/settings/web"}:
             self.send_error(404, "Not found")
             return
 
@@ -14468,6 +14521,11 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
             if path == "/api/hardware/motion":
                 return _json(self, 200, _set_motion_hardware(payload))
+
+            if path == "/api/screen/lock-status":
+                if not _request_client_is_loopback(self):
+                    return _json(self, 403, {"ok": False, "error": "Screen lock status can only be reported by the local panel."})
+                return _json(self, 200, _set_screen_lock_status(payload))
 
             if path == "/api/thermostat/status":
                 return _json(self, 200, _thermostat_status_payload(refresh_runtime=False, apply_hardware=False))
