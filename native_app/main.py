@@ -13445,7 +13445,7 @@ class SettingsDialog(QDialog):
 
     def selected_alexa_lockout_entities(self) -> list[dict]:
         ha = self.s.ha()
-        raw = ha.get("alexaLockoutEntities") if isinstance(ha, dict) else []
+        raw = ha.get("alexaLockoutSwitchEntitiesV2") if isinstance(ha, dict) else []
         clean: list[dict] = []
         seen: set[str] = set()
         for item in raw if isinstance(raw, list) else []:
@@ -13501,8 +13501,10 @@ class SettingsDialog(QDialog):
                 })
 
             ha = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
-            previous = copy.deepcopy(ha.get("alexaLockoutEntities") or [])
-            ha["alexaLockoutEntities"] = copy.deepcopy(clean)
+            previous = copy.deepcopy(ha.get("alexaLockoutSwitchEntitiesV2") or [])
+            ha["alexaLockoutSwitchEntitiesV2"] = copy.deepcopy(clean)
+            ha["alexaLockoutSchemaVersion"] = 2
+            ha.pop("alexaLockoutEntities", None)
             if hasattr(self, "alexa_lockout_summary"):
                 self.alexa_lockout_summary.setText(self.alexa_lockout_summary_text())
                 self.alexa_lockout_summary.repaint()
@@ -13513,11 +13515,17 @@ class SettingsDialog(QDialog):
                     self.s.config = record.get("config") or self.s.config
                 if hasattr(self, "alexa_lockout_summary"):
                     self.alexa_lockout_summary.setText(self.alexa_lockout_summary_text())
+                # Settings can only be opened from an unlocked panel. Reconcile
+                # immediately so newly selected Alexa switches are definitely
+                # unblocked before the user leaves Settings.
+                parent = self.parent()
+                if parent is not None and hasattr(parent, "apply_alexa_lockout_state"):
+                    QTimer.singleShot(0, lambda p=parent: p.apply_alexa_lockout_state(False))
                 self.saved.emit()
 
             def failed(error):
                 ha_now = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
-                ha_now["alexaLockoutEntities"] = previous
+                ha_now["alexaLockoutSwitchEntitiesV2"] = previous
                 if hasattr(self, "alexa_lockout_summary"):
                     self.alexa_lockout_summary.setText(self.alexa_lockout_summary_text())
                 QMessageBox.warning(self, "Alexa Lockout", error)
@@ -15274,7 +15282,7 @@ class SettingsDialog(QDialog):
         alexa_row.addWidget(self.alexa_lockout_summary, 1)
         alexa_row.addWidget(choose_alexa)
         alexa_lockout.layout().addLayout(alexa_row)
-        alexa_status = QLabel("MULTI-SELECT   ·   LOCKED = selected Alexa switches OFF   ·   UNLOCKED = ON")
+        alexa_status = QLabel("MULTI-SELECT   ·   LOCKED = BLOCKED   ·   UNLOCKED = UNBLOCKED")
         alexa_status.setWordWrap(True)
         alexa_status.setFont(font(7, QFont.Black))
         alexa_status.setStyleSheet("color:#8fffd0; background:transparent; border:0;")
@@ -17429,6 +17437,7 @@ class MainWindow(Background):
             if not self.api.wait_until_ready(5):
                 self.toast.show_message("Backend is not responding on 127.0.0.1:8080")
             self.s.load()
+            self.migrate_alexa_lockout_config()
             self.apply_thermal_protection_state(self.s.thermostat)
             if not getattr(self, "_thermal_protection_active", False):
                 try:
@@ -18833,7 +18842,7 @@ class MainWindow(Background):
     def selected_alexa_lockout_entities(self) -> list[dict]:
         """Return this panel's configured Alexa network-access controls."""
         ha = self.s.ha()
-        raw = ha.get("alexaLockoutEntities") if isinstance(ha, dict) else []
+        raw = ha.get("alexaLockoutSwitchEntitiesV2") if isinstance(ha, dict) else []
         clean: list[dict] = []
         seen: set[str] = set()
         for item in raw if isinstance(raw, list) else []:
@@ -18851,11 +18860,125 @@ class MainWindow(Background):
             })
         return clean
 
-    def apply_alexa_lockout_state(self, locked: bool):
-        """Block/unblock only the Alexa devices selected for this panel.
+    def _set_alexa_switch_state(self, entity_id: str, action: str, *, attempts: int = 3) -> dict:
+        """Set one Alexa lockout switch and verify/retry the requested state."""
+        entity_id = str(entity_id or "").strip()
+        action = str(action or "").strip().lower()
+        if not entity_id.startswith("switch.") or action not in {"on", "off"}:
+            raise ValueError("Invalid Alexa lockout switch request")
 
-        UniFi client-access switches are ON when network access is allowed and
-        OFF when the client is blocked. Alexa discovery is never changed.
+        last_result: dict = {}
+        last_state = ""
+        last_error = ""
+        for attempt in range(max(1, int(attempts))):
+            payload = self.s.ha_payload({"entityId": entity_id, "action": action})
+            try:
+                result = self.s.api.post("/api/ha/audio/switch/action", payload, timeout=4.0)
+                last_result = result if isinstance(result, dict) else {}
+                control = last_result.get("control") if isinstance(last_result.get("control"), dict) else {}
+                last_state = str(control.get("state") or "").strip().lower()
+                if last_state == action:
+                    return {"entityId": entity_id, "ok": True, "state": last_state, "attempts": attempt + 1}
+                last_error = f"Home Assistant reported state {last_state or 'unknown'}"
+            except Exception as exc:
+                last_error = str(exc)
+            if attempt + 1 < max(1, int(attempts)):
+                time.sleep(0.75)
+
+        return {
+            "entityId": entity_id,
+            "ok": False,
+            "state": last_state,
+            "attempts": max(1, int(attempts)),
+            "error": last_error or "Could not verify requested switch state",
+            "result": last_result,
+        }
+
+    def _apply_alexa_entities(self, entities: list[dict], *, locked: bool, sequence: int | None = None) -> dict:
+        """Apply lock state to an explicit entity list. OFF blocks UniFi clients; ON unblocks."""
+        action = "off" if bool(locked) else "on"
+        results: list[dict] = []
+        for item in entities or []:
+            if sequence is not None and sequence != int(getattr(self, "_alexa_lockout_sequence", 0) or 0):
+                return {"stale": True, "results": results}
+            entity_id = str((item or {}).get("entityId") or (item or {}).get("entity_id") or "").strip()
+            if not entity_id.startswith("switch."):
+                continue
+            result = self._set_alexa_switch_state(entity_id, action, attempts=3)
+            results.append(result)
+            trace_runtime(
+                f"alexa lockout entity={entity_id} requested={action} ok={bool(result.get('ok'))} "
+                f"state={result.get('state') or 'unknown'} attempts={result.get('attempts') or 0}"
+            )
+        return {"stale": False, "results": results}
+
+    def migrate_alexa_lockout_config(self):
+        """Reset legacy Alexa selections once so only explicit current-panel choices are controlled."""
+        integrations = self.s.config.setdefault("integrations", {})
+        ha = integrations.setdefault("homeAssistant", {})
+        if not isinstance(ha, dict):
+            return
+
+        try:
+            schema = int(ha.get("alexaLockoutSchemaVersion") or 0)
+        except (TypeError, ValueError):
+            schema = 0
+
+        if schema >= 2:
+            # The native UI always starts unlocked after a restart/update. Reconcile
+            # the selected switches to that state so a previous crash cannot strand
+            # an Echo in UniFi's blocked state.
+            QTimer.singleShot(350, lambda: self.apply_alexa_lockout_state(False))
+            return
+
+        legacy_raw = ha.get("alexaLockoutEntities")
+        legacy: list[dict] = []
+        seen: set[str] = set()
+        for item in legacy_raw if isinstance(legacy_raw, list) else []:
+            if not isinstance(item, dict):
+                continue
+            entity_id = str(item.get("entityId") or item.get("entity_id") or "").strip()
+            if not entity_id.startswith("switch.") or entity_id in seen:
+                continue
+            seen.add(entity_id)
+            legacy.append({"entityId": entity_id})
+
+        # Start the corrected implementation with a clean, per-panel selection.
+        # This prevents entities automatically carried forward from 16.45-16.48
+        # from being controlled on screens where the user did not select them now.
+        ha["alexaLockoutSwitchEntitiesV2"] = []
+        ha["alexaLockoutSchemaVersion"] = 2
+        ha.pop("alexaLockoutEntities", None)
+        snapshot = copy.deepcopy(self.s.config)
+
+        def worker():
+            # Do not operate any legacy switch during migration. Older builds
+            # could have saved arbitrary Alexa-named helper switches, so changing
+            # them automatically would risk affecting devices this panel no longer
+            # owns. The corrected selection starts empty and only explicit V2
+            # selections are controlled from this point forward.
+            saved = self.s.api.save_config(snapshot)
+            return {"saved": saved}
+
+        def done(result):
+            record = result.get("saved") if isinstance(result, dict) else None
+            if isinstance(record, dict):
+                self.s.config = record.get("config") or self.s.config
+            trace_runtime(f"alexa lockout migration complete legacy_cleared={len(legacy)}")
+
+        self.run_async(
+            "alexa-lockout-migrate",
+            worker,
+            done,
+            lambda error: trace_runtime(f"alexa lockout migration failed error={error}"),
+        )
+
+    def apply_alexa_lockout_state(self, locked: bool):
+        """Block/unblock only the Alexa switches explicitly selected on this panel.
+
+        Home Assistant's UniFi client-access switch is ON when network access is
+        allowed and OFF when the client is blocked. Therefore screen LOCKED sends
+        turn_off, and screen UNLOCKED sends turn_on.
         """
         entities = self.selected_alexa_lockout_entities()
         if not entities:
@@ -18863,35 +18986,21 @@ class MainWindow(Background):
 
         self._alexa_lockout_sequence = int(getattr(self, "_alexa_lockout_sequence", 0) or 0) + 1
         sequence = self._alexa_lockout_sequence
-        action = "off" if bool(locked) else "on"
         if not hasattr(self, "_alexa_lockout_apply_lock"):
             self._alexa_lockout_apply_lock = threading.Lock()
         apply_lock = self._alexa_lockout_apply_lock
 
         def worker():
-            results = []
             with apply_lock:
                 if sequence != int(getattr(self, "_alexa_lockout_sequence", 0) or 0):
                     return {"stale": True, "results": []}
-                for item in entities:
-                    if sequence != int(getattr(self, "_alexa_lockout_sequence", 0) or 0):
-                        return {"stale": True, "results": results}
-                    entity_id = str(item.get("entityId") or "").strip()
-                    if not entity_id:
-                        continue
-                    payload = self.s.ha_payload({"entityId": entity_id, "action": action})
-                    try:
-                        result = self.s.api.post("/api/ha/audio/switch/action", payload, timeout=3.0)
-                        results.append({"entityId": entity_id, "ok": True, "result": result})
-                    except Exception as exc:
-                        results.append({"entityId": entity_id, "ok": False, "error": str(exc)})
-            return {"stale": False, "results": results}
+                return self._apply_alexa_entities(entities, locked=bool(locked), sequence=sequence)
 
         self.run_async(
             "alexa-lockout",
             worker,
             lambda _result: None,
-            lambda _error: None,
+            lambda error: trace_runtime(f"alexa lockout apply failed error={error}"),
         )
 
     def report_screen_lock_state(self):
