@@ -12826,6 +12826,105 @@ def _fetch_ha_entities(ha_url: str, token: str, domains: list[str] | None = None
 
 
 
+def _fetch_ha_alexa_lockout_devices(ha_url: str, token: str) -> dict:
+    """Return physical Alexa devices plus UniFi client network-access switches.
+
+    Alexa Devices exposes an event entity for each physical voice-capable device
+    but not for speaker groups. UniFi client block controls are switches attached
+    to UniFi client devices that also have a device_tracker entity.
+    """
+    template = r"""
+{% set ns = namespace(alexa=[], controls=[]) %}
+{% for entity in integration_entities('alexa_devices') | select('match', '^event[.]') | list %}
+  {% set dev = device_id(entity) %}
+  {% if dev %}
+    {% set identifiers = device_attr(dev, 'identifiers') %}
+    {% set serial = (identifiers | default([], true) | list | first | default([]) | last) | default('', true) %}
+    {% set dev_name = device_name(dev) | default('', true) %}
+    {% set friendly = state_attr(entity, 'friendly_name') | default('', true) %}
+    {% set ns.alexa = ns.alexa + [dict(deviceId=dev, eventEntity=entity, serialNumber=serial, name=(dev_name or friendly or entity))] %}
+  {% endif %}
+{% endfor %}
+{% for entity in integration_entities('unifi') | select('match', '^switch[.]') | list %}
+  {% set dev = device_id(entity) %}
+  {% if dev %}
+    {% set dev_entities = device_entities(dev) | list %}
+    {% set trackers = dev_entities | select('match', '^device_tracker[.]') | list %}
+    {% if trackers | count > 0 %}
+      {% set dev_name = device_name(dev) | default('', true) %}
+      {% set friendly = state_attr(entity, 'friendly_name') | default('', true) %}
+      {% set ns.controls = ns.controls + [dict(entityId=entity, deviceId=dev, name=(dev_name or friendly or entity), state=states(entity))] %}
+    {% endif %}
+  {% endif %}
+{% endfor %}
+{{ dict(alexaDevices=ns.alexa, networkControls=ns.controls) | to_json }}
+"""
+    result = _ha_json_request(
+        ha_url,
+        token,
+        "POST",
+        "/api/template",
+        {"template": template},
+        timeout=max(HA_REQUEST_TIMEOUT_SECONDS, 8.0),
+    )
+    if isinstance(result, dict) and "alexaDevices" in result:
+        payload = result
+    elif isinstance(result, dict) and isinstance(result.get("raw"), str):
+        try:
+            payload = json.loads(result["raw"])
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("Home Assistant returned an invalid Alexa device list") from exc
+    else:
+        payload = {}
+
+    alexa_devices = payload.get("alexaDevices") if isinstance(payload, dict) else []
+    network_controls = payload.get("networkControls") if isinstance(payload, dict) else []
+    if not isinstance(alexa_devices, list):
+        alexa_devices = []
+    if not isinstance(network_controls, list):
+        network_controls = []
+
+    # De-duplicate while keeping the Home Assistant device names users recognize.
+    clean_alexa: list[dict] = []
+    seen_alexa: set[str] = set()
+    for item in alexa_devices:
+        if not isinstance(item, dict):
+            continue
+        device_id = str(item.get("deviceId") or "").strip()
+        event_entity = str(item.get("eventEntity") or "").strip()
+        key = device_id or event_entity
+        if not key or key in seen_alexa:
+            continue
+        seen_alexa.add(key)
+        clean_alexa.append({
+            "deviceId": device_id,
+            "eventEntity": event_entity,
+            "serialNumber": str(item.get("serialNumber") or "").strip(),
+            "name": str(item.get("name") or event_entity or device_id).strip(),
+        })
+
+    clean_controls: list[dict] = []
+    seen_controls: set[str] = set()
+    for item in network_controls:
+        if not isinstance(item, dict):
+            continue
+        entity_id = str(item.get("entityId") or "").strip()
+        if not entity_id.startswith("switch.") or entity_id in seen_controls:
+            continue
+        seen_controls.add(entity_id)
+        clean_controls.append({
+            "entityId": entity_id,
+            "deviceId": str(item.get("deviceId") or "").strip(),
+            "name": str(item.get("name") or entity_id).strip(),
+            "state": str(item.get("state") or "unknown").strip().lower(),
+        })
+
+    clean_alexa.sort(key=lambda item: str(item.get("name") or "").lower())
+    clean_controls.sort(key=lambda item: str(item.get("name") or item.get("entityId") or "").lower())
+    return {"alexaDevices": clean_alexa, "networkControls": clean_controls}
+
+
+
 
 IHA_CLIMATE_DISCOVERY_ATTRS = {
     "iha_panel",
@@ -14415,7 +14514,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/thermostat/run-schedule", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/hardware/temperature-sensors", "/api/screen/lock-status", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/group", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply", "/api/house-sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/playback", "/api/assistant/config", "/api/assistant/knowledge", "/api/settings/web"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/thermostat/run-schedule", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/hardware/temperature-sensors", "/api/screen/lock-status", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/alexa-lockout/devices", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/group", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply", "/api/house-sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/playback", "/api/assistant/config", "/api/assistant/knowledge", "/api/settings/web"}:
             self.send_error(404, "Not found")
             return
 
@@ -14548,6 +14647,13 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                     payload.get("domains", []),
                 )
                 return _json(self, 200, {"ok": True, "entities": entities, "count": len(entities)})
+
+            if path == "/api/ha/alexa-lockout/devices":
+                result = _fetch_ha_alexa_lockout_devices(
+                    payload.get("url", ""),
+                    payload.get("token", ""),
+                )
+                return _json(self, 200, {"ok": True, **result})
 
             if path == "/api/sync/thermostats":
                 peers = _fetch_ha_sync_thermostats(

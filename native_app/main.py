@@ -10240,16 +10240,22 @@ class PeopleSelectionDialog(QDialog):
 
 
 class AlexaLockoutSelectionDialog(QDialog):
-    """Select Home Assistant switch entities that block individual Alexa devices."""
+    """Select real Alexa Devices and map each one to its UniFi network-access switch."""
 
     saved = pyqtSignal(list)
     loadCompleted = pyqtSignal(object)
+
+    _GENERIC_NAME_WORDS = {
+        "amazon", "alexa", "echo", "dot", "device", "blocked", "block",
+        "network", "access", "client", "control", "switch",
+    }
 
     def __init__(self, state: AppState, selected_entities: list[dict] | None = None, parent=None):
         super().__init__(parent)
         self.s = state
         self.selected_entities = copy.deepcopy(selected_entities or [])
-        self.available_entities: list[dict] = []
+        self.available_devices: list[dict] = []
+        self.network_controls: list[dict] = []
         self.buttons: dict[str, RoundButton] = {}
         self._loading = False
         self.setModal(True)
@@ -10262,7 +10268,6 @@ class AlexaLockoutSelectionDialog(QDialog):
             QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
         """)
         self.loadCompleted.connect(self._handle_loaded)
-        self._seed_selected()
         self.build()
         QTimer.singleShot(0, self.load_entities)
         QTimer.singleShot(0, self.fit_to_screen)
@@ -10274,57 +10279,123 @@ class AlexaLockoutSelectionDialog(QDialog):
     def fit_to_screen(self):
         fit_dialog_to_available_screen(self, margin=0)
 
+    @classmethod
+    def _name_key(cls, value: object) -> str:
+        words = re.findall(r"[a-z0-9]+", str(value or "").lower())
+        words = [word for word in words if word not in cls._GENERIC_NAME_WORDS]
+        return "".join(words)
+
     @staticmethod
-    def _normalize_entity(item: dict) -> dict | None:
+    def _normalize_control(item: dict) -> dict | None:
         if not isinstance(item, dict):
             return None
         entity_id = str(item.get("entityId") or item.get("entity_id") or "").strip()
         if not entity_id.startswith("switch."):
             return None
-        name = str(item.get("name") or item.get("friendly_name") or entity_id).strip() or entity_id
-        # The user's Alexa network/block controls follow the switch.*_alexa
-        # naming pattern. Also accept friendly names containing Alexa so renamed
-        # helpers still appear without showing unrelated switches.
-        if "alexa" not in entity_id.lower() and "alexa" not in name.lower():
-            return None
         return {
             "entityId": entity_id,
-            "name": name,
+            "name": str(item.get("name") or item.get("friendly_name") or entity_id).strip() or entity_id,
+            "state": str(item.get("state") or ""),
+            "domain": "switch",
+            "deviceId": str(item.get("deviceId") or item.get("device_id") or "").strip(),
+        }
+
+    @staticmethod
+    def _normalize_device(item: dict) -> dict | None:
+        if not isinstance(item, dict):
+            return None
+        device_id = str(item.get("deviceId") or item.get("device_id") or "").strip()
+        event_entity = str(item.get("eventEntity") or item.get("event_entity") or "").strip()
+        if not device_id and not event_entity:
+            return None
+        name = str(item.get("name") or item.get("friendly_name") or event_entity or device_id).strip()
+        return {
+            "deviceId": device_id,
+            "eventEntity": event_entity,
+            "serialNumber": str(item.get("serialNumber") or item.get("serial_number") or "").strip(),
+            "name": name or event_entity or device_id,
+        }
+
+    @staticmethod
+    def _normalize_selection(item: dict) -> dict | None:
+        if not isinstance(item, dict):
+            return None
+        entity_id = str(item.get("entityId") or item.get("entity_id") or "").strip()
+        if not entity_id.startswith("switch."):
+            return None
+        return {
+            "alexaDeviceId": str(item.get("alexaDeviceId") or item.get("alexa_device_id") or "").strip(),
+            "alexaEventEntity": str(item.get("alexaEventEntity") or item.get("alexa_event_entity") or "").strip(),
+            "serialNumber": str(item.get("serialNumber") or item.get("serial_number") or "").strip(),
+            "entityId": entity_id,
+            "name": str(item.get("name") or item.get("friendly_name") or entity_id).strip() or entity_id,
+            "controlName": str(item.get("controlName") or item.get("control_name") or entity_id).strip() or entity_id,
             "state": str(item.get("state") or ""),
         }
 
-    def _seed_selected(self):
-        by_id: dict[str, dict] = {}
-        for item in self.selected_entities:
-            normalized = self._normalize_entity(item)
-            if normalized:
-                by_id[normalized["entityId"]] = normalized
-        self.available_entities = sorted(
-            by_id.values(),
-            key=lambda item: str(item.get("name") or item.get("entityId") or "").lower(),
-        )
+    def selected_device_ids(self) -> set[str]:
+        return {
+            str(item.get("alexaDeviceId") or "").strip()
+            for item in self.selected_entities
+            if isinstance(item, dict) and str(item.get("alexaDeviceId") or "").strip()
+        }
 
-    def selected_ids(self) -> set[str]:
-        ids: set[str] = set()
+    def selection_for_device(self, device: dict) -> dict | None:
+        device_id = str(device.get("deviceId") or "").strip()
+        event_entity = str(device.get("eventEntity") or "").strip()
         for item in self.selected_entities:
-            normalized = self._normalize_entity(item)
-            if normalized:
-                ids.add(normalized["entityId"])
-        return ids
+            normalized = self._normalize_selection(item)
+            if not normalized:
+                continue
+            if device_id and normalized.get("alexaDeviceId") == device_id:
+                return normalized
+            if event_entity and normalized.get("alexaEventEntity") == event_entity:
+                return normalized
+        return None
+
+    def control_by_id(self, entity_id: str) -> dict | None:
+        wanted = str(entity_id or "").strip()
+        for control in self.network_controls:
+            if str(control.get("entityId") or "").strip() == wanted:
+                return control
+        return None
+
+    def auto_control_for_device(self, device: dict) -> dict | None:
+        device_key = self._name_key(device.get("name"))
+        if not device_key:
+            return None
+        exact = [control for control in self.network_controls if self._name_key(control.get("name")) == device_key]
+        if len(exact) == 1:
+            return exact[0]
+        # A renamed UniFi client commonly adds "Alexa" or "Blocked" around the
+        # room name. Those words are stripped above. Do not make a fuzzy choice
+        # unless the remaining room/device key is unambiguous.
+        contained = []
+        for control in self.network_controls:
+            control_key = self._name_key(control.get("name"))
+            if not control_key:
+                continue
+            if len(device_key) >= 4 and (device_key in control_key or control_key in device_key):
+                contained.append(control)
+        return contained[0] if len(contained) == 1 else None
 
     def load_entities(self):
         if self._loading:
             return
         self._loading = True
         self.refresh()
-        payload = self.s.ha_payload({"domains": ["switch"]})
+        payload = self.s.ha_payload({})
 
         def worker():
             try:
-                data = self.s.api.post("/api/ha/entities", payload)
-                result = {"entities": data.get("entities") or [], "error": None}
+                data = self.s.api.post("/api/ha/alexa-lockout/devices", payload)
+                result = {
+                    "devices": data.get("alexaDevices") or [],
+                    "controls": data.get("networkControls") or [],
+                    "error": None,
+                }
             except Exception as exc:
-                result = {"entities": [], "error": str(exc)}
+                result = {"devices": [], "controls": [], "error": str(exc)}
             try:
                 self.loadCompleted.emit(result)
             except RuntimeError:
@@ -10335,20 +10406,45 @@ class AlexaLockoutSelectionDialog(QDialog):
     def _handle_loaded(self, info: object):
         self._loading = False
         data = info if isinstance(info, dict) else {}
-        by_id: dict[str, dict] = {}
-        for item in self.selected_entities:
-            normalized = self._normalize_entity(item)
-            if normalized:
-                by_id[normalized["entityId"]] = normalized
-        for item in data.get("entities") or []:
-            normalized = self._normalize_entity(item)
-            if normalized:
-                by_id[normalized["entityId"]] = normalized
-        self.available_entities = sorted(
-            by_id.values(),
+        self.available_devices = sorted(
+            [d for d in (self._normalize_device(item) for item in data.get("devices") or []) if d],
+            key=lambda item: str(item.get("name") or "").lower(),
+        )
+        self.network_controls = sorted(
+            [c for c in (self._normalize_control(item) for item in data.get("controls") or []) if c],
             key=lambda item: str(item.get("name") or item.get("entityId") or "").lower(),
         )
+
+        # Migrate the short-lived 16.45 selection format when a saved switch can
+        # be tied unambiguously to a real Alexa device by name.
+        migrated: list[dict] = []
+        for raw in self.selected_entities:
+            selected = self._normalize_selection(raw)
+            if not selected:
+                continue
+            if selected.get("alexaDeviceId"):
+                migrated.append(selected)
+                continue
+            control = self.control_by_id(selected.get("entityId"))
+            key = self._name_key((control or {}).get("name") or selected.get("name"))
+            matches = [device for device in self.available_devices if self._name_key(device.get("name")) == key and key]
+            if len(matches) == 1:
+                device = matches[0]
+                selected.update({
+                    "alexaDeviceId": device.get("deviceId", ""),
+                    "alexaEventEntity": device.get("eventEntity", ""),
+                    "serialNumber": device.get("serialNumber", ""),
+                    "name": device.get("name", selected.get("name", "Alexa")),
+                    "controlName": (control or {}).get("name") or selected.get("controlName") or selected.get("entityId"),
+                    "state": (control or {}).get("state") or selected.get("state", ""),
+                })
+            migrated.append(selected)
+        self.selected_entities = migrated
         self.refresh()
+
+        error = str(data.get("error") or "").strip()
+        if error:
+            QMessageBox.warning(self, "Alexa Lockout", f"Could not load Alexa devices from Home Assistant:\n{error}")
 
     def build(self):
         root = QVBoxLayout(self)
@@ -10359,7 +10455,7 @@ class AlexaLockoutSelectionDialog(QDialog):
         title = QLabel("ALEXA LOCKOUT")
         title.setFont(font(22, QFont.Black))
         title.setStyleSheet("color:#55f0ff; letter-spacing:3px;")
-        select_all = RoundButton("Select All", active=True, min_h=40)
+        select_all = RoundButton("Select Mapped", active=True, min_h=40)
         clear = RoundButton("Clear", active=False, kind="danger", min_h=40)
         header.addWidget(title)
         header.addStretch(1)
@@ -10368,9 +10464,9 @@ class AlexaLockoutSelectionDialog(QDialog):
         root.addLayout(header)
 
         note = QLabel(
-            "Select the Alexa block switches this thermostat should control. "
-            "When this screen is locked, the selected switches are turned ON (blocked). "
-            "When this screen is unlocked, they are turned OFF."
+            "Choose the actual Alexa devices this thermostat should disable while its screen is locked. "
+            "Each Alexa must have a UniFi network-access control switch in Home Assistant. "
+            "Tap an Alexa to assign its network control if it is not matched automatically."
         )
         note.setWordWrap(True)
         note.setFont(font(10, QFont.Black))
@@ -10410,64 +10506,131 @@ class AlexaLockoutSelectionDialog(QDialog):
             if item.widget():
                 item.widget().deleteLater()
         self.buttons = {}
-        if not self.available_entities:
-            text = "Loading Alexa switches from Home Assistant…" if self._loading else "No Alexa switch entities were found."
+        if not self.available_devices:
+            text = "Loading Alexa devices from Home Assistant…" if self._loading else "No physical Alexa devices were returned by the Alexa Devices integration."
             none = QLabel(text)
             none.setWordWrap(True)
             none.setStyleSheet("color:#c4d0e5; background:rgba(255,255,255,0.05); border-radius:12px; padding:12px;")
             self.body_lay.addWidget(none)
             return
-        selected = self.selected_ids()
-        for entity in self.available_entities:
-            entity_id = str(entity.get("entityId") or "")
-            name = str(entity.get("name") or entity_id)
-            state = str(entity.get("state") or "").lower()
-            state_text = "Blocked" if state == "on" else "Available" if state == "off" else state
-            suffix = f"  ({state_text})" if state_text else ""
-            button = RoundButton(
-                ("✓  " if entity_id in selected else "○  ") + name + suffix,
-                active=entity_id in selected,
-                min_h=52,
-            )
-            button.clicked.connect(lambda checked=False, e=entity: self.toggle_entity(e))
-            self.buttons[entity_id] = button
+
+        for device in self.available_devices:
+            device_id = str(device.get("deviceId") or device.get("eventEntity") or "")
+            name = str(device.get("name") or device_id)
+            selected = self.selection_for_device(device)
+            control = self.control_by_id((selected or {}).get("entityId")) if selected else self.auto_control_for_device(device)
+            if selected:
+                control_name = str((control or {}).get("name") or selected.get("controlName") or selected.get("entityId") or "")
+                suffix = f"  ·  {control_name}" if control_name else ""
+                prefix = "✓  "
+                active = True
+            elif control:
+                suffix = f"  ·  Ready: {control.get('name') or control.get('entityId')}"
+                prefix = "○  "
+                active = False
+            else:
+                suffix = "  ·  Tap to assign network control"
+                prefix = "○  "
+                active = False
+            button = RoundButton(prefix + name + suffix, active=active, min_h=52)
+            button.clicked.connect(lambda checked=False, d=device: self.toggle_device(d))
+            self.buttons[device_id] = button
             self.body_lay.addWidget(button)
         self.body_lay.addStretch(1)
 
-    def toggle_entity(self, entity: dict):
-        normalized = self._normalize_entity(entity)
-        if not normalized:
-            return
-        entity_id = normalized["entityId"]
-        if entity_id in self.selected_ids():
+    def _make_selection(self, device: dict, control: dict) -> dict:
+        return {
+            "alexaDeviceId": str(device.get("deviceId") or ""),
+            "alexaEventEntity": str(device.get("eventEntity") or ""),
+            "serialNumber": str(device.get("serialNumber") or ""),
+            "entityId": str(control.get("entityId") or ""),
+            "name": str(device.get("name") or device.get("eventEntity") or "Alexa"),
+            "controlName": str(control.get("name") or control.get("entityId") or "Network access"),
+            "state": str(control.get("state") or ""),
+        }
+
+    def toggle_device(self, device: dict):
+        current = self.selection_for_device(device)
+        if current:
+            current_device_id = str(device.get("deviceId") or "")
+            current_event = str(device.get("eventEntity") or "")
             self.selected_entities = [
                 item for item in self.selected_entities
-                if str(item.get("entityId") or item.get("entity_id") or "").strip() != entity_id
+                if not (
+                    str(item.get("alexaDeviceId") or "") == current_device_id
+                    or (current_event and str(item.get("alexaEventEntity") or "") == current_event)
+                )
             ]
-        else:
-            self.selected_entities.append(normalized)
-        self.refresh()
+            self.refresh()
+            return
+
+        control = self.auto_control_for_device(device)
+        if control:
+            self.selected_entities.append(self._make_selection(device, control))
+            self.refresh()
+            return
+
+        if not self.network_controls:
+            QMessageBox.information(
+                self,
+                "Alexa Lockout",
+                "No UniFi network-access client switches are available in Home Assistant yet. "
+                "Enable Network access controlled clients in the UniFi Network integration, then reopen this list.",
+            )
+            return
+
+        picker = EntityPickerDialog(f"Network Control for {device.get('name') or 'Alexa'}", self.network_controls, self)
+
+        def assigned(chosen):
+            control_item = self.control_by_id(str((chosen or {}).get("entityId") or ""))
+            if not control_item:
+                return
+            self.selected_entities.append(self._make_selection(device, control_item))
+            self.refresh()
+
+        picker.selected.connect(assigned)
+        picker.exec_()
 
     def select_all(self):
-        self.selected_entities = [copy.deepcopy(item) for item in self.available_entities]
+        selected: list[dict] = []
+        skipped = 0
+        for device in self.available_devices:
+            current = self.selection_for_device(device)
+            control = self.control_by_id((current or {}).get("entityId")) if current else self.auto_control_for_device(device)
+            if not control:
+                skipped += 1
+                continue
+            selected.append(self._make_selection(device, control))
+        self.selected_entities = selected
         self.refresh()
+        if skipped:
+            QMessageBox.information(
+                self,
+                "Alexa Lockout",
+                f"Selected every Alexa with a matched network control. {skipped} device(s) still need a UniFi network control assigned.",
+            )
 
     def clear_all(self):
         self.selected_entities = []
         self.refresh()
 
     def save(self):
-        clean = []
-        seen = set()
+        clean: list[dict] = []
+        seen_devices: set[str] = set()
+        seen_controls: set[str] = set()
         for item in self.selected_entities:
-            normalized = self._normalize_entity(item)
-            if not normalized or normalized["entityId"] in seen:
+            normalized = self._normalize_selection(item)
+            if not normalized:
                 continue
-            seen.add(normalized["entityId"])
+            device_key = normalized.get("alexaDeviceId") or normalized.get("alexaEventEntity") or normalized.get("entityId")
+            control_id = normalized.get("entityId")
+            if not device_key or not control_id or device_key in seen_devices or control_id in seen_controls:
+                continue
+            seen_devices.add(device_key)
+            seen_controls.add(control_id)
             clean.append(normalized)
         self.saved.emit(clean)
         self.accept()
-
 
 class ThermostatSyncSelectionDialog(QDialog):
     saved = pyqtSignal(list)
@@ -13414,8 +13577,12 @@ class SettingsDialog(QDialog):
                 continue
             seen.add(entity_id)
             clean.append({
+                "alexaDeviceId": str(item.get("alexaDeviceId") or item.get("alexa_device_id") or ""),
+                "alexaEventEntity": str(item.get("alexaEventEntity") or item.get("alexa_event_entity") or ""),
+                "serialNumber": str(item.get("serialNumber") or item.get("serial_number") or ""),
                 "entityId": entity_id,
                 "name": str(item.get("name") or item.get("friendly_name") or entity_id),
+                "controlName": str(item.get("controlName") or item.get("control_name") or entity_id),
                 "state": str(item.get("state") or ""),
             })
         return clean
@@ -13445,8 +13612,12 @@ class SettingsDialog(QDialog):
                     continue
                 seen.add(entity_id)
                 clean.append({
+                    "alexaDeviceId": str(item.get("alexaDeviceId") or item.get("alexa_device_id") or ""),
+                    "alexaEventEntity": str(item.get("alexaEventEntity") or item.get("alexa_event_entity") or ""),
+                    "serialNumber": str(item.get("serialNumber") or item.get("serial_number") or ""),
                     "entityId": entity_id,
                     "name": str(item.get("name") or item.get("friendly_name") or entity_id),
+                    "controlName": str(item.get("controlName") or item.get("control_name") or entity_id),
                     "state": str(item.get("state") or ""),
                 })
 
@@ -15207,7 +15378,7 @@ class SettingsDialog(QDialog):
         jarvis.layout().addWidget(jarvis_save_note)
 
         alexa_lockout = self.add_section("Alexa Lockout", -1, 2, 1, 2)
-        alexa_note = QLabel("Choose the Alexa block switches controlled by this thermostat's screen lock. Each thermostat stores its own selection.")
+        alexa_note = QLabel("Choose the actual Alexa devices this thermostat should take offline while its screen is locked. Each thermostat stores its own selection.")
         alexa_note.setWordWrap(True)
         alexa_note.setFont(font(8, QFont.Bold))
         alexa_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
@@ -15224,7 +15395,7 @@ class SettingsDialog(QDialog):
         alexa_row.addWidget(self.alexa_lockout_summary, 1)
         alexa_row.addWidget(choose_alexa)
         alexa_lockout.layout().addLayout(alexa_row)
-        alexa_status = QLabel("LOCKED = selected Alexa block switches ON   ·   UNLOCKED = OFF")
+        alexa_status = QLabel("LOCKED = selected Alexa network access OFF   ·   UNLOCKED = ON")
         alexa_status.setWordWrap(True)
         alexa_status.setFont(font(7, QFont.Black))
         alexa_status.setStyleSheet("color:#8fffd0; background:transparent; border:0;")
@@ -18781,7 +18952,7 @@ class MainWindow(Background):
         return "Screen locked: temperature and alarm controls only"
 
     def selected_alexa_lockout_entities(self) -> list[dict]:
-        """Return this panel's configured Alexa block switches."""
+        """Return this panel's configured Alexa network-access controls."""
         ha = self.s.ha()
         raw = ha.get("alexaLockoutEntities") if isinstance(ha, dict) else []
         clean: list[dict] = []
@@ -18794,17 +18965,18 @@ class MainWindow(Background):
                 continue
             seen.add(entity_id)
             clean.append({
+                "alexaDeviceId": str(item.get("alexaDeviceId") or item.get("alexa_device_id") or ""),
                 "entityId": entity_id,
                 "name": str(item.get("name") or item.get("friendly_name") or entity_id),
+                "controlName": str(item.get("controlName") or item.get("control_name") or entity_id),
             })
         return clean
 
     def apply_alexa_lockout_state(self, locked: bool):
         """Block/unblock only the Alexa devices selected for this panel.
 
-        The existing backend already has a generic Home Assistant switch action,
-        so this remains a native-app-only feature and does not alter Alexa
-        discovery or the Home Assistant Alexa integration.
+        UniFi client-access switches are ON when network access is allowed and
+        OFF when the client is blocked. Alexa discovery is never changed.
         """
         entities = self.selected_alexa_lockout_entities()
         if not entities:
@@ -18812,7 +18984,7 @@ class MainWindow(Background):
 
         self._alexa_lockout_sequence = int(getattr(self, "_alexa_lockout_sequence", 0) or 0) + 1
         sequence = self._alexa_lockout_sequence
-        action = "on" if bool(locked) else "off"
+        action = "off" if bool(locked) else "on"
         if not hasattr(self, "_alexa_lockout_apply_lock"):
             self._alexa_lockout_apply_lock = threading.Lock()
         apply_lock = self._alexa_lockout_apply_lock
