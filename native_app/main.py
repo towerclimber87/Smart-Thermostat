@@ -1731,6 +1731,114 @@ class SyncButton(QAbstractButton):
         p.drawText(QRectF(3, r.bottom() - 16, r.width() - 6, 14), Qt.AlignCenter, label)
 
 
+class DeviceInternetButton(QAbstractButton):
+    """Main-screen device internet toggle drawn as a small tablet/iPad."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedSize(58, 58)
+        self._blocked = False
+        self._mixed = False
+        self._busy = False
+        self.setToolTip("Disable internet for selected devices")
+
+    def setState(self, blocked: bool, *, mixed: bool = False, busy: bool = False):
+        self._blocked = bool(blocked)
+        self._mixed = bool(mixed)
+        self._busy = bool(busy)
+        if self._busy:
+            tip = "Changing internet access for selected devices…"
+        elif self._mixed:
+            tip = "Selected devices have mixed internet states; tap to disable internet for all"
+        elif self._blocked:
+            tip = "Internet disabled for selected devices; tap to restore"
+        else:
+            tip = "Internet enabled for selected devices; tap to disable"
+        self.setToolTip(tip)
+        self.update()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self.rect().contains(event.pos()):
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
+        r = QRectF(self.rect()).adjusted(1.5, 1.5, -1.5, -1.5)
+
+        g = QLinearGradient(r.topLeft(), r.bottomRight())
+        if self._busy:
+            g.setColorAt(0.0, QColor(84, 98, 125, 238))
+            g.setColorAt(0.58, QColor(45, 58, 83, 235))
+            g.setColorAt(1.0, QColor(18, 27, 45, 240))
+            border = QColor(196, 216, 255, 165)
+            screen = QColor(181, 204, 236, 185)
+        elif self._mixed:
+            g.setColorAt(0.0, QColor(157, 116, 35, 240))
+            g.setColorAt(0.58, QColor(92, 65, 24, 236))
+            g.setColorAt(1.0, QColor(36, 28, 20, 242))
+            border = QColor(255, 215, 124, 215)
+            screen = QColor(255, 225, 159, 235)
+        elif self._blocked:
+            g.setColorAt(0.0, QColor(151, 39, 59, 242))
+            g.setColorAt(0.58, QColor(87, 24, 42, 238))
+            g.setColorAt(1.0, QColor(34, 14, 27, 242))
+            border = QColor(255, 137, 156, 220)
+            screen = QColor(255, 217, 225, 235)
+        else:
+            g.setColorAt(0.0, QColor(31, 91, 100, 236))
+            g.setColorAt(0.58, QColor(18, 54, 68, 232))
+            g.setColorAt(1.0, QColor(10, 22, 38, 240))
+            border = QColor(91, 241, 225, 165)
+            screen = QColor(211, 255, 248, 235)
+
+        p.setBrush(QBrush(g))
+        p.setPen(QPen(border, 1.35))
+        p.drawRoundedRect(r, 20, 20)
+
+        glow = QRadialGradient(r.center(), 34)
+        glow.setColorAt(0.0, QColor(border.red(), border.green(), border.blue(), 58))
+        glow.setColorAt(0.72, QColor(border.red(), border.green(), border.blue(), 12))
+        glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.fillRect(self.rect(), glow)
+
+        # Tablet/iPad silhouette. No external icon font is required.
+        tablet = QRectF(r.center().x() - 13, r.center().y() - 18, 26, 36)
+        p.setPen(QPen(screen, 2.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.setBrush(QColor(screen.red(), screen.green(), screen.blue(), 24))
+        p.drawRoundedRect(tablet, 4.5, 4.5)
+        display = tablet.adjusted(4.0, 4.2, -4.0, -6.2)
+        p.setPen(QPen(QColor(screen.red(), screen.green(), screen.blue(), 145), 1.0))
+        p.setBrush(QColor(6, 14, 26, 135))
+        p.drawRoundedRect(display, 2.5, 2.5)
+        p.setPen(Qt.NoPen)
+        p.setBrush(screen)
+        p.drawEllipse(QRectF(tablet.center().x() - 1.5, tablet.bottom() - 4.5, 3.0, 3.0))
+
+        # Small Wi-Fi mark on the tablet screen makes the function readable.
+        cx = display.center().x()
+        cy = display.center().y() + 2
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(screen, 1.7, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.drawArc(QRectF(cx - 7, cy - 7, 14, 10), 35 * 16, 110 * 16)
+        p.drawArc(QRectF(cx - 4.5, cy - 3.8, 9, 6.5), 35 * 16, 110 * 16)
+        p.setPen(Qt.NoPen)
+        p.setBrush(screen)
+        p.drawEllipse(QRectF(cx - 1.3, cy + 2.0, 2.6, 2.6))
+
+        if self._blocked:
+            p.setPen(QPen(QColor(255, 235, 239, 245), 2.8, Qt.SolidLine, Qt.RoundCap))
+            p.drawLine(QPointF(tablet.left() + 2, tablet.bottom() - 2), QPointF(tablet.right() - 2, tablet.top() + 2))
+        elif self._mixed:
+            p.setFont(font(9, QFont.Black))
+            p.setPen(screen)
+            p.drawText(QRectF(display.left(), display.top() - 1, display.width(), display.height()), Qt.AlignCenter, "?")
+
+
 class IntimacyHoldButton(QAbstractButton):
     """Small six-hour configurable comfort override shown above Thermostat Sync."""
 
@@ -10511,6 +10619,294 @@ class AlexaLockoutSelectionDialog(QDialog):
         self.accept()
 
 
+class DeviceInternetSelectionDialog(QDialog):
+    """Searchable multi-select picker for device network-access switches."""
+
+    saved = pyqtSignal(list)
+    loadCompleted = pyqtSignal(object)
+
+    def __init__(self, state: AppState, selected_entities: list[dict] | None = None, parent=None):
+        super().__init__(parent)
+        self.s = state
+        self.selected_entities = copy.deepcopy(selected_entities or [])
+        self.available_entities: list[dict] = []
+        self.buttons: dict[str, RoundButton] = {}
+        self._loading = False
+        self.setModal(True)
+        self.setWindowTitle("Device Internet")
+        self.setWindowFlag(Qt.FramelessWindowHint, True)
+        self.setMinimumSize(720, 520)
+        self.resize(1280, 800)
+        self.setStyleSheet("""
+            QDialog { background:#09111f; color:#f7fbff; }
+            QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
+            QLineEdit {
+                background:rgba(7,13,25,0.96);
+                color:#ffffff;
+                border:1px solid rgba(100,229,255,0.42);
+                border-radius:11px;
+                padding:8px 12px;
+                font-weight:900;
+                font-size:14px;
+                min-height:28px;
+            }
+        """)
+        self.loadCompleted.connect(self._handle_loaded)
+        self.build()
+        QTimer.singleShot(0, self.load_entities)
+        QTimer.singleShot(0, self.fit_to_screen)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.fit_to_screen()
+
+    def fit_to_screen(self):
+        fit_dialog_to_available_screen(self, margin=0)
+
+    @staticmethod
+    def _normalize_switch(item: dict) -> dict | None:
+        if not isinstance(item, dict):
+            return None
+        entity_id = str(item.get("entityId") or item.get("entity_id") or "").strip()
+        if not entity_id.startswith("switch."):
+            return None
+        friendly_name = str(item.get("name") or item.get("friendly_name") or entity_id).strip() or entity_id
+        display_name = friendly_name
+        # Generic UniFi network-access switches often have an unhelpful friendly
+        # name such as "Blocked". In that case, make the entity ID human-readable.
+        if friendly_name.lower() in {"blocked", "block", "network access", "client access"}:
+            stem = entity_id.split(".", 1)[1] if "." in entity_id else entity_id
+            display_name = " ".join(part.capitalize() for part in stem.split("_") if part) or friendly_name
+        return {
+            "entityId": entity_id,
+            "name": display_name,
+            "controlName": friendly_name,
+            "state": str(item.get("state") or ""),
+        }
+
+    @staticmethod
+    def _normalize_selection(item: dict) -> dict | None:
+        if not isinstance(item, dict):
+            return None
+        entity_id = str(item.get("entityId") or item.get("entity_id") or "").strip()
+        if not entity_id.startswith("switch."):
+            return None
+        name = str(item.get("name") or item.get("friendly_name") or item.get("controlName") or entity_id).strip() or entity_id
+        return {
+            "entityId": entity_id,
+            "name": name,
+            "controlName": str(item.get("controlName") or item.get("control_name") or name).strip() or name,
+            "state": str(item.get("state") or ""),
+        }
+
+    def selected_ids(self) -> set[str]:
+        return {
+            str(item.get("entityId") or "").strip()
+            for item in (self._normalize_selection(raw) for raw in self.selected_entities)
+            if item and str(item.get("entityId") or "").strip()
+        }
+
+    def load_entities(self):
+        if self._loading:
+            return
+        self._loading = True
+        self.refresh()
+        payload = self.s.ha_payload({"domains": ["switch"]})
+
+        def worker():
+            try:
+                data = self.s.api.post("/api/ha/entities", payload)
+                result = {"entities": data.get("entities") or [], "error": None}
+            except Exception as exc:
+                result = {"entities": [], "error": str(exc)}
+            try:
+                self.loadCompleted.emit(result)
+            except RuntimeError:
+                pass
+
+        threading.Thread(target=worker, name="device-internet-picker-load", daemon=True).start()
+
+    def _handle_loaded(self, info: object):
+        self._loading = False
+        data = info if isinstance(info, dict) else {}
+        by_id: dict[str, dict] = {}
+        for raw in data.get("entities") or []:
+            item = self._normalize_switch(raw)
+            if item:
+                by_id[item["entityId"]] = item
+        self.available_entities = sorted(
+            by_id.values(),
+            key=lambda item: (str(item.get("name") or "").lower(), str(item.get("entityId") or "").lower()),
+        )
+
+        available_by_id = {item["entityId"]: item for item in self.available_entities}
+        migrated: list[dict] = []
+        seen: set[str] = set()
+        for raw in self.selected_entities:
+            item = self._normalize_selection(raw)
+            if not item:
+                continue
+            entity_id = item["entityId"]
+            if entity_id in seen:
+                continue
+            seen.add(entity_id)
+            if entity_id in available_by_id:
+                item = copy.deepcopy(available_by_id[entity_id])
+            migrated.append(item)
+        self.selected_entities = migrated
+        self.refresh()
+
+        error = str(data.get("error") or "").strip()
+        if error:
+            QMessageBox.warning(self, "Device Internet", f"Could not load switch entities from Home Assistant:\n{error}")
+
+    def build(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(12, 10, 12, 10)
+        root.setSpacing(8)
+
+        header = QHBoxLayout()
+        title = QLabel("DEVICE INTERNET")
+        title.setFont(font(22, QFont.Black))
+        title.setStyleSheet("color:#55f0ff; letter-spacing:3px;")
+        clear = RoundButton("Clear Selected", active=False, kind="danger", min_h=40)
+        header.addWidget(title)
+        header.addStretch(1)
+        header.addWidget(clear)
+        root.addLayout(header)
+
+        note = QLabel(
+            "Choose the Home Assistant switch entities that control internet/network access for the devices you want on the main-screen iPad button. "
+            "This uses the same convention as the existing Alexa network lockout: switch ON = internet allowed, switch OFF = internet blocked."
+        )
+        note.setWordWrap(True)
+        note.setFont(font(10, QFont.Black))
+        note.setStyleSheet(
+            "color:#cdd8ee; background:rgba(255,255,255,0.06); "
+            "border:1px solid rgba(255,255,255,0.10); border-radius:12px; padding:8px;"
+        )
+        root.addWidget(note)
+
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search device name or entity ID…")
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(self.refresh)
+        root.addWidget(self.search)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea{background:transparent;border:0;}")
+        body = QWidget()
+        self.body_lay = QVBoxLayout(body)
+        self.body_lay.setContentsMargins(0, 0, 0, 0)
+        self.body_lay.setSpacing(8)
+        scroll.setWidget(body)
+        root.addWidget(scroll, 1)
+
+        bottom = QHBoxLayout()
+        cancel = RoundButton("Cancel", active=False, min_h=42)
+        save = RoundButton("Save Selected", active=True, min_h=42)
+        bottom.addStretch(1)
+        bottom.addWidget(cancel)
+        bottom.addWidget(save)
+        root.addLayout(bottom)
+
+        clear.clicked.connect(self.clear_all)
+        cancel.clicked.connect(self.reject)
+        save.clicked.connect(self.save)
+        self.refresh()
+
+    def filtered_entities(self) -> list[dict]:
+        query = str(self.search.text() if hasattr(self, "search") else "").strip().lower()
+        if not query:
+            return list(self.available_entities)
+        words = [word for word in query.split() if word]
+        matched: list[dict] = []
+        for entity in self.available_entities:
+            haystack = " ".join([
+                str(entity.get("name") or ""),
+                str(entity.get("controlName") or ""),
+                str(entity.get("entityId") or ""),
+            ]).lower()
+            if all(word in haystack for word in words):
+                matched.append(entity)
+        return matched
+
+    def refresh(self):
+        if not hasattr(self, "body_lay"):
+            return
+        while self.body_lay.count():
+            item = self.body_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.buttons = {}
+
+        if not self.available_entities:
+            text = "Loading switch entities from Home Assistant…" if self._loading else "No Home Assistant switch entities were found."
+            none = QLabel(text)
+            none.setWordWrap(True)
+            none.setStyleSheet("color:#c4d0e5; background:rgba(255,255,255,0.05); border-radius:12px; padding:12px;")
+            self.body_lay.addWidget(none)
+            return
+
+        filtered = self.filtered_entities()
+        if not filtered:
+            none = QLabel("No switches match your search.")
+            none.setWordWrap(True)
+            none.setStyleSheet("color:#c4d0e5; background:rgba(255,255,255,0.05); border-radius:12px; padding:12px;")
+            self.body_lay.addWidget(none)
+            return
+
+        selected = self.selected_ids()
+        for entity in filtered:
+            entity_id = str(entity.get("entityId") or "")
+            name = str(entity.get("name") or entity_id)
+            is_selected = entity_id in selected
+            prefix = "✓  " if is_selected else "○  "
+            detail = "" if name == entity_id else f"  ·  {entity_id}"
+            button = RoundButton(prefix + name + detail, active=is_selected, min_h=52)
+            button.clicked.connect(lambda checked=False, e=entity: self.toggle_entity(e))
+            self.buttons[entity_id] = button
+            self.body_lay.addWidget(button)
+        self.body_lay.addStretch(1)
+
+    def toggle_entity(self, entity: dict):
+        normalized = self._normalize_switch(entity)
+        if not normalized:
+            return
+        entity_id = normalized["entityId"]
+        if entity_id in self.selected_ids():
+            self.selected_entities = [
+                item for item in self.selected_entities
+                if str((self._normalize_selection(item) or {}).get("entityId") or "") != entity_id
+            ]
+        else:
+            self.selected_entities.append(copy.deepcopy(normalized))
+        self.refresh()
+
+    def clear_all(self):
+        self.selected_entities = []
+        self.refresh()
+
+    def save(self):
+        clean: list[dict] = []
+        seen: set[str] = set()
+        available_by_id = {item["entityId"]: item for item in self.available_entities}
+        for raw in self.selected_entities:
+            item = self._normalize_selection(raw)
+            if not item:
+                continue
+            entity_id = item["entityId"]
+            if entity_id in seen:
+                continue
+            seen.add(entity_id)
+            if entity_id in available_by_id:
+                item = copy.deepcopy(available_by_id[entity_id])
+            clean.append(item)
+        self.saved.emit(clean)
+        self.accept()
+
+
 class ThermostatSyncSelectionDialog(QDialog):
     saved = pyqtSignal(list)
     loadCompleted = pyqtSignal(object)
@@ -13019,6 +13415,7 @@ class SettingsDialog(QDialog):
             "Screen Settings": "Rotation, compact auto on/off, and automatic brightness rules",
             "Audio Settings": "Create media-player groups and configure Audio-page controls",
             "Jarvis": "Home Assistant speech volume, response, and screen-display controls",
+            "Device Internet": "Choose device network-access switches for the main-screen iPad button",
             "Alexa Lockout": "Choose which Alexa devices are blocked while this screen is locked",
         }
         return descriptions.get(str(title or ""), "Open this section to view its settings")
@@ -13442,6 +13839,97 @@ class SettingsDialog(QDialog):
             empty="No home-screen people assigned. Tap Choose Tracking to add.",
             prefix="Home screen shows",
         )
+
+    def selected_device_internet_entities(self) -> list[dict]:
+        ha = self.s.ha()
+        raw = ha.get("deviceInternetSwitchEntitiesV1") if isinstance(ha, dict) else []
+        clean: list[dict] = []
+        seen: set[str] = set()
+        for item in raw if isinstance(raw, list) else []:
+            if not isinstance(item, dict):
+                continue
+            entity_id = str(item.get("entityId") or item.get("entity_id") or "").strip()
+            if not entity_id.startswith("switch.") or entity_id in seen:
+                continue
+            seen.add(entity_id)
+            clean.append({
+                "entityId": entity_id,
+                "name": str(item.get("name") or item.get("friendly_name") or entity_id),
+                "controlName": str(item.get("controlName") or item.get("control_name") or entity_id),
+                "state": str(item.get("state") or ""),
+            })
+        return clean
+
+    def device_internet_summary_text(self) -> str:
+        entities = self.selected_device_internet_entities()
+        if not entities:
+            return "No devices selected. The main-screen iPad button will stay hidden."
+        names = [str(item.get("name") or item.get("entityId") or "Device") for item in entities]
+        shown = ", ".join(names[:3])
+        if len(names) > 3:
+            shown += f" +{len(names)-3} more"
+        return f"iPad button controls: {shown}"
+
+    def choose_device_internet_entities(self):
+        current = self.selected_device_internet_entities()
+        dlg = DeviceInternetSelectionDialog(self.s, current, self)
+
+        def apply(entities):
+            clean: list[dict] = []
+            seen: set[str] = set()
+            for item in entities if isinstance(entities, list) else []:
+                if not isinstance(item, dict):
+                    continue
+                entity_id = str(item.get("entityId") or item.get("entity_id") or "").strip()
+                if not entity_id.startswith("switch.") or entity_id in seen:
+                    continue
+                seen.add(entity_id)
+                clean.append({
+                    "entityId": entity_id,
+                    "name": str(item.get("name") or item.get("friendly_name") or entity_id),
+                    "controlName": str(item.get("controlName") or item.get("control_name") or entity_id),
+                    "state": str(item.get("state") or ""),
+                })
+
+            ha = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
+            previous = copy.deepcopy(ha.get("deviceInternetSwitchEntitiesV1") or [])
+            ha["deviceInternetSwitchEntitiesV1"] = copy.deepcopy(clean)
+            ha["deviceInternetSchemaVersion"] = 1
+            if hasattr(self, "device_internet_summary"):
+                self.device_internet_summary.setText(self.device_internet_summary_text())
+                self.device_internet_summary.repaint()
+            config_snapshot = copy.deepcopy(self.s.config)
+
+            def done(record):
+                if isinstance(record, dict):
+                    self.s.config = record.get("config") or self.s.config
+                if hasattr(self, "device_internet_summary"):
+                    self.device_internet_summary.setText(self.device_internet_summary_text())
+                parent = self.parent()
+                if parent is not None:
+                    if hasattr(parent, "position_sleep_controls"):
+                        QTimer.singleShot(0, parent.position_sleep_controls)
+                    if hasattr(parent, "refresh_device_internet_state"):
+                        QTimer.singleShot(0, parent.refresh_device_internet_state)
+                self.saved.emit()
+
+            def failed(error):
+                ha_now = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
+                ha_now["deviceInternetSwitchEntitiesV1"] = previous
+                if hasattr(self, "device_internet_summary"):
+                    self.device_internet_summary.setText(self.device_internet_summary_text())
+                QMessageBox.warning(self, "Device Internet", error)
+
+            self.run_settings_write(
+                "device-internet-save",
+                lambda: self.s.api.save_config(config_snapshot),
+                done,
+                failed,
+            )
+
+        dlg.saved.connect(apply)
+        dlg.exec_()
+
 
     def selected_alexa_lockout_entities(self) -> list[dict]:
         ha = self.s.ha()
@@ -15264,7 +15752,31 @@ class SettingsDialog(QDialog):
         jarvis_save_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
         jarvis.layout().addWidget(jarvis_save_note)
 
-        alexa_lockout = self.add_section("Alexa Lockout", -1, 2, 1, 2)
+        device_internet = self.add_section("Device Internet", -2, 0, 1, 2)
+        device_note = QLabel("Select the Home Assistant network-access switches controlled by the iPad button on the thermostat screen. The button only appears when at least one device is selected.")
+        device_note.setWordWrap(True)
+        device_note.setFont(font(8, QFont.Bold))
+        device_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
+        device_internet.layout().addWidget(device_note)
+        device_row = QHBoxLayout()
+        device_row.setSpacing(8)
+        self.device_internet_summary = QLabel(self.device_internet_summary_text())
+        self.device_internet_summary.setWordWrap(True)
+        self.device_internet_summary.setFont(font(8, QFont.Black))
+        self.device_internet_summary.setStyleSheet("color:#c4d0e5; background:rgba(5,10,20,0.42); border:1px dashed rgba(160,180,210,0.26); border-radius:8px; padding:7px;")
+        choose_devices = RoundButton("Choose Devices", active=True, min_h=34)
+        choose_devices.setMinimumWidth(162)
+        choose_devices.clicked.connect(self.choose_device_internet_entities)
+        device_row.addWidget(self.device_internet_summary, 1)
+        device_row.addWidget(choose_devices)
+        device_internet.layout().addLayout(device_row)
+        device_status = QLabel("MULTI-SELECT   ·   SEARCHABLE   ·   ON = INTERNET   ·   OFF = BLOCKED")
+        device_status.setWordWrap(True)
+        device_status.setFont(font(7, QFont.Black))
+        device_status.setStyleSheet("color:#8fffd0; background:transparent; border:0;")
+        device_internet.layout().addWidget(device_status)
+
+        alexa_lockout = self.add_section("Alexa Lockout", -2, 2, 1, 2)
         alexa_note = QLabel("Choose one or more Home Assistant Alexa switches this thermostat should control while its screen is locked. Each thermostat stores its own selection.")
         alexa_note.setWordWrap(True)
         alexa_note.setFont(font(8, QFont.Bold))
@@ -17225,6 +17737,14 @@ class MainWindow(Background):
         self.sleep_button.clicked.connect(lambda: self.enter_display_sleep(manual=True))
         self.sync_button = SyncButton(self)
         self.sync_button.clicked.connect(self.toggle_sync_mode)
+        self.device_internet_button = DeviceInternetButton(self)
+        self.device_internet_button.clicked.connect(self.toggle_device_internet)
+        self._device_internet_toggle_running = False
+        self._device_internet_refresh_running = False
+        self._device_internet_state_known = False
+        self._device_internet_blocked = False
+        self._device_internet_mixed = False
+        self._device_internet_sequence = 0
         self.intimacy_button = IntimacyHoldButton(self)
         self.intimacy_button.clicked.connect(self.toggle_intimacy_hold)
         self._intimacy_toggle_running = False
@@ -17344,6 +17864,10 @@ class MainWindow(Background):
         self.screen_lock_report_timer.setInterval(30000)
         self.screen_lock_report_timer.timeout.connect(self.report_screen_lock_state)
         self.screen_lock_report_timer.start()
+        self.device_internet_state_timer = QTimer(self)
+        self.device_internet_state_timer.setInterval(30000)
+        self.device_internet_state_timer.timeout.connect(self.refresh_device_internet_state)
+        self.device_internet_state_timer.start()
         self.reloadAllCompleted.connect(self._handle_reload_all_completed)
         self.ui_heartbeat_timer = QTimer(self)
         self.ui_heartbeat_timer.setInterval(500)
@@ -17453,6 +17977,7 @@ class MainWindow(Background):
             # Mirror the native lock state to the local backend for Home Assistant.
             # This is reporting only; the backend cannot lock or unlock the panel.
             QTimer.singleShot(0, self.report_screen_lock_state)
+            QTimer.singleShot(250, self.refresh_device_internet_state)
             if not getattr(self, "_thermal_protection_active", False):
                 self.toast.show_message("Native panel ready")
         except Exception as exc:
@@ -17499,6 +18024,22 @@ class MainWindow(Background):
                     sync_y = max(0, sleep_y - self.sync_button.height() - 10)
                     self.sync_button.move(sleep_x, sync_y)
                     self.sync_button.raise_()
+
+            show_device_internet = False
+            if hasattr(self, "device_internet_button"):
+                show_device_internet = (
+                    not assistant_active
+                    and not getattr(self, "_display_sleeping", False)
+                    and self.current_name == "Thermostat"
+                    and bool(self.selected_device_internet_entities())
+                )
+                self.device_internet_button.setVisible(show_device_internet)
+                if show_device_internet:
+                    device_y = sync_y
+                    device_x = max(0, sleep_x - self.device_internet_button.width() - 10) if show_sync else sleep_x
+                    self.device_internet_button.move(device_x, device_y)
+                    self.device_internet_button.raise_()
+
             if hasattr(self, "intimacy_button"):
                 show_intimacy = (
                     not assistant_active
@@ -17508,7 +18049,7 @@ class MainWindow(Background):
                 self.intimacy_button.setVisible(show_intimacy)
                 if show_intimacy:
                     intimacy_x = max(0, self.width() - self.intimacy_button.width() - margin - 2)
-                    anchor_y = sync_y if show_sync else sleep_y
+                    anchor_y = sync_y if (show_sync or show_device_internet) else sleep_y
                     self.intimacy_button.move(
                         intimacy_x,
                         max(0, anchor_y - self.intimacy_button.height() - 10),
@@ -17531,6 +18072,8 @@ class MainWindow(Background):
                     self.sleep_button.hide()
                 if hasattr(self, "sync_button"):
                     self.sync_button.hide()
+                if hasattr(self, "device_internet_button"):
+                    self.device_internet_button.hide()
                 if hasattr(self, "intimacy_button"):
                     self.intimacy_button.hide()
                 if hasattr(self, "assistant_overlay"):
@@ -18839,6 +19382,156 @@ class MainWindow(Background):
             return "Security lock active: alarm control only"
         return "Screen locked: temperature and alarm controls only"
 
+    def selected_device_internet_entities(self) -> list[dict]:
+        """Return the explicitly configured network-access switches for the iPad button."""
+        ha = self.s.ha()
+        raw = ha.get("deviceInternetSwitchEntitiesV1") if isinstance(ha, dict) else []
+        clean: list[dict] = []
+        seen: set[str] = set()
+        for item in raw if isinstance(raw, list) else []:
+            if not isinstance(item, dict):
+                continue
+            entity_id = str(item.get("entityId") or item.get("entity_id") or "").strip()
+            if not entity_id.startswith("switch.") or entity_id in seen:
+                continue
+            seen.add(entity_id)
+            clean.append({
+                "entityId": entity_id,
+                "name": str(item.get("name") or item.get("friendly_name") or entity_id),
+                "controlName": str(item.get("controlName") or item.get("control_name") or entity_id),
+                "state": str(item.get("state") or ""),
+            })
+        return clean
+
+    def set_device_internet_button_state(self, *, blocked: bool, mixed: bool = False, busy: bool = False):
+        self._device_internet_blocked = bool(blocked)
+        self._device_internet_mixed = bool(mixed)
+        if hasattr(self, "device_internet_button"):
+            self.device_internet_button.setState(blocked, mixed=mixed, busy=busy)
+
+    def refresh_device_internet_state(self):
+        """Refresh the iPad button from the actual Home Assistant switch states."""
+        entities = self.selected_device_internet_entities()
+        if not entities:
+            self._device_internet_state_known = False
+            self.set_device_internet_button_state(blocked=False, mixed=False, busy=False)
+            self.position_sleep_controls()
+            return
+        if getattr(self, "_device_internet_refresh_running", False) or getattr(self, "_device_internet_toggle_running", False):
+            return
+        self._device_internet_refresh_running = True
+        wanted = {str(item.get("entityId") or "") for item in entities}
+        payload = self.s.ha_payload({"domains": ["switch"]})
+
+        def done(result):
+            self._device_internet_refresh_running = False
+            rows = result.get("entities") if isinstance(result, dict) else []
+            by_id = {
+                str(item.get("entityId") or item.get("entity_id") or ""): str(item.get("state") or "").strip().lower()
+                for item in rows if isinstance(item, dict)
+            }
+            states = [by_id.get(entity_id, "") for entity_id in wanted]
+            all_on = bool(states) and all(state == "on" for state in states)
+            all_off = bool(states) and all(state == "off" for state in states)
+            mixed = not (all_on or all_off)
+            self._device_internet_state_known = bool(all_on or all_off)
+            self.set_device_internet_button_state(blocked=all_off, mixed=mixed, busy=False)
+            self.position_sleep_controls()
+
+        def failed(error):
+            self._device_internet_refresh_running = False
+            trace_runtime(f"device internet state refresh failed error={error}")
+
+        self.run_async(
+            "device-internet-state",
+            lambda: self.s.api.post("/api/ha/entities", payload, timeout=6.0),
+            done,
+            failed,
+        )
+
+    def _apply_device_internet_entities(self, entities: list[dict], *, blocked: bool, sequence: int) -> dict:
+        """Set every selected network-access switch and verify each resulting state."""
+        action = "off" if bool(blocked) else "on"
+        results: list[dict] = []
+        for item in entities or []:
+            if sequence != int(getattr(self, "_device_internet_sequence", 0) or 0):
+                return {"stale": True, "results": results}
+            entity_id = str((item or {}).get("entityId") or (item or {}).get("entity_id") or "").strip()
+            if not entity_id.startswith("switch."):
+                continue
+            result = self._set_alexa_switch_state(entity_id, action, attempts=3)
+            results.append(result)
+            trace_runtime(
+                f"device internet entity={entity_id} requested={action} ok={bool(result.get('ok'))} "
+                f"state={result.get('state') or 'unknown'} attempts={result.get('attempts') or 0}"
+            )
+        return {"stale": False, "results": results}
+
+    def toggle_device_internet(self):
+        if getattr(self, "navigation_locked", False):
+            self.toast.show_message(self.lock_restriction_message())
+            return
+        if getattr(self, "_device_internet_toggle_running", False):
+            return
+        entities = self.selected_device_internet_entities()
+        if not entities:
+            self.position_sleep_controls()
+            return
+
+        # If state is mixed/unknown, a tap deliberately normalizes all selected
+        # devices to BLOCKED. Only a fully blocked set makes the next tap restore.
+        target_blocked = not (bool(getattr(self, "_device_internet_blocked", False)) and not bool(getattr(self, "_device_internet_mixed", False)))
+        self._device_internet_toggle_running = True
+        self._device_internet_sequence = int(getattr(self, "_device_internet_sequence", 0) or 0) + 1
+        sequence = self._device_internet_sequence
+        self.set_device_internet_button_state(
+            blocked=bool(getattr(self, "_device_internet_blocked", False)),
+            mixed=bool(getattr(self, "_device_internet_mixed", False)),
+            busy=True,
+        )
+        if not hasattr(self, "_device_internet_apply_lock"):
+            self._device_internet_apply_lock = threading.Lock()
+        apply_lock = self._device_internet_apply_lock
+
+        def worker():
+            with apply_lock:
+                if sequence != int(getattr(self, "_device_internet_sequence", 0) or 0):
+                    return {"stale": True, "results": []}
+                return self._apply_device_internet_entities(entities, blocked=target_blocked, sequence=sequence)
+
+        def done(result):
+            self._device_internet_toggle_running = False
+            info = result if isinstance(result, dict) else {}
+            if info.get("stale"):
+                self.refresh_device_internet_state()
+                return
+            results = [item for item in (info.get("results") or []) if isinstance(item, dict)]
+            failures = [item for item in results if not bool(item.get("ok"))]
+            if failures or len(results) != len(entities):
+                self.toast.show_message("Device internet change was incomplete; checking actual states", 3200)
+                QTimer.singleShot(150, self.refresh_device_internet_state)
+                return
+            self._device_internet_state_known = True
+            self.set_device_internet_button_state(blocked=target_blocked, mixed=False, busy=False)
+            count = len(results)
+            if target_blocked:
+                self.toast.show_message(f"Internet disabled for {count} device{'s' if count != 1 else ''}")
+            else:
+                self.toast.show_message(f"Internet restored for {count} device{'s' if count != 1 else ''}")
+
+        def failed(error):
+            self._device_internet_toggle_running = False
+            self.set_device_internet_button_state(
+                blocked=bool(getattr(self, "_device_internet_blocked", False)),
+                mixed=bool(getattr(self, "_device_internet_mixed", False)),
+                busy=False,
+            )
+            self.toast.show_message(f"Device internet change failed: {error}", 3500)
+            QTimer.singleShot(150, self.refresh_device_internet_state)
+
+        self.run_async("device-internet-toggle", worker, done, failed)
+
+
     def selected_alexa_lockout_entities(self) -> list[dict]:
         """Return this panel's configured Alexa network-access controls."""
         ha = self.s.ha()
@@ -19033,6 +19726,7 @@ class MainWindow(Background):
         self.header.set_locked(self.navigation_locked, self.security_lock_active)
         self.sleep_button.setEnabled(not self.navigation_locked)
         self.sync_button.setEnabled(not self.navigation_locked)
+        self.device_internet_button.setEnabled(not self.navigation_locked)
         self.intimacy_button.setEnabled(not self.navigation_locked)
 
         thermostat_page = self.pages.get("Thermostat")
@@ -19489,6 +20183,8 @@ class MainWindow(Background):
             self.s.system_info = system_info
         self.sync_runtime_only()
         self.update_sync_button_state()
+        self.position_sleep_controls()
+        QTimer.singleShot(0, self.refresh_device_internet_state)
         self._update_screen_motion_poll_interval()
         QTimer.singleShot(0, self.refresh_screen_motion_status)
         errors = [str(item) for item in (data.get("errors") or []) if str(item)]
