@@ -124,6 +124,7 @@ PANEL_COMMAND_GRACE_MS = int(float(os.environ.get("SMART_THERMOSTAT_PANEL_COMMAN
 # value 30-60 seconds after the user tapped the touchscreen.
 PANEL_TARGET_COMMAND_GRACE_MS = int(float(os.environ.get("SMART_THERMOSTAT_PANEL_TARGET_GRACE_SECONDS", "300") or "300") * 1000)
 ARRIVING_AWAY_BYPASS_MS = int(float(os.environ.get("SMART_THERMOSTAT_ARRIVING_BYPASS_MINUTES", "120") or "120") * 60000)
+MANUAL_RETURN_HOME_DURATION_MS = 6 * 60 * 60 * 1000
 INTIMACY_HOLD_TARGET_F = 66
 INTIMACY_HOLD_DURATION_MS = 6 * 60 * 60 * 1000
 SYNC_ARM_DURATION_SECONDS = max(5.0, float(os.environ.get("SMART_THERMOSTAT_SYNC_ARM_SECONDS", "30") or "30"))
@@ -1097,7 +1098,14 @@ def _normalize_presence_home_override(value: object) -> dict | None:
     away_observed_entity_ids = _normalize_presence_entity_list(
         value.get("awayObservedEntityIds", value.get("departureEntityIds", []))
     )
-    if reason == "arriving" and expires_at <= 0:
+    if reason == "manual-return-home" and expires_at <= 0:
+        # Return Home is intentionally temporary. Legacy saved overrides did not
+        # carry an expiry, so derive the six-hour limit from their original
+        # startedAt timestamp instead of allowing them to block Auto Away forever.
+        if duration_ms <= 0:
+            duration_ms = MANUAL_RETURN_HOME_DURATION_MS
+        expires_at = int(started_at + duration_ms)
+    elif reason == "arriving" and expires_at <= 0:
         expires_at = int(started_at + (duration_ms if duration_ms > 0 else ARRIVING_AWAY_BYPASS_MS))
     if expires_at > 0 and now_ms >= expires_at:
         return None
@@ -1132,12 +1140,17 @@ def _presence_home_override_payload(
         "entityIds": _normalize_presence_entity_list(entity_ids or []),
         "reason": reason,
     }
+    if reason == "manual-return-home" and (duration_ms is None or duration_ms <= 0):
+        duration_ms = MANUAL_RETURN_HOME_DURATION_MS
     if duration_ms is not None and duration_ms > 0:
         payload["durationMs"] = int(duration_ms)
     if expires_at is not None and expires_at > 0:
         payload["expiresAt"] = int(expires_at)
-    elif reason == "arriving":
-        duration = int(duration_ms) if duration_ms is not None and duration_ms > 0 else ARRIVING_AWAY_BYPASS_MS
+    elif reason in {"arriving", "manual-return-home"}:
+        if reason == "arriving":
+            duration = int(duration_ms) if duration_ms is not None and duration_ms > 0 else ARRIVING_AWAY_BYPASS_MS
+        else:
+            duration = int(duration_ms) if duration_ms is not None and duration_ms > 0 else MANUAL_RETURN_HOME_DURATION_MS
         payload["durationMs"] = duration
         payload["expiresAt"] = started_at + duration
     return payload
@@ -4842,7 +4855,8 @@ def _apply_presence_away_logic(thermostat: dict) -> dict:
                 updated["presenceHomeOverride"] = None
                 home_override = None
         elif home_override:
-            # A real Home report releases an indefinite manual Return Home hold.
+            # A real Home report releases a manual Return Home hold immediately,
+            # even before its six-hour maximum duration has elapsed.
             updated["presenceHomeOverride"] = None
             home_override = None
         if bool(updated.get("away")) and away_source in {"presence", "auto", ""}:
@@ -4855,8 +4869,8 @@ def _apply_presence_away_logic(thermostat: dict) -> dict:
         if home_override:
             _clear_auto_away_pending("Home/Arriving override is active")
             # A Home override blocks Auto Away while all assigned people still
-            # report Away/unknown. Manual Return Home lasts until a real Home
-            # report; Arriving also remembers a confirmed departure so the next
+            # report Away/unknown. Manual Return Home lasts for at most six hours
+            # (or until a real Home report); Arriving also remembers a confirmed departure so the next
             # Home report can end the trip and return the UI to Home immediately.
             home_override_reason = str(home_override.get("reason") or "").strip().lower()
             if home_override_reason == "arriving" and all_confidently_away:

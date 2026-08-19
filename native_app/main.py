@@ -6539,6 +6539,18 @@ class ThermostatScreen(Page):
             "expiresAt": now_ms + duration_ms,
         }
 
+    def manual_return_home_override_payload(self, snapshot: dict | None = None) -> dict:
+        now_ms = int(time.time() * 1000)
+        duration_ms = 6 * 60 * 60 * 1000
+        return {
+            "active": True,
+            "startedAt": now_ms,
+            "entityIds": self.auto_away_entity_ids(snapshot),
+            "reason": "manual-return-home",
+            "durationMs": duration_ms,
+            "expiresAt": now_ms + duration_ms,
+        }
+
     def arriving_override_active(self, snapshot: dict | None = None) -> bool:
         t = snapshot if isinstance(snapshot, dict) else self.thermostat_view()
         override = t.get("presenceHomeOverride") if isinstance(t.get("presenceHomeOverride"), dict) else {}
@@ -6710,14 +6722,10 @@ class ThermostatScreen(Page):
                 entity_ids.append(entity_id)
         if entity_ids:
             # Return Home should mean "stay Home now" even if the Auto Away
-            # person trackers still say everyone is away. The backend releases
-            # this override automatically once any configured Auto Away user reports Home.
-            changes["presenceHomeOverride"] = {
-                "active": True,
-                "startedAt": int(time.time() * 1000),
-                "entityIds": entity_ids,
-                "reason": "manual-return-home",
-            }
+            # person trackers still say everyone is away. The hold ends as soon
+            # as an assigned Auto Away user reports Home, or after six hours so
+            # normal Auto Away logic can re-check the house and take over again.
+            changes["presenceHomeOverride"] = self.manual_return_home_override_payload(self.thermostat)
             self.s.thermostat["presenceHomeOverride"] = copy.deepcopy(changes["presenceHomeOverride"])
         else:
             # Do not send an explicit null override. The backend has the saved
@@ -7154,7 +7162,7 @@ class ThermostatScreen(Page):
         if away and not self.screen_control_locked():
             source = str(t.get("awaySource") or "").lower()
             if source == "presence":
-                self.away_body.setText("No assigned Auto Away users are home. Tap Return Home to hold Home until one assigned Auto Away user reports Home again.")
+                self.away_body.setText("No assigned Auto Away users are home. Tap Return Home to hold Home for up to 6 hours; normal presence control resumes sooner if someone returns.")
             else:
                 self.away_body.setText("Tap to return Home and resume normal comfort.")
             self.position_away_overlay()
