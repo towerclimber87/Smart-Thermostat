@@ -1806,37 +1806,56 @@ class DeviceInternetButton(QAbstractButton):
         glow.setColorAt(1.0, QColor(0, 0, 0, 0))
         p.fillRect(self.rect(), glow)
 
-        # Tablet/iPad silhouette. No external icon font is required.
-        tablet = QRectF(r.center().x() - 13, r.center().y() - 18, 26, 36)
-        p.setPen(QPen(screen, 2.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        # Tablet/iPad silhouette. Keep the icon slightly high so a live network
+        # status can sit directly beneath it without changing the floating control size.
+        tablet = QRectF(r.center().x() - 11.5, r.top() + 5.0, 23.0, 31.0)
+        p.setPen(QPen(screen, 1.8, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
         p.setBrush(QColor(screen.red(), screen.green(), screen.blue(), 24))
-        p.drawRoundedRect(tablet, 4.5, 4.5)
-        display = tablet.adjusted(4.0, 4.2, -4.0, -6.2)
+        p.drawRoundedRect(tablet, 4.0, 4.0)
+        display = tablet.adjusted(3.6, 3.8, -3.6, -5.4)
         p.setPen(QPen(QColor(screen.red(), screen.green(), screen.blue(), 145), 1.0))
         p.setBrush(QColor(6, 14, 26, 135))
-        p.drawRoundedRect(display, 2.5, 2.5)
+        p.drawRoundedRect(display, 2.2, 2.2)
         p.setPen(Qt.NoPen)
         p.setBrush(screen)
-        p.drawEllipse(QRectF(tablet.center().x() - 1.5, tablet.bottom() - 4.5, 3.0, 3.0))
+        p.drawEllipse(QRectF(tablet.center().x() - 1.3, tablet.bottom() - 4.0, 2.6, 2.6))
 
         # Small Wi-Fi mark on the tablet screen makes the function readable.
         cx = display.center().x()
-        cy = display.center().y() + 2
+        cy = display.center().y() + 1.5
         p.setBrush(Qt.NoBrush)
-        p.setPen(QPen(screen, 1.7, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
-        p.drawArc(QRectF(cx - 7, cy - 7, 14, 10), 35 * 16, 110 * 16)
-        p.drawArc(QRectF(cx - 4.5, cy - 3.8, 9, 6.5), 35 * 16, 110 * 16)
+        p.setPen(QPen(screen, 1.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.drawArc(QRectF(cx - 6.2, cy - 6.3, 12.4, 8.8), 35 * 16, 110 * 16)
+        p.drawArc(QRectF(cx - 4.0, cy - 3.4, 8.0, 5.7), 35 * 16, 110 * 16)
         p.setPen(Qt.NoPen)
         p.setBrush(screen)
-        p.drawEllipse(QRectF(cx - 1.3, cy + 2.0, 2.6, 2.6))
+        p.drawEllipse(QRectF(cx - 1.15, cy + 1.8, 2.3, 2.3))
 
         if self._blocked:
-            p.setPen(QPen(QColor(255, 235, 239, 245), 2.8, Qt.SolidLine, Qt.RoundCap))
+            p.setPen(QPen(QColor(255, 235, 239, 245), 2.5, Qt.SolidLine, Qt.RoundCap))
             p.drawLine(QPointF(tablet.left() + 2, tablet.bottom() - 2), QPointF(tablet.right() - 2, tablet.top() + 2))
         elif self._mixed:
-            p.setFont(font(9, QFont.Black))
+            p.setFont(font(8, QFont.Black))
             p.setPen(screen)
             p.drawText(QRectF(display.left(), display.top() - 1, display.width(), display.height()), Qt.AlignCenter, "?")
+
+        # The button's active state means the selected tablets are intentionally
+        # blocked. Home Assistant switch OFF = blocked/offline; switch ON = online.
+        if self._busy:
+            status_text = "..."
+            status_color = QColor(210, 225, 247, 230)
+        elif self._mixed:
+            status_text = "MIXED"
+            status_color = QColor(255, 215, 124, 245)
+        elif self._blocked:
+            status_text = "OFFLINE"
+            status_color = QColor(255, 105, 119, 255)
+        else:
+            status_text = "ONLINE"
+            status_color = QColor(100, 255, 157, 255)
+        p.setFont(font(6, QFont.Black, 8))
+        p.setPen(status_color)
+        p.drawText(QRectF(2, r.bottom() - 16, r.width() - 4, 13), Qt.AlignCenter, status_text)
 
 
 class IntimacyHoldButton(QAbstractButton):
@@ -10785,7 +10804,7 @@ class DeviceInternetSelectionDialog(QDialog):
 
         note = QLabel(
             "Choose the Home Assistant switch entities that control internet/network access for the devices you want on the main-screen iPad button. "
-            "This uses the same convention as the existing Alexa network lockout: switch ON = internet allowed, switch OFF = internet blocked."
+            "The iPad button shows ONLINE when those switches are ON. Pressing it makes the devices OFFLINE by turning the selected switches OFF; pressing it again restores them ON."
         )
         note.setWordWrap(True)
         note.setFont(font(10, QFont.Black))
@@ -15778,7 +15797,7 @@ class SettingsDialog(QDialog):
         device_row.addWidget(self.device_internet_summary, 1)
         device_row.addWidget(choose_devices)
         device_internet.layout().addLayout(device_row)
-        device_status = QLabel("MULTI-SELECT   ·   SEARCHABLE   ·   ON = INTERNET   ·   OFF = BLOCKED")
+        device_status = QLabel("MULTI-SELECT   ·   SEARCHABLE   ·   ONLINE = SWITCH ON   ·   OFFLINE/BLOCKED = SWITCH OFF")
         device_status.setWordWrap(True)
         device_status.setFont(font(7, QFont.Black))
         device_status.setStyleSheet("color:#8fffd0; background:transparent; border:0;")
@@ -19458,7 +19477,15 @@ class MainWindow(Background):
         )
 
     def _apply_device_internet_entities(self, entities: list[dict], *, blocked: bool, sequence: int) -> dict:
-        """Set every selected network-access switch and verify each resulting state."""
+        """Set every selected network-access switch and verify each resulting state.
+
+        The main-screen button is active when the selected tablets are OFFLINE.
+        These Home Assistant network-access switches are inverse to that button:
+        switch OFF = internet blocked, switch ON = internet allowed.
+        """
+        # Never use toggle here. The button state is deterministic: pressing it
+        # from ONLINE requests switch.turn_off (blocked), and pressing it from
+        # OFFLINE requests switch.turn_on (internet restored).
         action = "off" if bool(blocked) else "on"
         results: list[dict] = []
         for item in entities or []:
@@ -19486,9 +19513,11 @@ class MainWindow(Background):
             self.position_sleep_controls()
             return
 
-        # If state is mixed/unknown, a tap deliberately normalizes all selected
-        # devices to BLOCKED. Only a fully blocked set makes the next tap restore.
-        target_blocked = not (bool(getattr(self, "_device_internet_blocked", False)) and not bool(getattr(self, "_device_internet_mixed", False)))
+        # The iPad button's ON/active state means OFFLINE/BLOCKED. Therefore a tap
+        # while the selected switches are ON (internet allowed) must send them OFF.
+        # If state is mixed/unknown, normalize everything to OFFLINE/BLOCKED first.
+        currently_offline = bool(getattr(self, "_device_internet_blocked", False)) and not bool(getattr(self, "_device_internet_mixed", False))
+        target_blocked = not currently_offline
         self._device_internet_toggle_running = True
         self._device_internet_sequence = int(getattr(self, "_device_internet_sequence", 0) or 0) + 1
         sequence = self._device_internet_sequence
