@@ -10817,6 +10817,10 @@ class DeviceInternetSelectionDialog(QDialog):
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search device name or entity ID…")
         self.search.setClearButtonEnabled(True)
+        # This panel runs on a touchscreen and does not rely on an OS keyboard.
+        # Match the other searchable entity picker: tapping the search field opens
+        # the built-in keyboard, then setText() drives the existing live filter.
+        self.search.mousePressEvent = lambda event: self.open_search_keyboard()
         self.search.textChanged.connect(self.refresh)
         root.addWidget(self.search)
 
@@ -10842,6 +10846,12 @@ class DeviceInternetSelectionDialog(QDialog):
         cancel.clicked.connect(self.reject)
         save.clicked.connect(self.save)
         self.refresh()
+
+    def open_search_keyboard(self):
+        value = MiniTextKeyboardDialog.get_text(self, "Search Devices", self.search.text())
+        if value is not None:
+            self.search.setText(value)
+            self.refresh()
 
     def filtered_entities(self) -> list[dict]:
         query = str(self.search.text() if hasattr(self, "search") else "").strip().lower()
