@@ -107,7 +107,7 @@ def install_crash_logging():
         trace_runtime(f"Crash logging unavailable: {exc}")
 
 
-from PyQt5.QtCore import QEvent, QPoint, QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QEvent, QEasingCurve, QPoint, QPointF, QPropertyAnimation, QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QCursor, QFont, QIcon, QImage, QPainter, QPen, QBrush, QLinearGradient, QPainterPath, QRadialGradient, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
@@ -1120,12 +1120,16 @@ class HoldRoundButton(RoundButton):
 
     def _fire_hold(self):
         self._hold_fired = True
-        # The appliance-wide raw-touch handler owns touchscreen presses.  Do not
-        # open a modal while that raw QTouchEvent is still active; the release can
-        # otherwise be delivered to the newly opened dialog.  The direct-touch
-        # path emits ``held`` immediately after TouchEnd instead.
         if self._direct_touch_hold_active:
-            return
+            # Fire at the actual hold threshold rather than waiting for the
+            # finger to lift.  The main window detaches this raw touch sequence
+            # and consumes its eventual release so it cannot land on a modal
+            # that the held signal opens.
+            self._direct_touch_hold_active = False
+            window = self.window()
+            prepare = getattr(window, "prepare_live_hold_activation", None)
+            if callable(prepare):
+                prepare(self)
         self.held.emit()
 
     def begin_direct_touch_hold(self):
@@ -1142,8 +1146,6 @@ class HoldRoundButton(RoundButton):
             self._hold_timer.stop()
         held = bool(self._hold_fired and inside)
         self._direct_touch_hold_active = False
-        if held:
-            QTimer.singleShot(0, self.held.emit)
         return held
 
     def cancel_direct_touch_hold(self):
@@ -1215,7 +1217,11 @@ class ModernAudioButton(QAbstractButton):
             return
         self._hold_fired = True
         if self._direct_touch_hold_active:
-            return
+            self._direct_touch_hold_active = False
+            window = self.window()
+            prepare = getattr(window, "prepare_live_hold_activation", None)
+            if callable(prepare):
+                prepare(self)
         self.held.emit()
 
     def begin_direct_touch_hold(self):
@@ -1236,8 +1242,6 @@ class ModernAudioButton(QAbstractButton):
             self._hold_timer.stop()
         held = bool(self._hold_fired and inside)
         self._direct_touch_hold_active = False
-        if held:
-            QTimer.singleShot(0, self.held.emit)
         return held
 
     def cancel_direct_touch_hold(self):
@@ -12665,19 +12669,28 @@ class SimplePageSettingsDialog(QDialog):
 
 
 class TouchRollerColumn(QListWidget):
-    """A touch-first, looping wheel column that snaps to one centered value."""
+    """Touch-first looping wheel that settles smoothly on one centered value."""
 
     valueChanged = pyqtSignal(str)
 
     def __init__(self, values: list[tuple[str, str]], current_value: str = "", parent=None):
         super().__init__(parent)
         self.base_values = [(str(label), str(value)) for label, value in values]
-        self.repeat_count = 7
+        self.repeat_count = 9
         self._recentering = False
-        self._snap_timer = QTimer(self)
-        self._snap_timer.setSingleShot(True)
-        self._snap_timer.setInterval(140)
-        self._snap_timer.timeout.connect(self.snap_to_nearest)
+        self._animating = False
+        self._value = str(current_value or (self.base_values[0][1] if self.base_values else ""))
+
+        self._settle_timer = QTimer(self)
+        self._settle_timer.setSingleShot(True)
+        self._settle_timer.setInterval(260)
+        self._settle_timer.timeout.connect(self._settle_if_idle)
+
+        self._snap_animation = QPropertyAnimation(self.verticalScrollBar(), b"value", self)
+        self._snap_animation.setDuration(145)
+        self._snap_animation.setEasingCurve(QEasingCurve.OutCubic)
+        self._snap_animation.finished.connect(self._finish_snap)
+        self._pending_snap_item: QListWidgetItem | None = None
 
         self.setFocusPolicy(Qt.NoFocus)
         self.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -12685,31 +12698,33 @@ class TouchRollerColumn(QListWidget):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setFrameShape(QFrame.NoFrame)
-        self.setMinimumWidth(78)
-        self.setFixedHeight(150)
+        self.setUniformItemSizes(True)
+        self.setMinimumWidth(70)
+        self.setFixedHeight(120)
         self.setSpacing(0)
+        self.viewport().setAttribute(Qt.WA_AcceptTouchEvents, True)
         self.setStyleSheet("""
             QListWidget {
-                background:rgba(10,20,34,0.86);
-                border:1px solid rgba(73,230,255,0.28);
-                border-radius:16px;
-                padding:46px 3px;
-                color:rgba(230,239,252,0.46);
+                background:rgba(8,18,31,0.92);
+                border:1px solid rgba(73,230,255,0.30);
+                border-radius:15px;
+                padding:0 3px;
+                color:rgba(229,239,252,0.60);
                 outline:0;
             }
             QListWidget::item {
-                min-height:50px;
+                min-height:40px;
                 border:0;
-                border-radius:11px;
-                padding:0 6px;
-                font-size:18px;
+                padding:0 5px;
+                font-size:17px;
                 font-weight:900;
                 text-align:center;
+                background:transparent;
+                color:rgba(229,239,252,0.58);
             }
             QListWidget::item:selected {
-                background:rgba(73,230,255,0.20);
-                color:#f7fbff;
-                border:1px solid rgba(73,230,255,0.54);
+                background:transparent;
+                color:#ffffff;
             }
         """)
 
@@ -12718,21 +12733,69 @@ class TouchRollerColumn(QListWidget):
                 item = QListWidgetItem(label)
                 item.setData(Qt.UserRole, value)
                 item.setTextAlignment(Qt.AlignCenter)
-                item.setSizeHint(QSize(72, 50))
+                item.setSizeHint(QSize(68, 40))
                 self.addItem(item)
 
-        # Flick/swipe scrolling on the physical touchscreen.
+        # A stationary selection band makes the wheel visually stable while the
+        # numbers move underneath it.  It does not intercept touches.
+        self._center_band = QFrame(self.viewport())
+        self._center_band.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._center_band.setStyleSheet("""
+            QFrame {
+                background:rgba(73,230,255,0.13);
+                border-top:1px solid rgba(73,230,255,0.48);
+                border-bottom:1px solid rgba(73,230,255,0.48);
+            }
+        """)
+        self._center_band.raise_()
+
+        self._scroller = QScroller.scroller(self.viewport())
         try:
-            QScroller.grabGesture(self.viewport(), QScroller.LeftMouseButtonGesture)
+            QScroller.grabGesture(self.viewport(), QScroller.TouchGesture)
         except Exception:
             try:
-                QScroller.grabGesture(self.viewport(), QScroller.TouchGesture)
+                QScroller.grabGesture(self.viewport(), QScroller.LeftMouseButtonGesture)
             except Exception:
                 pass
+        try:
+            self._scroller.stateChanged.connect(self._on_scroller_state_changed)
+        except Exception:
+            pass
 
-        self.verticalScrollBar().valueChanged.connect(lambda _value: self._snap_timer.start())
-        self.itemClicked.connect(lambda _item: self._snap_timer.start(0))
-        QTimer.singleShot(0, lambda: self.set_value(current_value, emit=False))
+        self.verticalScrollBar().valueChanged.connect(self._on_scroll_value_changed)
+        self.itemClicked.connect(self._on_item_clicked)
+        QTimer.singleShot(0, lambda: self.set_value(self._value, emit=False))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        row_h = 40
+        y = max(0, (self.viewport().height() - row_h) // 2)
+        self._center_band.setGeometry(1, y, max(1, self.viewport().width() - 2), row_h)
+        self._center_band.raise_()
+
+    def _scroller_is_idle(self) -> bool:
+        try:
+            return self._scroller.state() == QScroller.Inactive
+        except Exception:
+            return True
+
+    def _on_scroller_state_changed(self, state):
+        if state == QScroller.Inactive:
+            self._settle_timer.start(35)
+        else:
+            self._settle_timer.stop()
+
+    def _on_scroll_value_changed(self, _value: int):
+        if self._recentering or self._animating:
+            return
+        if self._scroller_is_idle():
+            # Mouse-wheel / non-kinetic fallback.  Kinetic touch settling is
+            # driven by QScroller's Inactive state instead.
+            self._settle_timer.start()
+
+    def _on_item_clicked(self, item: QListWidgetItem):
+        if item is not None:
+            self._start_snap(item)
 
     def _middle_row_for_value(self, value: str) -> int:
         if not self.base_values:
@@ -12745,45 +12808,89 @@ class TouchRollerColumn(QListWidget):
         middle_repeat = self.repeat_count // 2
         return middle_repeat * len(self.base_values) + base_index
 
+    def _center_item(self) -> QListWidgetItem | None:
+        if not self.count():
+            return None
+        center_y = self.viewport().height() // 2
+        center_x = max(1, self.viewport().width() // 2)
+        item = self.itemAt(center_x, center_y)
+        if item is not None:
+            return item
+        for delta in range(2, max(4, self.viewport().height() // 2), 2):
+            item = self.itemAt(center_x, center_y + delta)
+            if item is None:
+                item = self.itemAt(center_x, center_y - delta)
+            if item is not None:
+                return item
+        return None
+
     def set_value(self, value: str, emit: bool = False):
         if not self.base_values:
             return
         row = self._middle_row_for_value(str(value))
+        item = self.item(row)
+        if item is None:
+            return
+        old = self._value
         self._recentering = True
         try:
             self.setCurrentRow(row)
-            item = self.item(row)
-            if item is not None:
-                self.scrollToItem(item, QAbstractItemView.PositionAtCenter)
+            self.scrollToItem(item, QAbstractItemView.PositionAtCenter)
+            self._value = str(item.data(Qt.UserRole) or "")
         finally:
             self._recentering = False
-        if emit:
-            self.valueChanged.emit(self.value())
+        if emit and self._value != old:
+            self.valueChanged.emit(self._value)
 
     def value(self) -> str:
-        item = self.currentItem()
-        if item is None and self.count():
-            item = self.item(self.currentRow() if self.currentRow() >= 0 else 0)
-        return str(item.data(Qt.UserRole) if item is not None else "")
+        return str(self._value or "")
 
-    def snap_to_nearest(self):
-        if self._recentering or not self.count():
+    def _settle_if_idle(self):
+        if self._recentering or self._animating or not self._scroller_is_idle():
             return
-        center_y = self.viewport().height() // 2
-        item = self.itemAt(self.viewport().width() // 2, center_y)
+        item = self._center_item()
+        if item is not None:
+            self._start_snap(item)
+
+    def _start_snap(self, item: QListWidgetItem):
         if item is None:
-            # Fall back to the closest visible row when the exact center lands in padding.
-            for delta in range(0, self.viewport().height() // 2 + 1, 4):
-                item = self.itemAt(self.viewport().width() // 2, center_y + delta)
-                if item is None and delta:
-                    item = self.itemAt(self.viewport().width() // 2, center_y - delta)
-                if item is not None:
-                    break
+            return
+        try:
+            rect = self.visualItemRect(item)
+            delta = int(round(rect.center().y() - (self.viewport().height() / 2.0)))
+            bar = self.verticalScrollBar()
+            target = int(clamp(bar.value() + delta, bar.minimum(), bar.maximum()))
+        except Exception:
+            return
+        self._settle_timer.stop()
+        self._pending_snap_item = item
+        self._snap_animation.stop()
+        if target == self.verticalScrollBar().value():
+            self._finish_snap()
+            return
+        self._animating = True
+        self._snap_animation.setStartValue(self.verticalScrollBar().value())
+        self._snap_animation.setEndValue(target)
+        self._snap_animation.start()
+
+    def _finish_snap(self):
+        self._animating = False
+        item = self._pending_snap_item or self._center_item()
+        self._pending_snap_item = None
         if item is None:
             return
         raw = str(item.data(Qt.UserRole) or "")
-        old = self.value()
-        self.set_value(raw, emit=False)
+        old = self._value
+        self._value = raw
+        self.setCurrentItem(item)
+        # Recenter into the middle copy only after the animation has completed.
+        # The visible value is identical, so this keeps the wheel effectively
+        # endless without a noticeable jump.
+        row = self.row(item)
+        base_count = max(1, len(self.base_values))
+        repeat_index = row // base_count
+        if repeat_index <= 1 or repeat_index >= self.repeat_count - 2:
+            self.set_value(raw, emit=False)
         if raw != old:
             self.valueChanged.emit(raw)
 
@@ -12807,14 +12914,14 @@ class TouchTimeRoller(QWidget):
         self.hour = TouchRollerColumn([(str(v), str(v)) for v in range(1, 13)], str(shown_hour))
         self.minute = TouchRollerColumn([(f"{v:02d}", f"{v:02d}") for v in range(0, 60, 5)], f"{minute:02d}")
         self.ampm = TouchRollerColumn([("AM", "AM"), ("PM", "PM")], suffix)
-        self.hour.setFixedWidth(76)
-        self.minute.setFixedWidth(82)
-        self.ampm.setFixedWidth(82)
+        self.hour.setFixedWidth(70)
+        self.minute.setFixedWidth(74)
+        self.ampm.setFixedWidth(74)
 
         colon = QLabel(":")
         colon.setAlignment(Qt.AlignCenter)
-        colon.setFixedWidth(18)
-        colon.setFont(font(22, QFont.Black))
+        colon.setFixedWidth(14)
+        colon.setFont(font(20, QFont.Black))
         colon.setStyleSheet("color:#49e6ff;")
 
         root.addWidget(self.hour)
@@ -12842,7 +12949,7 @@ class TouchTimeRoller(QWidget):
 
 
 class AudioVolumeLockDialog(QDialog):
-    """Touch-friendly schedule and reinforcement settings for Volume Lock."""
+    """Compact touch-friendly schedule and reinforcement settings for Volume Lock."""
 
     def __init__(self, settings: dict | None = None, parent=None):
         super().__init__(parent)
@@ -12852,21 +12959,15 @@ class AudioVolumeLockDialog(QDialog):
         self.setModal(True)
         self.setWindowTitle("Volume Lock")
         self.setWindowFlag(Qt.FramelessWindowHint, True)
-        self.resize(1040, 720)
+        self.resize(1040, 650)
         self.setStyleSheet("""
             QDialog { background:#09111f; color:#f7fbff; }
             QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
-            QCheckBox { color:#eef5ff; font-size:16px; font-weight:900; spacing:10px; min-height:38px; }
-            QCheckBox::indicator { width:28px; height:28px; }
-            QComboBox {
-                background:rgba(22,36,52,0.96); color:#f6f8ff;
-                border:1px solid rgba(73,230,255,0.30); border-radius:14px;
-                padding:8px 12px; min-height:42px; font-size:15px; font-weight:900;
-            }
-            QAbstractItemView { background:#182235; color:#fff; selection-background-color:#45e5ff; selection-color:#071420; }
+            QCheckBox { color:#eef5ff; font-size:14px; font-weight:900; spacing:8px; min-height:30px; }
+            QCheckBox::indicator { width:24px; height:24px; }
         """)
         self.build()
-        QTimer.singleShot(0, lambda: fit_dialog_to_available_screen(self, margin=12))
+        QTimer.singleShot(0, lambda: fit_dialog_to_available_screen(self, margin=10))
 
     @staticmethod
     def _time_label(value: str) -> str:
@@ -12880,75 +12981,84 @@ class AudioVolumeLockDialog(QDialog):
 
     def build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(26, 22, 26, 22)
-        root.setSpacing(14)
+        root.setContentsMargins(20, 14, 20, 14)
+        root.setSpacing(9)
 
+        header = QVBoxLayout()
+        header.setSpacing(2)
         title = QLabel("VOLUME LOCK")
-        title.setFont(font(26, QFont.Black))
+        title.setFont(font(23, QFont.Black))
         title.setStyleSheet("color:#49e6ff; letter-spacing:3px;")
-        subtitle = QLabel("Tap the Volume Lock button to turn it on or off manually. A manual change never disables the next scheduled run.")
+        subtitle = QLabel("Tap to toggle manually. Hold 2 seconds for settings. Manual changes never disable the next scheduled run.")
         subtitle.setWordWrap(True)
-        subtitle.setStyleSheet("color:rgba(225,235,248,0.76); font-size:13px;")
-        root.addWidget(title)
-        root.addWidget(subtitle)
+        subtitle.setStyleSheet("color:rgba(225,235,248,0.76); font-size:12px;")
+        header.addWidget(title)
+        header.addWidget(subtitle)
+        root.addLayout(header)
 
-        schedule_panel = GlassPanel(radius=20)
+        body = QHBoxLayout()
+        body.setSpacing(10)
+
+        # LEFT: schedule.  Days use two rows and both times sit side-by-side so
+        # the dialog stays comfortably inside the panel height.
+        schedule_panel = GlassPanel(radius=18)
         schedule = QVBoxLayout(schedule_panel)
-        schedule.setContentsMargins(18, 14, 18, 14)
-        schedule.setSpacing(10)
+        schedule.setContentsMargins(14, 10, 14, 10)
+        schedule.setSpacing(6)
         self.auto_enabled = QCheckBox("Auto Run Schedule")
         self.auto_enabled.setChecked(bool(self.initial.get("autoEnabled", False)))
         schedule.addWidget(self.auto_enabled)
 
-        days_label = QLabel("Days that Volume Lock automatically starts")
-        days_label.setStyleSheet("color:#dbe3f4; font-size:13px;")
+        days_label = QLabel("Days Volume Lock automatically starts")
+        days_label.setStyleSheet("color:#dbe3f4; font-size:12px;")
         schedule.addWidget(days_label)
-        days_row = QHBoxLayout()
         selected_days = {int(day) for day in self.initial.get("days") or []}
-        for day, label in AUDIO_VOLUME_LOCK_DAY_LABELS:
+        days_grid = QGridLayout()
+        days_grid.setHorizontalSpacing(12)
+        days_grid.setVerticalSpacing(1)
+        for idx, (day, label) in enumerate(AUDIO_VOLUME_LOCK_DAY_LABELS):
             check = QCheckBox(label)
             check.setChecked(day in selected_days)
             self.day_checks[day] = check
-            days_row.addWidget(check)
-        days_row.addStretch(1)
-        schedule.addLayout(days_row)
+            days_grid.addWidget(check, idx // 4, idx % 4)
+        schedule.addLayout(days_grid)
 
+        times_title = QLabel("Schedule Times")
+        times_title.setStyleSheet("color:#dbe3f4; font-size:12px;")
+        schedule.addWidget(times_title)
         time_row = QHBoxLayout()
-        time_row.setSpacing(28)
-
-        start_col = QVBoxLayout()
-        start_col.setSpacing(5)
-        start_label = QLabel("Turns On")
-        start_label.setAlignment(Qt.AlignCenter)
-        start_label.setStyleSheet("color:#dbe3f4; font-size:13px;")
-        self.start_time = self._build_time_roller(str(self.initial.get("startTime") or "08:00"))
-        start_col.addWidget(start_label)
-        start_col.addWidget(self.start_time)
-
-        end_col = QVBoxLayout()
-        end_col.setSpacing(5)
-        end_label = QLabel("Turns Off")
-        end_label.setAlignment(Qt.AlignCenter)
-        end_label.setStyleSheet("color:#dbe3f4; font-size:13px;")
-        self.end_time = self._build_time_roller(str(self.initial.get("endTime") or "22:00"))
-        end_col.addWidget(end_label)
-        end_col.addWidget(self.end_time)
-
-        time_row.addLayout(start_col)
-        time_row.addLayout(end_col)
-        time_row.addStretch(1)
+        time_row.setSpacing(12)
+        for title_text, attr_name, value in (
+            ("Turns On", "start_time", str(self.initial.get("startTime") or "08:00")),
+            ("Turns Off", "end_time", str(self.initial.get("endTime") or "22:00")),
+        ):
+            col = QVBoxLayout()
+            col.setSpacing(3)
+            label = QLabel(title_text)
+            label.setAlignment(Qt.AlignCenter)
+            label.setStyleSheet("color:#49e6ff; font-size:12px;")
+            roller = self._build_time_roller(value)
+            setattr(self, attr_name, roller)
+            col.addWidget(label)
+            col.addWidget(roller, 0, Qt.AlignHCenter)
+            time_row.addLayout(col, 1)
         schedule.addLayout(time_row)
-        root.addWidget(schedule_panel)
+        schedule.addStretch(1)
+        body.addWidget(schedule_panel, 3)
 
-        limit_panel = GlassPanel(radius=20)
+        # RIGHT: volume ceiling and forced-off controls, stacked compactly.
+        right = QVBoxLayout()
+        right.setSpacing(10)
+
+        limit_panel = GlassPanel(radius=18)
         limit = QVBoxLayout(limit_panel)
-        limit.setContentsMargins(18, 14, 18, 14)
-        limit.setSpacing(8)
+        limit.setContentsMargins(14, 10, 14, 10)
+        limit.setSpacing(5)
         max_row = QHBoxLayout()
         max_title = QLabel("Maximum Volume")
-        max_title.setFont(font(13, QFont.Black))
+        max_title.setFont(font(12, QFont.Black))
         self.max_value = QLabel(f"{int(self.initial.get('maxVolume') or 50)}%")
-        self.max_value.setFont(font(15, QFont.Black))
+        self.max_value.setFont(font(14, QFont.Black))
         self.max_value.setStyleSheet("color:#49e6ff;")
         max_row.addWidget(max_title)
         max_row.addStretch(1)
@@ -12957,44 +13067,49 @@ class AudioVolumeLockDialog(QDialog):
         self.max_slider = TouchFriendlySlider(Qt.Horizontal)
         self.max_slider.setRange(1, 100)
         self.max_slider.setValue(int(clamp(int(self.initial.get("maxVolume") or 50), 1, 100)))
-        self.max_slider.setMinimumHeight(54)
+        self.max_slider.setMinimumHeight(46)
         self.max_slider.valueChanged.connect(lambda value: self.max_value.setText(f"{value}%"))
         limit.addWidget(self.max_slider)
-        max_note = QLabel("Only values above this ceiling are reduced. Volume already below the limit is left alone.")
+        max_note = QLabel("Only volume above this ceiling is reduced; lower volume is left alone.")
         max_note.setWordWrap(True)
-        max_note.setStyleSheet("color:rgba(225,235,248,0.70); font-size:12px;")
+        max_note.setStyleSheet("color:rgba(225,235,248,0.70); font-size:11px;")
         limit.addWidget(max_note)
-        root.addWidget(limit_panel)
+        right.addWidget(limit_panel, 1)
 
-        off_panel = GlassPanel(radius=20)
+        off_panel = GlassPanel(radius=18)
         off = QVBoxLayout(off_panel)
-        off.setContentsMargins(18, 14, 18, 14)
-        off.setSpacing(6)
-        off_title = QLabel("Keep These Audio Controls OFF While Locked")
-        off_title.setFont(font(13, QFont.Black))
+        off.setContentsMargins(14, 10, 14, 10)
+        off.setSpacing(4)
+        off_title = QLabel("Keep OFF While Locked")
+        off_title.setFont(font(12, QFont.Black))
         off.addWidget(off_title)
         force = self.initial.get("forceOffControls") if isinstance(self.initial.get("forceOffControls"), dict) else {}
         controls_grid = QGridLayout()
-        controls_grid.setHorizontalSpacing(24)
-        controls_grid.setVerticalSpacing(4)
+        controls_grid.setHorizontalSpacing(12)
+        controls_grid.setVerticalSpacing(0)
         for idx, (key, label) in enumerate(AUDIO_SWITCH_CONTROL_ORDER):
-            check = QCheckBox(f"Keep {label} Off")
+            check = QCheckBox(label)
             check.setChecked(bool(force.get(key, False)))
             self.force_checks[key] = check
             controls_grid.addWidget(check, idx // 2, idx % 2)
         off.addLayout(controls_grid)
-        off_note = QLabel("If another automation, remote, or source turns one of these on, Volume Lock turns it back off on the next enforcement check. Unassigned controls are ignored.")
+        off_note = QLabel("If another source turns a protected control on, Volume Lock turns it back off. Unassigned controls are ignored.")
         off_note.setWordWrap(True)
-        off_note.setStyleSheet("color:rgba(225,235,248,0.70); font-size:12px;")
+        off_note.setStyleSheet("color:rgba(225,235,248,0.70); font-size:11px;")
         off.addWidget(off_note)
-        root.addWidget(off_panel)
+        right.addWidget(off_panel, 1)
+        body.addLayout(right, 2)
 
-        root.addStretch(1)
+        root.addLayout(body, 1)
+
+        # Footer never participates in body sizing, so it remains visible even
+        # on the shorter panel displays.
         actions = QHBoxLayout()
-        cancel = RoundButton("Cancel", min_h=54)
-        save = RoundButton("Save", min_h=54, active=True)
-        cancel.setMinimumWidth(150)
-        save.setMinimumWidth(170)
+        actions.setSpacing(10)
+        cancel = RoundButton("Cancel", min_h=48)
+        save = RoundButton("Save", min_h=48, active=True)
+        cancel.setMinimumWidth(140)
+        save.setMinimumWidth(160)
         cancel.clicked.connect(self.reject)
         save.clicked.connect(self.accept)
         actions.addStretch(1)
@@ -18661,6 +18776,9 @@ class MainWindow(Background):
         self._direct_touch_mouse_suppress_until = 0.0
         self._direct_touch_mouse_suppress_point: QPoint | None = None
         self._touch_input_active = False
+        # When a long-press opens a modal while the finger is still down, keep
+        # that original touch sequence from being delivered into the new modal.
+        self._live_hold_touch_guard = False
         self._alarm_dialog_open = False
         self._alarm_reopen_block_until = 0.0
         self._status_refresh_running = False
@@ -19341,6 +19459,27 @@ class MainWindow(Background):
         candidates.sort(key=lambda item: item[0])
         return candidates[0][1]
 
+    def prepare_live_hold_activation(self, button: QAbstractButton):
+        """Detach a held touchscreen press before its action opens a modal.
+
+        The held action fires at the timer threshold while the finger is still
+        down.  We then consume TouchUpdate/TouchEnd from that original press so
+        the release cannot accidentally activate a control in the new dialog.
+        """
+        if button is None or self._direct_touch_button is not button:
+            return
+        try:
+            button.setDown(False)
+            button.update()
+        except RuntimeError:
+            pass
+        self._direct_touch_button = None
+        self._touch_input_active = False
+        self._live_hold_touch_guard = True
+        self._direct_touch_mouse_suppress_point = self._direct_touch_last_global
+        self._direct_touch_mouse_suppress_until = time.monotonic() + 0.8
+        self._direct_touch_last_global = None
+
     def _activate_direct_touch_button(self, button: QAbstractButton):
         try:
             if button is not None and button.isVisible() and button.isEnabled():
@@ -19628,6 +19767,21 @@ class MainWindow(Background):
                 if event_type in self.display_activity_event_types():
                     self._last_user_activity_at = now
                     self._last_motion_activity_at = now
+
+            # A live long-press can open a modal before the finger is lifted.
+            # Swallow the remainder of that same physical touch so its release
+            # cannot click something inside the newly opened dialog.
+            if getattr(self, "_live_hold_touch_guard", False):
+                if event_type == QEvent.TouchBegin:
+                    # Fail-safe: if a platform drops the old TouchEnd entirely,
+                    # a brand-new touch must not inherit the stale guard.
+                    self._live_hold_touch_guard = False
+                elif event_type in {QEvent.TouchUpdate, QEvent.TouchEnd, QEvent.TouchCancel}:
+                    if event_type in {QEvent.TouchEnd, QEvent.TouchCancel}:
+                        self._live_hold_touch_guard = False
+                        self._direct_touch_mouse_suppress_until = time.monotonic() + 0.28
+                    event.accept()
+                    return True
 
             # Complete button taps from the original touch sequence.  This is
             # intentionally before edge-brightness handling so an actual button
