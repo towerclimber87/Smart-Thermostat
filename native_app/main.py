@@ -112,6 +112,7 @@ from PyQt5.QtGui import QColor, QCursor, QFont, QIcon, QImage, QPainter, QPen, Q
 from PyQt5.QtWidgets import (
     QApplication,
     QAbstractButton,
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -121,10 +122,13 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QMenu,
     QPushButton,
     QScrollArea,
+    QScroller,
     QSizePolicy,
     QSlider,
     QStackedWidget,
@@ -12660,6 +12664,183 @@ class SimplePageSettingsDialog(QDialog):
 
 
 
+class TouchRollerColumn(QListWidget):
+    """A touch-first, looping wheel column that snaps to one centered value."""
+
+    valueChanged = pyqtSignal(str)
+
+    def __init__(self, values: list[tuple[str, str]], current_value: str = "", parent=None):
+        super().__init__(parent)
+        self.base_values = [(str(label), str(value)) for label, value in values]
+        self.repeat_count = 7
+        self._recentering = False
+        self._snap_timer = QTimer(self)
+        self._snap_timer.setSingleShot(True)
+        self._snap_timer.setInterval(140)
+        self._snap_timer.timeout.connect(self.snap_to_nearest)
+
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setMinimumWidth(78)
+        self.setFixedHeight(150)
+        self.setSpacing(0)
+        self.setStyleSheet("""
+            QListWidget {
+                background:rgba(10,20,34,0.86);
+                border:1px solid rgba(73,230,255,0.28);
+                border-radius:16px;
+                padding:46px 3px;
+                color:rgba(230,239,252,0.46);
+                outline:0;
+            }
+            QListWidget::item {
+                min-height:50px;
+                border:0;
+                border-radius:11px;
+                padding:0 6px;
+                font-size:18px;
+                font-weight:900;
+                text-align:center;
+            }
+            QListWidget::item:selected {
+                background:rgba(73,230,255,0.20);
+                color:#f7fbff;
+                border:1px solid rgba(73,230,255,0.54);
+            }
+        """)
+
+        for _ in range(self.repeat_count):
+            for label, value in self.base_values:
+                item = QListWidgetItem(label)
+                item.setData(Qt.UserRole, value)
+                item.setTextAlignment(Qt.AlignCenter)
+                item.setSizeHint(QSize(72, 50))
+                self.addItem(item)
+
+        # Flick/swipe scrolling on the physical touchscreen.
+        try:
+            QScroller.grabGesture(self.viewport(), QScroller.LeftMouseButtonGesture)
+        except Exception:
+            try:
+                QScroller.grabGesture(self.viewport(), QScroller.TouchGesture)
+            except Exception:
+                pass
+
+        self.verticalScrollBar().valueChanged.connect(lambda _value: self._snap_timer.start())
+        self.itemClicked.connect(lambda _item: self._snap_timer.start(0))
+        QTimer.singleShot(0, lambda: self.set_value(current_value, emit=False))
+
+    def _middle_row_for_value(self, value: str) -> int:
+        if not self.base_values:
+            return 0
+        base_index = 0
+        for idx, (_label, raw) in enumerate(self.base_values):
+            if raw == str(value):
+                base_index = idx
+                break
+        middle_repeat = self.repeat_count // 2
+        return middle_repeat * len(self.base_values) + base_index
+
+    def set_value(self, value: str, emit: bool = False):
+        if not self.base_values:
+            return
+        row = self._middle_row_for_value(str(value))
+        self._recentering = True
+        try:
+            self.setCurrentRow(row)
+            item = self.item(row)
+            if item is not None:
+                self.scrollToItem(item, QAbstractItemView.PositionAtCenter)
+        finally:
+            self._recentering = False
+        if emit:
+            self.valueChanged.emit(self.value())
+
+    def value(self) -> str:
+        item = self.currentItem()
+        if item is None and self.count():
+            item = self.item(self.currentRow() if self.currentRow() >= 0 else 0)
+        return str(item.data(Qt.UserRole) if item is not None else "")
+
+    def snap_to_nearest(self):
+        if self._recentering or not self.count():
+            return
+        center_y = self.viewport().height() // 2
+        item = self.itemAt(self.viewport().width() // 2, center_y)
+        if item is None:
+            # Fall back to the closest visible row when the exact center lands in padding.
+            for delta in range(0, self.viewport().height() // 2 + 1, 4):
+                item = self.itemAt(self.viewport().width() // 2, center_y + delta)
+                if item is None and delta:
+                    item = self.itemAt(self.viewport().width() // 2, center_y - delta)
+                if item is not None:
+                    break
+        if item is None:
+            return
+        raw = str(item.data(Qt.UserRole) or "")
+        old = self.value()
+        self.set_value(raw, emit=False)
+        if raw != old:
+            self.valueChanged.emit(raw)
+
+
+class TouchTimeRoller(QWidget):
+    """Three-wheel 12-hour time picker for the Volume Lock schedule."""
+
+    def __init__(self, value: str, parent=None):
+        super().__init__(parent)
+        hour24, minute = parse_schedule_time_24h(value, 8, 0)
+        shown_hour = hour24 % 12 or 12
+        minute = int(round(minute / 5.0) * 5)
+        if minute >= 60:
+            minute = 55
+        suffix = "AM" if hour24 < 12 else "PM"
+
+        root = QHBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(5)
+
+        self.hour = TouchRollerColumn([(str(v), str(v)) for v in range(1, 13)], str(shown_hour))
+        self.minute = TouchRollerColumn([(f"{v:02d}", f"{v:02d}") for v in range(0, 60, 5)], f"{minute:02d}")
+        self.ampm = TouchRollerColumn([("AM", "AM"), ("PM", "PM")], suffix)
+        self.hour.setFixedWidth(76)
+        self.minute.setFixedWidth(82)
+        self.ampm.setFixedWidth(82)
+
+        colon = QLabel(":")
+        colon.setAlignment(Qt.AlignCenter)
+        colon.setFixedWidth(18)
+        colon.setFont(font(22, QFont.Black))
+        colon.setStyleSheet("color:#49e6ff;")
+
+        root.addWidget(self.hour)
+        root.addWidget(colon)
+        root.addWidget(self.minute)
+        root.addWidget(self.ampm)
+
+    def value(self) -> str:
+        try:
+            hour12 = int(self.hour.value() or "12")
+        except Exception:
+            hour12 = 12
+        try:
+            minute = int(self.minute.value() or "0")
+        except Exception:
+            minute = 0
+        suffix = self.ampm.value() or "AM"
+        hour12 = int(clamp(hour12, 1, 12))
+        minute = int(clamp(minute, 0, 59))
+        if suffix == "AM":
+            hour24 = 0 if hour12 == 12 else hour12
+        else:
+            hour24 = 12 if hour12 == 12 else hour12 + 12
+        return f"{hour24:02d}:{minute:02d}"
+
+
 class AudioVolumeLockDialog(QDialog):
     """Touch-friendly schedule and reinforcement settings for Volume Lock."""
 
@@ -12694,22 +12875,8 @@ class AudioVolumeLockDialog(QDialog):
         shown_hour = hour % 12 or 12
         return f"{shown_hour}:{minute:02d} {suffix}"
 
-    def _build_time_combo(self, value: str) -> QComboBox:
-        combo = QComboBox()
-        combo.setMinimumWidth(180)
-        for hour in range(24):
-            for minute in range(0, 60, 5):
-                raw = f"{hour:02d}:{minute:02d}"
-                combo.addItem(self._time_label(raw), raw)
-        wanted = _normalize_audio_volume_lock_time(value, "08:00")
-        idx = combo.findData(wanted)
-        if idx < 0:
-            hour, minute = parse_schedule_time_24h(wanted, 8, 0)
-            minute = int(round(minute / 5.0) * 5) % 60
-            idx = combo.findData(f"{hour:02d}:{minute:02d}")
-        if idx >= 0:
-            combo.setCurrentIndex(idx)
-        return combo
+    def _build_time_roller(self, value: str) -> TouchTimeRoller:
+        return TouchTimeRoller(_normalize_audio_volume_lock_time(value, "08:00"))
 
     def build(self):
         root = QVBoxLayout(self)
@@ -12747,15 +12914,28 @@ class AudioVolumeLockDialog(QDialog):
         schedule.addLayout(days_row)
 
         time_row = QHBoxLayout()
+        time_row.setSpacing(28)
+
+        start_col = QVBoxLayout()
+        start_col.setSpacing(5)
         start_label = QLabel("Turns On")
+        start_label.setAlignment(Qt.AlignCenter)
+        start_label.setStyleSheet("color:#dbe3f4; font-size:13px;")
+        self.start_time = self._build_time_roller(str(self.initial.get("startTime") or "08:00"))
+        start_col.addWidget(start_label)
+        start_col.addWidget(self.start_time)
+
+        end_col = QVBoxLayout()
+        end_col.setSpacing(5)
         end_label = QLabel("Turns Off")
-        self.start_time = self._build_time_combo(str(self.initial.get("startTime") or "08:00"))
-        self.end_time = self._build_time_combo(str(self.initial.get("endTime") or "22:00"))
-        time_row.addWidget(start_label)
-        time_row.addWidget(self.start_time)
-        time_row.addSpacing(24)
-        time_row.addWidget(end_label)
-        time_row.addWidget(self.end_time)
+        end_label.setAlignment(Qt.AlignCenter)
+        end_label.setStyleSheet("color:#dbe3f4; font-size:13px;")
+        self.end_time = self._build_time_roller(str(self.initial.get("endTime") or "22:00"))
+        end_col.addWidget(end_label)
+        end_col.addWidget(self.end_time)
+
+        time_row.addLayout(start_col)
+        time_row.addLayout(end_col)
         time_row.addStretch(1)
         schedule.addLayout(time_row)
         root.addWidget(schedule_panel)
@@ -12826,8 +13006,8 @@ class AudioVolumeLockDialog(QDialog):
         return {
             "autoEnabled": bool(self.auto_enabled.isChecked()),
             "days": [day for day, check in self.day_checks.items() if check.isChecked()],
-            "startTime": str(self.start_time.currentData() or "08:00"),
-            "endTime": str(self.end_time.currentData() or "22:00"),
+            "startTime": str(self.start_time.value() or "08:00"),
+            "endTime": str(self.end_time.value() or "22:00"),
             "maxVolume": int(self.max_slider.value()),
             "forceOffControls": {key: bool(check.isChecked()) for key, check in self.force_checks.items()},
         }
