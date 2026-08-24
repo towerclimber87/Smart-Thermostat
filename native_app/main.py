@@ -13,7 +13,7 @@ import sys
 import threading
 import time
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib import request as urlrequest
 from pathlib import Path
 from typing import Any, Callable
@@ -612,6 +612,59 @@ def audio_ui_config(config: dict | None) -> dict:
     return {
         "enabledControls": merged,
         "autoNavigate": bool(audio.get("autoNavigate", False)),
+    }
+
+
+AUDIO_VOLUME_LOCK_DAY_LABELS: list[tuple[int, str]] = [
+    (0, "Mon"),
+    (1, "Tue"),
+    (2, "Wed"),
+    (3, "Thu"),
+    (4, "Fri"),
+    (5, "Sat"),
+    (6, "Sun"),
+]
+
+
+def _normalize_audio_volume_lock_time(value: Any, fallback: str) -> str:
+    hour, minute = parse_schedule_time_24h(value, *parse_schedule_time_24h(fallback))
+    return f"{hour:02d}:{minute:02d}"
+
+
+def audio_volume_lock_config(config: dict | None) -> dict:
+    """Return the normalized Audio-page Volume Lock configuration."""
+    cfg = config if isinstance(config, dict) else {}
+    audio = cfg.get("audio") if isinstance(cfg.get("audio"), dict) else {}
+    raw = audio.get("volumeLock") if isinstance(audio.get("volumeLock"), dict) else {}
+
+    days_raw = raw.get("days") if isinstance(raw.get("days"), list) else list(range(7))
+    days: list[int] = []
+    for value in days_raw:
+        try:
+            day = int(value)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= day <= 6 and day not in days:
+            days.append(day)
+    days.sort()
+
+    try:
+        max_volume = int(clamp(round(float(raw.get("maxVolume", 50))), 1, 100))
+    except (TypeError, ValueError):
+        max_volume = 50
+
+    force_raw = raw.get("forceOffControls") if isinstance(raw.get("forceOffControls"), dict) else {}
+    force_off = {key: bool(force_raw.get(key, False)) for key, _label in AUDIO_SWITCH_CONTROL_ORDER}
+
+    return {
+        "active": bool(raw.get("active", False)),
+        "autoEnabled": bool(raw.get("autoEnabled", False)),
+        "days": days,
+        "startTime": _normalize_audio_volume_lock_time(raw.get("startTime"), "08:00"),
+        "endTime": _normalize_audio_volume_lock_time(raw.get("endTime"), "22:00"),
+        "maxVolume": max_volume,
+        "forceOffControls": force_off,
+        "lastScheduleEventKey": str(raw.get("lastScheduleEventKey") or ""),
     }
 
 
@@ -8747,13 +8800,19 @@ class AudioScreen(Page):
         self._audio_number_local: dict[str, dict[str, Any]] = {}
         self._audio_volume_local: dict[str, Any] = {"value": None, "until": 0.0}
         self._audio_assign_short_ms = 700
-        self._audio_assign_reassign_ms = 6000
+        self._audio_assign_reassign_ms = 2000
         self._audio_detected_player_id = ""
         self._audio_detect_running_player_id = ""
         self._audio_detect_last_attempt: dict[str, float] = {}
         self.group_player_states: dict[str, dict] = {}
         self.group_buttons: dict[str, RoundButton] = {}
         self._group_signature: tuple = ()
+        self._volume_lock_enforce_running = False
+        self._volume_lock_save_running = False
+        self._volume_lock_save_pending = False
+        self.volume_lock_timer = QTimer(self)
+        self.volume_lock_timer.timeout.connect(self.volume_lock_tick)
+        self.volume_lock_timer.start(3000)
         root = QHBoxLayout(self)
         root.setContentsMargins(28, 6, 28, 18)
         root.setSpacing(18)
@@ -8834,6 +8893,13 @@ class AudioScreen(Page):
         self.group_buttons_layout = QHBoxLayout()
         self.group_buttons_layout.setSpacing(8)
         groups_strip_lay.addLayout(self.group_buttons_layout, 1)
+        self.volume_lock_button = HoldRoundButton("Volume Lock", min_h=42, hold_ms=2000)
+        self.volume_lock_button.setMaximumHeight(46)
+        self.volume_lock_button.setMinimumWidth(132)
+        self.volume_lock_button.setToolTip("Tap to toggle Volume Lock. Hold 2 seconds for schedule and limits.")
+        self.volume_lock_button.clicked.connect(self.toggle_volume_lock)
+        self.volume_lock_button.held.connect(self.show_volume_lock_settings)
+        groups_strip_lay.addWidget(self.volume_lock_button)
         lay.addWidget(self.groups_strip, 0)
         self.rebuild_audio_group_buttons()
 
@@ -9044,7 +9110,9 @@ class AudioScreen(Page):
                 widget.deleteLater()
         self.group_buttons = {}
         groups = self.configured_audio_groups()
-        self.groups_strip.setVisible(bool(groups))
+        # Volume Lock intentionally keeps this strip visible even when no custom
+        # audio groups have been created yet. It occupies the far-right position.
+        self.groups_strip.setVisible(True)
         for group in groups:
             group_id = str(group.get("id") or "")
             btn = RoundButton(str(group.get("name") or "Group"), min_h=42)
@@ -9145,6 +9213,7 @@ class AudioScreen(Page):
             self.artist_label.setText(title)
         self.apply_audio_control_state()
         self.rebuild_audio_group_buttons()
+        self.update_volume_lock_button()
 
         # Discover tone-control entities once for each selected player. The
         # returned number.* records include Home Assistant's live min/max/step,
@@ -9425,9 +9494,9 @@ class AudioScreen(Page):
                     slider.blockSignals(False)
                 label.setText(self._audio_number_label_text(name, self._number_label_value(value)))
                 slider.setEnabled(True)
-                label.setToolTip("Hold 6 seconds to reassign")
+                label.setToolTip("Hold 2 seconds to reassign")
                 if getattr(self, "eq_cards", {}).get(name):
-                    self.eq_cards[name].setToolTip(f"Hold 6 seconds to reassign {title}")
+                    self.eq_cards[name].setToolTip(f"Hold 2 seconds to reassign {title}")
             else:
                 self._clear_audio_number_local(name)
                 label.setText(self._audio_number_label_text(name, "Hold"))
@@ -9446,7 +9515,7 @@ class AudioScreen(Page):
             else:
                 on = state in {"on", "open", "true", "1"}
             button.setActive(on)
-            button.setToolTip("Hold 6 seconds to reassign" if assigned else "Hold to assign")
+            button.setToolTip("Hold 2 seconds to reassign" if assigned else "Hold to assign")
             # The highlight is the on/off indicator. Keep these tiles clean with no
             # ON/OFF text under Sub, Surround, or Projector.
             if hasattr(button, "setStatus"):
@@ -9462,6 +9531,9 @@ class AudioScreen(Page):
             try:
                 raw = float(value)
                 pct = int(clamp(round(raw * 100 if raw <= 1 else raw), 0, 100))
+                lock_cfg = audio_volume_lock_config(self.s.config)
+                if lock_cfg.get("active"):
+                    pct = min(pct, int(lock_cfg.get("maxVolume", 100)))
                 send_value = pct
                 self._hold_audio_volume_local(pct, 8.0)
                 self.volume.blockSignals(True)
@@ -9563,6 +9635,9 @@ class AudioScreen(Page):
             else:
                 try:
                     pct = int(clamp(round(float(volume_value)), 0, 100))
+                    lock_cfg = audio_volume_lock_config(self.s.config)
+                    if lock_cfg.get("active"):
+                        pct = min(pct, int(lock_cfg.get("maxVolume", 100)))
                     self._hold_audio_volume_local(pct, 8.0)
                     self.volume.blockSignals(True)
                     self.volume.setValue(pct)
@@ -9596,6 +9671,9 @@ class AudioScreen(Page):
                 missing.append(name.replace("subwoofer", "sub"))
                 continue
             action = "on" if str(action).lower() == "on" else "off"
+            lock_cfg = audio_volume_lock_config(self.s.config)
+            if lock_cfg.get("active") and bool((lock_cfg.get("forceOffControls") or {}).get(name)):
+                action = "off"
             self._remember_switch_state(name, action)
             switch_actions.append((name, entity_id, action))
 
@@ -9713,6 +9791,19 @@ class AudioScreen(Page):
 
         record = self.audio_control_record(name)
         domain = str(record.get("domain") or (eid.split(".", 1)[0] if "." in eid else "")).strip().lower()
+        lock_cfg = audio_volume_lock_config(self.s.config)
+        if lock_cfg.get("active") and bool((lock_cfg.get("forceOffControls") or {}).get(name)):
+            self._remember_switch_state(name, "off")
+            self.apply_audio_control_state()
+            payload = self.s.ha_payload({"entityId": eid, "action": "off"})
+            endpoint = "/api/ha/room/action" if domain == "media_player" else "/api/ha/audio/switch/action"
+            self.run_async(
+                "audio-volume-lock-force-off",
+                lambda: self.s.api.post(endpoint, payload),
+                lambda _result, n=title: self.requestToast.emit(f"Volume Lock keeps {n} off"),
+                lambda err, n=title: self.requestToast.emit(f"{n} failed: {err}"),
+            )
+            return
 
         def done(result):
             control = (result or {}).get("control") if isinstance(result, dict) else None
@@ -9747,6 +9838,274 @@ class AudioScreen(Page):
             done,
             lambda err, n=title: self.requestToast.emit(f"{n} failed: {err}"),
         )
+
+    def volume_lock_config(self) -> dict:
+        return audio_volume_lock_config(self.s.config)
+
+    def _volume_lock_raw(self) -> dict:
+        audio = self.s.config.setdefault("audio", {})
+        raw = audio.get("volumeLock")
+        if not isinstance(raw, dict):
+            raw = {}
+            audio["volumeLock"] = raw
+        return raw
+
+    def update_volume_lock_button(self):
+        button = getattr(self, "volume_lock_button", None)
+        if button is None:
+            return
+        cfg = self.volume_lock_config()
+        button.setActive(bool(cfg.get("active")))
+        auto_text = "Auto schedule on" if cfg.get("autoEnabled") else "Auto schedule off"
+        button.setToolTip(
+            f"Volume Lock {'ON' if cfg.get('active') else 'OFF'} · max {cfg.get('maxVolume', 50)}% · {auto_text}. "
+            "Tap to toggle; hold 2 seconds for settings."
+        )
+
+    def queue_volume_lock_save(self):
+        self._volume_lock_save_pending = True
+        if self._volume_lock_save_running:
+            return
+        self._start_volume_lock_save()
+
+    def _start_volume_lock_save(self):
+        if self._volume_lock_save_running or not self._volume_lock_save_pending:
+            return
+        self._volume_lock_save_pending = False
+        self._volume_lock_save_running = True
+        snapshot = copy.deepcopy(self.s.config)
+
+        def done(_result):
+            self._volume_lock_save_running = False
+            if self._volume_lock_save_pending:
+                self._start_volume_lock_save()
+
+        def failed(error):
+            self._volume_lock_save_running = False
+            self._volume_lock_save_pending = False
+            self.requestToast.emit(f"Volume Lock save failed: {error}")
+
+        self.run_async(
+            "audio-volume-lock-save",
+            lambda: self.s.api.save_config(snapshot),
+            done,
+            failed,
+        )
+
+    def toggle_volume_lock(self):
+        raw = self._volume_lock_raw()
+        cfg = self.volume_lock_config()
+        turning_on = not bool(cfg.get("active"))
+        raw["active"] = turning_on
+        self.update_volume_lock_button()
+        self.queue_volume_lock_save()
+        if turning_on:
+            self.requestToast.emit(f"Volume Lock on · max {cfg.get('maxVolume', 50)}%")
+            QTimer.singleShot(0, self.volume_lock_tick)
+        else:
+            self.requestToast.emit("Volume Lock off · schedule remains enabled")
+
+    def show_volume_lock_settings(self):
+        before = self.volume_lock_config()
+        dialog = AudioVolumeLockDialog(before, self)
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        updated = dialog.settings()
+        raw = self._volume_lock_raw()
+        schedule_before = (
+            bool(before.get("autoEnabled")),
+            tuple(before.get("days") or []),
+            str(before.get("startTime") or ""),
+            str(before.get("endTime") or ""),
+        )
+        schedule_after = (
+            bool(updated.get("autoEnabled")),
+            tuple(updated.get("days") or []),
+            str(updated.get("startTime") or ""),
+            str(updated.get("endTime") or ""),
+        )
+        raw["active"] = bool(before.get("active"))
+        raw["autoEnabled"] = bool(updated.get("autoEnabled"))
+        raw["days"] = list(updated.get("days") or [])
+        raw["startTime"] = str(updated.get("startTime") or "08:00")
+        raw["endTime"] = str(updated.get("endTime") or "22:00")
+        raw["maxVolume"] = int(updated.get("maxVolume") or 50)
+        raw["forceOffControls"] = copy.deepcopy(updated.get("forceOffControls") or {})
+        if schedule_before != schedule_after:
+            # Re-evaluate a newly changed schedule once. Manual toggles after the
+            # event is consumed are still respected until the next schedule edge.
+            raw["lastScheduleEventKey"] = ""
+        else:
+            raw["lastScheduleEventKey"] = str(before.get("lastScheduleEventKey") or "")
+        self.update_volume_lock_button()
+        self.queue_volume_lock_save()
+        QTimer.singleShot(0, self.volume_lock_tick)
+        self.requestToast.emit("Volume Lock settings saved")
+
+    def _volume_lock_latest_schedule_event(self, now: datetime, cfg: dict) -> tuple[str, bool] | None:
+        if not cfg.get("autoEnabled") or not cfg.get("days"):
+            return None
+        start_h, start_m = parse_schedule_time_24h(cfg.get("startTime"), 8, 0)
+        end_h, end_m = parse_schedule_time_24h(cfg.get("endTime"), 22, 0)
+        start_minutes = start_h * 60 + start_m
+        end_minutes = end_h * 60 + end_m
+        events: list[tuple[datetime, bool, str]] = []
+        today = now.date()
+        selected_days = {int(day) for day in cfg.get("days") or []}
+        # Eight days covers a full weekly cycle plus the prior overnight end.
+        for offset in range(-8, 1):
+            start_date = today + timedelta(days=offset)
+            if start_date.weekday() not in selected_days:
+                continue
+            start_dt = datetime(start_date.year, start_date.month, start_date.day, start_h, start_m)
+            end_date = start_date if end_minutes > start_minutes else start_date + timedelta(days=1)
+            end_dt = datetime(end_date.year, end_date.month, end_date.day, end_h, end_m)
+            if start_dt <= now:
+                events.append((start_dt, True, f"on:{start_dt.strftime('%Y-%m-%dT%H:%M')}"))
+            if end_dt <= now:
+                events.append((end_dt, False, f"off:{end_dt.strftime('%Y-%m-%dT%H:%M')}"))
+        if not events:
+            return None
+        event_dt, active, key = max(events, key=lambda item: item[0])
+        return key, active
+
+    def process_volume_lock_schedule(self) -> bool:
+        cfg = self.volume_lock_config()
+        latest = self._volume_lock_latest_schedule_event(datetime.now(), cfg)
+        if latest is None:
+            return False
+        key, target_active = latest
+        if key == str(cfg.get("lastScheduleEventKey") or ""):
+            return False
+        raw = self._volume_lock_raw()
+        raw["lastScheduleEventKey"] = key
+        raw["active"] = bool(target_active)
+        self.update_volume_lock_button()
+        self.queue_volume_lock_save()
+        self.requestToast.emit(f"Volume Lock {'on' if target_active else 'off'} · scheduled")
+        return True
+
+    @staticmethod
+    def _volume_lock_control_is_on(control: dict) -> bool:
+        state = str((control or {}).get("state") or "").strip().lower()
+        domain = str((control or {}).get("domain") or "").strip().lower()
+        if domain == "media_player":
+            return bool(state) and state not in {"off", "standby", "unavailable", "unknown"}
+        return state in {"on", "open", "true", "1", "playing", "paused", "idle"}
+
+    def volume_lock_tick(self):
+        try:
+            self.process_volume_lock_schedule()
+        except Exception as exc:
+            trace_runtime(f"Volume Lock schedule error: {exc}")
+        cfg = self.volume_lock_config()
+        desired_interval = 2000 if cfg.get("active") else 5000
+        if self.volume_lock_timer.interval() != desired_interval:
+            self.volume_lock_timer.setInterval(desired_interval)
+        self.update_volume_lock_button()
+        if not cfg.get("active") or self._volume_lock_enforce_running:
+            return
+
+        media_player_id = str(self.player_id() or "").strip()
+        force_off = cfg.get("forceOffControls") or {}
+        restricted: dict[str, str] = {}
+        for name, enabled in force_off.items():
+            if not enabled:
+                continue
+            entity_id = str(self.control_entity(name) or "").strip()
+            if entity_id:
+                restricted[name] = entity_id
+        if not media_player_id and not restricted:
+            return
+
+        max_volume = int(cfg.get("maxVolume") or 50)
+        self._volume_lock_enforce_running = True
+
+        def worker():
+            result: dict[str, Any] = {"player": None, "controls": {}, "correctedVolume": False, "forcedOff": []}
+            if media_player_id:
+                try:
+                    media_result = self.s.api.post(
+                        "/api/ha/media/states",
+                        self.s.ha_payload({"entityIds": [media_player_id]}),
+                    )
+                    players = media_result.get("players") if isinstance(media_result, dict) else []
+                    player = players[0] if isinstance(players, list) and players else None
+                    if isinstance(player, dict):
+                        result["player"] = player
+                        raw_volume = player.get("volumeLevel", player.get("volume_level"))
+                        try:
+                            current_pct = int(clamp(round(float(raw_volume) * 100), 0, 100))
+                        except (TypeError, ValueError):
+                            current_pct = -1
+                        if current_pct > max_volume:
+                            corrected = self.s.api.post(
+                                "/api/ha/media/action",
+                                self.s.ha_payload({"entityId": media_player_id, "action": "volume", "value": max_volume}),
+                            )
+                            if isinstance(corrected, dict) and isinstance(corrected.get("state"), dict):
+                                result["player"] = corrected.get("state")
+                            result["correctedVolume"] = True
+                except Exception as exc:
+                    result["mediaError"] = str(exc)
+
+            if restricted:
+                try:
+                    states_result = self.s.api.post(
+                        "/api/ha/room/states",
+                        self.s.ha_payload({"entityIds": list(restricted.values())}),
+                    )
+                    controls = states_result.get("controls") if isinstance(states_result, dict) else []
+                    by_id = {
+                        str(item.get("entityId") or ""): item
+                        for item in controls or []
+                        if isinstance(item, dict) and item.get("entityId")
+                    }
+                    for name, entity_id in restricted.items():
+                        control = by_id.get(entity_id)
+                        if not isinstance(control, dict):
+                            continue
+                        result["controls"][name] = control
+                        if self._volume_lock_control_is_on(control):
+                            response = self.s.api.post(
+                                "/api/ha/room/action",
+                                self.s.ha_payload({"entityId": entity_id, "action": "off"}),
+                            )
+                            fresh = response.get("control") if isinstance(response, dict) else None
+                            if isinstance(fresh, dict):
+                                result["controls"][name] = fresh
+                            result["forcedOff"].append(name)
+                except Exception as exc:
+                    result["controlError"] = str(exc)
+            return result
+
+        def done(result):
+            self._volume_lock_enforce_running = False
+            if not isinstance(result, dict):
+                return
+            player = result.get("player")
+            if isinstance(player, dict):
+                self.player_state = player
+                if result.get("correctedVolume"):
+                    self._hold_audio_volume_local(max_volume, 1.5)
+                if self.isVisible():
+                    self.apply_player_state()
+            controls_target = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {}).setdefault("audioControlEntities", {})
+            for name, control in (result.get("controls") or {}).items():
+                if not isinstance(control, dict):
+                    continue
+                previous = controls_target.get(name) if isinstance(controls_target.get(name), dict) else {}
+                merged = dict(previous)
+                merged.update(control)
+                controls_target[name] = merged
+            if self.isVisible():
+                self.apply_audio_control_state()
+
+        def failed(error):
+            self._volume_lock_enforce_running = False
+            trace_runtime(f"Volume Lock enforcement failed: {error}")
+
+        self.run_async("audio-volume-lock-enforce", worker, done, failed)
 
     def _compact_track_title(self, text: str) -> str:
         clean = str(text or "").strip()
@@ -12227,6 +12586,179 @@ class SimplePageSettingsDialog(QDialog):
     def fit_to_screen(self):
         fit_dialog_to_available_screen(self, margin=0)
 
+
+
+class AudioVolumeLockDialog(QDialog):
+    """Touch-friendly schedule and reinforcement settings for Volume Lock."""
+
+    def __init__(self, settings: dict | None = None, parent=None):
+        super().__init__(parent)
+        self.initial = copy.deepcopy(settings or {})
+        self.day_checks: dict[int, QCheckBox] = {}
+        self.force_checks: dict[str, QCheckBox] = {}
+        self.setModal(True)
+        self.setWindowTitle("Volume Lock")
+        self.setWindowFlag(Qt.FramelessWindowHint, True)
+        self.resize(1040, 720)
+        self.setStyleSheet("""
+            QDialog { background:#09111f; color:#f7fbff; }
+            QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
+            QCheckBox { color:#eef5ff; font-size:16px; font-weight:900; spacing:10px; min-height:38px; }
+            QCheckBox::indicator { width:28px; height:28px; }
+            QComboBox {
+                background:rgba(22,36,52,0.96); color:#f6f8ff;
+                border:1px solid rgba(73,230,255,0.30); border-radius:14px;
+                padding:8px 12px; min-height:42px; font-size:15px; font-weight:900;
+            }
+            QAbstractItemView { background:#182235; color:#fff; selection-background-color:#45e5ff; selection-color:#071420; }
+        """)
+        self.build()
+        QTimer.singleShot(0, lambda: fit_dialog_to_available_screen(self, margin=12))
+
+    @staticmethod
+    def _time_label(value: str) -> str:
+        hour, minute = parse_schedule_time_24h(value, 8, 0)
+        suffix = "AM" if hour < 12 else "PM"
+        shown_hour = hour % 12 or 12
+        return f"{shown_hour}:{minute:02d} {suffix}"
+
+    def _build_time_combo(self, value: str) -> QComboBox:
+        combo = QComboBox()
+        combo.setMinimumWidth(180)
+        for hour in range(24):
+            for minute in range(0, 60, 5):
+                raw = f"{hour:02d}:{minute:02d}"
+                combo.addItem(self._time_label(raw), raw)
+        wanted = _normalize_audio_volume_lock_time(value, "08:00")
+        idx = combo.findData(wanted)
+        if idx < 0:
+            hour, minute = parse_schedule_time_24h(wanted, 8, 0)
+            minute = int(round(minute / 5.0) * 5) % 60
+            idx = combo.findData(f"{hour:02d}:{minute:02d}")
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+        return combo
+
+    def build(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(26, 22, 26, 22)
+        root.setSpacing(14)
+
+        title = QLabel("VOLUME LOCK")
+        title.setFont(font(26, QFont.Black))
+        title.setStyleSheet("color:#49e6ff; letter-spacing:3px;")
+        subtitle = QLabel("Tap the Volume Lock button to turn it on or off manually. A manual change never disables the next scheduled run.")
+        subtitle.setWordWrap(True)
+        subtitle.setStyleSheet("color:rgba(225,235,248,0.76); font-size:13px;")
+        root.addWidget(title)
+        root.addWidget(subtitle)
+
+        schedule_panel = GlassPanel(radius=20)
+        schedule = QVBoxLayout(schedule_panel)
+        schedule.setContentsMargins(18, 14, 18, 14)
+        schedule.setSpacing(10)
+        self.auto_enabled = QCheckBox("Auto Run Schedule")
+        self.auto_enabled.setChecked(bool(self.initial.get("autoEnabled", False)))
+        schedule.addWidget(self.auto_enabled)
+
+        days_label = QLabel("Days that Volume Lock automatically starts")
+        days_label.setStyleSheet("color:#dbe3f4; font-size:13px;")
+        schedule.addWidget(days_label)
+        days_row = QHBoxLayout()
+        selected_days = {int(day) for day in self.initial.get("days") or []}
+        for day, label in AUDIO_VOLUME_LOCK_DAY_LABELS:
+            check = QCheckBox(label)
+            check.setChecked(day in selected_days)
+            self.day_checks[day] = check
+            days_row.addWidget(check)
+        days_row.addStretch(1)
+        schedule.addLayout(days_row)
+
+        time_row = QHBoxLayout()
+        start_label = QLabel("Turns On")
+        end_label = QLabel("Turns Off")
+        self.start_time = self._build_time_combo(str(self.initial.get("startTime") or "08:00"))
+        self.end_time = self._build_time_combo(str(self.initial.get("endTime") or "22:00"))
+        time_row.addWidget(start_label)
+        time_row.addWidget(self.start_time)
+        time_row.addSpacing(24)
+        time_row.addWidget(end_label)
+        time_row.addWidget(self.end_time)
+        time_row.addStretch(1)
+        schedule.addLayout(time_row)
+        root.addWidget(schedule_panel)
+
+        limit_panel = GlassPanel(radius=20)
+        limit = QVBoxLayout(limit_panel)
+        limit.setContentsMargins(18, 14, 18, 14)
+        limit.setSpacing(8)
+        max_row = QHBoxLayout()
+        max_title = QLabel("Maximum Volume")
+        max_title.setFont(font(13, QFont.Black))
+        self.max_value = QLabel(f"{int(self.initial.get('maxVolume') or 50)}%")
+        self.max_value.setFont(font(15, QFont.Black))
+        self.max_value.setStyleSheet("color:#49e6ff;")
+        max_row.addWidget(max_title)
+        max_row.addStretch(1)
+        max_row.addWidget(self.max_value)
+        limit.addLayout(max_row)
+        self.max_slider = TouchFriendlySlider(Qt.Horizontal)
+        self.max_slider.setRange(1, 100)
+        self.max_slider.setValue(int(clamp(int(self.initial.get("maxVolume") or 50), 1, 100)))
+        self.max_slider.setMinimumHeight(54)
+        self.max_slider.valueChanged.connect(lambda value: self.max_value.setText(f"{value}%"))
+        limit.addWidget(self.max_slider)
+        max_note = QLabel("Only values above this ceiling are reduced. Volume already below the limit is left alone.")
+        max_note.setWordWrap(True)
+        max_note.setStyleSheet("color:rgba(225,235,248,0.70); font-size:12px;")
+        limit.addWidget(max_note)
+        root.addWidget(limit_panel)
+
+        off_panel = GlassPanel(radius=20)
+        off = QVBoxLayout(off_panel)
+        off.setContentsMargins(18, 14, 18, 14)
+        off.setSpacing(6)
+        off_title = QLabel("Keep These Audio Controls OFF While Locked")
+        off_title.setFont(font(13, QFont.Black))
+        off.addWidget(off_title)
+        force = self.initial.get("forceOffControls") if isinstance(self.initial.get("forceOffControls"), dict) else {}
+        controls_grid = QGridLayout()
+        controls_grid.setHorizontalSpacing(24)
+        controls_grid.setVerticalSpacing(4)
+        for idx, (key, label) in enumerate(AUDIO_SWITCH_CONTROL_ORDER):
+            check = QCheckBox(f"Keep {label} Off")
+            check.setChecked(bool(force.get(key, False)))
+            self.force_checks[key] = check
+            controls_grid.addWidget(check, idx // 2, idx % 2)
+        off.addLayout(controls_grid)
+        off_note = QLabel("If another automation, remote, or source turns one of these on, Volume Lock turns it back off on the next enforcement check. Unassigned controls are ignored.")
+        off_note.setWordWrap(True)
+        off_note.setStyleSheet("color:rgba(225,235,248,0.70); font-size:12px;")
+        off.addWidget(off_note)
+        root.addWidget(off_panel)
+
+        root.addStretch(1)
+        actions = QHBoxLayout()
+        cancel = RoundButton("Cancel", min_h=54)
+        save = RoundButton("Save", min_h=54, active=True)
+        cancel.setMinimumWidth(150)
+        save.setMinimumWidth(170)
+        cancel.clicked.connect(self.reject)
+        save.clicked.connect(self.accept)
+        actions.addStretch(1)
+        actions.addWidget(cancel)
+        actions.addWidget(save)
+        root.addLayout(actions)
+
+    def settings(self) -> dict:
+        return {
+            "autoEnabled": bool(self.auto_enabled.isChecked()),
+            "days": [day for day, check in self.day_checks.items() if check.isChecked()],
+            "startTime": str(self.start_time.currentData() or "08:00"),
+            "endTime": str(self.end_time.currentData() or "22:00"),
+            "maxVolume": int(self.max_slider.value()),
+            "forceOffControls": {key: bool(check.isChecked()) for key, check in self.force_checks.items()},
+        }
 
 
 class AudioGroupEditorDialog(QDialog):
