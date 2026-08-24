@@ -13993,7 +13993,7 @@ def _rgb_to_hex(rgb_value) -> str:
     return "#" + "".join(f"{part:02x}" for part in parts)
 
 
-def _hex_to_rgb(color_value: str | None) -> list[int] | None:
+def _light_hex_to_rgb(color_value: str | None) -> list[int] | None:
     raw = str(color_value or "").strip().lstrip("#")
     if len(raw) == 3:
         raw = "".join(part * 2 for part in raw)
@@ -14098,7 +14098,7 @@ def _call_light_service(ha_url: str, token: str, entity_id: str, action: str, br
                 payload["transition"] = max(0.0, min(5.0, float(transition)))
         except (TypeError, ValueError):
             pass
-        rgb_color = _hex_to_rgb(color)
+        rgb_color = _light_hex_to_rgb(color)
         if action == "color" and rgb_color:
             payload["rgb_color"] = rgb_color
         _ha_json_request(ha_url, token, "POST", "/api/services/light/turn_on", payload)
@@ -14118,8 +14118,8 @@ def _call_light_service(ha_url: str, token: str, entity_id: str, action: str, br
             "name": entity_id,
             "state": "off" if action == "off" else "on",
             "brightnessPct": fallback_brightness,
-            "colorSupported": bool(_hex_to_rgb(color)),
-            "colorHex": f"#{str(color or '').strip().lstrip('#').lower()}" if _hex_to_rgb(color) else "#ffd76f",
+            "colorSupported": bool(_light_hex_to_rgb(color)),
+            "colorHex": f"#{str(color or '').strip().lstrip('#').lower()}" if _light_hex_to_rgb(color) else "#ffd76f",
         }
 
     if not refresh:
