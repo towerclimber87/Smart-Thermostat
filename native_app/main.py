@@ -8915,8 +8915,22 @@ class AudioScreen(Page):
         now_lay = QHBoxLayout(self.now_card)
         now_lay.setContentsMargins(26, 22, 26, 22)
         now_lay.setSpacing(26)
-        self.art = CoverArtLabel(250)
-        now_lay.addWidget(self.art, 0, Qt.AlignVCenter)
+        # Keep Volume Lock in the top-left of the Now Playing card so the
+        # Groups strip can use its entire width.  Overlaying it on the artwork
+        # keeps the existing Now Playing card height and spacing unchanged.
+        self.art_holder = QWidget(self.now_card)
+        self.art_holder.setFixedSize(250, 250)
+        self.art = CoverArtLabel(250, self.art_holder)
+        self.art.move(0, 0)
+
+        self.volume_lock_button = HoldRoundButton("Volume Lock", min_h=40, hold_ms=2000, parent=self.art_holder)
+        self.volume_lock_button.setFixedSize(138, 42)
+        self.volume_lock_button.move(10, 10)
+        self.volume_lock_button.setToolTip("Tap to toggle Volume Lock. Hold 2 seconds for schedule and limits.")
+        self.volume_lock_button.clicked.connect(self.toggle_volume_lock)
+        self.volume_lock_button.held.connect(self.show_volume_lock_settings)
+        self.volume_lock_button.raise_()
+        now_lay.addWidget(self.art_holder, 0, Qt.AlignVCenter)
 
         text_col = QVBoxLayout()
         text_col.setSpacing(8)
@@ -8957,13 +8971,6 @@ class AudioScreen(Page):
         self.group_buttons_layout = QHBoxLayout()
         self.group_buttons_layout.setSpacing(8)
         groups_strip_lay.addLayout(self.group_buttons_layout, 1)
-        self.volume_lock_button = HoldRoundButton("Volume Lock", min_h=42, hold_ms=2000)
-        self.volume_lock_button.setMaximumHeight(46)
-        self.volume_lock_button.setMinimumWidth(132)
-        self.volume_lock_button.setToolTip("Tap to toggle Volume Lock. Hold 2 seconds for schedule and limits.")
-        self.volume_lock_button.clicked.connect(self.toggle_volume_lock)
-        self.volume_lock_button.held.connect(self.show_volume_lock_settings)
-        groups_strip_lay.addWidget(self.volume_lock_button)
         lay.addWidget(self.groups_strip, 0)
         self.rebuild_audio_group_buttons()
 
@@ -9174,9 +9181,7 @@ class AudioScreen(Page):
                 widget.deleteLater()
         self.group_buttons = {}
         groups = self.configured_audio_groups()
-        # Volume Lock intentionally keeps this strip visible even when no custom
-        # audio groups have been created yet. It occupies the far-right position.
-        self.groups_strip.setVisible(True)
+        self.groups_strip.setVisible(bool(groups))
         for group in groups:
             group_id = str(group.get("id") or "")
             btn = RoundButton(str(group.get("name") or "Group"), min_h=42)
