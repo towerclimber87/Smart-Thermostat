@@ -1108,6 +1108,7 @@ class HoldRoundButton(RoundButton):
     def __init__(self, *args, hold_ms: int = 700, **kwargs):
         super().__init__(*args, **kwargs)
         self._hold_fired = False
+        self._direct_touch_hold_active = False
         self._hold_timer = QTimer(self)
         self._hold_timer.setSingleShot(True)
         self._hold_timer.setInterval(hold_ms)
@@ -1115,10 +1116,41 @@ class HoldRoundButton(RoundButton):
 
     def _fire_hold(self):
         self._hold_fired = True
+        # The appliance-wide raw-touch handler owns touchscreen presses.  Do not
+        # open a modal while that raw QTouchEvent is still active; the release can
+        # otherwise be delivered to the newly opened dialog.  The direct-touch
+        # path emits ``held`` immediately after TouchEnd instead.
+        if self._direct_touch_hold_active:
+            return
         self.held.emit()
+
+    def begin_direct_touch_hold(self):
+        self._direct_touch_hold_active = True
+        self._hold_fired = False
+        self._hold_timer.start()
+
+    def update_direct_touch_hold(self, inside: bool):
+        if not inside and self._hold_timer.isActive():
+            self._hold_timer.stop()
+
+    def end_direct_touch_hold(self, inside: bool) -> bool:
+        if self._hold_timer.isActive():
+            self._hold_timer.stop()
+        held = bool(self._hold_fired and inside)
+        self._direct_touch_hold_active = False
+        if held:
+            QTimer.singleShot(0, self.held.emit)
+        return held
+
+    def cancel_direct_touch_hold(self):
+        if self._hold_timer.isActive():
+            self._hold_timer.stop()
+        self._direct_touch_hold_active = False
+        self._hold_fired = False
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
+            self._direct_touch_hold_active = False
             self._hold_fired = False
             self._hold_timer.start()
         super().mousePressEvent(event)
@@ -1146,6 +1178,7 @@ class ModernAudioButton(QAbstractButton):
         self.kind = str(kind or "normal")
         self.holdable = bool(holdable)
         self._hold_fired = False
+        self._direct_touch_hold_active = False
         self._press_feedback_active = False
         self._press_feedback_timer = QTimer(self)
         self._press_feedback_timer.setSingleShot(True)
@@ -1177,7 +1210,37 @@ class ModernAudioButton(QAbstractButton):
         if not self.holdable:
             return
         self._hold_fired = True
+        if self._direct_touch_hold_active:
+            return
         self.held.emit()
+
+    def begin_direct_touch_hold(self):
+        if not self.holdable:
+            return
+        self._direct_touch_hold_active = True
+        self._hold_fired = False
+        self._hold_timer.start()
+
+    def update_direct_touch_hold(self, inside: bool):
+        if self.holdable and not inside and self._hold_timer.isActive():
+            self._hold_timer.stop()
+
+    def end_direct_touch_hold(self, inside: bool) -> bool:
+        if not self.holdable:
+            return False
+        if self._hold_timer.isActive():
+            self._hold_timer.stop()
+        held = bool(self._hold_fired and inside)
+        self._direct_touch_hold_active = False
+        if held:
+            QTimer.singleShot(0, self.held.emit)
+        return held
+
+    def cancel_direct_touch_hold(self):
+        if self._hold_timer.isActive():
+            self._hold_timer.stop()
+        self._direct_touch_hold_active = False
+        self._hold_fired = False
 
     def _clear_press_feedback(self):
         self._press_feedback_active = False
@@ -1190,6 +1253,7 @@ class ModernAudioButton(QAbstractButton):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton and self.holdable:
+            self._direct_touch_hold_active = False
             self._hold_fired = False
             self._hold_timer.start()
         super().mousePressEvent(event)
@@ -19117,6 +19181,9 @@ class MainWindow(Background):
                 else:
                     button.setDown(True)
                     button.update()
+                    begin_hold = getattr(button, "begin_direct_touch_hold", None)
+                    if callable(begin_hold):
+                        begin_hold()
             except RuntimeError:
                 self._direct_touch_button = None
                 self._touch_input_active = False
@@ -19142,12 +19209,16 @@ class MainWindow(Background):
                 else:
                     button.setDown(bool(inside))
                     button.update()
+                    update_hold = getattr(button, "update_direct_touch_hold", None)
+                    if callable(update_hold):
+                        update_hold(bool(inside))
             except RuntimeError:
                 pass
             event.accept()
             return True
 
         accepted = bool(event_type == QEvent.TouchEnd and inside)
+        held = False
         try:
             if isinstance(button, ScreenLockButton):
                 if event_type == QEvent.TouchEnd:
@@ -19157,7 +19228,18 @@ class MainWindow(Background):
             else:
                 button.setDown(False)
                 button.update()
+                if event_type == QEvent.TouchEnd:
+                    end_hold = getattr(button, "end_direct_touch_hold", None)
+                    if callable(end_hold):
+                        held = bool(end_hold(bool(inside)))
+                else:
+                    cancel_hold = getattr(button, "cancel_direct_touch_hold", None)
+                    if callable(cancel_hold):
+                        cancel_hold()
         except RuntimeError:
+            accepted = False
+            held = False
+        if held:
             accepted = False
         self._direct_touch_button = None
         self._touch_input_active = False
