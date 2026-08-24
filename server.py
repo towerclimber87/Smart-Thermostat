@@ -9175,7 +9175,7 @@ SPARSE_CHECKOUT
 
 backup_data_files() {{
   mkdir -p "$BACKUP_ROOT/$ts"
-  for file in panel-config.json thermostat-state.json thermostat-schedules.json thermostat-schedules.backup.json hvac-history.json; do
+  for file in panel-config.json panel-config.backup.json thermostat-state.json thermostat-schedules.json thermostat-schedules.backup.json hvac-history.json; do
     if [[ -f "data/$file" ]]; then
       cp -av "data/$file" "$BACKUP_ROOT/$ts/$file"
     fi
