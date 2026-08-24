@@ -12902,9 +12902,6 @@ class TouchTimeRoller(QWidget):
         super().__init__(parent)
         hour24, minute = parse_schedule_time_24h(value, 8, 0)
         shown_hour = hour24 % 12 or 12
-        minute = int(round(minute / 5.0) * 5)
-        if minute >= 60:
-            minute = 55
         suffix = "AM" if hour24 < 12 else "PM"
 
         root = QHBoxLayout(self)
@@ -12912,7 +12909,7 @@ class TouchTimeRoller(QWidget):
         root.setSpacing(5)
 
         self.hour = TouchRollerColumn([(str(v), str(v)) for v in range(1, 13)], str(shown_hour))
-        self.minute = TouchRollerColumn([(f"{v:02d}", f"{v:02d}") for v in range(0, 60, 5)], f"{minute:02d}")
+        self.minute = TouchRollerColumn([(f"{v:02d}", f"{v:02d}") for v in range(60)], f"{minute:02d}")
         self.ampm = TouchRollerColumn([("AM", "AM"), ("PM", "PM")], suffix)
         self.hour.setFixedWidth(70)
         self.minute.setFixedWidth(74)
