@@ -1,3 +1,7 @@
+## Current bundled IHA integration (10.17.5)
+
+The included `Supporting/iha.zip` currently contains IHA integration version **10.17.5**. Install/merge this package into Home Assistant's existing `/config/custom_components/iha/` directory and restart Home Assistant after updating.
+
 ## JARVIS playback completion synchronization (10.17.2)
 
 Version **10.17.2** prevents Sonos announcement volume and the panel's JARVIS overlay from resetting during speech. Some Sonos players briefly return to their baseline media state before the announcement audio has finished. The integration now treats its conservative text-derived speech duration as a minimum hold: observable playback may keep the announcement active longer, but an early state transition cannot shorten it. The previous Sonos volume is restored and the panel receives the finished callback only after that completion window.

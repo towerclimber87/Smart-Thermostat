@@ -294,7 +294,7 @@ To configure it from another computer, press **Backup Config** on the thermostat
 
 Version 12.30 moved learned temperature-source mappings into the IHA Home Assistant integration instead of saving a separate copy on each wall panel. Version 12.40 adds the shared routing and personality profile to that same record. Every IHA thermostat reads the same live data before answering multi-room temperature questions.
 
-Install the matching `Supporting/iha.zip` files into Home Assistant's `/config/custom_components/iha/` directory and restart Home Assistant before testing. The matching integration version is **10.14.0**.
+Install the matching `Supporting/iha.zip` files into Home Assistant's `/config/custom_components/iha/` directory and restart Home Assistant before testing. The matching integration version is **10.17.5**.
 
 JARVIS can be taught by speech or by **Backup Config → JARVIS Voice → Shared Home Knowledge**:
 
