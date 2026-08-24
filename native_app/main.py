@@ -8912,25 +8912,27 @@ class AudioScreen(Page):
         lay.addWidget(now)
 
         self.now_card = GlassPanel(radius=30)
-        now_lay = QHBoxLayout(self.now_card)
-        now_lay.setContentsMargins(26, 22, 26, 22)
-        now_lay.setSpacing(26)
-        # Keep Volume Lock in the top-left of the Now Playing card so the
-        # Groups strip can use its entire width.  Overlaying it on the artwork
-        # keeps the existing Now Playing card height and spacing unchanged.
-        self.art_holder = QWidget(self.now_card)
-        self.art_holder.setFixedSize(250, 250)
-        self.art = CoverArtLabel(250, self.art_holder)
-        self.art.move(0, 0)
+        now_lay = QVBoxLayout(self.now_card)
+        now_lay.setContentsMargins(26, 18, 26, 22)
+        now_lay.setSpacing(12)
 
-        self.volume_lock_button = HoldRoundButton("Volume Lock", min_h=40, hold_ms=2000, parent=self.art_holder)
+        volume_lock_row = QHBoxLayout()
+        volume_lock_row.setContentsMargins(0, 0, 0, 0)
+        volume_lock_row.setSpacing(0)
+        self.volume_lock_button = HoldRoundButton("Volume Lock", min_h=40, hold_ms=2000)
         self.volume_lock_button.setFixedSize(138, 42)
-        self.volume_lock_button.move(10, 10)
         self.volume_lock_button.setToolTip("Tap to toggle Volume Lock. Hold 2 seconds for schedule and limits.")
         self.volume_lock_button.clicked.connect(self.toggle_volume_lock)
         self.volume_lock_button.held.connect(self.show_volume_lock_settings)
-        self.volume_lock_button.raise_()
-        now_lay.addWidget(self.art_holder, 0, Qt.AlignVCenter)
+        volume_lock_row.addWidget(self.volume_lock_button, 0, Qt.AlignLeft | Qt.AlignTop)
+        volume_lock_row.addStretch(1)
+        now_lay.addLayout(volume_lock_row)
+
+        now_content = QHBoxLayout()
+        now_content.setContentsMargins(0, 0, 0, 0)
+        now_content.setSpacing(26)
+        self.art = CoverArtLabel(250)
+        now_content.addWidget(self.art, 0, Qt.AlignVCenter)
 
         text_col = QVBoxLayout()
         text_col.setSpacing(8)
@@ -8956,7 +8958,8 @@ class AudioScreen(Page):
         text_col.addSpacing(4)
         text_col.addWidget(self.source_label)
         text_col.addStretch(1)
-        now_lay.addLayout(text_col, 1)
+        now_content.addLayout(text_col, 1)
+        now_lay.addLayout(now_content, 1)
         lay.addWidget(self.now_card, 1)
 
         self.groups_strip = GlassPanel(radius=18)
