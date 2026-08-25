@@ -1,10 +1,10 @@
-## Current bundled IHA integration (10.17.7)
+## Current bundled IHA integration (10.17.8)
 
-The included `Supporting/iha.zip` currently contains IHA integration version **10.17.7**. Install/merge this package into Home Assistant's existing `/config/custom_components/iha/` directory and restart Home Assistant after updating.
+The included `Supporting/iha.zip` currently contains IHA integration version **10.17.8**. Install/merge this package into Home Assistant's existing `/config/custom_components/iha/` directory and restart Home Assistant after updating.
 
-## Home Assistant Backup Portal switch (10.17.7)
+## Home Assistant Backup Portal switch (10.17.8)
 
-Version **10.17.7** adds a **Backup Portal** switch entity to the thermostat device. Turn it on to enable the same temporary Backup / Settings web portal as **Open Backup**, and turn it off to close the portal immediately. The switch follows the actual panel state, so it turns off in Home Assistant when the portal times out or is closed from the thermostat screen. The existing **Open Backup** button remains available for compatibility. **Backup Portal**, **Open Backup**, **Check for updates**, **Force software update**, and the **Software** update entity are categorized as **Diagnostic** entities in Home Assistant so these maintenance controls stay out of the thermostat's normal control section.
+Version **10.17.8** keeps the **Backup Portal** switch as the single Home Assistant control for the temporary Backup / Settings web portal and removes the redundant **Open Backup** button, including cleaning up the retired button entity from existing installs. Turn the switch on to open the portal and turn it off to close the portal immediately. The switch follows the actual panel state, so it turns off in Home Assistant when the portal times out or is closed from the thermostat screen. **Backup Portal**, **Check for updates**, **Force software update**, and the **Software** update entity are categorized as **Diagnostic** entities so these maintenance controls stay out of the thermostat's normal control section.
 
 ## Home Assistant Open Backup button (10.17.6)
 
