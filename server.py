@@ -2902,7 +2902,7 @@ def _config_transfer_closed_html() -> str:
   <main class="card">
     <div class="eyebrow">Smart Thermostat</div>
     <h1>Config backup is closed</h1>
-    <p>Open Backup Config on the thermostat panel to temporarily enable this page.</p>
+    <p>Press Open Backup in Home Assistant or open Backup Config on the thermostat panel to temporarily enable this page.</p>
   </main>
 </body>
 </html>"""
@@ -2920,7 +2920,7 @@ def _config_web_portal_payload(server_port: int | str | None = None) -> dict:
         "port": info.get("port"),
         "address": info.get("address"),
         "thermostatName": info.get("thermostatName") or info.get("name"),
-        "note": "Open this address from a computer on the same network to download or upload the thermostat config. Keep the panel popup open while transferring; closing it stops the backup portal.",
+        "note": "Open this address from a computer on the same network. The portal automatically closes after its inactivity timeout, or immediately when the panel Backup popup is closed.",
         "resourceMode": "temporary-root-backup-route",
         "active": portal.get("active"),
         "timeoutSeconds": portal.get("timeoutSeconds"),
@@ -3052,6 +3052,9 @@ def _settings_entity_catalog() -> tuple[dict[str, list[dict]], dict[str, dict], 
         "doors": [],
         "people": [],
         "syncThermostats": [],
+        "switches": [],
+        "brightnessTriggers": [],
+        "mediaPlayers": [],
     }
     for item in by_id.values():
         domain = item.get("domain")
@@ -3065,6 +3068,12 @@ def _settings_entity_catalog() -> tuple[dict[str, list[dict]], dict[str, dict], 
             groups["doors"].append(item)
         if domain == "person":
             groups["people"].append(item)
+        if domain == "switch":
+            groups["switches"].append(item)
+        if domain in {"binary_sensor", "input_boolean", "switch"}:
+            groups["brightnessTriggers"].append(item)
+        if domain == "media_player":
+            groups["mediaPlayers"].append(item)
         if domain == "climate" and item.get("entityId") in sync_allowed:
             groups["syncThermostats"].append(item)
     for values in groups.values():
@@ -3074,6 +3083,170 @@ def _settings_entity_catalog() -> tuple[dict[str, list[dict]], dict[str, dict], 
 
 def _settings_source_mode(value: object) -> str:
     return "external" if str(value or "").strip().lower() in {"external", "home-assistant", "ha", "remote"} else "internal"
+
+
+
+def _settings_bool_value(value: object, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value or "").strip().lower()
+    if text in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    if text in {"0", "false", "no", "off", "disabled"}:
+        return False
+    return bool(default)
+
+
+def _settings_time_value(value: object, default: str) -> str:
+    text = str(value or "").strip()
+    match = re.fullmatch(r"(\d{1,2}):(\d{2})", text)
+    if match:
+        hour = int(match.group(1))
+        minute = int(match.group(2))
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return f"{hour:02d}:{minute:02d}"
+    return default
+
+
+def _settings_display_current(config: dict) -> dict:
+    display = config.get("display") if isinstance(config.get("display"), dict) else {}
+
+    def minutes(key: str, default: int) -> int:
+        try:
+            return max(1, min(720, int(round(float(display.get(key, default))))))
+        except (TypeError, ValueError):
+            return default
+
+    def percent(key: str, default: int) -> int:
+        try:
+            return max(8, min(100, int(round(float(display.get(key, default))))))
+        except (TypeError, ValueError):
+            return default
+
+    try:
+        step = int(round(float(display.get("timeoutAdjustmentStepMinutes", 1))))
+    except (TypeError, ValueError):
+        step = 1
+    if step not in {1, 5}:
+        step = 1
+
+    rules: list[dict] = []
+    for raw in display.get("brightnessEntityRules") if isinstance(display.get("brightnessEntityRules"), list) else []:
+        if not isinstance(raw, dict):
+            continue
+        entity_id = str(raw.get("entityId") or raw.get("entity_id") or "").strip()
+        if not entity_id or "." not in entity_id:
+            continue
+        domain = str(raw.get("domain") or entity_id.split(".", 1)[0]).strip().lower()
+        if domain not in {"binary_sensor", "input_boolean", "switch"}:
+            continue
+        state = str(raw.get("state") or "on").strip().lower()
+        state = state if state in {"on", "off"} else "on"
+        try:
+            brightness = max(8, min(100, int(round(float(raw.get("brightnessPercent", 40))))))
+        except (TypeError, ValueError):
+            brightness = 40
+        rules.append({
+            "entityId": entity_id,
+            "name": str(raw.get("name") or raw.get("friendly_name") or entity_id),
+            "domain": domain,
+            "state": state,
+            "brightnessPercent": brightness,
+        })
+
+    return {
+        "inactivityAutoOffEnabled": _settings_bool_value(display.get("inactivityAutoOffEnabled"), True),
+        "inactivityAutoOffMinutes": minutes("inactivityAutoOffMinutes", 180),
+        "motionAutoSleepEnabled": _settings_bool_value(display.get("motionAutoSleepEnabled"), False),
+        "motionAutoSleepMinutes": minutes("motionAutoSleepMinutes", 5),
+        "motionAutoWakeEnabled": _settings_bool_value(display.get("motionAutoWakeEnabled"), False),
+        "timeoutAdjustmentStepMinutes": step,
+        "brightnessNormalPercent": percent("brightnessNormalPercent", 100),
+        "brightnessTimeEnabled": _settings_bool_value(display.get("brightnessTimeEnabled"), False),
+        "brightnessTimeStart": _settings_time_value(display.get("brightnessTimeStart"), "22:00"),
+        "brightnessTimeEnd": _settings_time_value(display.get("brightnessTimeEnd"), "07:00"),
+        "brightnessTimePercent": percent("brightnessTimePercent", 40),
+        "brightnessEntityRules": rules,
+    }
+
+
+_AUDIO_WEB_NUMBER_CONTROLS = ("gain", "bass", "treble", "music_surround")
+_AUDIO_WEB_SWITCH_CONTROLS = ("tv_power", "projector", "subwoofer", "surround")
+_AUDIO_WEB_CONTROLS = _AUDIO_WEB_NUMBER_CONTROLS + _AUDIO_WEB_SWITCH_CONTROLS
+
+
+def _settings_audio_default_presets() -> dict:
+    return {
+        "show": {"label": "Show Mode", "volume": None, "numbers": {"gain": 0, "bass": 8, "treble": 8}, "switches": {"subwoofer": "off", "surround": "on"}},
+        "volume40": {"label": "40% Volume", "volume": 40, "numbers": {"gain": "max", "bass": "max", "treble": 8}, "switches": {"subwoofer": "on", "surround": "on"}},
+        "max": {"label": "Max", "volume": 100, "numbers": {"gain": "max", "bass": "max", "treble": 8}, "switches": {"subwoofer": "on", "surround": "on"}},
+        "movie": {"label": "Movie Mode", "volume": None, "numbers": {}, "switches": {}},
+    }
+
+
+def _settings_audio_current(config: dict) -> dict:
+    audio = config.get("audio") if isinstance(config.get("audio"), dict) else {}
+    enabled_raw = audio.get("enabledControls") if isinstance(audio.get("enabledControls"), dict) else {}
+    enabled = {key: _settings_bool_value(enabled_raw.get(key), True) for key in _AUDIO_WEB_CONTROLS}
+
+    groups: list[dict] = []
+    seen: set[str] = set()
+    for index, raw in enumerate(audio.get("groups") if isinstance(audio.get("groups"), list) else []):
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("name") or "").strip()
+        members: list[str] = []
+        for value in raw.get("members") if isinstance(raw.get("members"), list) else []:
+            entity_id = str(value or "").strip()
+            if entity_id.startswith("media_player.") and entity_id not in members:
+                members.append(entity_id)
+        if not name or len(members) < 2:
+            continue
+        coordinator = str(raw.get("coordinatorId") or "").strip()
+        if coordinator not in members:
+            coordinator = members[0]
+        group_id = str(raw.get("id") or "").strip() or f"audio-group-{index + 1}"
+        if group_id in seen:
+            group_id = f"{group_id}-{index + 1}"
+        seen.add(group_id)
+        groups.append({"id": group_id, "name": name[:80], "members": members, "coordinatorId": coordinator})
+
+    defaults = _settings_audio_default_presets()
+    custom = audio.get("presets") if isinstance(audio.get("presets"), dict) else {}
+    presets: dict[str, dict] = {}
+    for key, base in defaults.items():
+        merged = _deepcopy_json(base)
+        saved = custom.get(key) if isinstance(custom.get(key), dict) else {}
+        if saved:
+            if str(saved.get("label") or "").strip():
+                merged["label"] = str(saved.get("label"))[:80]
+            if "volume" in saved:
+                merged["volume"] = saved.get("volume")
+            if isinstance(saved.get("numbers"), dict):
+                merged["numbers"] = _deepcopy_json(saved.get("numbers"))
+            if isinstance(saved.get("switches"), dict):
+                merged["switches"] = _deepcopy_json(saved.get("switches"))
+        presets[key] = merged
+
+    return {
+        "enabledControls": enabled,
+        "autoNavigate": _settings_bool_value(audio.get("autoNavigate"), False),
+        "groups": groups,
+        "presets": presets,
+    }
+
+
+def _settings_switch_ids(raw: object) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in raw if isinstance(raw, list) else []:
+        entity_id = _settings_entity_id(item)
+        if entity_id.startswith("switch.") and entity_id not in seen:
+            seen.add(entity_id)
+            result.append(entity_id)
+    return result
 
 
 def _config_settings_current() -> dict:
@@ -3132,6 +3305,12 @@ def _config_settings_current() -> dict:
         "trackedPersonIds": [first_entity(x) for x in (thermostat.get("people") or []) if first_entity(x)],
         "doorEntityId": first_entity(pause_entries[0] if pause_entries else ha.get("doorEntity")),
         "doorPauseDurationMinutes": pause.get("durationMinutes", 5),
+        "intimacyHoldTargetTemp": thermostat.get("intimacyHoldTargetTemp", INTIMACY_HOLD_TARGET_F),
+        "deviceInternetSwitchIds": _settings_switch_ids(ha.get("deviceInternetSwitchEntitiesV1")),
+        "alexaLockoutSwitchIds": _settings_switch_ids(ha.get("alexaLockoutSwitchEntitiesV2")),
+        "displaySettings": _settings_display_current(config),
+        "temperatureSensors": _temperature_sensor_config(),
+        "audioSettings": _settings_audio_current(config),
         "disarmCode": str(alarm.get("disarmCode") or ""),
         "settingsCode": str(security.get("settingsCode") or ""),
     }
@@ -3143,6 +3322,7 @@ def _config_settings_payload() -> dict:
         "ok": True,
         "settings": _config_settings_current(),
         "entities": groups,
+        "temperatureTelemetry": _temperature_sensor_configuration_payload(force=False),
         "warnings": warnings,
     }
 
@@ -3229,6 +3409,178 @@ def _apply_saved_screen_orientation(orientation: str) -> tuple[bool, str]:
     return result.returncode == 0, detail
 
 
+
+def _settings_switch_records(values: dict, key: str, lookup: dict[str, dict], *, alexa_only: bool = False) -> list[dict]:
+    raw = values.get(key, [])
+    if not isinstance(raw, list):
+        raise ValueError(f"{key} must be a list")
+    records: list[dict] = []
+    seen: set[str] = set()
+    for value in raw:
+        entity_id = str(value or "").strip()
+        if not entity_id:
+            continue
+        if not entity_id.startswith("switch."):
+            raise ValueError(f"{key} contains a non-switch entity")
+        source = lookup.get(entity_id) or {"entityId": entity_id, "name": entity_id, "domain": "switch", "state": "unknown"}
+        name = str(source.get("name") or entity_id).strip() or entity_id
+        if alexa_only and "alexa" not in entity_id.lower() and "alexa" not in name.lower():
+            raise ValueError(f"{entity_id} is not an Alexa switch")
+        if entity_id in seen:
+            continue
+        seen.add(entity_id)
+        records.append({
+            "entityId": entity_id,
+            "name": name[:160],
+            "controlName": str(source.get("controlName") or name)[:160],
+            "state": str(source.get("state") or ""),
+        })
+    return records
+
+
+def _settings_display_from_payload(raw: object, current: dict) -> dict:
+    values = raw if isinstance(raw, dict) else {}
+
+    def boolean(key: str) -> bool:
+        return _settings_bool_value(values.get(key), bool(current.get(key)))
+
+    def bounded_int(key: str, low: int, high: int) -> int:
+        return int(_settings_number(values, key, current.get(key, low), low, high))
+
+    step = bounded_int("timeoutAdjustmentStepMinutes", 1, 5)
+    step = 5 if step == 5 else 1
+    start = _settings_time_value(values.get("brightnessTimeStart"), str(current.get("brightnessTimeStart") or "22:00"))
+    end = _settings_time_value(values.get("brightnessTimeEnd"), str(current.get("brightnessTimeEnd") or "07:00"))
+    rules_raw = values.get("brightnessEntityRules", current.get("brightnessEntityRules") or [])
+    if not isinstance(rules_raw, list):
+        raise ValueError("brightnessEntityRules must be a list")
+    rules: list[dict] = []
+    seen_pairs: set[tuple[str, str]] = set()
+    for item in rules_raw:
+        if not isinstance(item, dict):
+            continue
+        entity_id = str(item.get("entityId") or "").strip()
+        domain = entity_id.split(".", 1)[0] if "." in entity_id else ""
+        if domain not in {"binary_sensor", "input_boolean", "switch"}:
+            raise ValueError("Brightness rules must use a binary_sensor, input_boolean, or switch entity")
+        state = str(item.get("state") or "on").strip().lower()
+        if state not in {"on", "off"}:
+            raise ValueError("Brightness rule state must be on or off")
+        pair = (entity_id, state)
+        if pair in seen_pairs:
+            continue
+        seen_pairs.add(pair)
+        try:
+            brightness = max(8, min(100, int(round(float(item.get("brightnessPercent", 40))))))
+        except (TypeError, ValueError):
+            brightness = 40
+        rules.append({
+            "entityId": entity_id,
+            "name": str(item.get("name") or entity_id)[:160],
+            "domain": domain,
+            "state": state,
+            "brightnessPercent": brightness,
+        })
+    return {
+        "inactivityAutoOffEnabled": boolean("inactivityAutoOffEnabled"),
+        "inactivityAutoOffMinutes": bounded_int("inactivityAutoOffMinutes", 1, 720),
+        "motionAutoSleepEnabled": boolean("motionAutoSleepEnabled"),
+        "motionAutoSleepMinutes": bounded_int("motionAutoSleepMinutes", 1, 720),
+        "motionAutoWakeEnabled": boolean("motionAutoWakeEnabled"),
+        "timeoutAdjustmentStepMinutes": step,
+        "brightnessNormalPercent": bounded_int("brightnessNormalPercent", 8, 100),
+        "brightnessTimeEnabled": boolean("brightnessTimeEnabled"),
+        "brightnessTimeStart": start,
+        "brightnessTimeEnd": end,
+        "brightnessTimePercent": bounded_int("brightnessTimePercent", 8, 100),
+        "brightnessEntityRules": rules,
+    }
+
+
+def _settings_audio_target(value: object) -> object:
+    if value is None or value == "":
+        return None
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"max", "min"}:
+            return text
+        try:
+            number = float(text)
+        except ValueError:
+            raise ValueError("Audio scene values must be numeric, max, min, or blank")
+    else:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            raise ValueError("Audio scene values must be numeric, max, min, or blank")
+    return int(round(number)) if abs(number - round(number)) < 0.001 else round(number, 2)
+
+
+def _settings_audio_from_payload(raw: object, current: dict) -> dict:
+    values = raw if isinstance(raw, dict) else {}
+    enabled_raw = values.get("enabledControls") if isinstance(values.get("enabledControls"), dict) else current.get("enabledControls", {})
+    enabled = {key: _settings_bool_value(enabled_raw.get(key), True) for key in _AUDIO_WEB_CONTROLS}
+
+    groups_raw = values.get("groups", current.get("groups") or [])
+    if not isinstance(groups_raw, list):
+        raise ValueError("Audio groups must be a list")
+    groups: list[dict] = []
+    seen_ids: set[str] = set()
+    for index, item in enumerate(groups_raw):
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()[:80]
+        members_raw = item.get("members") if isinstance(item.get("members"), list) else []
+        members: list[str] = []
+        for member in members_raw:
+            entity_id = str(member or "").strip()
+            if entity_id and not entity_id.startswith("media_player."):
+                raise ValueError("Audio groups may only contain media_player entities")
+            if entity_id and entity_id not in members:
+                members.append(entity_id)
+        if not name and not members:
+            continue
+        if not name or len(members) < 2:
+            raise ValueError("Each audio group needs a name and at least two media players")
+        coordinator = str(item.get("coordinatorId") or "").strip()
+        if coordinator not in members:
+            coordinator = members[0]
+        group_id = str(item.get("id") or "").strip() or f"audio-group-{int(time.time() * 1000)}-{index}"
+        while group_id in seen_ids:
+            group_id += "-2"
+        seen_ids.add(group_id)
+        groups.append({"id": group_id, "name": name, "members": members, "coordinatorId": coordinator})
+
+    presets_raw = values.get("presets") if isinstance(values.get("presets"), dict) else current.get("presets", {})
+    defaults = _settings_audio_default_presets()
+    presets: dict[str, dict] = {}
+    for key, base in defaults.items():
+        item = presets_raw.get(key) if isinstance(presets_raw.get(key), dict) else current.get("presets", {}).get(key, {})
+        item = item if isinstance(item, dict) else {}
+        volume_raw = item.get("volume", base.get("volume"))
+        volume = _settings_audio_target(volume_raw)
+        if isinstance(volume, (int, float)):
+            volume = max(0, min(100, int(round(float(volume)))))
+        elif volume in {"max", "min"}:
+            raise ValueError("Audio scene volume must be 0-100 or blank")
+        numbers_raw = item.get("numbers") if isinstance(item.get("numbers"), dict) else base.get("numbers", {})
+        switches_raw = item.get("switches") if isinstance(item.get("switches"), dict) else base.get("switches", {})
+        numbers = {control: _settings_audio_target(numbers_raw.get(control)) for control in _AUDIO_WEB_NUMBER_CONTROLS if control in numbers_raw}
+        switches = {control: ("on" if _settings_bool_value(switches_raw.get(control), str(switches_raw.get(control) or "off").lower() == "on") else "off") for control in _AUDIO_WEB_SWITCH_CONTROLS if control in switches_raw}
+        presets[key] = {
+            "label": str(item.get("label") or base.get("label") or key)[:80],
+            "volume": volume,
+            "numbers": numbers,
+            "switches": switches,
+        }
+    return {
+        "enabledControls": enabled,
+        "autoNavigate": _settings_bool_value(values.get("autoNavigate"), bool(current.get("autoNavigate"))),
+        "groups": groups,
+        "presets": presets,
+    }
+
+
 def _config_settings_save(payload: dict) -> dict:
     if not _config_web_portal_active(touch=True):
         return {"ok": False, "error": "The temporary config portal is closed."}
@@ -3290,6 +3642,11 @@ def _config_settings_save(payload: dict) -> dict:
     auto_away_people = [_settings_entity_for_id(x, {"person"}, lookup) for x in auto_away_ids]
     tracked_people = [_settings_entity_for_id(x, {"person"}, lookup) for x in tracked_ids]
     sync_peers = [_settings_entity_for_id(x, {"climate"}, lookup) for x in sync_ids]
+    device_internet = _settings_switch_records(values, "deviceInternetSwitchIds", lookup)
+    alexa_lockout = _settings_switch_records(values, "alexaLockoutSwitchIds", lookup, alexa_only=True)
+    display_settings = _settings_display_from_payload(values.get("displaySettings"), current_settings.get("displaySettings") or {})
+    temperature_sensors = _normalize_temperature_sensor_config(values.get("temperatureSensors", current_settings.get("temperatureSensors") or {}))
+    audio_settings = _settings_audio_from_payload(values.get("audioSettings"), current_settings.get("audioSettings") or {})
 
     integrations = config.setdefault("integrations", {})
     if not isinstance(integrations, dict):
@@ -3311,10 +3668,24 @@ def _config_settings_save(payload: dict) -> dict:
     if not isinstance(display, dict):
         display = {}
         config["display"] = display
+    hardware = config.setdefault("hardware", {})
+    if not isinstance(hardware, dict):
+        hardware = {}
+        config["hardware"] = hardware
+    audio = config.setdefault("audio", {})
+    if not isinstance(audio, dict):
+        audio = {}
+        config["audio"] = audio
 
     old_orientation = str(display.get("screenOrientation") or "upright")
     display["screenOrientation"] = orientation
     display["xrandrRotation"] = "inverted" if orientation == "upside_down" else "normal"
+    display.update(_deepcopy_json(display_settings))
+    hardware["temperatureSensors"] = _deepcopy_json(temperature_sensors)
+    audio["enabledControls"] = _deepcopy_json(audio_settings.get("enabledControls") or {})
+    audio["autoNavigate"] = bool(audio_settings.get("autoNavigate"))
+    audio["groups"] = _deepcopy_json(audio_settings.get("groups") or [])
+    audio["presets"] = _deepcopy_json(audio_settings.get("presets") or {})
     alarm["disarmCode"] = _settings_code(values, "disarmCode", str(alarm.get("disarmCode") or ""))
     security["settingsCode"] = _settings_code(values, "settingsCode", str(security.get("settingsCode") or ""))
 
@@ -3341,6 +3712,11 @@ def _config_settings_save(payload: dict) -> dict:
     ha["pauseFunctionAvailableEntities"] = _settings_prepend_entity(ha.get("pauseFunctionAvailableEntities"), door)
     ha["syncThermostatEntities"] = sync_peers
     ha["syncAvailableThermostatEntities"] = sync_peers
+    ha["deviceInternetSwitchEntitiesV1"] = _deepcopy_json(device_internet)
+    ha["deviceInternetSchemaVersion"] = 1
+    ha["alexaLockoutSwitchEntitiesV2"] = _deepcopy_json(alexa_lockout)
+    ha["alexaLockoutSchemaVersion"] = 2
+    ha.pop("alexaLockoutEntities", None)
     person_available = ha.get("personAvailableEntities")
     for person in auto_away_people + tracked_people:
         person_available = _settings_prepend_entity(person_available, person)
@@ -3353,6 +3729,7 @@ def _config_settings_save(payload: dict) -> dict:
         "fan": fan,
         "awayHeat": _settings_number(values, "awayHeat", current_settings["awayHeat"], 40, 75),
         "awayCool": _settings_number(values, "awayCool", current_settings["awayCool"], 75, 100),
+        "intimacyHoldTargetTemp": _settings_number(values, "intimacyHoldTargetTemp", current_settings["intimacyHoldTargetTemp"], 40, 100),
         "autoAwayPeople": auto_away_people,
         "people": tracked_people,
         "limits": {
@@ -3406,6 +3783,10 @@ def _config_settings_save(payload: dict) -> dict:
     except Exception:
         _write_panel_config_record(old_config)
         raise
+
+    _LOCAL_TEMP_SENSOR_CONFIG_CACHE["mtimeNs"] = None
+    _LOCAL_TEMP_SENSOR_CONFIG_CACHE["config"] = None
+    _reset_local_temperature_runtime_state()
 
     if orientation != old_orientation:
         ok, detail = _apply_saved_screen_orientation(orientation)
@@ -3507,6 +3888,12 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
     .hint {{ display:block; margin-top:7px; color:#8294ae; font-size:12px; line-height:1.35; }}
     .section-grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; margin-top:14px; }}
     .settings-section {{ border:1px solid rgba(255,255,255,.11); border-radius:18px; padding:16px; background:rgba(0,0,0,.16); }}
+    #tab-thermostat .settings-section > h3 {{ display:flex; align-items:center; justify-content:space-between; gap:12px; cursor:pointer; margin:-4px 0 12px; min-height:34px; }}
+    #tab-thermostat .settings-section > h3::after {{ content:"⌄"; color:#46e8ff; font-size:24px; line-height:1; }}
+    #tab-thermostat .settings-section.collapsed > h3 {{ margin-bottom:-4px; }}
+    #tab-thermostat .settings-section.collapsed > h3::after {{ content:"›"; }}
+    #tab-thermostat .settings-section.collapsed > :not(h3) {{ display:none !important; }}
+    #tab-thermostat .settings-section:focus-within {{ border-color:rgba(70,232,255,.42); }}
     .full {{ grid-column:1/-1; }}
     .checks {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin:14px 0; }}
     .check {{ display:flex; gap:9px; align-items:center; min-height:44px; padding:10px 12px; border-radius:13px; border:1px solid rgba(255,255,255,.12); background:rgba(0,0,0,.18); color:#dce8ff; font-weight:800; }}
@@ -3528,6 +3915,27 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
     .knowledge-source {{ margin-top:4px; color:#91a6c3; font-size:12px; overflow-wrap:anywhere; }}
     .knowledge-value {{ color:#7fffd4; font-weight:900; margin-top:4px; }}
     .knowledge-item button {{ min-height:38px; padding:0 13px; border-radius:11px; background:rgba(255,84,110,.17); border:1px solid rgba(255,84,110,.35); box-shadow:none; }}
+    .entity-search {{ margin-bottom:8px; }}
+    .entity-choice-list {{ max-height:220px; overflow:auto; display:grid; gap:6px; padding:4px; border-radius:12px; background:rgba(0,0,0,.16); border:1px solid rgba(255,255,255,.08); }}
+    .entity-choice {{ display:flex; align-items:flex-start; gap:8px; padding:8px 9px; border-radius:10px; background:rgba(255,255,255,.035); border:1px solid rgba(255,255,255,.08); cursor:pointer; }}
+    .entity-choice input {{ width:17px; height:17px; margin-top:1px; accent-color:#46e8ff; }}
+    .entity-choice strong {{ display:block; color:#eef8ff; font-size:13px; }}
+    .entity-choice span {{ display:block; color:#8294ae; font-size:11px; overflow-wrap:anywhere; margin-top:2px; }}
+    .subsection-title {{ color:#46e8ff; font-size:12px; font-weight:1000; letter-spacing:1.2px; text-transform:uppercase; margin:12px 0 8px; }}
+    .sensor-live-grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:8px; }}
+    .sensor-live {{ padding:9px; border-radius:11px; border:1px solid rgba(70,232,255,.17); background:rgba(0,0,0,.18); color:#dce8ff; font-size:12px; line-height:1.45; }}
+    .rule-list {{ display:grid; gap:7px; margin-top:8px; }}
+    .rule-row {{ display:grid; grid-template-columns:minmax(180px,2fr) 100px 100px auto; gap:7px; align-items:end; padding:8px; border-radius:11px; border:1px solid rgba(255,255,255,.09); background:rgba(0,0,0,.16); }}
+    .rule-row button {{ min-height:42px; padding:0 12px; background:rgba(255,84,110,.16); border:1px solid rgba(255,84,110,.32); box-shadow:none; }}
+    .audio-grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }}
+    .audio-wide {{ grid-column:1/-1; }}
+    .scene-grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }}
+    .scene-card {{ border:1px solid rgba(255,255,255,.10); background:rgba(0,0,0,.18); border-radius:15px; padding:12px; }}
+    .scene-card h4 {{ margin:0 0 10px; font-size:16px; color:#f7fbff; }}
+    .group-list {{ display:grid; gap:9px; margin-top:10px; }}
+    .group-row {{ border:1px solid rgba(255,255,255,.10); background:rgba(0,0,0,.17); border-radius:14px; padding:10px; }}
+    .group-actions {{ display:flex; justify-content:flex-end; margin-top:8px; }}
+    .group-actions button {{ min-height:38px; padding:0 13px; background:rgba(255,84,110,.16); border:1px solid rgba(255,84,110,.32); box-shadow:none; }}
 
     /* Thermostat settings are intentionally denser than the backup and voice
        tabs. Natural-height cards prevent a short section from being stretched
@@ -3536,7 +3944,7 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
     #tab-thermostat .eyebrow {{ font-size:10px; letter-spacing:3px; }}
     #tab-thermostat h2 {{ margin:3px 0 5px; font-size:23px; }}
     #tab-thermostat h3 {{ margin:0 0 8px; font-size:16px; line-height:1.1; }}
-    #tab-thermostat .section-grid {{ grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px; margin-top:9px; align-items:start; grid-auto-flow:dense; }}
+    #tab-thermostat .section-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px; margin-top:9px; align-items:start; grid-auto-flow:dense; }}
     #tab-thermostat .settings-section {{ align-self:start; border-radius:13px; padding:10px 11px; }}
     #tab-thermostat .settings-section.full {{ grid-column:1/-1; }}
     #tab-thermostat .form-grid {{ gap:8px 9px; }}
@@ -3556,15 +3964,15 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
     #tab-thermostat .status {{ min-height:40px; margin-top:8px; padding:9px 11px; border-radius:11px; font-size:12px; }}
 
     @media(max-width:1200px) {{ #tab-thermostat .section-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} }}
-    @media(max-width:900px) {{ .summary-grid {{ grid-template-columns:repeat(3,1fr); }} .section-grid {{ grid-template-columns:1fr; }} .full {{ grid-column:auto; }} #tab-thermostat .section-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} #tab-thermostat .settings-section.full {{ grid-column:1/-1; }} }}
-    @media(max-width:720px) {{ .hero,.actions {{ display:grid; grid-template-columns:1fr; }} .form-grid {{ grid-template-columns:1fr; }} .checks {{ grid-template-columns:1fr 1fr; }} .pill {{ white-space:normal; }} #tab-thermostat .section-grid {{ grid-template-columns:1fr; }} #tab-thermostat .settings-section.full {{ grid-column:auto; }} #tab-thermostat .form-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} }}
+    @media(max-width:900px) {{ .summary-grid {{ grid-template-columns:repeat(3,1fr); }} .section-grid {{ grid-template-columns:1fr; }} .full {{ grid-column:auto; }} #tab-thermostat .settings-section.full {{ grid-column:1/-1; }} }}
+    @media(max-width:720px) {{ .hero,.actions {{ display:grid; grid-template-columns:1fr; }} .form-grid {{ grid-template-columns:1fr; }} .checks {{ grid-template-columns:1fr 1fr; }} .pill {{ white-space:normal; }} #tab-thermostat .section-grid {{ grid-template-columns:1fr; }} #tab-thermostat .settings-section.full {{ grid-column:auto; }} #tab-thermostat .form-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} .audio-grid,.scene-grid {{ grid-template-columns:1fr; }} .audio-wide {{ grid-column:auto; }} .rule-row {{ grid-template-columns:1fr 1fr; }} }}
     @media(max-width:480px) {{ .summary-grid {{ grid-template-columns:1fr 1fr; }} .checks {{ grid-template-columns:1fr; }} .test-row {{ grid-template-columns:1fr; }} #tab-thermostat .form-grid {{ grid-template-columns:1fr; }} }}
   </style>
 </head>
 <body>
 <main class="wrap">
   <section class="hero">
-    <div><div class="eyebrow">Smart Thermostat Configuration</div><h1>{name}</h1><div class="muted">The portal is temporary and closes when Backup Config is closed on the thermostat.</div></div>
+    <div><div class="eyebrow">Smart Thermostat Configuration</div><h1>{name}</h1><div class="muted">The portal is temporary. It closes when the panel Backup popup is closed or after its inactivity timeout.</div></div>
     <div class="pill">{address}</div>
   </section>
   <section class="summary-grid">
@@ -3578,6 +3986,7 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
   <nav class="tabs" aria-label="Configuration tabs">
     <button class="tab-button active" data-tab="backup" type="button">Backup &amp; Restore</button>
     <button class="tab-button" data-tab="thermostat" type="button">Thermostat Settings</button>
+    <button class="tab-button" data-tab="audio" type="button">Audio Settings</button>
     <button class="tab-button" data-tab="jarvis" type="button">JARVIS Voice</button>
   </nav>
 
@@ -3591,29 +4000,50 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
   <section id="tab-thermostat" class="tab-panel">
     <div class="card">
       <div class="eyebrow">Comfort Setup</div><h2>Thermostat Settings</h2>
-      <p class="muted">These are the same thermostat settings available on the wall panel. Saving uses the existing thermostat control path and does not replace unrelated configuration.</p>
+      <p class="muted">This page mirrors the wall-panel Settings layout. Changes are staged here and applied together with Save Thermostat Settings.</p>
       <div id="thermostat-sections" class="section-grid">
-        <div class="settings-section"><h3>Thermostat Unit</h3><div class="form-grid"><div class="field"><label>Thermostat name</label><input id="ts-name" type="text" maxlength="80"></div><div class="field"><label>Fan mode</label><select id="ts-fan"><option value="auto">Auto</option><option value="on">On</option><option value="off">Off</option></select></div><div class="field full"><label>Screen rotation</label><select id="ts-orientation"><option value="upright">Upright</option><option value="upside_down">Upside Down</option></select></div></div></div>
-        <div class="settings-section"><h3>Auto Away / Home</h3><div class="form-grid"><div class="field"><label>Heat Away</label><input id="ts-away-heat" type="number" min="40" max="75" step="1"></div><div class="field"><label>Cool Away</label><input id="ts-away-cool" type="number" min="75" max="100" step="1"></div><div class="field full"><label>Auto Away users</label><select id="ts-auto-away-people" multiple></select><span class="hint">Hold Ctrl while clicking to select more than one person.</span></div></div></div>
+        <div class="settings-section"><h3>Device Internet</h3><p class="muted">Select the Home Assistant network-access switches controlled by the iPad button. ONLINE = switch ON; OFFLINE = switch OFF.</p><input id="ts-device-search" class="entity-search" type="text" placeholder="Search device name or entity ID"><div id="ts-device-list" class="entity-choice-list"></div></div>
+        <div class="settings-section"><h3>Alexa Lockout</h3><p class="muted">Select Alexa switch entities controlled when the thermostat screen locks or unlocks.</p><input id="ts-alexa-search" class="entity-search" type="text" placeholder="Search Alexa device or entity ID"><div id="ts-alexa-list" class="entity-choice-list"></div></div>
+        <div class="settings-section"><h3>Auto Away / Home</h3><div class="form-grid"><div class="field"><label>Heat Away</label><input id="ts-away-heat" type="number" min="40" max="75" step="1"></div><div class="field"><label>Cool Away</label><input id="ts-away-cool" type="number" min="75" max="100" step="1"></div><div class="field full"><label>Auto Away users</label><select id="ts-auto-away-people" multiple></select><span class="hint">Select one or more people used for automatic Away/Home logic.</span></div></div></div>
         <div class="settings-section"><h3>Range</h3><div class="form-grid"><div class="field"><label>Cool Low</label><input id="ts-cool-min" type="number" min="50" max="90"></div><div class="field"><label>Cool High</label><input id="ts-cool-max" type="number" min="50" max="90"></div><div class="field"><label>Heat Low</label><input id="ts-heat-min" type="number" min="40" max="80"></div><div class="field"><label>Heat High</label><input id="ts-heat-max" type="number" min="40" max="85"></div></div></div>
         <div class="settings-section"><h3>Safety / Mode Switches</h3><div class="form-grid"><div class="field"><label>Low Safety</label><input id="ts-safety-low" type="number" min="40" max="75"></div><div class="field"><label>High Safety</label><input id="ts-safety-high" type="number" min="75" max="100"></div><div class="field"><label>Cool Mode Switch</label><input id="ts-cool-switch" type="number" min="40" max="100"></div><div class="field"><label>Heat Mode Switch</label><input id="ts-heat-switch" type="number" min="40" max="100"></div></div><div class="checks"><label class="check"><input id="ts-heat-lock" type="checkbox">Heat lockout</label><label class="check"><input id="ts-cool-lock" type="checkbox">Cool lockout</label></div></div>
         <div class="settings-section"><h3>Changeover / Fan</h3><div class="form-grid"><div class="field"><label>Auto delay (hours)</label><input id="ts-auto-delay" type="number" min="0" max="8" step="1"></div><div class="field"><label>Manual delay (minutes)</label><input id="ts-manual-delay" type="number" min="0" max="60"></div><div class="field full"><label>Cool fan remain on (minutes)</label><input id="ts-cool-fan" type="number" min="0" max="15"></div></div></div>
-        <div class="settings-section"><h3>Differential / Minimum Runtime</h3><div class="form-grid"><div class="field"><label>Temperature differential</label><input id="ts-differential" type="number" min="0" max="5"></div><div class="field"><label>Heat minimum runtime (minutes)</label><input id="ts-heat-runtime" type="number" min="1" max="30"></div><div class="field"><label>Cool minimum runtime (minutes)</label><input id="ts-cool-runtime" type="number" min="1" max="30"></div></div></div>
         <div class="settings-section full"><h3>Internal / External Sources</h3><p class="muted">Each source remains independent, matching the wall-panel settings.</p><div class="form-grid">
           <div class="field"><label>Room temperature source</label><select id="ts-room-mode"><option value="internal">Internal</option><option value="external">External</option></select></div><div class="field"><label>Room temperature HA entity</label><input id="ts-room-entity" type="text" list="temperature-entities" placeholder="sensor... or climate..."></div>
           <div class="field"><label>Heat control source</label><select id="ts-heat-mode"><option value="internal">Internal</option><option value="external">External</option></select></div><div class="field"><label>External Heat entity</label><input id="ts-heat-entity" type="text" list="air-control-entities" placeholder="switch... or input_boolean..."></div>
           <div class="field"><label>Cool control source</label><select id="ts-cool-mode"><option value="internal">Internal</option><option value="external">External</option></select></div><div class="field"><label>External Cool entity</label><input id="ts-cool-entity" type="text" list="air-control-entities"></div>
           <div class="field"><label>Fan control source</label><select id="ts-fan-mode"><option value="internal">Internal</option><option value="external">External</option></select></div><div class="field"><label>External Fan entity</label><input id="ts-fan-entity" type="text" list="air-control-entities"></div>
         </div></div>
-        <div class="settings-section"><h3>Outside Temperature</h3><div class="field"><label>Home Assistant sensor/weather entity</label><input id="ts-outdoor-entity" type="text" list="outdoor-entities" placeholder="sensor... or weather..."></div></div>
-        <div class="settings-section"><h3>Sync</h3><div class="field"><label>Thermostats to sync</label><select id="ts-sync" multiple></select><span class="hint">Sync remains inactive until the main thermostat Sync button is armed.</span></div></div>
-        <div class="settings-section"><h3>Person Tracking</h3><div class="field"><label>People shown on the main screen</label><select id="ts-tracked-people" multiple></select></div></div>
+        <div class="settings-section full"><h3>Onboard Temperature Sensors</h3><p class="muted">These are the same primary sensor, offsets, and health thresholds used on the wall panel.</p><div class="form-grid"><div class="field"><label>Primary onboard sensor</label><select id="ts-sensor-primary"><option value="1">Sensor 1</option><option value="2">Sensor 2</option></select></div><div class="field"><label>Sensor 1 offset °F</label><input id="ts-sensor1-offset" type="number" min="-20" max="20" step="0.1"></div><div class="field"><label>Sensor 2 offset °F</label><input id="ts-sensor2-offset" type="number" min="-20" max="20" step="0.1"></div><div class="field"><label>Maximum difference / warning °F</label><input id="ts-sensor-delta" type="number" min="0.5" max="20" step="0.5"></div><div class="field"><label>Sudden jump / fault °F</label><input id="ts-sensor-jump" type="number" min="3" max="40" step="1"></div></div><div id="ts-sensor-live" class="sensor-live-grid"></div></div>
+        <div class="settings-section"><h3>Sync</h3><div class="field"><label>Thermostats to sync</label><select id="ts-sync" multiple></select><span class="hint">Sync remains inactive until the main thermostat Sync button is armed.</span></div><div class="subsection-title">House Sync</div><div class="field"><label>Copy Blinds, Lights, and Room setup from</label><select id="ts-house-sync-source"><option value="">Select another IHA thermostat</option></select><span class="hint">House Sync is a one-time setup copy. It does not copy thermostat, security, Home Assistant, schedule, or JARVIS settings.</span></div><div class="button-row"><button id="ts-house-sync-run" type="button" class="secondary">Sync House Setup</button></div><div id="ts-house-sync-status" class="status muted">Choose a source thermostat to run House Sync.</div></div>
         <div class="settings-section"><h3>Doors / Comfort Pause</h3><div class="form-grid"><div class="field"><label>Door/contact/cover entity</label><input id="ts-door-entity" type="text" list="door-entities"></div><div class="field"><label>Door delay (minutes)</label><input id="ts-door-delay" type="number" min="1" max="60"></div></div></div>
+        <div class="settings-section"><h3>Temperature Differential</h3><div class="field"><label>Temperature differential</label><input id="ts-differential" type="number" min="0" max="5"></div></div>
+        <div class="settings-section"><h3>Minimum Runtime</h3><div class="form-grid"><div class="field"><label>Heat minimum runtime (minutes)</label><input id="ts-heat-runtime" type="number" min="1" max="30"></div><div class="field"><label>Cool minimum runtime (minutes)</label><input id="ts-cool-runtime" type="number" min="1" max="30"></div></div></div>
+        <div class="settings-section"><h3>Intimacy Hold</h3><div class="field"><label>Hold Temperature °F</label><input id="ts-intimacy-temp" type="number" min="40" max="100" step="1"></div><span class="hint">While active, schedules, Away/Arriving, and manual setpoint changes are ignored.</span></div>
+        <div class="settings-section"><h3>Person Tracking</h3><div class="field"><label>People shown on the main screen</label><select id="ts-tracked-people" multiple></select></div></div>
+        <div class="settings-section"><h3>Outside Temperature</h3><div class="field"><label>Home Assistant sensor/weather entity</label><input id="ts-outdoor-entity" type="text" list="outdoor-entities" placeholder="sensor... or weather..."></div></div>
+        <div class="settings-section"><h3>Thermostat Unit</h3><div class="form-grid"><div class="field"><label>Thermostat name</label><input id="ts-name" type="text" maxlength="80"></div><div class="field"><label>Fan mode</label><select id="ts-fan"><option value="auto">Auto</option><option value="on">On</option><option value="off">Off</option></select></div></div></div>
         <div class="settings-section"><h3>Security Codes</h3><div class="form-grid"><div class="field"><label>Alarm disarm code</label><input id="ts-disarm-code" type="password" inputmode="numeric" maxlength="4"></div><div class="field"><label>Settings access code</label><input id="ts-settings-code" type="password" inputmode="numeric" maxlength="4"></div></div></div>
+        <div class="settings-section full"><h3>Screen Settings</h3><div class="form-grid"><div class="field"><label>Screen rotation</label><select id="ts-orientation"><option value="upright">Upright</option><option value="upside_down">Upside Down</option></select></div><div class="field"><label>Timeout adjustment step</label><select id="ts-screen-step"><option value="1">1 minute</option><option value="5">5 minutes</option></select></div><div class="field"><label class="check"><input id="ts-screen-inactivity" type="checkbox">Inactivity auto off</label><input id="ts-screen-inactivity-min" type="number" min="1" max="720" placeholder="Minutes"></div><div class="field"><label class="check"><input id="ts-screen-motion-sleep" type="checkbox">No-motion auto off</label><input id="ts-screen-motion-sleep-min" type="number" min="1" max="720" placeholder="Minutes"></div><div class="field"><label class="check"><input id="ts-screen-motion-wake" type="checkbox">Motion auto on</label></div><div class="field"><label>Normal brightness %</label><input id="ts-brightness-normal" type="number" min="8" max="100" step="1"></div><div class="field"><label class="check"><input id="ts-brightness-time-enabled" type="checkbox">Time-based brightness</label></div><div class="field"><label>Time brightness %</label><input id="ts-brightness-time-percent" type="number" min="8" max="100" step="1"></div><div class="field"><label>From</label><input id="ts-brightness-start" type="time"></div><div class="field"><label>Until</label><input id="ts-brightness-end" type="time"></div></div><div class="subsection-title">Home Assistant Brightness Rules</div><div class="button-row"><button id="ts-brightness-add" type="button" class="secondary">Add Entity Rule</button></div><div id="ts-brightness-rules" class="rule-list"></div><span class="hint">If multiple rules match, the lowest brightness wins. The same entity can have separate ON and OFF rules.</span></div>
       </div>
       <datalist id="temperature-entities"></datalist><datalist id="outdoor-entities"></datalist><datalist id="air-control-entities"></datalist><datalist id="door-entities"></datalist>
       <div class="button-row"><button id="ts-save" type="button">Save Thermostat Settings</button><button id="ts-reload" type="button" class="secondary">Reload Values</button></div>
       <div id="ts-status" class="status muted">Open this tab to load current thermostat values and Home Assistant choices.</div>
+    </div>
+  </section>
+
+  <section id="tab-audio" class="tab-panel">
+    <div class="card">
+      <div class="eyebrow">Audio Settings</div><h2>Audio Options, Scenes &amp; Groups</h2>
+      <p class="muted">This mirrors the wall-panel Audio Settings dialog. Save here with the main thermostat settings button; unrelated Audio-page entity assignments are preserved.</p>
+      <div class="audio-grid">
+        <div class="settings-section"><h3>Visible Controls</h3><p class="muted">Disabled controls are hidden from Audio and skipped by scene buttons.</p><div class="checks"><label class="check"><input id="audio-enable-gain" type="checkbox">Gain</label><label class="check"><input id="audio-enable-bass" type="checkbox">Bass</label><label class="check"><input id="audio-enable-treble" type="checkbox">Treble</label><label class="check"><input id="audio-enable-music_surround" type="checkbox">Music Surround</label><label class="check"><input id="audio-enable-tv_power" type="checkbox">TV Power</label><label class="check"><input id="audio-enable-projector" type="checkbox">Projector</label><label class="check"><input id="audio-enable-subwoofer" type="checkbox">Sub</label><label class="check"><input id="audio-enable-surround" type="checkbox">Surround Sound</label></div></div>
+        <div class="settings-section"><h3>Auto-Navigate</h3><label class="check"><input id="audio-auto-nav" type="checkbox">Enable auto-navigate</label><p class="muted">Real music jumps to Audio. Paused, idle, stopped, or unattended playback returns to Thermostat using the same wall-panel behavior.</p></div>
+        <div class="settings-section audio-wide"><h3>Scene Save Points</h3><p class="muted">Blank volume means the scene does not force volume. Gain/Bass/Treble/Music Surround may be a number, <code>max</code>, <code>min</code>, or blank.</p><div id="audio-scenes" class="scene-grid"></div></div>
+        <div class="settings-section audio-wide"><h3>Speaker Groups</h3><p class="muted">Create named media-player groups for one-touch group / ungroup control on the Audio page.</p><div class="button-row"><button id="audio-group-add" type="button" class="secondary">+ Add Group</button></div><div id="audio-groups" class="group-list"></div></div>
+      </div>
+      <div class="button-row"><button id="audio-save" type="button">Save Audio &amp; Thermostat Settings</button><button id="audio-reload" type="button" class="secondary">Reload Values</button></div>
+      <div id="audio-status" class="status muted">Open this tab to load Audio Settings.</div>
     </div>
   </section>
 
@@ -3659,7 +4089,9 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
 <script>
 const qs = (id) => document.getElementById(id);
 function setBox(box,text,kind) {{ box.textContent=text; box.className='status '+(kind||'muted'); }}
-for (const button of document.querySelectorAll('.tab-button')) {{ button.addEventListener('click',()=>{{ document.querySelectorAll('.tab-button').forEach(x=>x.classList.toggle('active',x===button)); document.querySelectorAll('.tab-panel').forEach(x=>x.classList.toggle('active',x.id==='tab-'+button.dataset.tab)); if(button.dataset.tab==='thermostat'&&!window.thermostatSettingsLoaded) loadThermostatSettings(); if(button.dataset.tab==='jarvis'&&!window.jarvisKnowledgeLoaded) loadJarvisKnowledge(); }}); }}
+for (const button of document.querySelectorAll('.tab-button')) {{ button.addEventListener('click',()=>{{ document.querySelectorAll('.tab-button').forEach(x=>x.classList.toggle('active',x===button)); document.querySelectorAll('.tab-panel').forEach(x=>x.classList.toggle('active',x.id==='tab-'+button.dataset.tab)); if((button.dataset.tab==='thermostat'||button.dataset.tab==='audio')&&!window.thermostatSettingsLoaded) loadThermostatSettings(); if(button.dataset.tab==='jarvis'&&!window.jarvisKnowledgeLoaded) loadJarvisKnowledge(); }}); }}
+function initThermostatSectionCards() {{ for(const section of document.querySelectorAll('#tab-thermostat .settings-section')) {{ const heading=section.querySelector(':scope > h3');if(!heading)continue;section.classList.add('collapsed');heading.tabIndex=0;heading.setAttribute('role','button');heading.setAttribute('aria-expanded','false');const toggle=()=>{{const collapsed=section.classList.toggle('collapsed');heading.setAttribute('aria-expanded',collapsed?'false':'true');}};heading.addEventListener('click',toggle);heading.addEventListener('keydown',event=>{{if(event.key==='Enter'||event.key===' '){{event.preventDefault();toggle();}}}}); }} }}
+initThermostatSectionCards();
 
 qs('upload').addEventListener('click',async()=>{{ const file=qs('file').files&&qs('file').files[0]; if(!file){{setBox(qs('status'),'Select a config JSON file first.','bad');return;}} try{{setBox(qs('status'),'Uploading config...','muted'); const payload=JSON.parse(await file.text()); const response=await fetch('/api/system/config-import',{{method:'POST',headers:{{'Accept':'application/json','Content-Type':'application/json'}},body:JSON.stringify(payload)}}); const data=await response.json().catch(()=>({{}})); if(!response.ok||!data.ok)throw new Error(data.error||data.message||'Upload failed.'); setBox(qs('status'),data.message||'Config uploaded.','ok');}}catch(err){{setBox(qs('status'),err.message||String(err),'bad');}} }});
 
@@ -3667,17 +4099,51 @@ function value(id) {{ return qs(id).value; }} function numberValue(id) {{ return
 function selectedValues(id) {{ return Array.from(qs(id).selectedOptions).map(x=>x.value); }}
 function fillDatalist(id,items) {{ qs(id).replaceChildren(...items.map(item=>{{const option=document.createElement('option');option.value=item.entityId;option.label=(item.name||item.entityId)+' — '+item.entityId;return option;}})); }}
 function fillMulti(id,items,selected) {{ const chosen=new Set(selected||[]); qs(id).replaceChildren(...items.map(item=>{{const option=document.createElement('option');option.value=item.entityId;option.textContent=(item.name||item.entityId)+' — '+item.entityId;option.selected=chosen.has(item.entityId);return option;}})); }}
-function setThermostatForm(s,e) {{
-  qs('ts-name').value=s.name||''; qs('ts-fan').value=s.fan||'auto'; qs('ts-orientation').value=s.screenOrientation||'upright'; qs('ts-away-heat').value=s.awayHeat; qs('ts-away-cool').value=s.awayCool;
+function fillHouseSync(items) {{ const select=qs('ts-house-sync-source');const previous=select.value;const options=[document.createElement('option')];options[0].value='';options[0].textContent='Select another IHA thermostat';for(const item of items||[]){{const panel=String(item.panelUrl||item.panel_url||'').trim();if(!panel)continue;const option=document.createElement('option');option.value=panel;option.dataset.name=item.name||item.entityId||'IHA thermostat';option.textContent=(item.name||item.entityId||'IHA thermostat')+' — '+panel;options.push(option);}}select.replaceChildren(...options);if(previous&&options.some(x=>x.value===previous))select.value=previous;}}
+function selectedChecklist(containerId) {{ return Array.from(qs(containerId).querySelectorAll('input[type=checkbox]:checked')).map(x=>x.value); }}
+function renderChecklist(containerId,items,selected,query,alexaOnly=false) {{
+  const chosen=new Set(selected||[]); const q=String(query||'').trim().toLowerCase(); const box=qs(containerId); const rows=[];
+  for(const item of items||[]) {{ const eid=String(item.entityId||''); const name=String(item.name||eid); if(alexaOnly&&!eid.toLowerCase().includes('alexa')&&!name.toLowerCase().includes('alexa'))continue; if(q&&!name.toLowerCase().includes(q)&&!eid.toLowerCase().includes(q))continue; const label=document.createElement('label');label.className='entity-choice';const check=document.createElement('input');check.type='checkbox';check.value=eid;check.checked=chosen.has(eid);check.addEventListener('change',()=>{{const key=containerId==='ts-device-list'?'deviceSelected':'alexaSelected';const set=new Set(window[key]||[]);if(check.checked)set.add(eid);else set.delete(eid);window[key]=Array.from(set);}});const text=document.createElement('div');const strong=document.createElement('strong');strong.textContent=name;const span=document.createElement('span');span.textContent=eid+(item.state?' · '+item.state:'');text.append(strong,span);label.append(check,text);rows.push(label); }}
+  box.replaceChildren(...rows); if(!rows.length){{const empty=document.createElement('div');empty.className='muted';empty.style.padding='10px';empty.textContent=alexaOnly?'No Alexa switches found.':'No matching switch entities.';box.append(empty);}}
+}}
+function renderSensorTelemetry(payload) {{ const box=qs('ts-sensor-live'); const temp=payload&&payload.temperature||{{}}; const sensors=Array.isArray(temp.sensors)?temp.sensors:[]; const rows=[]; for(const item of sensors){{const div=document.createElement('div');div.className='sensor-live';const n=item.sensorNumber||'?';const corrected=item.temperatureF==null?'--':item.temperatureF+'°F';const raw=item.rawTemperatureF==null?'--':item.rawTemperatureF+'°F';const humidity=item.humidity==null?'--':item.humidity+'%';div.textContent='Sensor '+n+(item.used?' · PRIMARY/ACTIVE':'')+'\\nCorrected: '+corrected+' · Raw: '+raw+' · Humidity: '+humidity+'\\n'+(item.healthy===false?'Warning: '+(item.ignoredReason||item.error||'health check failed'):'Status: healthy');div.style.whiteSpace='pre-line';rows.push(div);}} if(!rows.length){{const div=document.createElement('div');div.className='sensor-live';div.textContent=temp.healthMessage||'Live sensor readings are unavailable from this browser session.';rows.push(div);}} box.replaceChildren(...rows); }}
+function renderBrightnessRules() {{ const box=qs('ts-brightness-rules'); const entities=(window.lastThermostatEntities&&window.lastThermostatEntities.brightnessTriggers)||[]; box.replaceChildren(...window.brightnessRules.map((rule,index)=>{{const row=document.createElement('div');row.className='rule-row';const entityWrap=document.createElement('div');entityWrap.className='field';const entityLabel=document.createElement('label');entityLabel.textContent='Entity';const entity=document.createElement('select');const byId=new Map(entities.map(x=>[x.entityId,x]));if(rule.entityId&&!byId.has(rule.entityId))byId.set(rule.entityId,{{entityId:rule.entityId,name:rule.name||rule.entityId}});for(const item of Array.from(byId.values()).sort((a,b)=>String(a.name||a.entityId).localeCompare(String(b.name||b.entityId)))){{const option=document.createElement('option');option.value=item.entityId;option.textContent=(item.name||item.entityId)+' — '+item.entityId;option.selected=item.entityId===rule.entityId;entity.append(option);}}entity.addEventListener('change',()=>{{const item=byId.get(entity.value)||{{}};window.brightnessRules[index].entityId=entity.value;window.brightnessRules[index].name=item.name||entity.value;window.brightnessRules[index].domain=entity.value.split('.')[0];}});entityWrap.append(entityLabel,entity);
+    const stateWrap=document.createElement('div');stateWrap.className='field';const stateLabel=document.createElement('label');stateLabel.textContent='When';const state=document.createElement('select');for(const v of ['on','off']){{const option=document.createElement('option');option.value=v;option.textContent=v.toUpperCase();option.selected=v===(rule.state||'on');state.append(option);}}state.addEventListener('change',()=>window.brightnessRules[index].state=state.value);stateWrap.append(stateLabel,state);
+    const brightWrap=document.createElement('div');brightWrap.className='field';const brightLabel=document.createElement('label');brightLabel.textContent='Brightness %';const bright=document.createElement('input');bright.type='number';bright.min='8';bright.max='100';bright.value=rule.brightnessPercent||40;bright.addEventListener('change',()=>window.brightnessRules[index].brightnessPercent=Number(bright.value));brightWrap.append(brightLabel,bright);
+    const remove=document.createElement('button');remove.type='button';remove.textContent='Remove';remove.addEventListener('click',()=>{{window.brightnessRules.splice(index,1);renderBrightnessRules();}});row.append(entityWrap,stateWrap,brightWrap,remove);return row;}})); }}
+function addBrightnessRule() {{ const entities=(window.lastThermostatEntities&&window.lastThermostatEntities.brightnessTriggers)||[]; if(!entities.length)return; const first=entities[0];const used=new Set(window.brightnessRules.filter(x=>x.entityId===first.entityId).map(x=>x.state));const state=used.has('on')?'off':'on';window.brightnessRules.push({{entityId:first.entityId,name:first.name||first.entityId,domain:first.domain||first.entityId.split('.')[0],state:state,brightnessPercent:state==='on'?40:Number(value('ts-brightness-normal')||100)}});renderBrightnessRules(); }}
+
+const AUDIO_CONTROLS=['gain','bass','treble','music_surround','tv_power','projector','subwoofer','surround'];
+const AUDIO_SCENES=[['movie','Movie'],['show','Show'],['volume40','40%'],['max','Max']];
+const AUDIO_NUMBERS=['gain','bass','treble','music_surround']; const AUDIO_SWITCHES=['tv_power','projector','subwoofer','surround'];
+function audioTargetText(v) {{ return v===null||v===undefined?'':String(v); }}
+function renderAudioScenes(presets) {{ window.audioPresets=presets||{{}};const box=qs('audio-scenes');const cards=[];for(const [key,label] of AUDIO_SCENES){{const preset=window.audioPresets[key]||{{}};const card=document.createElement('div');card.className='scene-card';const title=document.createElement('h4');title.textContent=label;card.append(title);const grid=document.createElement('div');grid.className='form-grid';const addField=(name,id,val,type='text')=>{{const wrap=document.createElement('div');wrap.className='field';const lab=document.createElement('label');lab.textContent=name;const input=document.createElement('input');input.id=id;input.type=type;input.value=val;wrap.append(lab,input);grid.append(wrap);}};addField('Volume %','audio-'+key+'-volume',audioTargetText(preset.volume),'number');for(const control of AUDIO_NUMBERS)addField(control.replace('_',' ').replace(/\\b\\w/g,c=>c.toUpperCase()),'audio-'+key+'-'+control,audioTargetText((preset.numbers||{{}})[control]));for(const control of AUDIO_SWITCHES){{const wrap=document.createElement('label');wrap.className='check';const input=document.createElement('input');input.type='checkbox';input.id='audio-'+key+'-'+control;input.checked=String((preset.switches||{{}})[control]||'off').toLowerCase()==='on';wrap.append(input,document.createTextNode(control.replace('_',' ').replace(/\\b\\w/g,c=>c.toUpperCase())));grid.append(wrap);}}card.append(grid);cards.push(card);}}box.replaceChildren(...cards); }}
+function groupMembersSelect(players,members) {{ const select=document.createElement('select');select.multiple=true;select.style.minHeight='120px';const chosen=new Set(members||[]);for(const item of players){{const option=document.createElement('option');option.value=item.entityId;option.textContent=(item.name||item.entityId)+' — '+item.entityId;option.selected=chosen.has(item.entityId);select.append(option);}}return select; }}
+function renderAudioGroups() {{ const box=qs('audio-groups');const players=(window.lastThermostatEntities&&window.lastThermostatEntities.mediaPlayers)||[];box.replaceChildren(...window.audioGroups.map((group,index)=>{{const row=document.createElement('div');row.className='group-row';row.dataset.index=String(index);const grid=document.createElement('div');grid.className='form-grid';const nameWrap=document.createElement('div');nameWrap.className='field';const nameLabel=document.createElement('label');nameLabel.textContent='Group name';const name=document.createElement('input');name.type='text';name.value=group.name||'';name.addEventListener('input',()=>window.audioGroups[index].name=name.value);nameWrap.append(nameLabel,name);const membersWrap=document.createElement('div');membersWrap.className='field';const membersLabel=document.createElement('label');membersLabel.textContent='Members';const members=groupMembersSelect(players,group.members||[]);members.addEventListener('change',()=>{{window.audioGroups[index].members=selectedValuesFrom(members);renderAudioGroups();}});membersWrap.append(membersLabel,members);const coordWrap=document.createElement('div');coordWrap.className='field';const coordLabel=document.createElement('label');coordLabel.textContent='Coordinator';const coord=document.createElement('select');for(const eid of group.members||[]){{const item=players.find(x=>x.entityId===eid)||{{entityId:eid,name:eid}};const option=document.createElement('option');option.value=eid;option.textContent=item.name||eid;option.selected=eid===group.coordinatorId;coord.append(option);}}coord.addEventListener('change',()=>window.audioGroups[index].coordinatorId=coord.value);coordWrap.append(coordLabel,coord);grid.append(nameWrap,membersWrap,coordWrap);const actions=document.createElement('div');actions.className='group-actions';const remove=document.createElement('button');remove.type='button';remove.textContent='Delete Group';remove.addEventListener('click',()=>{{window.audioGroups.splice(index,1);renderAudioGroups();}});actions.append(remove);row.append(grid,actions);return row;}}));if(!window.audioGroups.length){{const empty=document.createElement('div');empty.className='muted';empty.textContent='No speaker groups created yet.';box.append(empty);}} }}
+function selectedValuesFrom(select) {{ return Array.from(select.selectedOptions).map(x=>x.value); }}
+function addAudioGroup() {{ window.audioGroups.push({{id:'audio-group-'+Date.now(),name:'',members:[],coordinatorId:''}});renderAudioGroups(); }}
+function setAudioForm(audio) {{ audio=audio||{{}};const enabled=audio.enabledControls||{{}};for(const key of AUDIO_CONTROLS)qs('audio-enable-'+key).checked=enabled[key]!==false;qs('audio-auto-nav').checked=!!audio.autoNavigate;window.audioGroups=JSON.parse(JSON.stringify(audio.groups||[]));renderAudioGroups();renderAudioScenes(audio.presets||{{}}); }}
+function readAudioSettings() {{ const enabled={{}};for(const key of AUDIO_CONTROLS)enabled[key]=qs('audio-enable-'+key).checked;const presets={{}};for(const [key,label] of AUDIO_SCENES){{const numbers={{}};for(const control of AUDIO_NUMBERS){{const v=value('audio-'+key+'-'+control).trim();if(v!=='')numbers[control]=v;}}const switches={{}};for(const control of AUDIO_SWITCHES)switches[control]=qs('audio-'+key+'-'+control).checked?'on':'off';const vol=value('audio-'+key+'-volume').trim();presets[key]={{label:label,volume:vol===''?null:Number(vol),numbers:numbers,switches:switches}};}}return {{enabledControls:enabled,autoNavigate:qs('audio-auto-nav').checked,groups:window.audioGroups,presets:presets}}; }}
+
+function setThermostatForm(s,e,telemetry) {{
+  qs('ts-name').value=s.name||''; qs('ts-fan').value=s.fan||'auto'; qs('ts-orientation').value=s.screenOrientation||'upright'; qs('ts-away-heat').value=s.awayHeat; qs('ts-away-cool').value=s.awayCool; qs('ts-intimacy-temp').value=s.intimacyHoldTargetTemp;
   qs('ts-cool-min').value=s.coolMin; qs('ts-cool-max').value=s.coolMax; qs('ts-heat-min').value=s.heatMin; qs('ts-heat-max').value=s.heatMax; qs('ts-safety-low').value=s.safetyLow; qs('ts-safety-high').value=s.safetyHigh; qs('ts-cool-switch').value=s.autoCoolOutdoorTarget; qs('ts-heat-switch').value=s.autoHeatOutdoorTarget; qs('ts-heat-lock').checked=!!s.heatLocked; qs('ts-cool-lock').checked=!!s.coolLocked;
   qs('ts-auto-delay').value=s.autoChangeoverHours; qs('ts-manual-delay').value=s.manualChangeoverMinutes; qs('ts-cool-fan').value=s.coolFanRemainOnMinutes; qs('ts-differential').value=s.temperatureDifferential; qs('ts-heat-runtime').value=s.heatMinimumRuntimeMinutes; qs('ts-cool-runtime').value=s.coolMinimumRuntimeMinutes;
   qs('ts-room-mode').value=s.roomTempControlMode||'internal'; qs('ts-heat-mode').value=s.heatControlMode||'internal'; qs('ts-cool-mode').value=s.coolControlMode||'internal'; qs('ts-fan-mode').value=s.fanControlMode||'internal'; qs('ts-room-entity').value=s.currentTempEntityId||''; qs('ts-heat-entity').value=s.externalHeatEntityId||''; qs('ts-cool-entity').value=s.externalCoolEntityId||''; qs('ts-fan-entity').value=s.externalFanEntityId||''; qs('ts-outdoor-entity').value=s.outdoorTempEntityId||''; qs('ts-door-entity').value=s.doorEntityId||''; qs('ts-door-delay').value=s.doorPauseDurationMinutes; qs('ts-disarm-code').value=s.disarmCode||''; qs('ts-settings-code').value=s.settingsCode||'';
-  fillDatalist('temperature-entities',e.temperature||[]); fillDatalist('outdoor-entities',e.outdoor||[]); fillDatalist('air-control-entities',e.airControls||[]); fillDatalist('door-entities',e.doors||[]); fillMulti('ts-auto-away-people',e.people||[],s.autoAwayPersonIds); fillMulti('ts-tracked-people',e.people||[],s.trackedPersonIds); fillMulti('ts-sync',e.syncThermostats||[],s.syncThermostatIds);
+  fillDatalist('temperature-entities',e.temperature||[]); fillDatalist('outdoor-entities',e.outdoor||[]); fillDatalist('air-control-entities',e.airControls||[]); fillDatalist('door-entities',e.doors||[]); fillMulti('ts-auto-away-people',e.people||[],s.autoAwayPersonIds); fillMulti('ts-tracked-people',e.people||[],s.trackedPersonIds); fillMulti('ts-sync',e.syncThermostats||[],s.syncThermostatIds); fillHouseSync(e.syncThermostats||[]);
+  window.deviceSelected=s.deviceInternetSwitchIds||[];window.alexaSelected=s.alexaLockoutSwitchIds||[];renderChecklist('ts-device-list',e.switches||[],window.deviceSelected,value('ts-device-search'));renderChecklist('ts-alexa-list',e.switches||[],window.alexaSelected,value('ts-alexa-search'),true);
+  const sensor=s.temperatureSensors||{{}};qs('ts-sensor-primary').value=String(sensor.primarySensor||2);qs('ts-sensor1-offset').value=sensor.sensor1OffsetF;qs('ts-sensor2-offset').value=sensor.sensor2OffsetF;qs('ts-sensor-delta').value=sensor.maxDisagreementF;qs('ts-sensor-jump').value=sensor.maxJumpF;renderSensorTelemetry(telemetry||{{}});
+  const display=s.displaySettings||{{}};qs('ts-screen-inactivity').checked=!!display.inactivityAutoOffEnabled;qs('ts-screen-inactivity-min').value=display.inactivityAutoOffMinutes;qs('ts-screen-motion-sleep').checked=!!display.motionAutoSleepEnabled;qs('ts-screen-motion-sleep-min').value=display.motionAutoSleepMinutes;qs('ts-screen-motion-wake').checked=!!display.motionAutoWakeEnabled;qs('ts-screen-step').value=String(display.timeoutAdjustmentStepMinutes||1);qs('ts-brightness-normal').value=display.brightnessNormalPercent;qs('ts-brightness-time-enabled').checked=!!display.brightnessTimeEnabled;qs('ts-brightness-start').value=display.brightnessTimeStart||'22:00';qs('ts-brightness-end').value=display.brightnessTimeEnd||'07:00';qs('ts-brightness-time-percent').value=display.brightnessTimePercent;window.brightnessRules=JSON.parse(JSON.stringify(display.brightnessEntityRules||[]));renderBrightnessRules();
+  setAudioForm(s.audioSettings||{{}});
 }}
-async function loadThermostatSettings() {{ try{{setBox(qs('ts-status'),'Loading current thermostat settings...','muted'); const response=await fetch('/api/settings/web'); const data=await response.json().catch(()=>({{}})); if(!response.ok||!data.ok)throw new Error(data.error||'Could not load settings.'); window.lastThermostatEntities=data.entities||{{}}; setThermostatForm(data.settings||{{}},window.lastThermostatEntities); window.thermostatSettingsLoaded=true; const warning=(data.warnings||[]).join('\\n'); setBox(qs('ts-status'),warning||'Current values loaded. Changes are not applied until Save Thermostat Settings is pressed.',warning?'muted':'ok');}}catch(err){{setBox(qs('ts-status'),err.message||String(err),'bad');}} }}
-function thermostatPayload() {{ return {{settings:{{ name:value('ts-name').trim(),fan:value('ts-fan'),screenOrientation:value('ts-orientation'),awayHeat:numberValue('ts-away-heat'),awayCool:numberValue('ts-away-cool'),autoAwayPersonIds:selectedValues('ts-auto-away-people'),coolMin:numberValue('ts-cool-min'),coolMax:numberValue('ts-cool-max'),heatMin:numberValue('ts-heat-min'),heatMax:numberValue('ts-heat-max'),safetyLow:numberValue('ts-safety-low'),safetyHigh:numberValue('ts-safety-high'),autoCoolOutdoorTarget:numberValue('ts-cool-switch'),autoHeatOutdoorTarget:numberValue('ts-heat-switch'),heatLocked:qs('ts-heat-lock').checked,coolLocked:qs('ts-cool-lock').checked,autoChangeoverHours:numberValue('ts-auto-delay'),manualChangeoverMinutes:numberValue('ts-manual-delay'),coolFanRemainOnMinutes:numberValue('ts-cool-fan'),temperatureDifferential:numberValue('ts-differential'),heatMinimumRuntimeMinutes:numberValue('ts-heat-runtime'),coolMinimumRuntimeMinutes:numberValue('ts-cool-runtime'),roomTempControlMode:value('ts-room-mode'),heatControlMode:value('ts-heat-mode'),coolControlMode:value('ts-cool-mode'),fanControlMode:value('ts-fan-mode'),currentTempEntityId:value('ts-room-entity').trim(),externalHeatEntityId:value('ts-heat-entity').trim(),externalCoolEntityId:value('ts-cool-entity').trim(),externalFanEntityId:value('ts-fan-entity').trim(),outdoorTempEntityId:value('ts-outdoor-entity').trim(),syncThermostatIds:selectedValues('ts-sync'),trackedPersonIds:selectedValues('ts-tracked-people'),doorEntityId:value('ts-door-entity').trim(),doorPauseDurationMinutes:numberValue('ts-door-delay'),disarmCode:value('ts-disarm-code').trim(),settingsCode:value('ts-settings-code').trim()}} }}; }}
-qs('ts-save').addEventListener('click',async()=>{{ try{{qs('ts-save').disabled=true;setBox(qs('ts-status'),'Validating and saving thermostat settings...','muted'); const response=await fetch('/api/settings/web',{{method:'POST',headers:{{'Accept':'application/json','Content-Type':'application/json'}},body:JSON.stringify(thermostatPayload())}}); const data=await response.json().catch(()=>({{}})); if(!response.ok||!data.ok)throw new Error(data.error||'Could not save thermostat settings.'); if(data.settings)setThermostatForm(data.settings,window.lastThermostatEntities||{{}}); const warning=(data.warnings||[]).join('\\n'); setBox(qs('ts-status'),(data.message||'Settings saved.')+(warning?'\\n'+warning:''),warning?'muted':'ok');}}catch(err){{setBox(qs('ts-status'),err.message||String(err),'bad');}}finally{{qs('ts-save').disabled=false;}} }});
-qs('ts-reload').addEventListener('click',()=>{{window.thermostatSettingsLoaded=false;loadThermostatSettings();}});
+async function loadThermostatSettings() {{ try{{setBox(qs('ts-status'),'Loading current thermostat settings...','muted');setBox(qs('audio-status'),'Loading Audio Settings...','muted'); const response=await fetch('/api/settings/web'); const data=await response.json().catch(()=>({{}})); if(!response.ok||!data.ok)throw new Error(data.error||'Could not load settings.'); window.lastThermostatEntities=data.entities||{{}}; setThermostatForm(data.settings||{{}},window.lastThermostatEntities,data.temperatureTelemetry||{{}}); window.thermostatSettingsLoaded=true; const warning=(data.warnings||[]).join('\\n'); const msg=warning||'Current values loaded. Changes are not applied until Save is pressed.';setBox(qs('ts-status'),msg,warning?'muted':'ok');setBox(qs('audio-status'),msg,warning?'muted':'ok');}}catch(err){{setBox(qs('ts-status'),err.message||String(err),'bad');setBox(qs('audio-status'),err.message||String(err),'bad');}} }}
+function thermostatPayload() {{ return {{settings:{{ name:value('ts-name').trim(),fan:value('ts-fan'),screenOrientation:value('ts-orientation'),awayHeat:numberValue('ts-away-heat'),awayCool:numberValue('ts-away-cool'),intimacyHoldTargetTemp:numberValue('ts-intimacy-temp'),autoAwayPersonIds:selectedValues('ts-auto-away-people'),coolMin:numberValue('ts-cool-min'),coolMax:numberValue('ts-cool-max'),heatMin:numberValue('ts-heat-min'),heatMax:numberValue('ts-heat-max'),safetyLow:numberValue('ts-safety-low'),safetyHigh:numberValue('ts-safety-high'),autoCoolOutdoorTarget:numberValue('ts-cool-switch'),autoHeatOutdoorTarget:numberValue('ts-heat-switch'),heatLocked:qs('ts-heat-lock').checked,coolLocked:qs('ts-cool-lock').checked,autoChangeoverHours:numberValue('ts-auto-delay'),manualChangeoverMinutes:numberValue('ts-manual-delay'),coolFanRemainOnMinutes:numberValue('ts-cool-fan'),temperatureDifferential:numberValue('ts-differential'),heatMinimumRuntimeMinutes:numberValue('ts-heat-runtime'),coolMinimumRuntimeMinutes:numberValue('ts-cool-runtime'),roomTempControlMode:value('ts-room-mode'),heatControlMode:value('ts-heat-mode'),coolControlMode:value('ts-cool-mode'),fanControlMode:value('ts-fan-mode'),currentTempEntityId:value('ts-room-entity').trim(),externalHeatEntityId:value('ts-heat-entity').trim(),externalCoolEntityId:value('ts-cool-entity').trim(),externalFanEntityId:value('ts-fan-entity').trim(),outdoorTempEntityId:value('ts-outdoor-entity').trim(),syncThermostatIds:selectedValues('ts-sync'),trackedPersonIds:selectedValues('ts-tracked-people'),doorEntityId:value('ts-door-entity').trim(),doorPauseDurationMinutes:numberValue('ts-door-delay'),deviceInternetSwitchIds:window.deviceSelected||[],alexaLockoutSwitchIds:window.alexaSelected||[],temperatureSensors:{{primarySensor:Number(value('ts-sensor-primary')),sensor1OffsetF:numberValue('ts-sensor1-offset'),sensor2OffsetF:numberValue('ts-sensor2-offset'),maxDisagreementF:numberValue('ts-sensor-delta'),maxJumpF:numberValue('ts-sensor-jump')}},displaySettings:{{inactivityAutoOffEnabled:qs('ts-screen-inactivity').checked,inactivityAutoOffMinutes:numberValue('ts-screen-inactivity-min'),motionAutoSleepEnabled:qs('ts-screen-motion-sleep').checked,motionAutoSleepMinutes:numberValue('ts-screen-motion-sleep-min'),motionAutoWakeEnabled:qs('ts-screen-motion-wake').checked,timeoutAdjustmentStepMinutes:Number(value('ts-screen-step')),brightnessNormalPercent:numberValue('ts-brightness-normal'),brightnessTimeEnabled:qs('ts-brightness-time-enabled').checked,brightnessTimeStart:value('ts-brightness-start'),brightnessTimeEnd:value('ts-brightness-end'),brightnessTimePercent:numberValue('ts-brightness-time-percent'),brightnessEntityRules:window.brightnessRules}},audioSettings:readAudioSettings(),disarmCode:value('ts-disarm-code').trim(),settingsCode:value('ts-settings-code').trim()}} }}; }}
+async function saveAllSettings(source) {{ const button=qs(source==='audio'?'audio-save':'ts-save');const other=qs(source==='audio'?'ts-save':'audio-save');try{{button.disabled=true;other.disabled=true;setBox(qs('ts-status'),'Validating and saving thermostat, screen, sensor and audio settings...','muted');setBox(qs('audio-status'),'Validating and saving Audio Settings...','muted');const response=await fetch('/api/settings/web',{{method:'POST',headers:{{'Accept':'application/json','Content-Type':'application/json'}},body:JSON.stringify(thermostatPayload())}});const data=await response.json().catch(()=>({{}}));if(!response.ok||!data.ok)throw new Error(data.error||'Could not save settings.');if(data.settings)setThermostatForm(data.settings,window.lastThermostatEntities||{{}},data.temperatureTelemetry||{{}});const warning=(data.warnings||[]).join('\\n');const msg=(data.message||'Settings saved.')+(warning?'\\n'+warning:'');setBox(qs('ts-status'),msg,warning?'muted':'ok');setBox(qs('audio-status'),msg,warning?'muted':'ok');}}catch(err){{setBox(qs('ts-status'),err.message||String(err),'bad');setBox(qs('audio-status'),err.message||String(err),'bad');}}finally{{button.disabled=false;other.disabled=false;}} }}
+qs('ts-save').addEventListener('click',()=>saveAllSettings('thermostat'));qs('audio-save').addEventListener('click',()=>saveAllSettings('audio'));
+qs('ts-reload').addEventListener('click',()=>{{window.thermostatSettingsLoaded=false;loadThermostatSettings();}});qs('audio-reload').addEventListener('click',()=>{{window.thermostatSettingsLoaded=false;loadThermostatSettings();}});
+qs('ts-device-search').addEventListener('input',()=>{{renderChecklist('ts-device-list',(window.lastThermostatEntities||{{}}).switches||[],window.deviceSelected||[],value('ts-device-search'));}});qs('ts-alexa-search').addEventListener('input',()=>{{renderChecklist('ts-alexa-list',(window.lastThermostatEntities||{{}}).switches||[],window.alexaSelected||[],value('ts-alexa-search'),true);}});
+qs('ts-brightness-add').addEventListener('click',addBrightnessRule);qs('audio-group-add').addEventListener('click',addAudioGroup);
+qs('ts-house-sync-run').addEventListener('click',async()=>{{const select=qs('ts-house-sync-source');const panelUrl=select.value.trim();if(!panelUrl){{setBox(qs('ts-house-sync-status'),'Choose another IHA thermostat first.','bad');return;}}const option=select.selectedOptions&&select.selectedOptions[0];const sourceName=option&&option.dataset?option.dataset.name:'';try{{qs('ts-house-sync-run').disabled=true;setBox(qs('ts-house-sync-status'),'Copying Blinds, Lights, and Room setup...','muted');const response=await fetch('/api/settings/house-sync',{{method:'POST',headers:{{'Accept':'application/json','Content-Type':'application/json'}},body:JSON.stringify({{panelUrl:panelUrl,sourceName:sourceName}})}});const data=await response.json().catch(()=>({{}}));if(!response.ok||!data.ok)throw new Error(data.error||'House Sync failed.');setBox(qs('ts-house-sync-status'),data.message||'House Sync complete.','ok');}}catch(err){{setBox(qs('ts-house-sync-status'),err.message||String(err),'bad');}}finally{{qs('ts-house-sync-run').disabled=false;}}}});
 
 qs('va-volume').addEventListener('input',()=>{{qs('va-volume-value').textContent=qs('va-volume').value+'%';}});
 function knowledgeValue(item) {{ if(!item.available)return 'Unavailable'; const value=Number(item.value); const shown=Number.isFinite(value)?(Math.abs(value-Math.round(value))<0.05?String(Math.round(value)):value.toFixed(1)):String(item.value); return shown+(item.unit?' '+item.unit:''); }}
@@ -14565,7 +15031,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/thermostat/run-schedule", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/hardware/temperature-sensors", "/api/screen/lock-status", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/alexa-lockout/devices", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/group", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply", "/api/house-sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/playback", "/api/assistant/config", "/api/assistant/knowledge", "/api/settings/web"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/thermostat/run-schedule", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/hardware/temperature-sensors", "/api/screen/lock-status", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/alexa-lockout/devices", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/group", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply", "/api/house-sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/playback", "/api/assistant/config", "/api/assistant/knowledge", "/api/settings/web", "/api/settings/house-sync"}:
             self.send_error(404, "Not found")
             return
 
@@ -14605,6 +15071,12 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
             if path == "/api/assistant/knowledge":
                 result = _assistant_knowledge_admin_update(payload)
+                return _json(self, 200 if result.get("ok") else 400, result)
+
+            if path == "/api/settings/house-sync":
+                if not _config_web_portal_active(touch=True):
+                    return _json(self, 403, {"ok": False, "error": "The temporary config portal is closed."})
+                result = _apply_house_sync_payload(payload)
                 return _json(self, 200 if result.get("ok") else 400, result)
 
             if path == "/api/house-sync/apply":

@@ -1,6 +1,13 @@
-## Current bundled IHA integration (10.17.5)
+## Current bundled IHA integration (10.17.6)
 
-The included `Supporting/iha.zip` currently contains IHA integration version **10.17.5**. Install/merge this package into Home Assistant's existing `/config/custom_components/iha/` directory and restart Home Assistant after updating.
+The included `Supporting/iha.zip` currently contains IHA integration version **10.17.6**. Install/merge this package into Home Assistant's existing `/config/custom_components/iha/` directory and restart Home Assistant after updating.
+
+## Home Assistant Open Backup button (10.17.6)
+
+Version **10.17.6** adds an **Open Backup** button entity to the thermostat device in Home Assistant. Pressing it enables the thermostat's temporary Backup / Settings web portal using the same backend activation route as the panel's **Backup Config** action. The entity exposes the returned `backup_url`, portal `active` state, and `timeout_seconds` as attributes.
+
+The temporary browser portal has also been expanded to mirror the current wall-panel Settings organization more closely, using two-column section cards that open and collapse like the panel. It includes Device Internet, Alexa Lockout, Auto Away / Home, HVAC range and safety settings, onboard temperature sensors, Thermostat Sync and one-time House Sync, Doors / Comfort Pause, differential/runtime settings, Intimacy Hold, person tracking, outside temperature, unit/security settings, Screen Settings, Audio Settings, and JARVIS controls.
+
 
 ## JARVIS playback completion synchronization (10.17.2)
 
