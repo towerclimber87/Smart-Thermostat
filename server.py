@@ -14510,6 +14510,8 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
         if path == "/api/history/dates":
             return _json(self, 200, _hvac_history_dates_payload())
         if path == "/api/config":
+            if not _request_client_is_loopback(self):
+                return _json(self, 403, {"ok": False, "error": "Panel configuration is local-only."})
             return _json(self, 200, _panel_config_payload())
         if path == "/api/house-sync/profile":
             result = _house_sync_profile_payload()
@@ -14566,6 +14568,9 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
         if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/thermostat/run-schedule", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/hardware/temperature-sensors", "/api/screen/lock-status", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/alexa-lockout/devices", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/group", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply", "/api/house-sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/playback", "/api/assistant/config", "/api/assistant/knowledge", "/api/settings/web"}:
             self.send_error(404, "Not found")
             return
+
+        if path == "/api/config" and not _request_client_is_loopback(self):
+            return _json(self, 403, {"ok": False, "error": "Panel configuration is local-only."})
 
         try:
             length = int(self.headers.get("Content-Length", "0"))
