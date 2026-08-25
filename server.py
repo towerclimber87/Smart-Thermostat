@@ -2882,6 +2882,25 @@ def _config_web_portal_stop_payload() -> dict:
     }
 
 
+def _config_web_portal_status_payload(server_port: int | str | None = None) -> dict:
+    """Return the temporary Backup / Settings portal state without extending it."""
+    active = _config_web_portal_active(touch=False)
+    now = time.monotonic()
+    with _CONFIG_WEB_PORTAL_LOCK:
+        enabled_until = float(_CONFIG_WEB_PORTAL_ENABLED_UNTIL or 0.0)
+        started_at = float(_CONFIG_WEB_PORTAL_STARTED_AT or 0.0)
+        last_activity_at = float(_CONFIG_WEB_PORTAL_LAST_ACTIVITY_AT or 0.0)
+    remaining = max(0, int(round(enabled_until - now))) if active else 0
+    return {
+        "active": bool(active),
+        "url": _config_portal_url(server_port) if active else None,
+        "timeoutSeconds": int(CONFIG_WEB_PORTAL_TIMEOUT_SECONDS),
+        "remainingSeconds": remaining,
+        "started": bool(started_at),
+        "recentActivity": bool(last_activity_at),
+    }
+
+
 def _config_transfer_closed_html() -> str:
     return """<!doctype html>
 <html lang="en">
@@ -6070,6 +6089,7 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
         else "home"
     )
     sync_status = _sync_status_payload()
+    config_web_portal = _config_web_portal_status_payload()
     assistant_config = _assistant_config_payload()
     jarvis_volume_percent = int(assistant_config.get("announcementVolumePercent") or 45)
     jarvis_volume_level = round(jarvis_volume_percent / 100.0, 2)
@@ -6128,6 +6148,8 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
         "sync": sync_status,
         "syncArmed": bool(sync_status.get("active")),
         "syncRemainingSeconds": int(sync_status.get("remainingSeconds") or 0),
+        "configWebPortal": config_web_portal,
+        "config_web_portal": config_web_portal,
         "jarvisVolumePercent": jarvis_volume_percent,
         "jarvis_volume_percent": jarvis_volume_percent,
         "jarvisVolumeLevel": jarvis_volume_level,
@@ -6208,6 +6230,8 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
         "sync": sync_status,
         "syncArmed": bool(sync_status.get("active")),
         "syncRemainingSeconds": int(sync_status.get("remainingSeconds") or 0),
+        "configWebPortal": config_web_portal,
+        "config_web_portal": config_web_portal,
         "jarvisVolumePercent": jarvis_volume_percent,
         "jarvis_volume_percent": jarvis_volume_percent,
         "jarvisVolumeLevel": jarvis_volume_level,
