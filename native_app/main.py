@@ -4714,6 +4714,9 @@ class ThermostatScreen(Page):
         self._target_command_pending_value: int | None = None
         self._target_command_pending_suppress_peer_sync = False
         self._target_command_sequence = 0
+        # Shortcut buttons are expensive to destroy/recreate on the Pi. Rebuild
+        # them only when the visible shortcut data or lock state actually changes.
+        self._schedule_shortcut_signature = None
         self.dial = ThermostatDial()
         self.dial.setMaximumSize(470, 470)
         self.mode_buttons: dict[str, RoundButton] = {}
@@ -6435,11 +6438,27 @@ class ThermostatScreen(Page):
     def refresh_schedule_shortcuts(self):
         if not hasattr(self, "schedule_shortcuts_lay"):
             return
+        schedules = self.s.thermostat_schedules()
+        locked = bool(self.screen_control_locked())
+        signature = (
+            locked,
+            tuple(
+                (
+                    str(sched.get("name") or "Schedule"),
+                    str(sched.get("heatSetpoint") or ""),
+                    str(sched.get("coolSetpoint") or ""),
+                )
+                for sched in schedules
+                if isinstance(sched, dict)
+            ),
+        )
+        if signature == self._schedule_shortcut_signature:
+            return
+        self._schedule_shortcut_signature = signature
         while self.schedule_shortcuts_lay.count():
             item = self.schedule_shortcuts_lay.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        schedules = self.s.thermostat_schedules()
         self.schedule_shortcuts.setVisible(bool(schedules))
         if not schedules:
             return
@@ -9384,11 +9403,15 @@ class AudioScreen(Page):
 
             self._audio_detected_player_id = entity_id
             if changed_names or cleared_names:
-                try:
-                    self.s.save_config()
-                    self.config = self.s.config
-                except Exception as exc:
-                    self.requestToast.emit(f"Audio control save failed: {exc}")
+                # Never perform config persistence on the Qt thread. The backend
+                # uses durable file writes/fsync, which can pause noticeably on SD.
+                snapshot = copy.deepcopy(self.s.config)
+                self.run_async(
+                    "audio-control-save",
+                    lambda: self.s.api.save_config(snapshot),
+                    None,
+                    lambda error: self.requestToast.emit(f"Audio control save failed: {error}"),
+                )
             self.apply_audio_control_state()
             QTimer.singleShot(100, self.poll)
             if notify:
@@ -18773,6 +18796,8 @@ class MainWindow(Background):
         self._direct_touch_mouse_suppress_until = 0.0
         self._direct_touch_mouse_suppress_point: QPoint | None = None
         self._touch_input_active = False
+        self._touch_input_last_event_at = 0.0
+        self._live_hold_touch_guard_started_at = 0.0
         # When a long-press opens a modal while the finger is still down, keep
         # that original touch sequence from being delivered into the new modal.
         self._live_hold_touch_guard = False
@@ -18809,6 +18834,10 @@ class MainWindow(Background):
         self.ui_heartbeat_timer.setInterval(500)
         self.ui_heartbeat_timer.timeout.connect(self._mark_ui_heartbeat)
         self.ui_heartbeat_timer.start()
+        self.touch_recovery_timer = QTimer(self)
+        self.touch_recovery_timer.setInterval(1000)
+        self.touch_recovery_timer.timeout.connect(self._recover_stale_touch_state)
+        self.touch_recovery_timer.start()
         threading.Thread(target=self._ui_stall_watchdog, name="ui-stall-watchdog", daemon=True).start()
         self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self.refresh_status)
@@ -18892,34 +18921,60 @@ class MainWindow(Background):
         self._set_repeating_timer_interval(self.thermal_watch_timer, interval)
 
     def boot(self):
+        # Backend startup and initial API reads must never block the Qt event loop.
         QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            if not self.api.wait_until_ready(5):
-                self.toast.show_message("Backend is not responding on 127.0.0.1:8080")
-            self.s.load()
-            self.migrate_alexa_lockout_config()
-            self.apply_thermal_protection_state(self.s.thermostat)
-            if not getattr(self, "_thermal_protection_active", False):
-                try:
-                    self.s.refresh_alarm_state()
-                except Exception:
-                    pass
-            self.sync_runtime_only()
-            self.sync_visible_page(self.current_name)
-            self.position_sleep_controls()
-            self._last_motion_activity_at = time.monotonic()
-            QTimer.singleShot(0, self.refresh_assistant_status)
-            QTimer.singleShot(0, self.refresh_screen_motion_status)
-            # Mirror the native lock state to the local backend for Home Assistant.
-            # This is reporting only; the backend cannot lock or unlock the panel.
-            QTimer.singleShot(0, self.report_screen_lock_state)
-            QTimer.singleShot(250, self.refresh_device_internet_state)
-            if not getattr(self, "_thermal_protection_active", False):
-                self.toast.show_message("Native panel ready")
-        except Exception as exc:
-            self.toast.show_message(f"Startup problem: {exc}", 6000)
-        finally:
+
+        def worker():
+            ready = self.api.wait_until_ready(5)
+            config_record = self.api.get_config_record()
+            thermostat = self.api.thermostat_status()
+            try:
+                system_info = self.api.get("/api/system/info")
+            except Exception:
+                system_info = {}
+            return {
+                "ready": ready,
+                "configRecord": config_record,
+                "thermostat": thermostat,
+                "systemInfo": system_info,
+            }
+
+        def done(result):
+            try:
+                data = result if isinstance(result, dict) else {}
+                if not data.get("ready"):
+                    self.toast.show_message("Backend is not responding on 127.0.0.1:8080")
+                record = data.get("configRecord") if isinstance(data.get("configRecord"), dict) else {}
+                self.s.config = record.get("config") or {}
+                thermostat = data.get("thermostat") if isinstance(data.get("thermostat"), dict) else {}
+                self.s.ingest_thermostat(thermostat)
+                self.s.thermostat_schedules()
+                self.s.system_info = data.get("systemInfo") if isinstance(data.get("systemInfo"), dict) else {}
+                self.migrate_alexa_lockout_config()
+                self.apply_thermal_protection_state(self.s.thermostat)
+                self.sync_runtime_only()
+                self.sync_visible_page(self.current_name)
+                self.position_sleep_controls()
+                self._last_motion_activity_at = time.monotonic()
+                QTimer.singleShot(0, self.refresh_alarm_state)
+                QTimer.singleShot(0, self.refresh_assistant_status)
+                QTimer.singleShot(0, self.refresh_screen_motion_status)
+                # Mirror the native lock state to the local backend for Home Assistant.
+                # This is reporting only; the backend cannot lock or unlock the panel.
+                QTimer.singleShot(0, self.report_screen_lock_state)
+                QTimer.singleShot(250, self.refresh_device_internet_state)
+                if not getattr(self, "_thermal_protection_active", False):
+                    self.toast.show_message("Native panel ready")
+            except Exception as exc:
+                self.toast.show_message(f"Startup problem: {exc}", 6000)
+            finally:
+                QApplication.restoreOverrideCursor()
+
+        def failed(error):
             QApplication.restoreOverrideCursor()
+            self.toast.show_message(f"Startup problem: {error}", 6000)
+
+        self.run_async("boot-load", worker, done, failed)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -19472,7 +19527,9 @@ class MainWindow(Background):
             pass
         self._direct_touch_button = None
         self._touch_input_active = False
+        self._touch_input_last_event_at = 0.0
         self._live_hold_touch_guard = True
+        self._live_hold_touch_guard_started_at = time.monotonic()
         self._direct_touch_mouse_suppress_point = self._direct_touch_last_global
         self._direct_touch_mouse_suppress_until = time.monotonic() + 0.8
         self._direct_touch_last_global = None
@@ -19499,6 +19556,7 @@ class MainWindow(Background):
             self._direct_touch_button = button
             self._direct_touch_last_global = point
             self._touch_input_active = True
+            self._touch_input_last_event_at = time.monotonic()
             try:
                 if isinstance(button, ScreenLockButton):
                     button.begin_press()
@@ -19520,6 +19578,7 @@ class MainWindow(Background):
             return False
         if point is not None:
             self._direct_touch_last_global = point
+        self._touch_input_last_event_at = time.monotonic()
         try:
             hit_point = QPointF(self._direct_touch_last_global) if self._direct_touch_last_global is not None else QPointF()
             inside = self._button_global_rect(button).adjusted(-10.0, -10.0, 10.0, 10.0).contains(hit_point)
@@ -19567,6 +19626,7 @@ class MainWindow(Background):
             accepted = False
         self._direct_touch_button = None
         self._touch_input_active = False
+        self._touch_input_last_event_at = 0.0
         self._direct_touch_mouse_suppress_until = time.monotonic() + 0.22
         self._direct_touch_mouse_suppress_point = self._direct_touch_last_global
         self._direct_touch_last_global = None
@@ -19578,6 +19638,46 @@ class MainWindow(Background):
             QTimer.singleShot(0, lambda b=button: self._activate_direct_touch_button(b))
         QTimer.singleShot(0, self.flush_deferred_interaction_sync)
         return True
+
+    def _recover_stale_touch_state(self):
+        """Release UI touch state if the driver drops TouchEnd/TouchCancel."""
+        now = time.monotonic()
+        touch_last = float(getattr(self, "_touch_input_last_event_at", 0.0) or 0.0)
+        stale_touch = bool(getattr(self, "_touch_input_active", False) and touch_last and now - touch_last >= 8.0)
+        guard_started = float(getattr(self, "_live_hold_touch_guard_started_at", 0.0) or 0.0)
+        stale_guard = bool(getattr(self, "_live_hold_touch_guard", False) and guard_started and now - guard_started >= 8.0)
+        stale_brightness = bool(
+            getattr(self, "_brightness_drag_active", False)
+            and now - float(getattr(self, "_last_user_activity_at", now) or now) >= 8.0
+        )
+        if not (stale_touch or stale_guard or stale_brightness):
+            return
+        button = getattr(self, "_direct_touch_button", None)
+        if stale_touch and button is not None:
+            try:
+                if isinstance(button, ScreenLockButton):
+                    button.cancel_press()
+                else:
+                    cancel_hold = getattr(button, "cancel_direct_touch_hold", None)
+                    if callable(cancel_hold):
+                        cancel_hold()
+                    button.setDown(False)
+                    button.update()
+            except RuntimeError:
+                pass
+        self._direct_touch_button = None
+        self._direct_touch_last_global = None
+        self._direct_touch_mouse_suppress_point = None
+        self._direct_touch_mouse_suppress_until = 0.0
+        self._touch_input_active = False
+        self._touch_input_last_event_at = 0.0
+        self._live_hold_touch_guard = False
+        self._live_hold_touch_guard_started_at = 0.0
+        self._brightness_drag_active = False
+        trace_runtime(
+            f"Recovered stale touch state touch={stale_touch} hold_guard={stale_guard} brightness={stale_brightness}"
+        )
+        QTimer.singleShot(0, self.flush_deferred_interaction_sync)
 
     def _suppress_mouse_copy_of_touch(self, event_type, event, now: float) -> bool:
         if event_type not in {QEvent.MouseButtonPress, QEvent.MouseButtonRelease, QEvent.MouseButtonDblClick}:
@@ -19773,9 +19873,11 @@ class MainWindow(Background):
                     # Fail-safe: if a platform drops the old TouchEnd entirely,
                     # a brand-new touch must not inherit the stale guard.
                     self._live_hold_touch_guard = False
+                    self._live_hold_touch_guard_started_at = 0.0
                 elif event_type in {QEvent.TouchUpdate, QEvent.TouchEnd, QEvent.TouchCancel}:
                     if event_type in {QEvent.TouchEnd, QEvent.TouchCancel}:
                         self._live_hold_touch_guard = False
+                        self._live_hold_touch_guard_started_at = 0.0
                         self._direct_touch_mouse_suppress_until = time.monotonic() + 0.28
                     event.accept()
                     return True
@@ -19797,8 +19899,14 @@ class MainWindow(Background):
                     self._brightness_drag_active = False
                 elif self.handle_edge_brightness_event(event_type, event):
                     return True
-        except Exception:
-            pass
+        except Exception as exc:
+            # Input exceptions used to disappear silently, which made intermittent
+            # touchscreen failures nearly impossible to diagnose.
+            last_error_at = float(getattr(self, "_last_event_filter_error_at", 0.0) or 0.0)
+            now = time.monotonic()
+            if now - last_error_at >= 2.0:
+                self._last_event_filter_error_at = now
+                trace_runtime(f"eventFilter error: {type(exc).__name__}: {exc}")
         return super().eventFilter(obj, event)
 
     def find_screen_backlight_path(self) -> Path | None:
@@ -21201,16 +21309,23 @@ class MainWindow(Background):
     def _ui_stall_watchdog(self):
         """Record all Python thread stacks when the Qt loop stops responding."""
         while True:
-            time.sleep(1.0)
+            time.sleep(0.5)
             now = time.monotonic()
             stalled_for = now - float(getattr(self, "_ui_heartbeat_at", now) or now)
-            if stalled_for < 5.0 or now - float(getattr(self, "_ui_stall_last_dump_at", 0.0) or 0.0) < 20.0:
+            if stalled_for < 2.0 or now - float(getattr(self, "_ui_stall_last_dump_at", 0.0) or 0.0) < 10.0:
                 continue
             self._ui_stall_last_dump_at = now
             try:
                 path = runtime_log_path("native-ui-stall.log")
+                page_name = str(getattr(self, "current_name", "unknown") or "unknown")
+                touch_active = bool(getattr(self, "_touch_input_active", False))
+                hold_guard = bool(getattr(self, "_live_hold_touch_guard", False))
                 with open(path, "a", buffering=1) as handle:
-                    handle.write(f"\n===== UI stall {datetime.now().isoformat(timespec='seconds')} duration={stalled_for:.1f}s =====\n")
+                    handle.write(
+                        f"\n===== UI stall {datetime.now().isoformat(timespec='seconds')} "
+                        f"duration={stalled_for:.1f}s page={page_name} "
+                        f"touch_active={touch_active} hold_guard={hold_guard} =====\n"
+                    )
                     faulthandler.dump_traceback(file=handle, all_threads=True)
                 trace_runtime(f"UI stall trace written to {path} after {stalled_for:.1f}s")
             except Exception as exc:
