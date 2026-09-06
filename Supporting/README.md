@@ -3,9 +3,9 @@
 The included `Supporting/iha.zip` currently contains IHA integration version **10.18.0**. Install/merge this package into Home Assistant's existing `/config/custom_components/iha/` directory and restart Home Assistant after updating.
 
 
-## Home Assistant Screen Lock (10.18.0)
+## Home Assistant Screen Lock (10.19.0)
 
-Version **10.18.0** adds a real Home Assistant **Screen Lock** lock entity for each thermostat panel. Lock/unlock controls the normal tap/guest lock shown at the top-left of the thermostat screen. The long-press Security Lock remains local-only and cannot be remotely unlocked or downgraded from Home Assistant.
+Version **10.19.0** adds a real Home Assistant **Screen Lock** lock entity for each thermostat panel. Lock/unlock controls the normal tap/guest lock shown at the top-left of the thermostat screen. The long-press Security Lock remains local-only and cannot be remotely unlocked or downgraded from Home Assistant. The read-only **Screen Locked** binary sensor is now disabled by default so the Home Assistant device page emphasizes the controllable **Screen Lock** lock entity.
 
 ## Home Assistant Backup Portal switch (10.17.8)
 

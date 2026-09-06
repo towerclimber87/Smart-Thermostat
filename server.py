@@ -6162,6 +6162,8 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
         "jarvis_volume_level": jarvis_volume_level,
         "thermalProtection": thermal_protection,
         "thermal_protection": thermal_protection,
+        "screenLock": _screen_lock_status_payload(),
+        "screen_lock": _screen_lock_status_payload(),
     }
     payload = {
         "ok": True,
@@ -6244,6 +6246,8 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
         "jarvis_volume_level": jarvis_volume_level,
         "thermalProtection": thermal_protection,
         "thermal_protection": thermal_protection,
+        "screenLock": _screen_lock_status_payload(),
+        "screen_lock": _screen_lock_status_payload(),
     }
     return payload
 
