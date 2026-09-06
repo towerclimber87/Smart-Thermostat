@@ -1866,20 +1866,20 @@ class DeviceInternetButton(QAbstractButton):
         self._blocked = False
         self._mixed = False
         self._busy = False
-        self.setToolTip("Disable internet for selected devices")
+        self.setToolTip("Manage internet for selected devices")
 
     def setState(self, blocked: bool, *, mixed: bool = False, busy: bool = False):
         self._blocked = bool(blocked)
         self._mixed = bool(mixed)
         self._busy = bool(busy)
         if self._busy:
-            tip = "Changing internet access for selected devices…"
+            tip = "Refreshing internet access for selected devices…"
         elif self._mixed:
-            tip = "Selected devices have mixed internet states; tap to disable internet for all"
+            tip = "Selected devices have mixed internet states; tap to manage them"
         elif self._blocked:
-            tip = "Internet disabled for selected devices; tap to restore"
+            tip = "Selected devices are offline; tap to manage them"
         else:
-            tip = "Internet enabled for selected devices; tap to disable"
+            tip = "Selected devices are online; tap to manage them"
         self.setToolTip(tip)
         self.update()
 
@@ -11108,6 +11108,226 @@ class AlexaLockoutSelectionDialog(QDialog):
         self.accept()
 
 
+class DeviceInternetControlDialog(QDialog):
+    """Touch-friendly popup for controlling the selected network devices independently."""
+
+    refreshRequested = pyqtSignal()
+    stateChangeRequested = pyqtSignal(str, bool)  # entity id, internet enabled
+
+    def __init__(self, entities: list[dict] | None = None, parent=None):
+        super().__init__(parent)
+        self.entities = copy.deepcopy(entities or [])
+        self.rows: dict[str, dict[str, object]] = {}
+        self._states: dict[str, str] = {}
+        self.setModal(True)
+        self.setWindowTitle("Device Internet")
+        self.setWindowFlag(Qt.FramelessWindowHint, True)
+        self.setMinimumSize(620, 420)
+        self.resize(760, 500)
+        self.setStyleSheet("""
+            QDialog { background:#09111f; color:#f7fbff; border:1px solid rgba(100,229,255,0.30); }
+            QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
+            QCheckBox {
+                color:#eef7ff;
+                font-family:Arial;
+                font-size:14px;
+                font-weight:900;
+                spacing:12px;
+                min-height:38px;
+                padding:4px 8px;
+            }
+            QCheckBox::indicator {
+                width:30px;
+                height:30px;
+                border-radius:9px;
+                border:2px solid rgba(107,226,255,0.55);
+                background:rgba(7,13,25,0.90);
+            }
+            QCheckBox::indicator:checked {
+                background:#49e6ff;
+                border:2px solid rgba(255,255,255,0.70);
+            }
+            QCheckBox:disabled { color:#8392aa; }
+            QCheckBox::indicator:disabled {
+                border:2px solid rgba(150,165,185,0.28);
+                background:rgba(255,255,255,0.04);
+            }
+        """)
+        self.build()
+        QTimer.singleShot(0, self._center_on_parent)
+        QTimer.singleShot(0, self.refreshRequested.emit)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._center_on_parent()
+
+    def _center_on_parent(self):
+        parent = self.parentWidget()
+        if parent is not None:
+            width = min(max(self.minimumWidth(), self.width()), max(self.minimumWidth(), parent.width() - 80))
+            height = min(max(self.minimumHeight(), self.height()), max(self.minimumHeight(), parent.height() - 70))
+            self.resize(width, height)
+            self.move(
+                parent.x() + max(0, (parent.width() - self.width()) // 2),
+                parent.y() + max(0, (parent.height() - self.height()) // 2),
+            )
+            return
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen:
+            geo = screen.availableGeometry()
+            self.move(
+                geo.x() + max(0, (geo.width() - self.width()) // 2),
+                geo.y() + max(0, (geo.height() - self.height()) // 2),
+            )
+
+    def build(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
+
+        header = QHBoxLayout()
+        title = QLabel("DEVICE INTERNET")
+        title.setFont(font(20, QFont.Black))
+        title.setStyleSheet("color:#55f0ff; letter-spacing:2px;")
+        close = RoundButton("Close", active=False, min_h=38)
+        close.setMinimumWidth(105)
+        close.clicked.connect(self.accept)
+        header.addWidget(title)
+        header.addStretch(1)
+        header.addWidget(close)
+        root.addLayout(header)
+
+        note = QLabel("Check a device to allow internet. Uncheck it to block that device.")
+        note.setWordWrap(True)
+        note.setFont(font(9, QFont.Black))
+        note.setStyleSheet(
+            "color:#cdd8ee; background:rgba(255,255,255,0.055); "
+            "border:1px solid rgba(255,255,255,0.10); border-radius:10px; padding:8px;"
+        )
+        root.addWidget(note)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea{background:transparent;border:0;}")
+        body = QWidget()
+        self.body_lay = QVBoxLayout(body)
+        self.body_lay.setContentsMargins(0, 0, 0, 0)
+        self.body_lay.setSpacing(8)
+        scroll.setWidget(body)
+        root.addWidget(scroll, 1)
+
+        for raw in self.entities:
+            if not isinstance(raw, dict):
+                continue
+            entity_id = str(raw.get("entityId") or raw.get("entity_id") or "").strip()
+            if not entity_id.startswith("switch.") or entity_id in self.rows:
+                continue
+            name = str(raw.get("name") or raw.get("friendly_name") or entity_id).strip() or entity_id
+
+            row = QFrame()
+            row.setStyleSheet(
+                "QFrame{background:rgba(255,255,255,0.055); border:1px solid rgba(160,190,220,0.16); "
+                "border-radius:12px;}"
+            )
+            lay = QHBoxLayout(row)
+            lay.setContentsMargins(12, 8, 12, 8)
+            lay.setSpacing(12)
+
+            labels = QVBoxLayout()
+            labels.setSpacing(2)
+            name_label = QLabel(name)
+            name_label.setFont(font(12, QFont.Black))
+            name_label.setStyleSheet("color:#ffffff; background:transparent; border:0;")
+            entity_label = QLabel(entity_id)
+            entity_label.setFont(font(7, QFont.Bold))
+            entity_label.setStyleSheet("color:#7789a6; background:transparent; border:0;")
+            labels.addWidget(name_label)
+            labels.addWidget(entity_label)
+
+            state_label = QLabel("CHECKING…")
+            state_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            state_label.setMinimumWidth(82)
+            state_label.setFont(font(8, QFont.Black))
+            state_label.setStyleSheet("color:#a8b8d0; background:transparent; border:0;")
+
+            check = QCheckBox("Internet")
+            check.setMinimumWidth(150)
+            check.setEnabled(False)
+            check.clicked.connect(lambda checked, eid=entity_id: self._request_change(eid, bool(checked)))
+
+            lay.addLayout(labels, 1)
+            lay.addWidget(state_label)
+            lay.addWidget(check)
+            self.body_lay.addWidget(row)
+            self.rows[entity_id] = {"check": check, "state": state_label, "frame": row}
+
+        if not self.rows:
+            empty = QLabel("No devices are selected in Settings.")
+            empty.setAlignment(Qt.AlignCenter)
+            empty.setFont(font(12, QFont.Black))
+            empty.setStyleSheet("color:#9fb0c8; padding:30px;")
+            self.body_lay.addWidget(empty)
+        self.body_lay.addStretch(1)
+
+    def _request_change(self, entity_id: str, internet_enabled: bool):
+        row = self.rows.get(entity_id)
+        if not row:
+            return
+        check = row.get("check")
+        state_label = row.get("state")
+        if isinstance(check, QCheckBox):
+            check.setEnabled(False)
+        if isinstance(state_label, QLabel):
+            state_label.setText("CHANGING…")
+            state_label.setStyleSheet("color:#ffd77c; background:transparent; border:0;")
+        self.stateChangeRequested.emit(entity_id, bool(internet_enabled))
+
+    def set_entity_state(self, entity_id: str, state: str, *, busy: bool = False):
+        row = self.rows.get(str(entity_id or "").strip())
+        if not row:
+            return
+        normalized = str(state or "").strip().lower()
+        self._states[str(entity_id or "").strip()] = normalized
+        check = row.get("check")
+        state_label = row.get("state")
+        if isinstance(check, QCheckBox):
+            check.blockSignals(True)
+            check.setChecked(normalized == "on")
+            check.blockSignals(False)
+            check.setEnabled(not busy and normalized in {"on", "off"})
+        if isinstance(state_label, QLabel):
+            if busy:
+                text, color = "CHANGING…", "#ffd77c"
+            elif normalized == "on":
+                text, color = "ONLINE", "#64ff9d"
+            elif normalized == "off":
+                text, color = "OFFLINE", "#ff6977"
+            else:
+                text, color = "UNAVAILABLE", "#9aa9bf"
+            state_label.setText(text)
+            state_label.setStyleSheet(f"color:{color}; background:transparent; border:0;")
+
+    def set_states(self, states: dict[str, str]):
+        for entity_id in self.rows:
+            self.set_entity_state(entity_id, str((states or {}).get(entity_id) or ""), busy=False)
+
+    def set_entity_error(self, entity_id: str):
+        row = self.rows.get(str(entity_id or "").strip())
+        if not row:
+            return
+        state_label = row.get("state")
+        if isinstance(state_label, QLabel):
+            state_label.setText("ERROR")
+            state_label.setStyleSheet("color:#ff6977; background:transparent; border:0;")
+        check = row.get("check")
+        if isinstance(check, QCheckBox):
+            previous = self._states.get(str(entity_id or "").strip(), "")
+            check.blockSignals(True)
+            check.setChecked(previous == "on")
+            check.blockSignals(False)
+            check.setEnabled(previous in {"on", "off"})
+
+
 class DeviceInternetSelectionDialog(QDialog):
     """Searchable multi-select picker for device network-access switches."""
 
@@ -11266,7 +11486,7 @@ class DeviceInternetSelectionDialog(QDialog):
 
         note = QLabel(
             "Choose the Home Assistant switch entities that control internet/network access for the devices you want on the main-screen iPad button. "
-            "The iPad button shows ONLINE when those switches are ON. Pressing it makes the devices OFFLINE by turning the selected switches OFF; pressing it again restores them ON."
+            "The iPad button opens a popup where each selected device can be turned online or offline independently."
         )
         note.setWordWrap(True)
         note.setFont(font(10, QFont.Black))
@@ -16709,7 +16929,7 @@ class SettingsDialog(QDialog):
         jarvis.layout().addWidget(jarvis_save_note)
 
         device_internet = self.add_section("Device Internet", -2, 0, 1, 2)
-        device_note = QLabel("Select the Home Assistant network-access switches controlled by the iPad button on the thermostat screen. The button only appears when at least one device is selected.")
+        device_note = QLabel("Select the Home Assistant network-access switches shown by the iPad button on the thermostat screen. Tapping the button opens individual controls for the selected devices.")
         device_note.setWordWrap(True)
         device_note.setFont(font(8, QFont.Bold))
         device_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
@@ -16726,7 +16946,7 @@ class SettingsDialog(QDialog):
         device_row.addWidget(self.device_internet_summary, 1)
         device_row.addWidget(choose_devices)
         device_internet.layout().addLayout(device_row)
-        device_status = QLabel("MULTI-SELECT   ·   SEARCHABLE   ·   ONLINE = SWITCH ON   ·   OFFLINE/BLOCKED = SWITCH OFF")
+        device_status = QLabel("MULTI-SELECT   ·   CHECKED = ONLINE   ·   UNCHECKED = OFFLINE/BLOCKED")
         device_status.setWordWrap(True)
         device_status.setFont(font(7, QFont.Black))
         device_status.setStyleSheet("color:#8fffd0; background:transparent; border:0;")
@@ -18694,7 +18914,7 @@ class MainWindow(Background):
         self.sync_button = SyncButton(self)
         self.sync_button.clicked.connect(self.toggle_sync_mode)
         self.device_internet_button = DeviceInternetButton(self)
-        self.device_internet_button.clicked.connect(self.toggle_device_internet)
+        self.device_internet_button.clicked.connect(self.show_device_internet_controls)
         self._device_internet_toggle_running = False
         self._device_internet_refresh_running = False
         self._device_internet_state_known = False
@@ -20581,6 +20801,106 @@ class MainWindow(Background):
                 f"state={result.get('state') or 'unknown'} attempts={result.get('attempts') or 0}"
             )
         return {"stale": False, "results": results}
+
+    def show_device_internet_controls(self):
+        if getattr(self, "navigation_locked", False):
+            self.toast.show_message(self.lock_restriction_message())
+            return
+        entities = self.selected_device_internet_entities()
+        if not entities:
+            self.position_sleep_controls()
+            return
+        dlg = DeviceInternetControlDialog(entities, self)
+        self._device_internet_dialog = dlg
+        dlg.refreshRequested.connect(lambda d=dlg: self.refresh_device_internet_dialog(d))
+        dlg.stateChangeRequested.connect(
+            lambda entity_id, internet_enabled, d=dlg: self.set_single_device_internet(d, entity_id, internet_enabled)
+        )
+        dlg.exec_()
+        if getattr(self, "_device_internet_dialog", None) is dlg:
+            self._device_internet_dialog = None
+        QTimer.singleShot(0, self.refresh_device_internet_state)
+
+    def refresh_device_internet_dialog(self, dialog: DeviceInternetControlDialog):
+        """Refresh the per-device popup from actual Home Assistant switch states."""
+        if dialog is None:
+            return
+        entities = self.selected_device_internet_entities()
+        wanted = {str(item.get("entityId") or "") for item in entities}
+        payload = self.s.ha_payload({"domains": ["switch"]})
+
+        def done(result):
+            try:
+                if not dialog.isVisible():
+                    return
+                rows = result.get("entities") if isinstance(result, dict) else []
+                by_id = {
+                    str(item.get("entityId") or item.get("entity_id") or ""): str(item.get("state") or "").strip().lower()
+                    for item in rows if isinstance(item, dict)
+                }
+                dialog.set_states({entity_id: by_id.get(entity_id, "") for entity_id in wanted})
+            except RuntimeError:
+                return
+
+        def failed(error):
+            trace_runtime(f"device internet popup refresh failed error={error}")
+            try:
+                if dialog.isVisible():
+                    dialog.set_states({entity_id: "" for entity_id in wanted})
+            except RuntimeError:
+                return
+
+        self.run_async(
+            "device-internet-popup-state",
+            lambda: self.s.api.post("/api/ha/entities", payload, timeout=6.0),
+            done,
+            failed,
+        )
+
+    def set_single_device_internet(self, dialog: DeviceInternetControlDialog, entity_id: str, internet_enabled: bool):
+        """Apply one row from the device popup without changing the other selected devices."""
+        entity_id = str(entity_id or "").strip()
+        if not entity_id.startswith("switch."):
+            return
+        action = "on" if bool(internet_enabled) else "off"
+        try:
+            dialog.set_entity_state(entity_id, action, busy=True)
+        except RuntimeError:
+            return
+
+        def worker():
+            return self._set_alexa_switch_state(entity_id, action, attempts=3)
+
+        def done(result):
+            info = result if isinstance(result, dict) else {}
+            ok = bool(info.get("ok"))
+            state = str(info.get("state") or "").strip().lower()
+            try:
+                if dialog.isVisible():
+                    if ok:
+                        dialog.set_entity_state(entity_id, state or action, busy=False)
+                    else:
+                        dialog.set_entity_error(entity_id)
+            except RuntimeError:
+                pass
+            if not ok:
+                self.toast.show_message("Device internet change failed", 2800)
+                QTimer.singleShot(150, lambda d=dialog: self.refresh_device_internet_dialog(d))
+            QTimer.singleShot(0, self.refresh_device_internet_state)
+
+        def failed(error):
+            trace_runtime(f"device internet single toggle failed entity={entity_id} error={error}")
+            try:
+                if dialog.isVisible():
+                    dialog.set_entity_error(entity_id)
+            except RuntimeError:
+                pass
+            self.toast.show_message("Device internet change failed", 2800)
+            QTimer.singleShot(150, lambda d=dialog: self.refresh_device_internet_dialog(d))
+            QTimer.singleShot(0, self.refresh_device_internet_state)
+
+        self.run_async(f"device-internet-{entity_id}", worker, done, failed)
+
 
     def toggle_device_internet(self):
         if getattr(self, "navigation_locked", False):
