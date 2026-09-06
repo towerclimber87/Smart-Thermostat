@@ -18821,10 +18821,17 @@ class MainWindow(Background):
         self.assistantStatusCompleted.connect(self._handle_assistant_status_completed)
         self.mainAsyncCompleted.connect(self._handle_main_async_completed)
         self.screenMotionCompleted.connect(self.handle_screen_motion_completed)
+        self._screen_lock_command_poll_running = False
+        self._screen_lock_command_sequence_seen = 0
+        self._screen_lock_command_ack_sequence = 0
         self.screen_lock_report_timer = QTimer(self)
         self.screen_lock_report_timer.setInterval(30000)
         self.screen_lock_report_timer.timeout.connect(self.report_screen_lock_state)
         self.screen_lock_report_timer.start()
+        self.screen_lock_command_timer = QTimer(self)
+        self.screen_lock_command_timer.setInterval(1000)
+        self.screen_lock_command_timer.timeout.connect(self.refresh_screen_lock_command)
+        self.screen_lock_command_timer.start()
         self.device_internet_state_timer = QTimer(self)
         self.device_internet_state_timer.setInterval(30000)
         self.device_internet_state_timer.timeout.connect(self.refresh_device_internet_state)
@@ -18959,9 +18966,11 @@ class MainWindow(Background):
                 QTimer.singleShot(0, self.refresh_alarm_state)
                 QTimer.singleShot(0, self.refresh_assistant_status)
                 QTimer.singleShot(0, self.refresh_screen_motion_status)
-                # Mirror the native lock state to the local backend for Home Assistant.
-                # This is reporting only; the backend cannot lock or unlock the panel.
+                # Mirror the native lock state and immediately check for a Home
+                # Assistant guest-lock command. The secure long-press lock remains
+                # local-only and can never be remotely downgraded or bypassed.
                 QTimer.singleShot(0, self.report_screen_lock_state)
+                QTimer.singleShot(100, self.refresh_screen_lock_command)
                 QTimer.singleShot(250, self.refresh_device_internet_state)
                 if not getattr(self, "_thermal_protection_active", False):
                     self.toast.show_message("Native panel ready")
@@ -20814,12 +20823,57 @@ class MainWindow(Background):
             # Requests run off the UI thread. The sequence lets the backend ignore
             # an older request if rapid lock/unlock taps complete out of order.
             "sequence": time.monotonic_ns(),
+            # A Home Assistant lock command is acknowledged only after the native
+            # panel has actually applied (or safely rejected) that requested state.
+            "commandSequence": int(getattr(self, "_screen_lock_command_ack_sequence", 0) or 0),
         }
         self.run_async(
             "screen-lock-state",
             lambda p=payload: self.s.api.post("/api/screen/lock-status", p, timeout=1.0),
             lambda _result: None,
             lambda _err: None,
+        )
+
+    def refresh_screen_lock_command(self):
+        """Apply the normal guest lock requested by the IHA Home Assistant lock entity."""
+        if getattr(self, "_screen_lock_command_poll_running", False):
+            return
+        self._screen_lock_command_poll_running = True
+
+        def done(result):
+            self._screen_lock_command_poll_running = False
+            data = result if isinstance(result, dict) else {}
+            command = data.get("command") if isinstance(data.get("command"), dict) else {}
+            if not command.get("pending"):
+                return
+            try:
+                sequence = int(command.get("sequence") or 0)
+            except (TypeError, ValueError):
+                sequence = 0
+            if sequence <= 0 or sequence <= int(getattr(self, "_screen_lock_command_sequence_seen", 0) or 0):
+                return
+
+            requested_locked = bool(command.get("requestedLocked"))
+            self._screen_lock_command_sequence_seen = sequence
+            self._screen_lock_command_ack_sequence = sequence
+
+            # The long-press Security Lock is intentionally local-only. A remote
+            # lock command may leave it locked, but a remote unlock can never
+            # clear it or downgrade it to the normal guest lock.
+            if bool(getattr(self, "security_lock_active", False)):
+                self.report_screen_lock_state()
+                return
+
+            self.set_navigation_locked(requested_locked, secure=False, show_toast=False)
+
+        def failed(_error):
+            self._screen_lock_command_poll_running = False
+
+        self.run_async(
+            "screen-lock-command",
+            lambda: self.s.api.get("/api/screen/lock-command"),
+            done,
+            failed,
         )
 
     def set_navigation_locked(self, locked: bool, *, secure: bool | None = None, show_toast: bool = False):

@@ -310,6 +310,12 @@ _HARDWARE_MOTION_RUNTIME = {
     "lastReadAt": 0.0,
 }
 _SCREEN_LOCK_STATUS_LOCK = threading.RLock()
+_SCREEN_LOCK_COMMAND = {
+    "sequence": 0,
+    "requestedLocked": None,
+    "updatedAt": 0,
+    "acknowledgedSequence": 0,
+}
 _SCREEN_LOCK_STATUS = {
     "locked": False,
     "securityLocked": False,
@@ -8946,8 +8952,77 @@ def _screen_lock_status_payload() -> dict:
     }
 
 
+def _screen_lock_command_payload() -> dict:
+    """Return the latest Home Assistant guest-lock command for the native UI."""
+    with _SCREEN_LOCK_STATUS_LOCK:
+        sequence = int(_SCREEN_LOCK_COMMAND.get("sequence") or 0)
+        acknowledged = int(_SCREEN_LOCK_COMMAND.get("acknowledgedSequence") or 0)
+        requested = _SCREEN_LOCK_COMMAND.get("requestedLocked")
+        updated_at = int(_SCREEN_LOCK_COMMAND.get("updatedAt") or 0)
+    pending = bool(sequence > acknowledged and requested is not None)
+    return {
+        "sequence": sequence,
+        "acknowledgedSequence": acknowledged,
+        "pending": pending,
+        "requestedLocked": bool(requested) if requested is not None else None,
+        "action": "lock" if requested is True else "unlock" if requested is False else "",
+        "updatedAt": updated_at,
+    }
+
+
+def _request_screen_lock_control(payload: object) -> dict:
+    """Queue the normal guest lock for the native UI; secure lock stays local-only."""
+    raw = payload if isinstance(payload, dict) else {}
+    action = str(raw.get("action") or "").strip().lower()
+    if action in {"lock", "locked", "on"}:
+        requested_locked = True
+    elif action in {"unlock", "unlocked", "off"}:
+        requested_locked = False
+    elif "locked" in raw:
+        requested_locked = _boolish(raw.get("locked"))
+    else:
+        return {"ok": False, "error": "Use action lock/unlock or provide locked=true/false."}
+
+    with _SCREEN_LOCK_STATUS_LOCK:
+        if not requested_locked and bool(_SCREEN_LOCK_STATUS.get("securityLocked")):
+            return {
+                "ok": False,
+                "error": "Security lock must be unlocked on the thermostat with the Settings code.",
+                "screenLock": _screen_lock_status_payload(),
+            }
+        next_sequence = max(int(_SCREEN_LOCK_COMMAND.get("sequence") or 0) + 1, time.monotonic_ns())
+        _SCREEN_LOCK_COMMAND["sequence"] = next_sequence
+        _SCREEN_LOCK_COMMAND["requestedLocked"] = bool(requested_locked)
+        _SCREEN_LOCK_COMMAND["updatedAt"] = int(time.time())
+
+    # Give the native process a short window to consume the localhost command so
+    # Home Assistant usually gets a confirmed state instead of an optimistic one.
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        with _SCREEN_LOCK_STATUS_LOCK:
+            acknowledged = int(_SCREEN_LOCK_COMMAND.get("acknowledgedSequence") or 0)
+            actual_locked = bool(_SCREEN_LOCK_STATUS.get("locked"))
+            security_locked = bool(_SCREEN_LOCK_STATUS.get("securityLocked"))
+        if acknowledged >= next_sequence:
+            return {
+                "ok": True,
+                "applied": actual_locked == bool(requested_locked) and not (not requested_locked and security_locked),
+                "screenLock": _screen_lock_status_payload(),
+                "command": _screen_lock_command_payload(),
+            }
+        time.sleep(0.05)
+
+    return {
+        "ok": True,
+        "applied": False,
+        "pending": True,
+        "screenLock": _screen_lock_status_payload(),
+        "command": _screen_lock_command_payload(),
+    }
+
+
 def _set_screen_lock_status(payload: object) -> dict:
-    """Accept a local, read-only mirror of the native screen lock state."""
+    """Accept a local mirror of the native screen lock state and acknowledge remote commands."""
     raw = payload if isinstance(payload, dict) else {}
     locked = _boolish(raw.get("locked"))
     security_locked = bool(locked and _boolish(raw.get("securityLocked", raw.get("security_locked", False))))
@@ -8970,8 +9045,19 @@ def _set_screen_lock_status(payload: object) -> dict:
         _SCREEN_LOCK_STATUS["securityLocked"] = security_locked
         _SCREEN_LOCK_STATUS["updatedAt"] = int(time.time())
         _SCREEN_LOCK_STATUS["sequence"] = sequence
+        try:
+            command_sequence = max(0, int(raw.get("commandSequence") or raw.get("command_sequence") or 0))
+        except (TypeError, ValueError):
+            command_sequence = 0
+        if command_sequence:
+            latest_command = int(_SCREEN_LOCK_COMMAND.get("sequence") or 0)
+            if command_sequence <= latest_command:
+                _SCREEN_LOCK_COMMAND["acknowledgedSequence"] = max(
+                    int(_SCREEN_LOCK_COMMAND.get("acknowledgedSequence") or 0),
+                    command_sequence,
+                )
 
-    return {"ok": True, "stale": False, "screenLock": _screen_lock_status_payload()}
+    return {"ok": True, "stale": False, "screenLock": _screen_lock_status_payload(), "command": _screen_lock_command_payload()}
 
 
 def _hardware_telemetry_payload() -> dict:
@@ -8990,6 +9076,7 @@ def _hardware_telemetry_payload() -> dict:
         "readAt": int(time.time()),
         "motion": motion,
         "screenLock": _screen_lock_status_payload(),
+        "screenLockCommand": _screen_lock_command_payload(),
         "temperature": temperature,
         # Keep the established hardware-status key as an alias for clients that
         # already understand the local sensor payload.
@@ -14987,6 +15074,10 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
             return _json(self, 200, _hardware_status_payload(force_i2c=True))
         if path == "/api/hardware/telemetry":
             return _json(self, 200, _hardware_telemetry_payload())
+        if path == "/api/screen/lock-command":
+            if not _request_client_is_loopback(self):
+                return _json(self, 403, {"ok": False, "error": "Screen lock commands can only be consumed by the local panel."})
+            return _json(self, 200, {"ok": True, "command": _screen_lock_command_payload(), "screenLock": _screen_lock_status_payload()})
         if path == "/api/hardware/temperature-sensors":
             refresh = str((query.get("refresh") or [""])[0]).strip().lower() in {"1", "true", "yes", "on"}
             return _json(self, 200, _temperature_sensor_configuration_payload(force=refresh))
@@ -15055,7 +15146,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/thermostat/run-schedule", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/hardware/temperature-sensors", "/api/screen/lock-status", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/alexa-lockout/devices", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/group", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply", "/api/house-sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/playback", "/api/assistant/config", "/api/assistant/knowledge", "/api/settings/web", "/api/settings/house-sync"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/thermostat/run-schedule", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/hardware/temperature-sensors", "/api/screen/lock-status", "/api/screen/lock-control", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/alexa-lockout/devices", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/group", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply", "/api/house-sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/playback", "/api/assistant/config", "/api/assistant/knowledge", "/api/settings/web", "/api/settings/house-sync"}:
             self.send_error(404, "Not found")
             return
 
@@ -15175,6 +15266,10 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                 if not _request_client_is_loopback(self):
                     return _json(self, 403, {"ok": False, "error": "Screen lock status can only be reported by the local panel."})
                 return _json(self, 200, _set_screen_lock_status(payload))
+
+            if path == "/api/screen/lock-control":
+                result = _request_screen_lock_control(payload)
+                return _json(self, 200 if result.get("ok") else 409, result)
 
             if path == "/api/thermostat/status":
                 return _json(self, 200, _thermostat_status_payload(refresh_runtime=False, apply_hardware=False))
