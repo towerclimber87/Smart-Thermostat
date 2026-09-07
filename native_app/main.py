@@ -20813,7 +20813,7 @@ class MainWindow(Background):
             entity_id = str((item or {}).get("entityId") or (item or {}).get("entity_id") or "").strip()
             if not entity_id.startswith("switch."):
                 continue
-            result = self._set_alexa_switch_state(entity_id, action, attempts=3)
+            result = self._set_alexa_switch_state(entity_id, action, attempts=10)
             results.append(result)
             trace_runtime(
                 f"device internet entity={entity_id} requested={action} ok={bool(result.get('ok'))} "
@@ -20888,7 +20888,7 @@ class MainWindow(Background):
             return
 
         def worker():
-            return self._set_alexa_switch_state(entity_id, action, attempts=3)
+            return self._set_alexa_switch_state(entity_id, action, attempts=10)
 
         def done(result):
             info = result if isinstance(result, dict) else {}
@@ -21010,35 +21010,57 @@ class MainWindow(Background):
         return clean
 
     def _set_alexa_switch_state(self, entity_id: str, action: str, *, attempts: int = 3) -> dict:
-        """Set one Alexa lockout switch and verify/retry the requested state."""
+        """Set one network-access switch once, then wait for HA to confirm it.
+
+        UniFi-backed switch entities can lag behind an accepted service call by a
+        few seconds. Re-sending turn_on/turn_off and checking only the immediate
+        response caused successful changes to be reported as failures. Keep the
+        command idempotent and poll the one live entity until the state catches up.
+        """
         entity_id = str(entity_id or "").strip()
         action = str(action or "").strip().lower()
         if not entity_id.startswith("switch.") or action not in {"on", "off"}:
             raise ValueError("Invalid Alexa lockout switch request")
 
+        checks = max(1, int(attempts))
+        command_payload = self.s.ha_payload({"entityId": entity_id, "action": action})
         last_result: dict = {}
         last_state = ""
         last_error = ""
-        for attempt in range(max(1, int(attempts))):
-            payload = self.s.ha_payload({"entityId": entity_id, "action": action})
+
+        # Send the requested state exactly once. A timeout here is not necessarily
+        # proof that HA rejected the service call, so verification still runs.
+        try:
+            result = self.s.api.post("/api/ha/audio/switch/action", command_payload, timeout=5.0)
+            last_result = result if isinstance(result, dict) else {}
+            control = last_result.get("control") if isinstance(last_result.get("control"), dict) else {}
+            last_state = str(control.get("state") or "").strip().lower()
+            if last_state == action:
+                return {"entityId": entity_id, "ok": True, "state": last_state, "attempts": 1}
+            last_error = f"Home Assistant initially reported state {last_state or 'unknown'}"
+        except Exception as exc:
+            last_error = str(exc)
+
+        state_payload = self.s.ha_payload({"entityId": entity_id})
+        for check in range(checks):
+            # Give UniFi/Home Assistant a moment to publish the resulting entity
+            # state before the first verification read.
+            time.sleep(0.65 if check == 0 else 0.55)
             try:
-                result = self.s.api.post("/api/ha/audio/switch/action", payload, timeout=4.0)
-                last_result = result if isinstance(result, dict) else {}
-                control = last_result.get("control") if isinstance(last_result.get("control"), dict) else {}
-                last_state = str(control.get("state") or "").strip().lower()
+                state_result = self.s.api.post("/api/ha/entity/state", state_payload, timeout=4.0)
+                entity = state_result.get("entity") if isinstance(state_result, dict) else {}
+                last_state = str((entity or {}).get("state") or "").strip().lower()
                 if last_state == action:
-                    return {"entityId": entity_id, "ok": True, "state": last_state, "attempts": attempt + 1}
+                    return {"entityId": entity_id, "ok": True, "state": last_state, "attempts": check + 2}
                 last_error = f"Home Assistant reported state {last_state or 'unknown'}"
             except Exception as exc:
                 last_error = str(exc)
-            if attempt + 1 < max(1, int(attempts)):
-                time.sleep(0.75)
 
         return {
             "entityId": entity_id,
             "ok": False,
             "state": last_state,
-            "attempts": max(1, int(attempts)),
+            "attempts": checks + 1,
             "error": last_error or "Could not verify requested switch state",
             "result": last_result,
         }

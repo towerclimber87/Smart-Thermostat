@@ -13420,6 +13420,17 @@ def _fetch_ha_entities(ha_url: str, token: str, domains: list[str] | None = None
     return entities
 
 
+def _fetch_ha_entity_state(ha_url: str, token: str, entity_id: str) -> dict:
+    """Fetch one Home Assistant entity directly, bypassing panel state caches."""
+    entity_id = str(entity_id or "").strip()
+    if not entity_id or "." not in entity_id:
+        raise ValueError("Entity ID must include a Home Assistant domain")
+    item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
+    if not isinstance(item, dict) or not item:
+        raise RuntimeError("Home Assistant did not return the requested entity state")
+    return _normalize_generic_entity(item)
+
+
 
 def _fetch_ha_alexa_lockout_devices(ha_url: str, token: str) -> dict:
     """Return physical Alexa devices plus UniFi clients and access controls.
@@ -15150,7 +15161,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/thermostat/run-schedule", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/hardware/temperature-sensors", "/api/screen/lock-status", "/api/screen/lock-control", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/alexa-lockout/devices", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/group", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply", "/api/house-sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/playback", "/api/assistant/config", "/api/assistant/knowledge", "/api/settings/web", "/api/settings/house-sync"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/thermostat/run-schedule", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/hardware/temperature-sensors", "/api/screen/lock-status", "/api/screen/lock-control", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/entity/state", "/api/ha/alexa-lockout/devices", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/group", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply", "/api/house-sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/playback", "/api/assistant/config", "/api/assistant/knowledge", "/api/settings/web", "/api/settings/house-sync"}:
             self.send_error(404, "Not found")
             return
 
@@ -15296,6 +15307,14 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                     payload.get("domains", []),
                 )
                 return _json(self, 200, {"ok": True, "entities": entities, "count": len(entities)})
+
+            if path == "/api/ha/entity/state":
+                entity = _fetch_ha_entity_state(
+                    payload.get("url", ""),
+                    payload.get("token", ""),
+                    payload.get("entityId", ""),
+                )
+                return _json(self, 200, {"ok": True, "entity": entity})
 
             if path == "/api/ha/alexa-lockout/devices":
                 result = _fetch_ha_alexa_lockout_devices(
