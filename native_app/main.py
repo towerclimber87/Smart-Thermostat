@@ -4172,7 +4172,7 @@ class ScheduleManagerDialog(QDialog):
         root.addWidget(self.save_status)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
-        self.scroll.setStyleSheet("QScrollArea{background:transparent;border:0;}")
+        self.scroll.setStyleSheet("QScrollArea{background:transparent;border:0;} QScrollBar:vertical{background:rgba(255,255,255,0.05); width:12px; border-radius:6px;} QScrollBar::handle:vertical{background:rgba(110,225,255,0.50); min-height:28px; border-radius:6px;}")
         self.body = QWidget()
         self.body_lay = QVBoxLayout(self.body)
         self.body_lay.setContentsMargins(0, 0, 0, 0)
@@ -10767,7 +10767,7 @@ class PeopleSelectionDialog(QDialog):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea{background:transparent;border:0;}")
+        scroll.setStyleSheet("QScrollArea{background:transparent;border:0;} QScrollBar:vertical{background:rgba(255,255,255,0.05); width:12px; border-radius:6px;} QScrollBar::handle:vertical{background:rgba(110,225,255,0.50); min-height:28px; border-radius:6px;}")
         body = QWidget()
         self.body_lay = QVBoxLayout(body)
         self.body_lay.setContentsMargins(0, 0, 0, 0)
@@ -11006,7 +11006,7 @@ class AlexaLockoutSelectionDialog(QDialog):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea{background:transparent;border:0;}")
+        scroll.setStyleSheet("QScrollArea{background:transparent;border:0;} QScrollBar:vertical{background:rgba(255,255,255,0.05); width:12px; border-radius:6px;} QScrollBar::handle:vertical{background:rgba(110,225,255,0.50); min-height:28px; border-radius:6px;}")
         body = QWidget()
         self.body_lay = QVBoxLayout(body)
         self.body_lay.setContentsMargins(0, 0, 0, 0)
@@ -11125,12 +11125,12 @@ class DeviceInternetControlDialog(QDialog):
         self.setMinimumSize(620, 420)
         self.resize(760, 500)
         self.setStyleSheet("""
-            QDialog { background:#09111f; color:#f7fbff; border:1px solid rgba(100,229,255,0.30); }
+            QDialog { background:#08111d; color:#ffffff; border:2px solid rgba(105,235,255,0.42); }
             QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
             QCheckBox {
-                color:#eef7ff;
+                color:#ffffff;
                 font-family:Arial;
-                font-size:14px;
+                font-size:15px;
                 font-weight:900;
                 spacing:12px;
                 min-height:38px;
@@ -11147,7 +11147,7 @@ class DeviceInternetControlDialog(QDialog):
                 background:#49e6ff;
                 border:2px solid rgba(255,255,255,0.70);
             }
-            QCheckBox:disabled { color:#8392aa; }
+            QCheckBox:disabled { color:#c7d3e6; }
             QCheckBox::indicator:disabled {
                 border:2px solid rgba(150,165,185,0.28);
                 background:rgba(255,255,255,0.04);
@@ -11201,14 +11201,14 @@ class DeviceInternetControlDialog(QDialog):
         note.setWordWrap(True)
         note.setFont(font(9, QFont.Black))
         note.setStyleSheet(
-            "color:#cdd8ee; background:rgba(255,255,255,0.055); "
-            "border:1px solid rgba(255,255,255,0.10); border-radius:10px; padding:8px;"
+            "color:#f4f8ff; background:rgba(16,30,48,0.98); "
+            "border:1px solid rgba(130,220,255,0.30); border-radius:10px; padding:10px;"
         )
         root.addWidget(note)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea{background:transparent;border:0;}")
+        scroll.setStyleSheet("QScrollArea{background:transparent;border:0;} QScrollBar:vertical{background:rgba(255,255,255,0.05); width:12px; border-radius:6px;} QScrollBar::handle:vertical{background:rgba(110,225,255,0.50); min-height:28px; border-radius:6px;}")
         body = QWidget()
         self.body_lay = QVBoxLayout(body)
         self.body_lay.setContentsMargins(0, 0, 0, 0)
@@ -11226,7 +11226,7 @@ class DeviceInternetControlDialog(QDialog):
 
             row = QFrame()
             row.setStyleSheet(
-                "QFrame{background:rgba(255,255,255,0.055); border:1px solid rgba(160,190,220,0.16); "
+                "QFrame{background:rgba(14,24,38,0.98); border:1px solid rgba(135,190,235,0.30); "
                 "border-radius:12px;}"
             )
             lay = QHBoxLayout(row)
@@ -11240,15 +11240,15 @@ class DeviceInternetControlDialog(QDialog):
             name_label.setStyleSheet("color:#ffffff; background:transparent; border:0;")
             entity_label = QLabel(entity_id)
             entity_label.setFont(font(7, QFont.Bold))
-            entity_label.setStyleSheet("color:#7789a6; background:transparent; border:0;")
+            entity_label.setStyleSheet("color:#c9d6eb; background:transparent; border:0;")
             labels.addWidget(name_label)
             labels.addWidget(entity_label)
 
             state_label = QLabel("CHECKING…")
             state_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            state_label.setMinimumWidth(82)
-            state_label.setFont(font(8, QFont.Black))
-            state_label.setStyleSheet("color:#a8b8d0; background:transparent; border:0;")
+            state_label.setMinimumWidth(110)
+            state_label.setFont(font(9, QFont.Black))
+            state_label.setStyleSheet("color:#e4edf9; background:rgba(255,255,255,0.07); border:1px solid rgba(180,200,225,0.22); border-radius:10px; padding:6px 10px;")
 
             check = QCheckBox("Internet")
             check.setMinimumWidth(150)
@@ -11265,7 +11265,7 @@ class DeviceInternetControlDialog(QDialog):
             empty = QLabel("No devices are selected in Settings.")
             empty.setAlignment(Qt.AlignCenter)
             empty.setFont(font(12, QFont.Black))
-            empty.setStyleSheet("color:#9fb0c8; padding:30px;")
+            empty.setStyleSheet("color:#e3eefc; padding:30px;")
             self.body_lay.addWidget(empty)
         self.body_lay.addStretch(1)
 
@@ -11279,7 +11279,7 @@ class DeviceInternetControlDialog(QDialog):
             check.setEnabled(False)
         if isinstance(state_label, QLabel):
             state_label.setText("CHANGING…")
-            state_label.setStyleSheet("color:#ffd77c; background:transparent; border:0;")
+            state_label.setStyleSheet("color:#1b1400; background:#ffd77c; border:1px solid rgba(255,230,150,0.70); border-radius:10px; padding:6px 10px;")
         self.stateChangeRequested.emit(entity_id, bool(internet_enabled))
 
     def set_entity_state(self, entity_id: str, state: str, *, busy: bool = False):
@@ -11305,7 +11305,26 @@ class DeviceInternetControlDialog(QDialog):
             else:
                 text, color = "UNAVAILABLE", "#9aa9bf"
             state_label.setText(text)
-            state_label.setStyleSheet(f"color:{color}; background:transparent; border:0;")
+            
+            if busy:
+                bg = "#ffd77c"
+                border = "rgba(255,230,150,0.70)"
+                text_color = "#1b1400"
+            elif normalized == "on":
+                bg = "rgba(100,255,157,0.18)"
+                border = "rgba(100,255,157,0.55)"
+                text_color = "#b8ffd0"
+            elif normalized == "off":
+                bg = "rgba(255,105,119,0.18)"
+                border = "rgba(255,105,119,0.55)"
+                text_color = "#ffc0c7"
+            else:
+                bg = "rgba(255,255,255,0.07)"
+                border = "rgba(180,200,225,0.22)"
+                text_color = "#e4edf9"
+            state_label.setStyleSheet(
+                f"color:{text_color}; background:{bg}; border:1px solid {border}; border-radius:10px; padding:6px 10px;"
+            )
 
     def set_states(self, states: dict[str, str]):
         for entity_id in self.rows:
@@ -11318,7 +11337,7 @@ class DeviceInternetControlDialog(QDialog):
         state_label = row.get("state")
         if isinstance(state_label, QLabel):
             state_label.setText("ERROR")
-            state_label.setStyleSheet("color:#ff6977; background:transparent; border:0;")
+            state_label.setStyleSheet("color:#ffe6e9; background:rgba(255,105,119,0.22); border:1px solid rgba(255,105,119,0.55); border-radius:10px; padding:6px 10px;")
         check = row.get("check")
         if isinstance(check, QCheckBox):
             previous = self._states.get(str(entity_id or "").strip(), "")
@@ -11508,7 +11527,7 @@ class DeviceInternetSelectionDialog(QDialog):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea{background:transparent;border:0;}")
+        scroll.setStyleSheet("QScrollArea{background:transparent;border:0;} QScrollBar:vertical{background:rgba(255,255,255,0.05); width:12px; border-radius:6px;} QScrollBar::handle:vertical{background:rgba(110,225,255,0.50); min-height:28px; border-radius:6px;}")
         body = QWidget()
         self.body_lay = QVBoxLayout(body)
         self.body_lay.setContentsMargins(0, 0, 0, 0)
@@ -11772,7 +11791,7 @@ class ThermostatSyncSelectionDialog(QDialog):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea{background:transparent;border:0;}")
+        scroll.setStyleSheet("QScrollArea{background:transparent;border:0;} QScrollBar:vertical{background:rgba(255,255,255,0.05); width:12px; border-radius:6px;} QScrollBar::handle:vertical{background:rgba(110,225,255,0.50); min-height:28px; border-radius:6px;}")
         body = QWidget()
         self.body_lay = QVBoxLayout(body)
         self.body_lay.setContentsMargins(0, 0, 0, 0)
@@ -12038,7 +12057,7 @@ class HouseSyncSelectionDialog(QDialog):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea{background:transparent;border:0;}")
+        scroll.setStyleSheet("QScrollArea{background:transparent;border:0;} QScrollBar:vertical{background:rgba(255,255,255,0.05); width:12px; border-radius:6px;} QScrollBar::handle:vertical{background:rgba(110,225,255,0.50); min-height:28px; border-radius:6px;}")
         body = QWidget()
         self.body_lay = QVBoxLayout(body)
         self.body_lay.setContentsMargins(0, 0, 0, 0)
