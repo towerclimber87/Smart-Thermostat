@@ -50,6 +50,7 @@ _UPDATE_CHECK_LOCK = threading.Lock()
 THERMOSTAT_STATE_FILE = DATA_DIR / "thermostat-state.json"
 THERMOSTAT_SCHEDULES_FILE = DATA_DIR / "thermostat-schedules.json"
 THERMOSTAT_SCHEDULES_BACKUP_FILE = DATA_DIR / "thermostat-schedules.backup.json"
+DEVICE_INTERNET_CONFIG_FILE = DATA_DIR / "device-internet-config.json"
 PANEL_CONFIG_FILE = DATA_DIR / "panel-config.json"
 PANEL_CONFIG_BACKUP_FILE = DATA_DIR / "panel-config.backup.json"
 HVAC_HISTORY_FILE = DATA_DIR / "hvac-history.json"
@@ -1865,6 +1866,418 @@ def _atomic_write_json(path: Path, record: dict) -> None:
         pass
 
 
+
+
+_DEVICE_INTERNET_CONFIG_LOCK = threading.RLock()
+_DEVICE_INTERNET_TRIGGER_LOCK = threading.RLock()
+_DEVICE_INTERNET_TRIGGERED_KEYS: dict[str, float] = {}
+_DEVICE_INTERNET_PEER_SYNC_LOCK = threading.Lock()
+_DEVICE_INTERNET_PEER_SYNC_RUNNING = False
+_DEVICE_INTERNET_LAST_PEER_SYNC_AT = 0.0
+DEVICE_INTERNET_PEER_SYNC_INTERVAL_SECONDS = max(
+    30.0,
+    float(os.environ.get("SMART_THERMOSTAT_DEVICE_INTERNET_SYNC_SECONDS", "60") or "60"),
+)
+
+
+def _normalize_device_internet_devices(value: object) -> list[dict]:
+    devices: list[dict] = []
+    seen: set[str] = set()
+    for raw in value if isinstance(value, list) else []:
+        if not isinstance(raw, dict):
+            continue
+        entity_id = str(raw.get("entityId") or raw.get("entity_id") or "").strip()
+        if not entity_id.startswith("switch.") or entity_id in seen:
+            continue
+        seen.add(entity_id)
+        name = str(raw.get("name") or raw.get("friendly_name") or raw.get("controlName") or entity_id).strip() or entity_id
+        devices.append({
+            "entityId": entity_id,
+            "name": name[:160],
+            "controlName": str(raw.get("controlName") or raw.get("control_name") or name).strip()[:160] or name[:160],
+        })
+    return devices
+
+
+def _normalize_device_internet_schedules(value: object) -> list[dict]:
+    schedules: list[dict] = []
+    seen: set[str] = set()
+    for index, raw in enumerate(value if isinstance(value, list) else []):
+        if not isinstance(raw, dict):
+            continue
+        schedule_id = str(raw.get("id") or f"internet-schedule-{index + 1}").strip()[:100]
+        if not schedule_id or schedule_id in seen:
+            continue
+        seen.add(schedule_id)
+        disable_time = _normalize_schedule_time(
+            raw.get("disableTime", raw.get("blockTime", raw.get("startTime"))),
+            "20:00",
+        )
+        enable_time = _normalize_schedule_time(
+            raw.get("enableTime", raw.get("restoreTime", raw.get("endTime"))),
+            "07:00",
+        )
+        # Equal start/end times would create an ambiguous 24-hour blackout. Keep
+        # a safe one-hour window when old or malformed data contains that value.
+        if enable_time == disable_time:
+            hour, minute = [int(x) for x in disable_time.split(":", 1)]
+            enable_time = f"{(hour + 1) % 24:02d}:{minute:02d}"
+        devices = _normalize_device_internet_devices(raw.get("devices", raw.get("entities", raw.get("deviceEntities", []))))
+        schedules.append({
+            "id": schedule_id,
+            "name": str(raw.get("name") or "Internet Schedule").strip()[:80] or "Internet Schedule",
+            "enabled": bool(raw.get("enabled", True)),
+            "days": _normalize_schedule_days(raw.get("days", raw.get("weekdays", raw.get("daysOfWeek")))),
+            "disableTime": disable_time,
+            "enableTime": enable_time,
+            "devices": devices,
+        })
+    return schedules
+
+
+def _device_internet_origin() -> str:
+    try:
+        return str(_stable_panel_serial() or "").strip()[:120]
+    except Exception:
+        return ""
+
+
+def _legacy_device_internet_popup_devices() -> list[dict]:
+    try:
+        record = _read_panel_config_record()
+        config = record.get("config") if isinstance(record, dict) else {}
+        integrations = config.get("integrations") if isinstance(config, dict) and isinstance(config.get("integrations"), dict) else {}
+        ha = integrations.get("homeAssistant") if isinstance(integrations.get("homeAssistant"), dict) else {}
+        return _normalize_device_internet_devices(ha.get("deviceInternetSwitchEntitiesV1") or [])
+    except Exception:
+        return []
+
+
+def _normalize_device_internet_config(value: object) -> dict:
+    source = value if isinstance(value, dict) else {}
+    popup = source.get("popupDevices")
+    if popup is None:
+        popup = source.get("devices")
+    if popup is None:
+        popup = _legacy_device_internet_popup_devices()
+    try:
+        updated_at = int(float(source.get("updatedAt") or source.get("updated_at") or 0))
+    except (TypeError, ValueError):
+        updated_at = 0
+    return {
+        "schemaVersion": 2,
+        "updatedAt": max(0, updated_at),
+        "origin": str(source.get("origin") or "").strip()[:120],
+        "popupDevices": _normalize_device_internet_devices(popup),
+        "schedules": _normalize_device_internet_schedules(source.get("schedules") or []),
+    }
+
+
+def _read_device_internet_config_record() -> dict:
+    with _DEVICE_INTERNET_CONFIG_LOCK:
+        try:
+            raw = json.loads(DEVICE_INTERNET_CONFIG_FILE.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            raw = {}
+        return _normalize_device_internet_config(raw)
+
+
+def _apply_shared_device_internet_popup_to_panel_config(devices: list[dict]) -> None:
+    """Mirror the shared popup selection into the panel's normal config cache."""
+    try:
+        record = _read_panel_config_record()
+        config = _deepcopy_json(record.get("config") or {}) if isinstance(record, dict) else {}
+        if not isinstance(config, dict):
+            config = {}
+        integrations = config.setdefault("integrations", {})
+        if not isinstance(integrations, dict):
+            integrations = {}
+            config["integrations"] = integrations
+        ha = integrations.setdefault("homeAssistant", {})
+        if not isinstance(ha, dict):
+            ha = {}
+            integrations["homeAssistant"] = ha
+        normalized = _normalize_device_internet_devices(devices)
+        if _normalize_device_internet_devices(ha.get("deviceInternetSwitchEntitiesV1") or []) == normalized:
+            return
+        ha["deviceInternetSwitchEntitiesV1"] = normalized
+        ha["deviceInternetSchemaVersion"] = 2
+        _write_panel_config_record(config)
+    except Exception as exc:
+        print(f"Device Internet shared popup mirror error: {exc}", flush=True)
+
+
+def _write_device_internet_config_record(value: object, *, incoming_sync: bool = False) -> dict:
+    with _DEVICE_INTERNET_CONFIG_LOCK:
+        current = _read_device_internet_config_record()
+        candidate = _normalize_device_internet_config(value)
+        if incoming_sync:
+            current_key = (int(current.get("updatedAt") or 0), str(current.get("origin") or ""))
+            candidate_key = (int(candidate.get("updatedAt") or 0), str(candidate.get("origin") or ""))
+            if candidate_key <= current_key:
+                return current | {"changed": False}
+        else:
+            candidate["updatedAt"] = max(
+                int(time.time() * 1000),
+                int(current.get("updatedAt") or 0) + 1,
+            )
+            candidate["origin"] = _device_internet_origin()
+        candidate["schemaVersion"] = 2
+        _atomic_write_json(DEVICE_INTERNET_CONFIG_FILE, candidate)
+    _apply_shared_device_internet_popup_to_panel_config(candidate.get("popupDevices") or [])
+    return candidate | {"changed": candidate != current}
+
+
+def _device_internet_config_payload() -> dict:
+    record = _read_device_internet_config_record()
+    return {"ok": True, "config": record, **record}
+
+
+def _device_internet_schedule_minutes(value: object) -> int:
+    hour, minute = [int(x) for x in _normalize_schedule_time(value, "00:00").split(":", 1)]
+    return hour * 60 + minute
+
+
+def _device_internet_schedule_is_active(schedule: dict, entity_id: str, now: datetime) -> bool:
+    if not bool(schedule.get("enabled", True)):
+        return False
+    devices = {item.get("entityId") for item in _normalize_device_internet_devices(schedule.get("devices") or [])}
+    if entity_id not in devices:
+        return False
+    days = set(_normalize_schedule_days(schedule.get("days")))
+    if not days:
+        return False
+    start = _device_internet_schedule_minutes(schedule.get("disableTime"))
+    end = _device_internet_schedule_minutes(schedule.get("enableTime"))
+    minute_now = now.hour * 60 + now.minute
+    today = SCHEDULE_DAY_KEYS[now.weekday()]
+    yesterday = SCHEDULE_DAY_KEYS[(now.weekday() - 1) % 7]
+    if start < end:
+        return today in days and start <= minute_now < end
+    # Overnight rule: the selected day is the day the blackout starts.
+    return (today in days and minute_now >= start) or (yesterday in days and minute_now < end)
+
+
+def _device_internet_transition_keys(schedule: dict, now: datetime) -> list[str]:
+    if not bool(schedule.get("enabled", True)):
+        return []
+    days = set(_normalize_schedule_days(schedule.get("days")))
+    if not days or not _normalize_device_internet_devices(schedule.get("devices") or []):
+        return []
+    time_key = now.strftime("%H:%M")
+    date_key = now.strftime("%Y-%m-%d")
+    today = SCHEDULE_DAY_KEYS[now.weekday()]
+    yesterday = SCHEDULE_DAY_KEYS[(now.weekday() - 1) % 7]
+    start_time = str(schedule.get("disableTime") or "")
+    end_time = str(schedule.get("enableTime") or "")
+    start_min = _device_internet_schedule_minutes(start_time)
+    end_min = _device_internet_schedule_minutes(end_time)
+    schedule_id = str(schedule.get("id") or "schedule")
+    result: list[str] = []
+    if time_key == start_time and today in days:
+        result.append(f"{date_key}:{schedule_id}:disable")
+    if time_key == end_time:
+        end_day_matches = today in days if start_min < end_min else yesterday in days
+        if end_day_matches:
+            result.append(f"{date_key}:{schedule_id}:enable")
+    return result
+
+
+def _apply_device_internet_schedule_transitions(now: datetime | None = None) -> dict:
+    """Apply only start/end transitions so manual overrides persist between them."""
+    current_time = now or datetime.now()
+    record = _read_device_internet_config_record()
+    schedules = _normalize_device_internet_schedules(record.get("schedules") or [])
+    due: list[tuple[dict, str]] = []
+    with _DEVICE_INTERNET_TRIGGER_LOCK:
+        # Keep only recent dedupe entries. They are RAM-only by design; after a
+        # backend restart, an idempotent transition may be sent once more.
+        cutoff = time.monotonic() - (2 * 24 * 60 * 60)
+        for key, stamp in list(_DEVICE_INTERNET_TRIGGERED_KEYS.items()):
+            if stamp < cutoff:
+                _DEVICE_INTERNET_TRIGGERED_KEYS.pop(key, None)
+        for schedule in schedules:
+            for trigger_key in _device_internet_transition_keys(schedule, current_time):
+                if trigger_key not in _DEVICE_INTERNET_TRIGGERED_KEYS:
+                    due.append((schedule, trigger_key))
+    if not due:
+        return {"ok": True, "due": 0, "changed": 0}
+
+    impacted: dict[str, dict] = {}
+    for schedule, _trigger_key in due:
+        for item in _normalize_device_internet_devices(schedule.get("devices") or []):
+            impacted[item["entityId"]] = item
+    if not impacted:
+        with _DEVICE_INTERNET_TRIGGER_LOCK:
+            for _schedule, trigger_key in due:
+                _DEVICE_INTERNET_TRIGGERED_KEYS[trigger_key] = time.monotonic()
+        return {"ok": True, "due": len(due), "changed": 0}
+
+    try:
+        ha_url, token = _ha_credentials_from_panel_config()
+    except Exception as exc:
+        return {"ok": False, "due": len(due), "changed": 0, "error": str(exc)}
+    if not ha_url or not token:
+        return {"ok": False, "due": len(due), "changed": 0, "error": "Home Assistant is not configured"}
+
+    errors: list[str] = []
+    changed = 0
+    for entity_id in sorted(impacted):
+        blocked = any(_device_internet_schedule_is_active(schedule, entity_id, current_time) for schedule in schedules)
+        action = "off" if blocked else "on"
+        try:
+            service = "turn_off" if blocked else "turn_on"
+            _ha_json_request(ha_url, token, "POST", f"/api/services/switch/{service}", {"entity_id": entity_id})
+            _invalidate_ha_state_cache(ha_url, token)
+            changed += 1
+            print(f"Device Internet schedule transition entity={entity_id} action={action}", flush=True)
+        except Exception as exc:
+            errors.append(f"{entity_id}: {exc}")
+    if not errors:
+        with _DEVICE_INTERNET_TRIGGER_LOCK:
+            stamp = time.monotonic()
+            for _schedule, trigger_key in due:
+                _DEVICE_INTERNET_TRIGGERED_KEYS[trigger_key] = stamp
+    return {"ok": not errors, "due": len(due), "changed": changed, "errors": errors}
+
+
+def _device_internet_peer_urls() -> list[str]:
+    try:
+        record = _read_panel_config_record()
+        config = record.get("config") if isinstance(record, dict) else {}
+        integrations = config.get("integrations") if isinstance(config, dict) and isinstance(config.get("integrations"), dict) else {}
+        ha = integrations.get("homeAssistant") if isinstance(integrations.get("homeAssistant"), dict) else {}
+        ha_url = str(ha.get("url") or "").strip()
+        token = str(ha.get("token") or "").strip()
+        if not ha_url or not token:
+            return []
+        local_name = str((_read_thermostat_record().get("thermostat") or {}).get("name") or "")
+        peers = _fetch_ha_sync_thermostats(ha_url, token, [], local_name)
+    except Exception as exc:
+        print(f"Device Internet peer discovery error: {exc}", flush=True)
+        return []
+    urls: list[str] = []
+    seen: set[str] = set()
+    for peer in peers:
+        panel_url = str((peer or {}).get("panelUrl") or "").strip()
+        if not panel_url:
+            continue
+        try:
+            panel_url = _house_sync_safe_panel_url(panel_url)
+        except Exception:
+            continue
+        if panel_url in seen:
+            continue
+        seen.add(panel_url)
+        urls.append(panel_url)
+    return urls
+
+
+def _send_device_internet_config_to_peer(panel_url: str, record: dict) -> dict:
+    base_url = _house_sync_safe_panel_url(panel_url)
+    data = json.dumps(_normalize_device_internet_config(record)).encode("utf-8")
+    req = request.Request(
+        f"{base_url}/api/device-internet/config/sync",
+        data=data,
+        headers={"Accept": "application/json", "Content-Type": "application/json", "Connection": "close"},
+        method="POST",
+    )
+    with request.urlopen(req, timeout=max(2.0, HA_REQUEST_TIMEOUT_SECONDS)) as resp:
+        raw = resp.read()
+    return json.loads(raw.decode("utf-8")) if raw else {"ok": True}
+
+
+def _fetch_device_internet_config_from_peer(panel_url: str) -> dict | None:
+    base_url = _house_sync_safe_panel_url(panel_url)
+    req = request.Request(
+        f"{base_url}/api/device-internet/config",
+        headers={"Accept": "application/json", "Connection": "close"},
+        method="GET",
+    )
+    with request.urlopen(req, timeout=max(2.0, HA_REQUEST_TIMEOUT_SECONDS)) as resp:
+        raw = resp.read()
+    data = json.loads(raw.decode("utf-8")) if raw else {}
+    candidate = data.get("config") if isinstance(data, dict) and isinstance(data.get("config"), dict) else data
+    return _normalize_device_internet_config(candidate) if isinstance(candidate, dict) else None
+
+
+def _broadcast_device_internet_config(record: dict) -> None:
+    for panel_url in _device_internet_peer_urls():
+        try:
+            _send_device_internet_config_to_peer(panel_url, record)
+        except Exception as exc:
+            print(f"Device Internet peer push failed {panel_url}: {exc}", flush=True)
+
+
+def _reconcile_device_internet_config_with_peers() -> None:
+    local = _read_device_internet_config_record()
+    records: list[tuple[str, dict]] = [("", local)]
+    for panel_url in _device_internet_peer_urls():
+        try:
+            peer = _fetch_device_internet_config_from_peer(panel_url)
+            if peer:
+                records.append((panel_url, peer))
+        except Exception as exc:
+            print(f"Device Internet peer read failed {panel_url}: {exc}", flush=True)
+    if len(records) <= 1:
+        return
+    _url, newest = max(
+        records,
+        key=lambda pair: (int(pair[1].get("updatedAt") or 0), str(pair[1].get("origin") or "")),
+    )
+    newest_key = (int(newest.get("updatedAt") or 0), str(newest.get("origin") or ""))
+    local_key = (int(local.get("updatedAt") or 0), str(local.get("origin") or ""))
+    if newest_key > local_key:
+        local = _write_device_internet_config_record(newest, incoming_sync=True)
+    for panel_url, peer in records:
+        if not panel_url:
+            continue
+        peer_key = (int(peer.get("updatedAt") or 0), str(peer.get("origin") or ""))
+        if peer_key < newest_key:
+            try:
+                _send_device_internet_config_to_peer(panel_url, local)
+            except Exception as exc:
+                print(f"Device Internet peer reconcile push failed {panel_url}: {exc}", flush=True)
+
+
+def _start_device_internet_peer_reconcile_if_due(force: bool = False) -> None:
+    global _DEVICE_INTERNET_PEER_SYNC_RUNNING, _DEVICE_INTERNET_LAST_PEER_SYNC_AT
+    now = time.monotonic()
+    with _DEVICE_INTERNET_PEER_SYNC_LOCK:
+        if _DEVICE_INTERNET_PEER_SYNC_RUNNING:
+            return
+        if not force and now - float(_DEVICE_INTERNET_LAST_PEER_SYNC_AT or 0.0) < DEVICE_INTERNET_PEER_SYNC_INTERVAL_SECONDS:
+            return
+        _DEVICE_INTERNET_PEER_SYNC_RUNNING = True
+        _DEVICE_INTERNET_LAST_PEER_SYNC_AT = now
+
+    def worker() -> None:
+        global _DEVICE_INTERNET_PEER_SYNC_RUNNING
+        try:
+            _reconcile_device_internet_config_with_peers()
+        except Exception as exc:
+            print(f"Device Internet peer reconcile error: {exc}", flush=True)
+        finally:
+            with _DEVICE_INTERNET_PEER_SYNC_LOCK:
+                _DEVICE_INTERNET_PEER_SYNC_RUNNING = False
+
+    threading.Thread(target=worker, name="device-internet-peer-sync", daemon=True).start()
+
+
+def _save_device_internet_config_payload(payload: object) -> dict:
+    value = payload.get("config") if isinstance(payload, dict) and isinstance(payload.get("config"), dict) else payload
+    candidate = _normalize_device_internet_config(value)
+    record = _write_device_internet_config_record(candidate, incoming_sync=False)
+    threading.Thread(target=_broadcast_device_internet_config, args=(record,), name="device-internet-peer-push", daemon=True).start()
+    return {"ok": True, "config": record, **record}
+
+
+def _sync_device_internet_config_payload(payload: object) -> dict:
+    value = payload.get("config") if isinstance(payload, dict) and isinstance(payload.get("config"), dict) else payload
+    record = _write_device_internet_config_record(value, incoming_sync=True)
+    return {"ok": True, "config": record, **record}
+
+
 def _schedule_entries_from_object(value: object) -> list[dict] | None:
     """Extract an explicit schedule list from known old/new storage shapes.
 
@@ -2774,6 +3187,15 @@ def _request_client_is_loopback(handler: BaseHTTPRequestHandler) -> bool:
     try:
         address = str((handler.client_address or ("",))[0]).split("%", 1)[0]
         return ipaddress.ip_address(address).is_loopback
+    except (ValueError, TypeError):
+        return False
+
+
+def _request_client_is_private_network(handler: BaseHTTPRequestHandler) -> bool:
+    try:
+        address = str((handler.client_address or ("",))[0]).split("%", 1)[0]
+        ip = ipaddress.ip_address(address)
+        return bool(ip.is_loopback or ip.is_link_local or ip.is_private)
     except (ValueError, TypeError):
         return False
 
@@ -8910,6 +9332,11 @@ def _thermostat_control_loop() -> None:
             if control_generation != _thermostat_control_generation_snapshot():
                 continue
             _apply_thermostat_outputs_to_hardware(outputs, thermostat)
+            # Device Internet schedules are transition-based: they act at the
+            # configured block/restore minute, then leave any manual override
+            # alone until the next scheduled transition.
+            _apply_device_internet_schedule_transitions()
+            _start_device_internet_peer_reconcile_if_due()
         except Exception as exc:  # noqa: BLE001 - keep local HVAC control alive
             print(f"Thermostat autonomous control loop error: {exc}", flush=True)
 
@@ -15112,6 +15539,10 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
         if path == "/api/house-sync/profile":
             result = _house_sync_profile_payload()
             return _json(self, 200 if result.get("ok") else 409, result)
+        if path == "/api/device-internet/config":
+            if not _request_client_is_private_network(self):
+                return _json(self, 403, {"ok": False, "error": "Device Internet configuration is available only on the local network."})
+            return _json(self, 200, _device_internet_config_payload())
         if path == "/api/thermostat/status":
             return _json(self, 200, _thermostat_status_payload(refresh_runtime=False, apply_hardware=False))
         if path == "/api/sync/status":
@@ -15161,7 +15592,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/thermostat/run-schedule", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/hardware/temperature-sensors", "/api/screen/lock-status", "/api/screen/lock-control", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/entity/state", "/api/ha/alexa-lockout/devices", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/group", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/sync/thermostats", "/api/sync/apply", "/api/house-sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/playback", "/api/assistant/config", "/api/assistant/knowledge", "/api/settings/web", "/api/settings/house-sync"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/thermostat/run-schedule", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/hardware/temperature-sensors", "/api/screen/lock-status", "/api/screen/lock-control", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/entity/state", "/api/ha/alexa-lockout/devices", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/group", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/device-internet/config", "/api/device-internet/config/sync", "/api/sync/thermostats", "/api/sync/apply", "/api/house-sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/playback", "/api/assistant/config", "/api/assistant/knowledge", "/api/settings/web", "/api/settings/house-sync"}:
             self.send_error(404, "Not found")
             return
 
@@ -15171,6 +15602,19 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+
+            if path == "/api/device-internet/config":
+                if not _request_client_is_loopback(self):
+                    return _json(self, 403, {"ok": False, "error": "Device Internet changes must be started from this thermostat screen."})
+                result = _save_device_internet_config_payload(payload)
+                _start_device_internet_peer_reconcile_if_due(force=True)
+                return _json(self, 200, result)
+
+            if path == "/api/device-internet/config/sync":
+                if not _request_client_is_private_network(self):
+                    return _json(self, 403, {"ok": False, "error": "Device Internet sync is limited to the local network."})
+                result = _sync_device_internet_config_payload(payload)
+                return _json(self, 200, result)
 
             if path == "/api/assistant/process":
                 if not _assistant_client_access_allowed(self.client_address[0] if self.client_address else ""):

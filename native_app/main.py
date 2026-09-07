@@ -11154,6 +11154,10 @@ class DeviceInternetControlDialog(QDialog):
             }
         """)
         self.build()
+        self.live_refresh_timer = QTimer(self)
+        self.live_refresh_timer.setInterval(5000)
+        self.live_refresh_timer.timeout.connect(self.refreshRequested.emit)
+        self.live_refresh_timer.start()
         QTimer.singleShot(0, self._center_on_parent)
         QTimer.singleShot(0, self.refreshRequested.emit)
 
@@ -11197,7 +11201,10 @@ class DeviceInternetControlDialog(QDialog):
         header.addWidget(close)
         root.addLayout(header)
 
-        note = QLabel("Check a device to allow internet. Uncheck it to block that device.")
+        note = QLabel(
+            "Check a device to allow internet or uncheck it to block that device. "
+            "The Turn On/Turn Off button is a manual override; that choice stays until the next scheduled transition."
+        )
         note.setWordWrap(True)
         note.setFont(font(9, QFont.Black))
         note.setStyleSheet(
@@ -11251,15 +11258,21 @@ class DeviceInternetControlDialog(QDialog):
             state_label.setStyleSheet("color:#e4edf9; background:rgba(255,255,255,0.07); border:1px solid rgba(180,200,225,0.22); border-radius:10px; padding:6px 10px;")
 
             check = QCheckBox("Internet")
-            check.setMinimumWidth(150)
+            check.setMinimumWidth(122)
             check.setEnabled(False)
             check.clicked.connect(lambda checked, eid=entity_id: self._request_change(eid, bool(checked)))
+
+            override = RoundButton("Override", active=True, min_h=38)
+            override.setMinimumWidth(120)
+            override.setEnabled(False)
+            override.clicked.connect(lambda checked=False, eid=entity_id: self._request_override(eid))
 
             lay.addLayout(labels, 1)
             lay.addWidget(state_label)
             lay.addWidget(check)
+            lay.addWidget(override)
             self.body_lay.addWidget(row)
-            self.rows[entity_id] = {"check": check, "state": state_label, "frame": row}
+            self.rows[entity_id] = {"check": check, "state": state_label, "override": override, "frame": row}
 
         if not self.rows:
             empty = QLabel("No devices are selected in Settings.")
@@ -11269,14 +11282,24 @@ class DeviceInternetControlDialog(QDialog):
             self.body_lay.addWidget(empty)
         self.body_lay.addStretch(1)
 
+    def _request_override(self, entity_id: str):
+        state = str(self._states.get(str(entity_id or "").strip()) or "").strip().lower()
+        if state not in {"on", "off"}:
+            return
+        self._request_change(entity_id, state != "on")
+
     def _request_change(self, entity_id: str, internet_enabled: bool):
         row = self.rows.get(entity_id)
         if not row:
             return
         check = row.get("check")
+        override = row.get("override")
         state_label = row.get("state")
         if isinstance(check, QCheckBox):
             check.setEnabled(False)
+        if isinstance(override, RoundButton):
+            override.setEnabled(False)
+            override.setText("CHANGING…")
         if isinstance(state_label, QLabel):
             state_label.setText("CHANGING…")
             state_label.setStyleSheet("color:#1b1400; background:#ffd77c; border:1px solid rgba(255,230,150,0.70); border-radius:10px; padding:6px 10px;")
@@ -11289,12 +11312,23 @@ class DeviceInternetControlDialog(QDialog):
         normalized = str(state or "").strip().lower()
         self._states[str(entity_id or "").strip()] = normalized
         check = row.get("check")
+        override = row.get("override")
         state_label = row.get("state")
         if isinstance(check, QCheckBox):
             check.blockSignals(True)
             check.setChecked(normalized == "on")
             check.blockSignals(False)
             check.setEnabled(not busy and normalized in {"on", "off"})
+        if isinstance(override, RoundButton):
+            if busy:
+                override.setText("CHANGING…")
+            elif normalized == "on":
+                override.setText("Turn Off")
+            elif normalized == "off":
+                override.setText("Turn On")
+            else:
+                override.setText("Override")
+            override.setEnabled(not busy and normalized in {"on", "off"})
         if isinstance(state_label, QLabel):
             if busy:
                 text, color = "CHANGING…", "#ffd77c"
@@ -11339,12 +11373,16 @@ class DeviceInternetControlDialog(QDialog):
             state_label.setText("ERROR")
             state_label.setStyleSheet("color:#ffe6e9; background:rgba(255,105,119,0.22); border:1px solid rgba(255,105,119,0.55); border-radius:10px; padding:6px 10px;")
         check = row.get("check")
+        override = row.get("override")
+        previous = self._states.get(str(entity_id or "").strip(), "")
         if isinstance(check, QCheckBox):
-            previous = self._states.get(str(entity_id or "").strip(), "")
             check.blockSignals(True)
             check.setChecked(previous == "on")
             check.blockSignals(False)
             check.setEnabled(previous in {"on", "off"})
+        if isinstance(override, RoundButton):
+            override.setText("Turn Off" if previous == "on" else "Turn On" if previous == "off" else "Override")
+            override.setEnabled(previous in {"on", "off"})
 
 
 class DeviceInternetSelectionDialog(QDialog):
@@ -11353,15 +11391,27 @@ class DeviceInternetSelectionDialog(QDialog):
     saved = pyqtSignal(list)
     loadCompleted = pyqtSignal(object)
 
-    def __init__(self, state: AppState, selected_entities: list[dict] | None = None, parent=None):
+    def __init__(
+        self,
+        state: AppState,
+        selected_entities: list[dict] | None = None,
+        parent=None,
+        *,
+        title: str = "Device Internet",
+        note: str | None = None,
+        save_text: str = "Save Selected",
+    ):
         super().__init__(parent)
         self.s = state
+        self.dialog_title = str(title or "Device Internet")
+        self.dialog_note = note
+        self.save_text = str(save_text or "Save Selected")
         self.selected_entities = copy.deepcopy(selected_entities or [])
         self.available_entities: list[dict] = []
         self.buttons: dict[str, RoundButton] = {}
         self._loading = False
         self.setModal(True)
-        self.setWindowTitle("Device Internet")
+        self.setWindowTitle(self.dialog_title)
         self.setWindowFlag(Qt.FramelessWindowHint, True)
         self.setMinimumSize(720, 520)
         self.resize(1280, 800)
@@ -11494,7 +11544,7 @@ class DeviceInternetSelectionDialog(QDialog):
         root.setSpacing(8)
 
         header = QHBoxLayout()
-        title = QLabel("DEVICE INTERNET")
+        title = QLabel(self.dialog_title.upper())
         title.setFont(font(22, QFont.Black))
         title.setStyleSheet("color:#55f0ff; letter-spacing:3px;")
         clear = RoundButton("Clear Selected", active=False, kind="danger", min_h=40)
@@ -11504,8 +11554,11 @@ class DeviceInternetSelectionDialog(QDialog):
         root.addLayout(header)
 
         note = QLabel(
-            "Choose the Home Assistant switch entities that control internet/network access for the devices you want on the main-screen iPad button. "
-            "The iPad button opens a popup where each selected device can be turned online or offline independently."
+            self.dialog_note
+            or (
+                "Choose the Home Assistant switch entities that control internet/network access for the devices you want on the main-screen iPad button. "
+                "The iPad button opens a popup where each selected device can be turned online or offline independently."
+            )
         )
         note.setWordWrap(True)
         note.setFont(font(10, QFont.Black))
@@ -11537,7 +11590,7 @@ class DeviceInternetSelectionDialog(QDialog):
 
         bottom = QHBoxLayout()
         cancel = RoundButton("Cancel", active=False, min_h=42)
-        save = RoundButton("Save Selected", active=True, min_h=42)
+        save = RoundButton(self.save_text, active=True, min_h=42)
         bottom.addStretch(1)
         bottom.addWidget(cancel)
         bottom.addWidget(save)
@@ -11642,6 +11695,308 @@ class DeviceInternetSelectionDialog(QDialog):
                 item = copy.deepcopy(available_by_id[entity_id])
             clean.append(item)
         self.saved.emit(clean)
+        self.accept()
+
+
+class DeviceInternetScheduleEditDialog(QDialog):
+    """Edit one recurring Device Internet blackout rule."""
+
+    saved = pyqtSignal(dict)
+
+    def __init__(self, state: AppState, schedule: dict | None = None, parent=None):
+        super().__init__(parent)
+        self.s = state
+        self.schedule = copy.deepcopy(schedule or {})
+        is_new = not bool(self.schedule.get("id"))
+        self.name = str(self.schedule.get("name") or "Internet Schedule")
+        self.enabled = bool(self.schedule.get("enabled", True))
+        self.days = normalize_schedule_days(self.schedule.get("days")) if not is_new else list(SCHEDULE_DAY_KEYS[:5])
+        self.devices = copy.deepcopy(self.schedule.get("devices") or [])
+        self.disable_hour, self.disable_minute = parse_schedule_time_24h(self.schedule.get("disableTime") or "20:00", 20, 0)
+        self.enable_hour, self.enable_minute = parse_schedule_time_24h(self.schedule.get("enableTime") or "07:00", 7, 0)
+        self.day_buttons: dict[str, RoundButton] = {}
+        self.setModal(True)
+        self.setWindowTitle("Device Internet Schedule")
+        self.setWindowFlag(Qt.FramelessWindowHint, True)
+        self.setMinimumSize(700, 500)
+        self.resize(980, 650)
+        self.setStyleSheet("""
+            QDialog { background:#09111f; color:#f7fbff; }
+            QLabel { color:#f7fbff; font-family:Arial; font-weight:900; }
+            QScrollArea { background:transparent; border:0; }
+            QScrollBar:vertical { background:rgba(255,255,255,0.06); width:10px; border-radius:5px; }
+            QScrollBar::handle:vertical { background:rgba(85,240,255,0.45); min-height:28px; border-radius:5px; }
+        """)
+        self.build()
+        QTimer.singleShot(0, lambda: fit_dialog_to_available_screen(self, margin=8))
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        fit_dialog_to_available_screen(self, margin=8)
+
+    def small_label(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setFont(font(9, QFont.Black))
+        label.setStyleSheet("color:#cddbf0; background:transparent; border:0;")
+        return label
+
+    def build(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(14, 12, 14, 12)
+        root.setSpacing(9)
+
+        header = QHBoxLayout()
+        title = QLabel("INTERNET SCHEDULE")
+        title.setFont(font(21, QFont.Black))
+        title.setStyleSheet("color:#55f0ff; letter-spacing:2px;")
+        self.summary_label = QLabel("")
+        self.summary_label.setFont(font(9, QFont.Black))
+        self.summary_label.setStyleSheet("color:#cde6ff; background:transparent; border:0;")
+        header.addWidget(title)
+        header.addStretch(1)
+        header.addWidget(self.summary_label)
+        root.addLayout(header)
+
+        note = QLabel(
+            "At the Disable time the selected devices are blocked. At the Re-enable time they are restored. "
+            "A manual change from any iPad popup stays in effect until the next scheduled transition."
+        )
+        note.setWordWrap(True)
+        note.setFont(font(9, QFont.Black))
+        note.setStyleSheet("color:#d9e7fb; background:rgba(255,255,255,0.055); border:1px solid rgba(255,255,255,0.10); border-radius:10px; padding:8px;")
+        root.addWidget(note)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        body = QWidget()
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(9)
+
+        name_panel = GlassPanel(radius=16)
+        name_lay = QHBoxLayout(name_panel)
+        name_lay.setContentsMargins(10, 8, 10, 8)
+        name_lay.addWidget(self.small_label("Schedule name"))
+        self.name_button = RoundButton(self.name, active=True, min_h=38)
+        self.name_button.clicked.connect(self.edit_name)
+        name_lay.addWidget(self.name_button, 1)
+        lay.addWidget(name_panel)
+
+        times = QHBoxLayout()
+        times.setSpacing(10)
+        times.addWidget(self.time_panel("Disable Internet", "disable"), 1)
+        times.addWidget(self.time_panel("Re-enable Internet", "enable"), 1)
+        lay.addLayout(times)
+
+        lay.addWidget(self.days_panel())
+        lay.addWidget(self.devices_panel())
+        scroll.setWidget(body)
+        root.addWidget(scroll, 1)
+
+        bottom = QHBoxLayout()
+        self.enabled_button = RoundButton("Enabled", active=self.enabled, min_h=42)
+        self.enabled_button.clicked.connect(self.toggle_enabled)
+        cancel = RoundButton("Cancel", active=False, kind="danger", min_h=42)
+        save = RoundButton("Save Schedule", active=True, min_h=42)
+        cancel.clicked.connect(self.reject)
+        save.clicked.connect(self.save)
+        bottom.addWidget(self.enabled_button)
+        bottom.addStretch(1)
+        bottom.addWidget(cancel)
+        bottom.addWidget(save)
+        root.addLayout(bottom)
+        self.refresh()
+
+    def time_panel(self, title: str, kind: str) -> QWidget:
+        panel = GlassPanel(radius=16)
+        lay = QGridLayout(panel)
+        lay.setContentsMargins(10, 8, 10, 8)
+        lay.setHorizontalSpacing(7)
+        lay.setVerticalSpacing(6)
+        label = QLabel(title)
+        label.setFont(font(11, QFont.Black))
+        label.setStyleSheet("color:#ffffff; background:transparent; border:0;")
+        lay.addWidget(label, 0, 0, 1, 4)
+        value = QLabel("")
+        value.setObjectName(f"{kind}_time_value")
+        value.setAlignment(Qt.AlignCenter)
+        value.setFont(font(20, QFont.Black))
+        value.setStyleSheet("background:rgba(255,255,255,0.07); border:1px solid rgba(85,240,255,0.25); border-radius:12px; padding:5px;")
+        lay.addWidget(value, 1, 0, 1, 2)
+        ampm = RoundButton("AM", active=False, min_h=38)
+        ampm.setObjectName(f"{kind}_ampm")
+        ampm.clicked.connect(lambda checked=False, k=kind: self.toggle_ampm(k))
+        lay.addWidget(ampm, 1, 2, 1, 2)
+        for text, dh, dm, row, col in [
+            ("Hour −", -1, 0, 2, 0), ("Hour +", 1, 0, 2, 1),
+            ("Min −", 0, -5, 2, 2), ("Min +", 0, 5, 2, 3),
+        ]:
+            button = RoundButton(text, active=False, min_h=36)
+            button.clicked.connect(lambda checked=False, k=kind, h=dh, m=dm: self.adjust_time(k, h, m))
+            lay.addWidget(button, row, col)
+        return panel
+
+    def days_panel(self) -> QWidget:
+        panel = GlassPanel(radius=16)
+        lay = QVBoxLayout(panel)
+        lay.setContentsMargins(10, 8, 10, 8)
+        lay.setSpacing(6)
+        top = QHBoxLayout()
+        top.addWidget(self.small_label("Blackout starts on these days"))
+        top.addStretch(1)
+        weekdays = RoundButton("Weekdays", active=False, min_h=32)
+        every_day = RoundButton("Every Day", active=False, min_h=32)
+        weekdays.clicked.connect(lambda checked=False: self.set_days(SCHEDULE_DAY_KEYS[:5]))
+        every_day.clicked.connect(lambda checked=False: self.set_days(SCHEDULE_DAY_KEYS))
+        top.addWidget(weekdays)
+        top.addWidget(every_day)
+        lay.addLayout(top)
+        row = QHBoxLayout()
+        row.setSpacing(5)
+        for key, short, _long in SCHEDULE_DAY_OPTIONS:
+            button = RoundButton(short, active=key in self.days, min_h=34)
+            button.setMinimumWidth(50)
+            button.clicked.connect(lambda checked=False, d=key: self.toggle_day(d))
+            self.day_buttons[key] = button
+            row.addWidget(button)
+        lay.addLayout(row)
+        return panel
+
+    def devices_panel(self) -> QWidget:
+        panel = GlassPanel(radius=16)
+        lay = QVBoxLayout(panel)
+        lay.setContentsMargins(10, 8, 10, 8)
+        lay.setSpacing(6)
+        top = QHBoxLayout()
+        top.addWidget(self.small_label("Devices controlled by this schedule"))
+        top.addStretch(1)
+        choose = RoundButton("Choose Devices", active=True, min_h=34)
+        choose.clicked.connect(self.choose_devices)
+        top.addWidget(choose)
+        lay.addLayout(top)
+        self.devices_summary = QLabel("")
+        self.devices_summary.setWordWrap(True)
+        self.devices_summary.setFont(font(9, QFont.Black))
+        self.devices_summary.setStyleSheet("color:#e5efff; background:rgba(5,10,20,0.42); border:1px dashed rgba(160,180,210,0.26); border-radius:8px; padding:8px;")
+        lay.addWidget(self.devices_summary)
+        return panel
+
+    def edit_name(self):
+        value = TextKeyboardDialog.get_text(self, "Schedule Name", self.name)
+        if value:
+            self.name = value[:80]
+            self.refresh()
+
+    def adjust_time(self, kind: str, dh: int, dm: int):
+        hour = self.disable_hour if kind == "disable" else self.enable_hour
+        minute = self.disable_minute if kind == "disable" else self.enable_minute
+        total = (hour * 60 + minute + dh * 60 + dm) % (24 * 60)
+        hour, minute = divmod(total, 60)
+        if kind == "disable":
+            self.disable_hour, self.disable_minute = hour, minute
+        else:
+            self.enable_hour, self.enable_minute = hour, minute
+        self.refresh()
+
+    def toggle_ampm(self, kind: str):
+        if kind == "disable":
+            self.disable_hour = (self.disable_hour + 12) % 24
+        else:
+            self.enable_hour = (self.enable_hour + 12) % 24
+        self.refresh()
+
+    def set_days(self, days: Any):
+        self.days = normalize_schedule_days(days)
+        self.refresh()
+
+    def toggle_day(self, day: str):
+        selected = set(self.days)
+        if day in selected and len(selected) > 1:
+            selected.remove(day)
+        else:
+            selected.add(day)
+        self.days = [key for key in SCHEDULE_DAY_KEYS if key in selected]
+        self.refresh()
+
+    def toggle_enabled(self):
+        self.enabled = not self.enabled
+        self.refresh()
+
+    def choose_devices(self):
+        dlg = DeviceInternetSelectionDialog(
+            self.s,
+            self.devices,
+            self,
+            title="Schedule Devices",
+            note=(
+                "Select one or more network-access switches for this schedule. "
+                "These devices do not have to be the same devices shown on the main iPad popup."
+            ),
+            save_text="Use Devices",
+        )
+        dlg.saved.connect(self.set_devices)
+        dlg.exec_()
+
+    def set_devices(self, devices: list[dict]):
+        self.devices = copy.deepcopy(devices or [])
+        self.refresh()
+
+    def refresh(self):
+        self.name_button.setText(self.name)
+        disable_value = f"{self.disable_hour:02d}:{self.disable_minute:02d}"
+        enable_value = f"{self.enable_hour:02d}:{self.enable_minute:02d}"
+        for label in self.findChildren(QLabel):
+            if label.objectName() == "disable_time_value":
+                label.setText(format_schedule_time_12h(disable_value))
+            elif label.objectName() == "enable_time_value":
+                label.setText(format_schedule_time_12h(enable_value))
+        for button in self.findChildren(RoundButton):
+            if button.objectName() == "disable_ampm":
+                button.setText("PM" if self.disable_hour >= 12 else "AM")
+                button.setActive(self.disable_hour >= 12)
+            elif button.objectName() == "enable_ampm":
+                button.setText("PM" if self.enable_hour >= 12 else "AM")
+                button.setActive(self.enable_hour >= 12)
+        for key, button in self.day_buttons.items():
+            button.setActive(key in self.days)
+        names = [str(item.get("name") or item.get("entityId") or "Device") for item in self.devices if isinstance(item, dict)]
+        if names:
+            shown = ", ".join(names[:4])
+            if len(names) > 4:
+                shown += f" +{len(names) - 4} more"
+            self.devices_summary.setText(shown)
+        else:
+            self.devices_summary.setText("No devices selected yet.")
+        self.enabled_button.setText("Enabled" if self.enabled else "Disabled")
+        self.enabled_button.setActive(self.enabled)
+        self.summary_label.setText(
+            f"{schedule_days_text(self.days, compact=True)}  ·  "
+            f"{format_schedule_time_12h(disable_value)} → {format_schedule_time_12h(enable_value)}"
+        )
+
+    def save(self):
+        if not self.devices:
+            QMessageBox.warning(self, "Internet Schedule", "Choose at least one device for this schedule.")
+            return
+        if not self.days:
+            QMessageBox.warning(self, "Internet Schedule", "Choose at least one day.")
+            return
+        disable_time = f"{self.disable_hour:02d}:{self.disable_minute:02d}"
+        enable_time = f"{self.enable_hour:02d}:{self.enable_minute:02d}"
+        if disable_time == enable_time:
+            QMessageBox.warning(self, "Internet Schedule", "Disable and Re-enable times must be different.")
+            return
+        payload = {
+            "id": str(self.schedule.get("id") or f"internet-schedule-{int(time.time() * 1000)}"),
+            "name": self.name or "Internet Schedule",
+            "enabled": self.enabled,
+            "days": normalize_schedule_days(self.days),
+            "disableTime": disable_time,
+            "enableTime": enable_time,
+            "devices": copy.deepcopy(self.devices),
+        }
+        self.saved.emit(payload)
         self.accept()
 
 
@@ -14363,6 +14718,15 @@ class SettingsDialog(QDialog):
         self._brightness_entities_loading = False
         self.house_sync_source: dict | None = None
         self.house_sync_running = False
+        self.device_internet_shared: dict = {
+            "schemaVersion": 2,
+            "updatedAt": 0,
+            "origin": "",
+            "popupDevices": copy.deepcopy(
+                (self.s.ha().get("deviceInternetSwitchEntitiesV1") if isinstance(self.s.ha(), dict) else []) or []
+            ),
+            "schedules": [],
+        }
         self.build()
         self.finalize_section_index()
         self.done.clicked.connect(self.close_settings)
@@ -14372,7 +14736,12 @@ class SettingsDialog(QDialog):
         self.source_temp_refresh_timer = QTimer(self)
         self.source_temp_refresh_timer.setInterval(3000)
         self.source_temp_refresh_timer.timeout.connect(self.refresh_source_temp_sensors)
+        self.device_internet_shared_refresh_timer = QTimer(self)
+        self.device_internet_shared_refresh_timer.setInterval(30000)
+        self.device_internet_shared_refresh_timer.timeout.connect(self.load_device_internet_shared_config)
+        self.device_internet_shared_refresh_timer.start()
         QTimer.singleShot(0, self.fit_to_screen)
+        QTimer.singleShot(120, self.load_device_internet_shared_config)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -15065,65 +15434,263 @@ class SettingsDialog(QDialog):
             shown += f" +{len(names)-3} more"
         return f"iPad button controls: {shown}"
 
+    def _normalize_device_internet_shared(self, value: object) -> dict:
+        source = value if isinstance(value, dict) else {}
+        popup: list[dict] = []
+        seen: set[str] = set()
+        for raw in source.get("popupDevices") or []:
+            if not isinstance(raw, dict):
+                continue
+            entity_id = str(raw.get("entityId") or raw.get("entity_id") or "").strip()
+            if not entity_id.startswith("switch.") or entity_id in seen:
+                continue
+            seen.add(entity_id)
+            name = str(raw.get("name") or raw.get("friendly_name") or raw.get("controlName") or entity_id).strip() or entity_id
+            popup.append({
+                "entityId": entity_id,
+                "name": name,
+                "controlName": str(raw.get("controlName") or raw.get("control_name") or name),
+            })
+        schedules: list[dict] = []
+        schedule_seen: set[str] = set()
+        for raw in source.get("schedules") or []:
+            if not isinstance(raw, dict):
+                continue
+            schedule_id = str(raw.get("id") or "").strip()
+            if not schedule_id or schedule_id in schedule_seen:
+                continue
+            schedule_seen.add(schedule_id)
+            devices: list[dict] = []
+            device_seen: set[str] = set()
+            for item in raw.get("devices") or []:
+                if not isinstance(item, dict):
+                    continue
+                entity_id = str(item.get("entityId") or item.get("entity_id") or "").strip()
+                if not entity_id.startswith("switch.") or entity_id in device_seen:
+                    continue
+                device_seen.add(entity_id)
+                name = str(item.get("name") or item.get("friendly_name") or item.get("controlName") or entity_id).strip() or entity_id
+                devices.append({
+                    "entityId": entity_id,
+                    "name": name,
+                    "controlName": str(item.get("controlName") or item.get("control_name") or name),
+                })
+            disable_time = f"{parse_schedule_time_24h(raw.get('disableTime') or '20:00', 20, 0)[0]:02d}:{parse_schedule_time_24h(raw.get('disableTime') or '20:00', 20, 0)[1]:02d}"
+            enable_time = f"{parse_schedule_time_24h(raw.get('enableTime') or '07:00', 7, 0)[0]:02d}:{parse_schedule_time_24h(raw.get('enableTime') or '07:00', 7, 0)[1]:02d}"
+            schedules.append({
+                "id": schedule_id,
+                "name": str(raw.get("name") or "Internet Schedule"),
+                "enabled": bool(raw.get("enabled", True)),
+                "days": normalize_schedule_days(raw.get("days")),
+                "disableTime": disable_time,
+                "enableTime": enable_time,
+                "devices": devices,
+            })
+        try:
+            updated_at = int(float(source.get("updatedAt") or 0))
+        except (TypeError, ValueError):
+            updated_at = 0
+        return {
+            "schemaVersion": 2,
+            "updatedAt": updated_at,
+            "origin": str(source.get("origin") or ""),
+            "popupDevices": popup,
+            "schedules": schedules,
+        }
+
+    def apply_device_internet_shared_config(self, value: object):
+        source = value.get("config") if isinstance(value, dict) and isinstance(value.get("config"), dict) else value
+        shared = self._normalize_device_internet_shared(source)
+        self.device_internet_shared = shared
+        ha = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
+        ha["deviceInternetSwitchEntitiesV1"] = copy.deepcopy(shared.get("popupDevices") or [])
+        ha["deviceInternetSchemaVersion"] = 2
+        if hasattr(self, "device_internet_summary"):
+            self.device_internet_summary.setText(self.device_internet_summary_text())
+            self.device_internet_summary.repaint()
+        self.refresh_device_internet_schedule_rows()
+        parent = self.parent()
+        if parent is not None:
+            if hasattr(parent, "position_sleep_controls"):
+                QTimer.singleShot(0, parent.position_sleep_controls)
+            if hasattr(parent, "refresh_device_internet_state"):
+                QTimer.singleShot(0, parent.refresh_device_internet_state)
+
+    def load_device_internet_shared_config(self):
+        if int(getattr(self, "_settings_write_jobs", 0) or 0) > 0:
+            return
+        def done(result):
+            self.apply_device_internet_shared_config(result)
+
+        def failed(error):
+            trace_runtime(f"device internet shared config load failed error={error}")
+            self.refresh_device_internet_schedule_rows()
+
+        self.run_settings_async(
+            "device-internet-shared-load",
+            lambda: self.s.api.get("/api/device-internet/config"),
+            done,
+            failed,
+        )
+
+    def persist_device_internet_shared_config(self, next_config: dict, previous_config: dict | None = None):
+        previous = copy.deepcopy(previous_config if isinstance(previous_config, dict) else self.device_internet_shared)
+        candidate = self._normalize_device_internet_shared(next_config)
+        # Apply optimistically so the section responds immediately while the
+        # backend saves and broadcasts it to the other IHA panels.
+        self.apply_device_internet_shared_config(candidate)
+
+        def done(result):
+            self.apply_device_internet_shared_config(result)
+            self.saved.emit()
+
+        def failed(error):
+            self.apply_device_internet_shared_config(previous)
+            QMessageBox.warning(self, "Device Internet", error)
+
+        self.run_settings_write(
+            "device-internet-shared-save",
+            lambda: self.s.api.post("/api/device-internet/config", {"config": candidate}, timeout=8.0),
+            done,
+            failed,
+        )
+
     def choose_device_internet_entities(self):
         current = self.selected_device_internet_entities()
         dlg = DeviceInternetSelectionDialog(self.s, current, self)
 
         def apply(entities):
-            clean: list[dict] = []
-            seen: set[str] = set()
-            for item in entities if isinstance(entities, list) else []:
-                if not isinstance(item, dict):
-                    continue
-                entity_id = str(item.get("entityId") or item.get("entity_id") or "").strip()
-                if not entity_id.startswith("switch.") or entity_id in seen:
-                    continue
-                seen.add(entity_id)
-                clean.append({
-                    "entityId": entity_id,
-                    "name": str(item.get("name") or item.get("friendly_name") or entity_id),
-                    "controlName": str(item.get("controlName") or item.get("control_name") or entity_id),
-                    "state": str(item.get("state") or ""),
-                })
-
-            ha = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
-            previous = copy.deepcopy(ha.get("deviceInternetSwitchEntitiesV1") or [])
-            ha["deviceInternetSwitchEntitiesV1"] = copy.deepcopy(clean)
-            ha["deviceInternetSchemaVersion"] = 1
-            if hasattr(self, "device_internet_summary"):
-                self.device_internet_summary.setText(self.device_internet_summary_text())
-                self.device_internet_summary.repaint()
-            config_snapshot = copy.deepcopy(self.s.config)
-
-            def done(record):
-                if isinstance(record, dict):
-                    self.s.config = record.get("config") or self.s.config
-                if hasattr(self, "device_internet_summary"):
-                    self.device_internet_summary.setText(self.device_internet_summary_text())
-                parent = self.parent()
-                if parent is not None:
-                    if hasattr(parent, "position_sleep_controls"):
-                        QTimer.singleShot(0, parent.position_sleep_controls)
-                    if hasattr(parent, "refresh_device_internet_state"):
-                        QTimer.singleShot(0, parent.refresh_device_internet_state)
-                self.saved.emit()
-
-            def failed(error):
-                ha_now = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
-                ha_now["deviceInternetSwitchEntitiesV1"] = previous
-                if hasattr(self, "device_internet_summary"):
-                    self.device_internet_summary.setText(self.device_internet_summary_text())
-                QMessageBox.warning(self, "Device Internet", error)
-
-            self.run_settings_write(
-                "device-internet-save",
-                lambda: self.s.api.save_config(config_snapshot),
-                done,
-                failed,
-            )
+            previous = copy.deepcopy(self.device_internet_shared)
+            next_config = copy.deepcopy(previous)
+            next_config["popupDevices"] = copy.deepcopy(entities or [])
+            self.persist_device_internet_shared_config(next_config, previous)
 
         dlg.saved.connect(apply)
         dlg.exec_()
+
+    def device_internet_schedules(self) -> list[dict]:
+        shared = self.device_internet_shared if isinstance(self.device_internet_shared, dict) else {}
+        return [copy.deepcopy(item) for item in (shared.get("schedules") or []) if isinstance(item, dict)]
+
+    def refresh_device_internet_schedule_rows(self):
+        lay = getattr(self, "device_internet_schedule_rows", None)
+        if lay is None:
+            return
+        while lay.count():
+            item = lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+            elif item.layout():
+                child_lay = item.layout()
+                while child_lay.count():
+                    child = child_lay.takeAt(0)
+                    if child.widget():
+                        child.widget().deleteLater()
+        schedules = self.device_internet_schedules()
+        if not schedules:
+            empty = QLabel("No internet schedules yet. Tap + Add Schedule to create one.")
+            empty.setWordWrap(True)
+            empty.setFont(font(7, QFont.Bold))
+            empty.setStyleSheet("color:#aebfd5; background:rgba(255,255,255,0.035); border-radius:8px; padding:7px;")
+            lay.addWidget(empty)
+            return
+        for schedule in schedules:
+            row = QFrame()
+            row.setStyleSheet("QFrame{background:rgba(5,10,20,0.44); border:1px solid rgba(160,180,210,0.20); border-radius:9px;}")
+            row_lay = QHBoxLayout(row)
+            row_lay.setContentsMargins(8, 6, 8, 6)
+            row_lay.setSpacing(6)
+            names = [str(item.get("name") or item.get("entityId") or "Device") for item in schedule.get("devices") or [] if isinstance(item, dict)]
+            devices_text = ", ".join(names[:3])
+            if len(names) > 3:
+                devices_text += f" +{len(names)-3}"
+            summary = QLabel(
+                f"{schedule.get('name') or 'Internet Schedule'}\n"
+                f"{schedule_days_text(schedule.get('days'), compact=True)}  ·  "
+                f"{format_schedule_time_12h(schedule.get('disableTime') or '20:00')} → "
+                f"{format_schedule_time_12h(schedule.get('enableTime') or '07:00')}  ·  {devices_text or 'No devices'}"
+            )
+            summary.setWordWrap(True)
+            summary.setFont(font(7, QFont.Black))
+            summary.setStyleSheet("color:#e0eaff; background:transparent; border:0;")
+            enabled = bool(schedule.get("enabled", True))
+            toggle = RoundButton("On" if enabled else "Off", active=enabled, min_h=30)
+            toggle.setMinimumWidth(58)
+            toggle.clicked.connect(lambda checked=False, sid=str(schedule.get("id") or ""): self.toggle_device_internet_schedule(sid))
+            edit = RoundButton("Edit", active=True, min_h=30)
+            edit.setMinimumWidth(66)
+            edit.clicked.connect(lambda checked=False, sid=str(schedule.get("id") or ""): self.edit_device_internet_schedule(sid))
+            delete = RoundButton("Delete", active=False, kind="danger", min_h=30)
+            delete.setMinimumWidth(74)
+            delete.clicked.connect(lambda checked=False, sid=str(schedule.get("id") or ""): self.delete_device_internet_schedule(sid))
+            row_lay.addWidget(summary, 1)
+            row_lay.addWidget(toggle)
+            row_lay.addWidget(edit)
+            row_lay.addWidget(delete)
+            lay.addWidget(row)
+
+    def add_device_internet_schedule(self):
+        dlg = DeviceInternetScheduleEditDialog(self.s, None, self)
+        dlg.saved.connect(self.save_device_internet_schedule)
+        dlg.exec_()
+
+    def edit_device_internet_schedule(self, schedule_id: str):
+        schedule = next((item for item in self.device_internet_schedules() if str(item.get("id") or "") == str(schedule_id or "")), None)
+        if not schedule:
+            return
+        dlg = DeviceInternetScheduleEditDialog(self.s, schedule, self)
+        dlg.saved.connect(self.save_device_internet_schedule)
+        dlg.exec_()
+
+    def save_device_internet_schedule(self, schedule: dict):
+        previous = copy.deepcopy(self.device_internet_shared)
+        schedules = self.device_internet_schedules()
+        schedule_id = str(schedule.get("id") or "")
+        replaced = False
+        for index, item in enumerate(schedules):
+            if str(item.get("id") or "") == schedule_id:
+                schedules[index] = copy.deepcopy(schedule)
+                replaced = True
+                break
+        if not replaced:
+            schedules.append(copy.deepcopy(schedule))
+        next_config = copy.deepcopy(previous)
+        next_config["schedules"] = schedules
+        self.persist_device_internet_shared_config(next_config, previous)
+
+    def toggle_device_internet_schedule(self, schedule_id: str):
+        previous = copy.deepcopy(self.device_internet_shared)
+        schedules = self.device_internet_schedules()
+        changed = False
+        for item in schedules:
+            if str(item.get("id") or "") == str(schedule_id or ""):
+                item["enabled"] = not bool(item.get("enabled", True))
+                changed = True
+                break
+        if not changed:
+            return
+        next_config = copy.deepcopy(previous)
+        next_config["schedules"] = schedules
+        self.persist_device_internet_shared_config(next_config, previous)
+
+    def delete_device_internet_schedule(self, schedule_id: str):
+        schedule = next((item for item in self.device_internet_schedules() if str(item.get("id") or "") == str(schedule_id or "")), None)
+        if not schedule:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Delete Internet Schedule",
+            f"Delete {schedule.get('name') or 'this internet schedule'}?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        previous = copy.deepcopy(self.device_internet_shared)
+        schedules = [item for item in self.device_internet_schedules() if str(item.get("id") or "") != str(schedule_id or "")]
+        next_config = copy.deepcopy(previous)
+        next_config["schedules"] = schedules
+        self.persist_device_internet_shared_config(next_config, previous)
 
 
     def selected_alexa_lockout_entities(self) -> list[dict]:
@@ -16970,6 +17537,32 @@ class SettingsDialog(QDialog):
         device_status.setFont(font(7, QFont.Black))
         device_status.setStyleSheet("color:#8fffd0; background:transparent; border:0;")
         device_internet.layout().addWidget(device_status)
+
+        schedule_header = QHBoxLayout()
+        schedule_header.setSpacing(8)
+        schedule_title = QLabel("INTERNET SCHEDULES")
+        schedule_title.setFont(font(8, QFont.Black))
+        schedule_title.setStyleSheet("color:#55f0ff; background:transparent; border:0; letter-spacing:1px;")
+        add_schedule = RoundButton("+ Add Schedule", active=True, min_h=32)
+        add_schedule.setMinimumWidth(145)
+        add_schedule.clicked.connect(self.add_device_internet_schedule)
+        schedule_header.addWidget(schedule_title)
+        schedule_header.addStretch(1)
+        schedule_header.addWidget(add_schedule)
+        device_internet.layout().addLayout(schedule_header)
+
+        schedule_note = QLabel(
+            "Schedules and the iPad device list sync across all IHA thermostat screens. "
+            "Each schedule can control its own set of devices. Manual overrides remain until the next scheduled transition."
+        )
+        schedule_note.setWordWrap(True)
+        schedule_note.setFont(font(7, QFont.Bold))
+        schedule_note.setStyleSheet("color:#b7c7de; background:transparent; border:0;")
+        device_internet.layout().addWidget(schedule_note)
+        self.device_internet_schedule_rows = QVBoxLayout()
+        self.device_internet_schedule_rows.setSpacing(5)
+        device_internet.layout().addLayout(self.device_internet_schedule_rows)
+        self.refresh_device_internet_schedule_rows()
 
         alexa_lockout = self.add_section("Alexa Lockout", -2, 2, 1, 2)
         alexa_note = QLabel("Choose one or more Home Assistant Alexa switches this thermostat should control while its screen is locked. Each thermostat stores its own selection.")
@@ -20756,22 +21349,55 @@ class MainWindow(Background):
             self.device_internet_button.setState(blocked, mixed=mixed, busy=busy)
 
     def refresh_device_internet_state(self):
-        """Refresh the iPad button from the actual Home Assistant switch states."""
-        entities = self.selected_device_internet_entities()
-        if not entities:
-            self._device_internet_state_known = False
-            self.set_device_internet_button_state(blocked=False, mixed=False, busy=False)
-            self.position_sleep_controls()
-            return
+        """Refresh shared popup selection, then read actual HA switch states."""
         if getattr(self, "_device_internet_refresh_running", False) or getattr(self, "_device_internet_toggle_running", False):
             return
         self._device_internet_refresh_running = True
-        wanted = {str(item.get("entityId") or "") for item in entities}
-        payload = self.s.ha_payload({"domains": ["switch"]})
+        fallback_entities = self.selected_device_internet_entities()
+        ha_payload = self.s.ha_payload({"domains": ["switch"]})
+
+        def worker():
+            shared = None
+            try:
+                shared_result = self.s.api.get("/api/device-internet/config")
+                shared = shared_result.get("config") if isinstance(shared_result, dict) and isinstance(shared_result.get("config"), dict) else shared_result
+            except Exception as exc:
+                trace_runtime(f"device internet shared selection refresh failed error={exc}")
+            if isinstance(shared, dict):
+                devices = [item for item in (shared.get("popupDevices") or []) if isinstance(item, dict)]
+            else:
+                devices = copy.deepcopy(fallback_entities)
+            wanted = {
+                str(item.get("entityId") or item.get("entity_id") or "").strip()
+                for item in devices
+                if str(item.get("entityId") or item.get("entity_id") or "").strip().startswith("switch.")
+            }
+            if not wanted:
+                return {"shared": shared, "devices": devices, "wanted": [], "entities": []}
+            state_result = self.s.api.post("/api/ha/entities", ha_payload, timeout=6.0)
+            return {
+                "shared": shared,
+                "devices": devices,
+                "wanted": sorted(wanted),
+                "entities": state_result.get("entities") or [],
+            }
 
         def done(result):
             self._device_internet_refresh_running = False
-            rows = result.get("entities") if isinstance(result, dict) else []
+            info = result if isinstance(result, dict) else {}
+            shared = info.get("shared") if isinstance(info.get("shared"), dict) else None
+            devices = info.get("devices") if isinstance(info.get("devices"), list) else []
+            if shared is not None:
+                ha = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
+                ha["deviceInternetSwitchEntitiesV1"] = copy.deepcopy(devices)
+                ha["deviceInternetSchemaVersion"] = 2
+            wanted = [str(x) for x in (info.get("wanted") or []) if str(x)]
+            if not wanted:
+                self._device_internet_state_known = False
+                self.set_device_internet_button_state(blocked=False, mixed=False, busy=False)
+                self.position_sleep_controls()
+                return
+            rows = info.get("entities") if isinstance(info.get("entities"), list) else []
             by_id = {
                 str(item.get("entityId") or item.get("entity_id") or ""): str(item.get("state") or "").strip().lower()
                 for item in rows if isinstance(item, dict)
@@ -20787,13 +21413,9 @@ class MainWindow(Background):
         def failed(error):
             self._device_internet_refresh_running = False
             trace_runtime(f"device internet state refresh failed error={error}")
+            self.position_sleep_controls()
 
-        self.run_async(
-            "device-internet-state",
-            lambda: self.s.api.post("/api/ha/entities", payload, timeout=6.0),
-            done,
-            failed,
-        )
+        self.run_async("device-internet-state", worker, done, failed)
 
     def _apply_device_internet_entities(self, entities: list[dict], *, blocked: bool, sequence: int) -> dict:
         """Set every selected network-access switch and verify each resulting state.
