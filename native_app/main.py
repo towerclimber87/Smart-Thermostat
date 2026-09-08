@@ -19842,8 +19842,10 @@ class MainWindow(Background):
             if hasattr(self, "sleep_button"):
                 self.sleep_button.move(sleep_x, sleep_y)
                 self.sleep_button.setVisible(not assistant_active and not getattr(self, "_display_sleeping", False))
+            # Keep the three thermostat quick controls together as one row
+            # immediately above the Alarmo card. Their left-to-right order is:
+            # Intimacy Hold | device internet (iPad) | Thermostat Sync.
             show_sync = False
-            sync_y = max(0, sleep_y - 58 - 10)
             if hasattr(self, "sync_button"):
                 show_sync = (
                     not assistant_active
@@ -19852,10 +19854,6 @@ class MainWindow(Background):
                     and bool(self.sync_peer_entities())
                 )
                 self.sync_button.setVisible(show_sync)
-                if show_sync:
-                    sync_y = max(0, sleep_y - self.sync_button.height() - 10)
-                    self.sync_button.move(sleep_x, sync_y)
-                    self.sync_button.raise_()
 
             show_device_internet = False
             if hasattr(self, "device_internet_button"):
@@ -19866,12 +19864,8 @@ class MainWindow(Background):
                     and bool(self.selected_device_internet_entities())
                 )
                 self.device_internet_button.setVisible(show_device_internet)
-                if show_device_internet:
-                    device_y = sync_y
-                    device_x = max(0, sleep_x - self.device_internet_button.width() - 10) if show_sync else sleep_x
-                    self.device_internet_button.move(device_x, device_y)
-                    self.device_internet_button.raise_()
 
+            show_intimacy = False
             if hasattr(self, "intimacy_button"):
                 show_intimacy = (
                     not assistant_active
@@ -19879,14 +19873,45 @@ class MainWindow(Background):
                     and self.current_name == "Thermostat"
                 )
                 self.intimacy_button.setVisible(show_intimacy)
-                if show_intimacy:
-                    intimacy_x = max(0, self.width() - self.intimacy_button.width() - margin - 2)
-                    anchor_y = sync_y if (show_sync or show_device_internet) else sleep_y
-                    self.intimacy_button.move(
-                        intimacy_x,
-                        max(0, anchor_y - self.intimacy_button.height() - 10),
-                    )
-                    self.intimacy_button.raise_()
+
+            quick_controls = []
+            if show_intimacy and hasattr(self, "intimacy_button"):
+                quick_controls.append(self.intimacy_button)
+            if show_device_internet and hasattr(self, "device_internet_button"):
+                quick_controls.append(self.device_internet_button)
+            if show_sync and hasattr(self, "sync_button"):
+                quick_controls.append(self.sync_button)
+
+            if quick_controls:
+                gap = 8
+                row_height = max(button.height() for button in quick_controls)
+                row_width = sum(button.width() for button in quick_controls) + gap * (len(quick_controls) - 1)
+
+                # Anchor the floating row to the visible Alarmo card on the
+                # thermostat page so it remains aligned as the screen resizes.
+                alarm_left = max(0, self.width() - 226 - 42)
+                alarm_top = max(0, sleep_y - 164)
+                alarm_width = 226
+                try:
+                    thermostat_page = self.pages.get("Thermostat") if hasattr(self, "pages") else None
+                    alarm_card = getattr(thermostat_page, "alarm_card", None)
+                    if alarm_card is not None:
+                        alarm_pos = alarm_card.mapTo(self, QPoint(0, 0))
+                        alarm_left = alarm_pos.x()
+                        alarm_top = alarm_pos.y()
+                        alarm_width = alarm_card.width()
+                except Exception:
+                    pass
+
+                row_x = alarm_left + (alarm_width - row_width) // 2
+                row_x = max(margin, min(row_x, max(margin, self.width() - row_width - margin)))
+                row_y = max(0, alarm_top - row_height - 10)
+
+                x = row_x
+                for button in quick_controls:
+                    button.move(x, row_y + (row_height - button.height()) // 2)
+                    button.raise_()
+                    x += button.width() + gap
 
             # Sleep shield is above the normal UI, but the active assistant screen
             # is deliberately top-most so a terminal command can wake the display
