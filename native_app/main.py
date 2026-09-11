@@ -4862,13 +4862,18 @@ class FamilyCenterStatusPanel(QWidget):
         return max(self.COMPACT_WIDTH, min(self.MAX_WIDTH, int(math.ceil(widest)))), height
 
     def _refresh_size(self):
+        """Apply the content-driven size without starting another Qt layout cycle.
+
+        This panel is a floating child of the thermostat controls band, not a
+        grid item, so resizing it does not require an asynchronous relayout.
+        Keeping this synchronous avoids a resize -> singleShot -> move/resize
+        feedback loop on slower Raspberry Pi panels.
+        """
         width, height = self._content_size()
         if self.width() == width and self.height() == height:
-            return
+            return False
         self.setFixedSize(width, height)
-        owner = self.parentWidget().parentWidget() if self.parentWidget() is not None else None
-        if owner is not None and hasattr(owner, "position_family_center_panel"):
-            QTimer.singleShot(0, owner.position_family_center_panel)
+        return True
 
     def set_display_scale(self, percent: object):
         value = _family_center_display_scale_percent(percent)
@@ -5552,7 +5557,12 @@ class ThermostatScreen(Page):
         self.position_notice_action_popup()
 
     def position_family_center_panel(self):
-        """Anchor Family Center under Alarmo and let extra width grow leftward."""
+        """Right-anchor Family Center below Alarmo with stable geometry.
+
+        The card owns its content-driven width/height. This method only moves
+        it, so longer names, larger text, or additional icons expand the left
+        edge without feeding a resize back into Qt's layout engine.
+        """
         panel = getattr(self, "family_center_panel", None)
         alarm = getattr(self, "alarm_card", None)
         band = getattr(self, "controls_band", None)
@@ -5562,40 +5572,41 @@ class ThermostatScreen(Page):
             alarm_pos = alarm.mapTo(band, QPoint(0, 0))
             right_edge = alarm_pos.x() + alarm.width()
 
-            # Keep the current compact alignment under Alarmo. If Family Center
-            # needs more width, only its left edge moves. Never push the main
-            # thermostat grid around.
-            max_available_width = max(FamilyCenterStatusPanel.COMPACT_WIDTH, right_edge - 42)
-            target_width = min(panel.width(), max_available_width)
-            if target_width != panel.width():
-                panel.setFixedWidth(target_width)
-            x = max(42, right_edge - panel.width())
+            # Keep Alarmo's right edge fixed. The Family Center card consumes
+            # only the width its rendered content needs and grows to the left.
+            x = max(8, right_edge - panel.width())
 
-            # Preserve the existing Family Center vertical band but nudge it
-            # upward slightly so it clears the floating Sleep control. Using the
-            # old grid cell as the vertical anchor keeps this a small visual move
-            # rather than pulling the card all the way up against Alarmo.
+            # Use the same spacer row that originally held Family Center, but
+            # lift it slightly so it stays clear of the bottom Sleep button.
             desired_y = alarm_pos.y() + alarm.height() + 4
             grid = getattr(self, "controls_grid", None)
             if grid is not None:
                 try:
                     family_cell = grid.cellRect(2, 4)
                     if family_cell.isValid():
-                        desired_y = family_cell.top() - 10
+                        desired_y = family_cell.top() - 12
                 except Exception:
                     pass
+
             y = desired_y
             window = self.window()
             sleep_button = getattr(window, "sleep_button", None)
             if sleep_button is not None and sleep_button.isVisible():
                 try:
-                    sleep_pos = sleep_button.mapTo(band, QPoint(0, 0))
-                    safe_bottom = sleep_pos.y() - 8
+                    # sleep_button is not a child of controls_band. Converting
+                    # through global coordinates is safe; mapTo(band, ...) is
+                    # undefined for unrelated widget branches in Qt.
+                    sleep_global = sleep_button.mapToGlobal(QPoint(0, 0))
+                    sleep_pos = band.mapFromGlobal(sleep_global)
+                    safe_bottom = sleep_pos.y() - 10
                     y = min(y, safe_bottom - panel.height())
                 except Exception:
                     pass
+
             y = max(0, y)
-            panel.move(x, y)
+            target = QPoint(int(x), int(y))
+            if panel.pos() != target:
+                panel.move(target)
             if panel.isVisible():
                 panel.raise_()
         except Exception:
@@ -5620,7 +5631,9 @@ class ThermostatScreen(Page):
 
         self.controls_band.setGeometry(0, y, w, band_h)
         self.controls_band.raise_()
-        QTimer.singleShot(0, self.position_family_center_panel)
+        # Family Center is a floating child of controls_band. Position it
+        # directly; do not enqueue layout callbacks on every status refresh.
+        self.position_family_center_panel()
 
         # Temporary alert controls stay outside the grid so they do not push
         # the Doors card around.  The compact notice is explicitly positioned
@@ -15460,6 +15473,8 @@ class SettingsDialog(QDialog):
         panel = getattr(thermostat_page, "family_center_panel", None) if thermostat_page is not None else None
         if panel is not None:
             panel.set_display_scale(value)
+            if thermostat_page is not None and hasattr(thermostat_page, "position_family_center_panel"):
+                thermostat_page.position_family_center_panel()
 
     def mark_family_center_dirty(self):
         self._family_center_dirty = True
