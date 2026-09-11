@@ -3627,6 +3627,47 @@ class TextKeyboardDialog(QDialog):
         return None
 
 
+class FamilyCenterTextKeyboardDialog(MiniTextKeyboardDialog):
+    """Mini keyboard with the URL punctuation Family Center needs."""
+    def __init__(self, title: str, value: str = "", parent=None):
+        super().__init__(title, value, parent)
+        root = self.layout()
+        symbols = QHBoxLayout()
+        symbols.setSpacing(6)
+        symbols.addStretch(1)
+        for char, label in ((":", ":  Port"), ("/", "/  Slash")):
+            button = KeypadButton(label, active=True, min_h=40)
+            button.setMinimumWidth(132)
+            button.clicked.connect(lambda checked=False, c=char: self.add_char(c))
+            symbols.addWidget(button)
+        symbols.addStretch(1)
+        root.insertLayout(max(0, root.count() - 1), symbols)
+
+    @staticmethod
+    def get_text(parent, title: str, value: str = "") -> str | None:
+        dlg = FamilyCenterTextKeyboardDialog(title, value, parent)
+        if dlg.exec_() == QDialog.Accepted:
+            return dlg.result_text.strip()
+        return None
+
+
+class SecretMiniTextKeyboardDialog(MiniTextKeyboardDialog):
+    """Mini keyboard that never paints a secret value back onto the screen."""
+    def refresh(self):
+        if self.result_text:
+            shown = min(len(self.result_text), 42)
+            self.display.setText("•" * shown)
+        else:
+            self.display.setText("API Key")
+
+    @staticmethod
+    def get_text(parent, title: str, value: str = "") -> str | None:
+        dlg = SecretMiniTextKeyboardDialog(title, value, parent)
+        if dlg.exec_() == QDialog.Accepted:
+            return dlg.result_text.strip()
+        return None
+
+
 class ScheduleEditDialog(QDialog):
     saved = pyqtSignal(dict)
     peopleLoaded = pyqtSignal(object)
@@ -4700,6 +4741,163 @@ class PersonPresenceStrip(QWidget):
 
 
 
+
+def _family_privilege_kind(privilege: dict) -> str:
+    text = " ".join([
+        str(privilege.get("name") or ""),
+        str(privilege.get("emoji") or ""),
+        str(privilege.get("controlKind") or privilege.get("control_kind") or ""),
+    ]).lower()
+    if any(token in text for token in ("ipad", "tablet", "phone", "mobile", "📱")):
+        return "tablet"
+    if any(token in text for token in ("television", "tv", "movie", "screen", "📺")):
+        return "tv"
+    if any(token in text for token in ("outside", "outdoor", "playtime", "park", "tree", "🌳")):
+        return "tree"
+    if any(token in text for token in ("game", "gaming", "xbox", "playstation", "nintendo", "switch", "🎮")):
+        return "game"
+    if any(token in text for token in ("computer", "laptop", " pc", "💻")):
+        return "laptop"
+    if any(token in text for token in ("music", "headphone", "audio", "🎧")):
+        return "music"
+    if any(token in text for token in ("book", "read", "reading", "📚")):
+        return "book"
+    if any(token in text for token in ("bike", "bicycle", "🚲")):
+        return "bike"
+    if any(token in text for token in ("ball", "sport", "soccer", "football", "⚽", "🏀", "🏈")):
+        return "ball"
+    if any(token in text for token in ("treat", "candy", "dessert", "sweet", "🍬", "🍭", "🍦")):
+        return "treat"
+    return "star"
+
+
+class FamilyCenterStatusPanel(QWidget):
+    """Mirror-style kid/points/privilege strip shown only when configured."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._kids: list[dict] = []
+        self._error = ""
+        self._configured = False
+        self._signature = ""
+        self.setFixedSize(226, 54)
+        self.setAttribute(Qt.WA_StyledBackground, False)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.hide()
+
+    def set_data(self, kids: list[dict] | None, *, configured: bool, error: str = ""):
+        clean = [item for item in (kids or []) if isinstance(item, dict)][:4]
+        signature = repr((configured, error, clean))
+        if signature == self._signature:
+            self.setVisible(bool(configured))
+            return
+        self._signature = signature
+        self._configured = bool(configured)
+        self._kids = clean
+        self._error = str(error or "")
+        if self._error:
+            self.setToolTip(self._error)
+        else:
+            names = ", ".join(str(k.get("name") or "Kid") for k in clean)
+            self.setToolTip(f"Family Center: {names}" if names else "Family Center")
+        self.setVisible(self._configured)
+        self.update()
+
+    def clear_and_hide(self):
+        self._signature = ""
+        self._configured = False
+        self._kids = []
+        self._error = ""
+        self.hide()
+        self.update()
+
+    @staticmethod
+    def _draw_icon(p: QPainter, kind: str, rect: QRectF):
+        p.save()
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(QColor(218, 241, 255, 235), 1.25, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        x, y, w, h = rect.x(), rect.y(), rect.width(), rect.height()
+        cx, cy = x + w / 2.0, y + h / 2.0
+        if kind == "tablet":
+            p.drawRoundedRect(QRectF(x + w*.26, y + h*.08, w*.48, h*.84), 2, 2)
+            p.drawPoint(QPointF(cx, y + h*.83))
+        elif kind == "tv":
+            p.drawRoundedRect(QRectF(x + w*.08, y + h*.18, w*.84, h*.58), 2, 2)
+            p.drawLine(QPointF(cx, y + h*.76), QPointF(cx, y + h*.88))
+            p.drawLine(QPointF(x+w*.32, y+h*.9), QPointF(x+w*.68, y+h*.9))
+        elif kind == "tree":
+            path = QPainterPath(); path.moveTo(cx, y+h*.05); path.lineTo(x+w*.18, y+h*.62); path.lineTo(x+w*.39, y+h*.62); path.lineTo(x+w*.27, y+h*.79); path.lineTo(x+w*.73, y+h*.79); path.lineTo(x+w*.61, y+h*.62); path.lineTo(x+w*.82, y+h*.62); path.closeSubpath(); p.drawPath(path)
+            p.drawLine(QPointF(cx, y+h*.62), QPointF(cx, y+h*.94))
+        elif kind == "game":
+            p.drawRoundedRect(QRectF(x+w*.08, y+h*.31, w*.84, h*.45), 4, 4)
+            p.drawLine(QPointF(x+w*.27, cy), QPointF(x+w*.43, cy)); p.drawLine(QPointF(x+w*.35, y+h*.43), QPointF(x+w*.35, y+h*.63))
+            p.drawEllipse(QPointF(x+w*.70, y+h*.49), 1.0, 1.0); p.drawEllipse(QPointF(x+w*.78, y+h*.58), 1.0, 1.0)
+        elif kind == "laptop":
+            p.drawRect(QRectF(x+w*.19, y+h*.16, w*.62, h*.52)); p.drawLine(QPointF(x+w*.08, y+h*.78), QPointF(x+w*.92, y+h*.78)); p.drawLine(QPointF(x+w*.22, y+h*.86), QPointF(x+w*.78, y+h*.86))
+        elif kind == "music":
+            p.drawArc(QRectF(x+w*.16, y+h*.12, w*.68, h*.68), 30*16, 120*16)
+            p.drawRoundedRect(QRectF(x+w*.12, y+h*.48, w*.18, h*.32), 2, 2); p.drawRoundedRect(QRectF(x+w*.70, y+h*.48, w*.18, h*.32), 2, 2)
+        elif kind == "book":
+            p.drawLine(QPointF(cx, y+h*.2), QPointF(cx, y+h*.84)); p.drawArc(QRectF(x+w*.08, y+h*.18, w*.43, h*.66), 270*16, 180*16); p.drawArc(QRectF(x+w*.49, y+h*.18, w*.43, h*.66), 90*16, 180*16)
+        elif kind == "bike":
+            p.drawEllipse(QRectF(x+w*.05, y+h*.51, w*.34, h*.34)); p.drawEllipse(QRectF(x+w*.61, y+h*.51, w*.34, h*.34)); p.drawLine(QPointF(x+w*.22, y+h*.68), QPointF(x+w*.47, y+h*.42)); p.drawLine(QPointF(x+w*.47, y+h*.42), QPointF(x+w*.69, y+h*.68)); p.drawLine(QPointF(x+w*.22, y+h*.68), QPointF(x+w*.60, y+h*.68)); p.drawLine(QPointF(x+w*.47, y+h*.42), QPointF(x+w*.40, y+h*.28)); p.drawLine(QPointF(x+w*.38, y+h*.28), QPointF(x+w*.52, y+h*.28))
+        elif kind == "ball":
+            p.drawEllipse(QRectF(x+w*.13, y+h*.13, w*.74, h*.74)); p.drawArc(QRectF(x+w*.25, y+h*.15, w*.50, h*.70), 70*16, 90*16); p.drawArc(QRectF(x+w*.25, y+h*.15, w*.50, h*.70), 250*16, 90*16)
+        elif kind == "treat":
+            p.drawRoundedRect(QRectF(x+w*.30, y+h*.30, w*.40, h*.40), 3, 3); p.drawLine(QPointF(x+w*.05, y+h*.25), QPointF(x+w*.30, y+h*.42)); p.drawLine(QPointF(x+w*.05, y+h*.75), QPointF(x+w*.30, y+h*.58)); p.drawLine(QPointF(x+w*.95, y+h*.25), QPointF(x+w*.70, y+h*.42)); p.drawLine(QPointF(x+w*.95, y+h*.75), QPointF(x+w*.70, y+h*.58))
+        else:
+            pts=[]
+            for i in range(10):
+                a=-math.pi/2 + i*math.pi/5
+                r=(w*.42 if i%2==0 else w*.19)
+                pts.append(QPointF(cx+math.cos(a)*r, cy+math.sin(a)*r))
+            path=QPainterPath(); path.moveTo(pts[0]); [path.lineTo(pt) for pt in pts[1:]]; path.closeSubpath(); p.drawPath(path)
+        p.restore()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if not self._configured:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(8, 17, 31, 150))
+        p.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 10, 10)
+        p.setPen(QPen(QColor(126, 207, 238, 75), 1))
+        p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 10, 10)
+
+        if self._error:
+            p.setPen(QColor("#f0c4a8")); p.setFont(font(7, QFont.Black)); p.drawText(self.rect().adjusted(6,0,-6,0), Qt.AlignCenter, "FAMILY CENTER UNAVAILABLE")
+            return
+        if not self._kids:
+            p.setPen(QColor("#aebbd0")); p.setFont(font(7, QFont.Black)); p.drawText(self.rect().adjusted(6,0,-6,0), Qt.AlignCenter, "NO FAMILY PROFILES")
+            return
+
+        row_count = max(1, len(self._kids))
+        row_h = self.height() / float(row_count)
+        name_font = font(7 if row_count <= 3 else 6, QFont.Black)
+        point_font = font(6 if row_count <= 3 else 5, QFont.Black)
+        for idx, kid in enumerate(self._kids):
+            y = idx * row_h
+            if idx:
+                p.setPen(QPen(QColor(255,255,255,25), 1)); p.drawLine(QPointF(5,y), QPointF(self.width()-5,y))
+            name = compact_name(str(kid.get("name") or "Kid"), 11)
+            try: score = int(kid.get("score") or 0)
+            except (TypeError, ValueError): score = 0
+            p.setPen(QColor("#f3f8ff")); p.setFont(name_font); p.drawText(QRectF(6,y,70,row_h), Qt.AlignVCenter|Qt.AlignLeft, name)
+            p.setPen(QColor("#70eaff")); p.setFont(point_font); p.drawText(QRectF(76,y,43,row_h), Qt.AlignVCenter|Qt.AlignLeft, f"{score} pts")
+            privileges = [x for x in (kid.get("privileges") or []) if isinstance(x, dict)]
+            icon_size = max(10.0, min(15.0, row_h - 2.0))
+            x = 120.0
+            for privilege in privileges[:6]:
+                if x + icon_size > self.width() - 3:
+                    break
+                self._draw_icon(p, _family_privilege_kind(privilege), QRectF(x, y + (row_h-icon_size)/2.0, icon_size, icon_size))
+                x += icon_size + 2.0
+
+
+
 class ThermostatScreen(Page):
     def __init__(self, app_state: AppState, parent=None):
         super().__init__(app_state, parent)
@@ -4717,6 +4915,9 @@ class ThermostatScreen(Page):
         # Shortcut buttons are expensive to destroy/recreate on the Pi. Rebuild
         # them only when the visible shortcut data or lock state actually changes.
         self._schedule_shortcut_signature = None
+        self._family_center_polling = False
+        self._family_center_next_poll_at = 0.0
+        self._family_center_config_signature = ""
         self.dial = ThermostatDial()
         self.dial.setMaximumSize(470, 470)
         self.mode_buttons: dict[str, RoundButton] = {}
@@ -4818,6 +5019,7 @@ class ThermostatScreen(Page):
             press_feedback=True,
         )
         self.alarm_card = InfoTile("Alarmo", "DISARMED", "盾", good=True)
+        self.family_center_panel = FamilyCenterStatusPanel(self)
         self._door_action_pending = False
         self.door_card.clicked.connect(self.run_door_action)
         self.door_card.held.connect(self.choose_door_action_entity)
@@ -4938,9 +5140,10 @@ class ThermostatScreen(Page):
         self.schedule_shortcuts.setWidget(self.schedule_shortcuts_content)
         self.schedule_shortcuts.hide()
         # Schedule hotkeys live in the spacer band directly above Off/Cool/Heat/Away.
-        # The scroll area spans the full row, while its internal layout starts
-        # at the left edge so each saved schedule becomes the next bubble.
-        mid.addWidget(self.schedule_shortcuts, 2, 0, 1, 5, Qt.AlignBottom)
+        # Leave the lower-right Alarmo column free for the optional Family Center
+        # strip. Panels without Family Center keep this area transparent.
+        mid.addWidget(self.schedule_shortcuts, 2, 0, 1, 4, Qt.AlignBottom)
+        mid.addWidget(self.family_center_panel, 2, 4, 1, 1, Qt.AlignCenter | Qt.AlignTop)
 
         mode_wrap = QWidget()
         mode_lay = QHBoxLayout(mode_wrap)
@@ -7343,10 +7546,62 @@ class ThermostatScreen(Page):
         self.alarm_card.setAlarmState(str(alarm.get("state") or "disarmed"))
         self.virtual_panel.updateData(t)
         self.apply_screen_lock_state()
+        self.refresh_family_center()
+
+    def family_center_config(self) -> dict:
+        integrations = self.config.get("integrations") if isinstance(self.config, dict) and isinstance(self.config.get("integrations"), dict) else {}
+        raw = integrations.get("familyCenter") if isinstance(integrations.get("familyCenter"), dict) else {}
+        return {
+            "url": str(raw.get("url") or "").strip(),
+            "apiKey": str(raw.get("apiKey") or "").strip(),
+        }
+
+    def refresh_family_center(self, *, force: bool = False):
+        cfg = self.family_center_config()
+        configured = bool(cfg.get("url") and cfg.get("apiKey"))
+        if not configured:
+            self._family_center_config_signature = ""
+            self._family_center_next_poll_at = 0.0
+            self.family_center_panel.clear_and_hide()
+            return
+        signature = f"{cfg.get('url')}|{cfg.get('apiKey')}"
+        if signature != self._family_center_config_signature:
+            self._family_center_config_signature = signature
+            self._family_center_next_poll_at = 0.0
+            force = True
+        now = time.monotonic()
+        if self._family_center_polling or (not force and now < self._family_center_next_poll_at):
+            return
+        self._family_center_polling = True
+        self._family_center_next_poll_at = now + 30.0
+
+        def success(data):
+            self._family_center_polling = False
+            payload = data if isinstance(data, dict) else {}
+            if not payload.get("configured"):
+                self.family_center_panel.clear_and_hide()
+                return
+            self.family_center_panel.set_data(
+                payload.get("kids") if isinstance(payload.get("kids"), list) else [],
+                configured=True,
+                error=str(payload.get("error") or "") if not payload.get("ok", True) else "",
+            )
+
+        def failed(message):
+            self._family_center_polling = False
+            self.family_center_panel.set_data([], configured=True, error=message)
+
+        self.run_async(
+            "family-center-status",
+            lambda: self.s.api.family_center_status(refresh=force),
+            success,
+            failed,
+        )
 
     def poll(self):
-        # Keep thermostat page light. Expensive HA polling is done only for cards with configured entities.
-        pass
+        # Family Center is the only optional external card on this page. Its
+        # backend result is cached and this UI polls at most once every 30 sec.
+        self.refresh_family_center()
 
 
 class InfoTile(HoldCard):
@@ -14671,6 +14926,7 @@ class SettingsDialog(QDialog):
         self._settings_dirty = False
         self._jarvis_dirty = False
         self._display_settings_dirty = False
+        self._family_center_dirty = False
         self._settings_update_seq = 0
         self._settings_async_jobs: dict[str, tuple[Callable | None, Callable | None]] = {}
         self._settings_write_jobs = 0
@@ -14981,8 +15237,82 @@ class SettingsDialog(QDialog):
             "Jarvis": "Home Assistant speech volume, response, and screen-display controls",
             "Device Internet": "Choose device network-access switches for the main-screen iPad button",
             "Alexa Lockout": "Choose which Alexa devices are blocked while this screen is locked",
+            "Family Center Application": "Connect the Family Center URL and API key for kid points and privileges",
         }
         return descriptions.get(str(title or ""), "Open this section to view its settings")
+
+    def family_center_config(self, create: bool = False) -> dict:
+        config = self.s.config if isinstance(self.s.config, dict) else {}
+        if config is not self.s.config:
+            self.s.config = config
+        integrations = config.get("integrations")
+        if not isinstance(integrations, dict):
+            if not create:
+                return {}
+            integrations = {}
+            config["integrations"] = integrations
+        family = integrations.get("familyCenter")
+        if not isinstance(family, dict):
+            if not create:
+                return {}
+            family = {"url": "", "apiKey": ""}
+            integrations["familyCenter"] = family
+        return family
+
+    def family_center_url_text(self) -> str:
+        value = str(self.family_center_config(False).get("url") or "").strip()
+        return value or "Not configured"
+
+    def family_center_key_text(self) -> str:
+        return "Configured" if str(self.family_center_config(False).get("apiKey") or "").strip() else "Not configured"
+
+    def mark_family_center_dirty(self):
+        self._family_center_dirty = True
+        self._last_settings_error = ""
+        self.s.pause_status_refresh(8.0)
+
+    def refresh_family_center_settings_labels(self):
+        if hasattr(self, "family_center_url_label"):
+            self.family_center_url_label.setText(self.family_center_url_text())
+        if hasattr(self, "family_center_key_label"):
+            self.family_center_key_label.setText(self.family_center_key_text())
+
+    def edit_family_center_url(self):
+        current = str(self.family_center_config(False).get("url") or "").strip()
+        value = FamilyCenterTextKeyboardDialog.get_text(self, "Family Center URL", current)
+        if value is None:
+            return
+        value = str(value or "").strip().rstrip("/")
+        if value and (not re.match(r"^https?://[^\s]+$", value, flags=re.IGNORECASE) or "?" in value or "#" in value):
+            QMessageBox.warning(self, "Family Center", "Enter a base URL beginning with http:// or https://, without a query string or fragment.")
+            return
+        self.family_center_config(True)["url"] = value
+        self.mark_family_center_dirty()
+        self.refresh_family_center_settings_labels()
+
+    def edit_family_center_api_key(self):
+        value = SecretMiniTextKeyboardDialog.get_text(self, "Family Center API Key", "")
+        if value is None:
+            return
+        value = str(value or "").strip()
+        if not value:
+            return
+        if not value.startswith("fcapi_") or any(ch.isspace() for ch in value):
+            QMessageBox.warning(self, "Family Center", "The API key is invalid. Family Center API keys begin with fcapi_.")
+            return
+        self.family_center_config(True)["apiKey"] = value
+        self.mark_family_center_dirty()
+        self.refresh_family_center_settings_labels()
+
+    def clear_family_center_api_key(self):
+        family = self.family_center_config(False)
+        if not str(family.get("apiKey") or "").strip():
+            return
+        if QMessageBox.question(self, "Family Center", "Clear the saved Family Center API key?", QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        self.family_center_config(True)["apiKey"] = ""
+        self.mark_family_center_dirty()
+        self.refresh_family_center_settings_labels()
 
     def jarvis_voice_defaults(self) -> dict:
         return {
@@ -17482,6 +17812,37 @@ class SettingsDialog(QDialog):
     def build(self):
         t = self.s.thermostat or {}
 
+        family_section = self.add_section("Family Center Application", -3, 0, 1, 4)
+        family_note = QLabel("Optional connection to the Family Center kids application. When both values are configured, the thermostat shows each kid's points and available privileges directly below Alarmo.")
+        family_note.setWordWrap(True)
+        family_note.setFont(font(8, QFont.Bold))
+        family_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
+        family_section.layout().addWidget(family_note)
+        family_grid = QGridLayout()
+        family_grid.setHorizontalSpacing(8)
+        family_grid.setVerticalSpacing(7)
+        family_grid.setColumnStretch(0, 1)
+        family_grid.setColumnStretch(1, 0)
+        url_title = QLabel("Family Center URL")
+        url_title.setFont(font(8, QFont.Black)); url_title.setStyleSheet("color:#e8f2ff; background:transparent; border:0;")
+        self.family_center_url_label = QLabel(self.family_center_url_text())
+        self.family_center_url_label.setWordWrap(True); self.family_center_url_label.setFont(font(8, QFont.Bold)); self.family_center_url_label.setStyleSheet("color:#78eaff; background:rgba(5,10,20,0.42); border:1px dashed rgba(160,180,210,0.26); border-radius:8px; padding:7px;")
+        url_button = RoundButton("Set URL", active=True, min_h=34); url_button.setMinimumWidth(128); url_button.clicked.connect(self.edit_family_center_url)
+        family_grid.addWidget(url_title, 0, 0); family_grid.addWidget(self.family_center_url_label, 1, 0); family_grid.addWidget(url_button, 1, 1)
+        key_title = QLabel("API Key")
+        key_title.setFont(font(8, QFont.Black)); key_title.setStyleSheet("color:#e8f2ff; background:transparent; border:0;")
+        self.family_center_key_label = QLabel(self.family_center_key_text())
+        self.family_center_key_label.setFont(font(8, QFont.Bold)); self.family_center_key_label.setStyleSheet("color:#8fffd0; background:rgba(5,10,20,0.42); border:1px dashed rgba(160,180,210,0.26); border-radius:8px; padding:7px;")
+        key_buttons = QHBoxLayout(); key_buttons.setSpacing(7)
+        set_key = RoundButton("Set API Key", active=True, min_h=34); set_key.setMinimumWidth(128); set_key.clicked.connect(self.edit_family_center_api_key)
+        clear_key = RoundButton("Clear Key", active=False, kind="danger", min_h=34); clear_key.setMinimumWidth(116); clear_key.clicked.connect(self.clear_family_center_api_key)
+        key_buttons.addWidget(set_key); key_buttons.addWidget(clear_key)
+        family_grid.addWidget(key_title, 2, 0); family_grid.addWidget(self.family_center_key_label, 3, 0); family_grid.addLayout(key_buttons, 3, 1)
+        family_section.layout().addLayout(family_grid)
+        family_save_note = QLabel("The saved API key is never shown again. Use the browser Backup portal if you prefer to paste the URL and key from a computer.")
+        family_save_note.setWordWrap(True); family_save_note.setFont(font(7, QFont.Black)); family_save_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
+        family_section.layout().addWidget(family_save_note)
+
         jarvis_voice = self.jarvis_voice_config(False)
         jarvis_defaults = self.jarvis_voice_defaults()
         self.jarvis_toggle_buttons: dict[str, RoundButton] = {}
@@ -18322,7 +18683,7 @@ class SettingsDialog(QDialog):
             QMessageBox.information(self, "House Sync", "House Sync is still running. Keep settings open until it finishes.")
             return
         self._settings_save_timer.stop()
-        if self._jarvis_dirty or self._display_settings_dirty:
+        if self._jarvis_dirty or self._display_settings_dirty or self._family_center_dirty:
             self.save_all()
             return
         self.push_pending_settings()
@@ -18424,6 +18785,7 @@ class SettingsDialog(QDialog):
         if (
             self._display_settings_dirty
             and not self._jarvis_dirty
+            and not self._family_center_dirty
             and not self._settings_dirty
             and not self._pending_settings_changes
         ):
@@ -18481,6 +18843,7 @@ class SettingsDialog(QDialog):
             self.s.config = config_record.get("config") or self.s.config
         self._jarvis_dirty = False
         self._display_settings_dirty = False
+        self._family_center_dirty = False
         if hasattr(self, "security_code_field"):
             self.security_code_field.setText(self.masked_code(str((self.s.config.get("alarm") or {}).get("disarmCode") or "")))
         if hasattr(self, "settings_code_field"):

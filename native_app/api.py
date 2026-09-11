@@ -86,6 +86,9 @@ class ApiClient:
     def thermal_status(self) -> dict[str, Any]:
         return self.get("/api/system/thermal")
 
+    def family_center_status(self, *, refresh: bool = False) -> dict[str, Any]:
+        return self.get("/api/family-center/status" + ("?refresh=1" if refresh else ""))
+
     def thermostat_update(self, changes: dict[str, Any]) -> dict[str, Any]:
         return self.post("/api/thermostat/control", {"thermostat": changes}, timeout=self.control_timeout)
 

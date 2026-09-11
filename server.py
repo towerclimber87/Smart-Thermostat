@@ -135,6 +135,10 @@ _CONFIG_WEB_PORTAL_LOCK = threading.RLock()
 _CONFIG_WEB_PORTAL_ENABLED_UNTIL = 0.0
 _CONFIG_WEB_PORTAL_STARTED_AT = 0.0
 _CONFIG_WEB_PORTAL_LAST_ACTIVITY_AT = 0.0
+_FAMILY_CENTER_CACHE_LOCK = threading.RLock()
+_FAMILY_CENTER_CACHE: tuple[float, str, dict] | None = None
+_FAMILY_CENTER_CACHE_TTL_SECONDS = max(5.0, float(os.environ.get("SMART_THERMOSTAT_FAMILY_CENTER_CACHE_SECONDS", "20") or "20"))
+_FAMILY_CENTER_REQUEST_TIMEOUT_SECONDS = max(1.0, float(os.environ.get("SMART_THERMOSTAT_FAMILY_CENTER_TIMEOUT_SECONDS", "4") or "4"))
 _ASSISTANT_LOCK = threading.RLock()
 _ASSISTANT_PROCESS_LOCK = threading.Lock()
 _ASSISTANT_PROFILE_CACHE_LOCK = threading.Lock()
@@ -589,11 +593,21 @@ def _migrate_panel_config(config: object) -> dict | None:
     migrated["security"] = security
 
     integrations = migrated.get("integrations")
-    if isinstance(integrations, dict) and isinstance(integrations.get("homeAssistant"), dict):
-        integrations["homeAssistant"] = _merge_missing_defaults(
-            DEFAULT_HOME_ASSISTANT_CONFIG,
-            integrations["homeAssistant"],
-        )
+    if isinstance(integrations, dict):
+        if isinstance(integrations.get("homeAssistant"), dict):
+            integrations["homeAssistant"] = _merge_missing_defaults(
+                DEFAULT_HOME_ASSISTANT_CONFIG,
+                integrations["homeAssistant"],
+            )
+        family_center = integrations.get("familyCenter")
+        if isinstance(family_center, dict):
+            # Family Center is optional, so do not create an empty integration for
+            # panels that do not use it. Normalize only a section that already
+            # exists and never expose or log the API key.
+            integrations["familyCenter"] = {
+                "url": str(family_center.get("url") or "").strip()[:2048].rstrip("/"),
+                "apiKey": str(family_center.get("apiKey") or "").strip()[:512],
+            }
         migrated["integrations"] = integrations
 
     return migrated
@@ -2586,6 +2600,20 @@ def _write_panel_config_record(config: dict) -> dict:
             incoming_security["settingsCode"] = existing_code
             candidate["security"] = incoming_security
 
+        # The browser backup portal can save Family Center while an already-open
+        # native Settings dialog still holds an older config snapshot. Preserve
+        # the saved integration only when that stale payload omitted the entire
+        # familyCenter section. An explicit section with a blank API key remains
+        # an intentional clear operation.
+        existing_integrations = existing_config.get("integrations") if isinstance(existing_config.get("integrations"), dict) else {}
+        existing_family = existing_integrations.get("familyCenter") if isinstance(existing_integrations.get("familyCenter"), dict) else None
+        incoming_integrations = candidate.get("integrations") if isinstance(candidate.get("integrations"), dict) else None
+        if existing_family is not None and (incoming_integrations is None or "familyCenter" not in incoming_integrations):
+            if incoming_integrations is None:
+                incoming_integrations = {}
+                candidate["integrations"] = incoming_integrations
+            incoming_integrations["familyCenter"] = _deepcopy_json(existing_family)
+
         safe_config = _normalize_panel_config(candidate) or {}
         if existing.get("config") == safe_config and PANEL_CONFIG_FILE.exists():
             return {
@@ -2608,6 +2636,172 @@ def _write_panel_config_record(config: dict) -> dict:
             _atomic_write_json(PANEL_CONFIG_BACKUP_FILE, record)
         return record
 
+
+
+def _normalize_family_center_url(value: object, *, allow_blank: bool = True) -> str:
+    text = str(value or "").strip()
+    if not text:
+        if allow_blank:
+            return ""
+        raise ValueError("Family Center URL is required")
+    if len(text) > 2048:
+        raise ValueError("Family Center URL is too long")
+    parsed = urlparse(text)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("Family Center URL must start with http:// or https:// and include a host")
+    if parsed.username or parsed.password:
+        raise ValueError("Family Center URL cannot contain a username or password")
+    if parsed.query or parsed.fragment:
+        raise ValueError("Family Center URL cannot contain a query string or fragment")
+    clean_path = (parsed.path or "").rstrip("/")
+    return urlunparse((parsed.scheme.lower(), parsed.netloc, clean_path, "", "", "")).rstrip("/")
+
+
+def _normalize_family_center_api_key(value: object, *, allow_blank: bool = True) -> str:
+    text = str(value or "").strip()
+    if not text:
+        if allow_blank:
+            return ""
+        raise ValueError("Family Center API key is required")
+    if len(text) > 512 or any(ch.isspace() for ch in text):
+        raise ValueError("Family Center API key is invalid")
+    if not text.startswith("fcapi_"):
+        raise ValueError("Family Center API key must start with fcapi_")
+    return text
+
+
+def _family_center_config(config: dict | None = None) -> dict:
+    source = config
+    if source is None:
+        record = _read_panel_config_record()
+        source = record.get("config") if isinstance(record, dict) else {}
+    source = source if isinstance(source, dict) else {}
+    integrations = source.get("integrations") if isinstance(source.get("integrations"), dict) else {}
+    raw = integrations.get("familyCenter") if isinstance(integrations.get("familyCenter"), dict) else {}
+    return {
+        "url": str(raw.get("url") or "").strip().rstrip("/"),
+        "apiKey": str(raw.get("apiKey") or "").strip(),
+    }
+
+
+def _family_center_http_json(base_url: str, api_key: str, path: str) -> dict:
+    req = request.Request(
+        base_url.rstrip("/") + path,
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {api_key}",
+            "User-Agent": "IHA-Smart-Thermostat-Family-Center/1.0",
+        },
+        method="GET",
+    )
+    try:
+        with request.urlopen(req, timeout=_FAMILY_CENTER_REQUEST_TIMEOUT_SECONDS) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+    except error.HTTPError as exc:
+        detail = ""
+        try:
+            payload = json.loads(exc.read().decode("utf-8", errors="replace") or "{}")
+            detail = str(payload.get("error") or payload.get("message") or "").strip() if isinstance(payload, dict) else ""
+        except Exception:
+            detail = ""
+        if exc.code in {401, 403}:
+            raise ValueError(detail or "Family Center rejected the API key") from exc
+        if exc.code == 429:
+            raise ValueError(detail or "Family Center API rate limit reached") from exc
+        raise ValueError(detail or f"Family Center returned HTTP {exc.code}") from exc
+    except error.URLError as exc:
+        reason = getattr(exc, "reason", exc)
+        raise ValueError(f"Could not reach Family Center: {reason}") from exc
+    except TimeoutError as exc:
+        raise ValueError("Family Center request timed out") from exc
+    try:
+        payload = json.loads(raw or "{}")
+    except json.JSONDecodeError as exc:
+        raise ValueError("Family Center returned invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Family Center returned an invalid response")
+    if payload.get("ok") is False:
+        raise ValueError(str(payload.get("error") or "Family Center request failed"))
+    return payload
+
+
+def _family_center_available_privileges(kid: dict, privileges: list[dict]) -> list[dict]:
+    active = [item for item in privileges if isinstance(item, dict) and int(item.get("active") or 0) == 1]
+    restriction = kid.get("restriction") if isinstance(kid.get("restriction"), dict) else {}
+    if restriction.get("grounding"):
+        return []
+    cooldown = restriction.get("cooldown") if isinstance(restriction.get("cooldown"), dict) else None
+    if not cooldown:
+        return active
+    # A manual/legacy cooldown has no rule_id and means all privileges are
+    # unavailable. Rule-based cooldowns revoke only the IDs selected by the rule.
+    if not cooldown.get("rule_id"):
+        return []
+    restricted_ids: set[int] = set()
+    for raw_id in cooldown.get("privilege_ids") if isinstance(cooldown.get("privilege_ids"), list) else []:
+        try:
+            restricted_ids.add(int(raw_id))
+        except (TypeError, ValueError):
+            continue
+    return [item for item in active if int(item.get("id") or 0) not in restricted_ids]
+
+
+def _family_center_status_payload(*, force: bool = False) -> dict:
+    global _FAMILY_CENTER_CACHE
+    cfg = _family_center_config()
+    url = cfg.get("url") or ""
+    api_key = cfg.get("apiKey") or ""
+    configured = bool(url and api_key)
+    if not configured:
+        return {"ok": True, "configured": False, "kids": []}
+
+    cache_key = f"{url}|{api_key[:12]}|{len(api_key)}"
+    now = time.monotonic()
+    with _FAMILY_CENTER_CACHE_LOCK:
+        if not force and _FAMILY_CENTER_CACHE is not None:
+            cached_at, cached_key, cached_payload = _FAMILY_CENTER_CACHE
+            if cached_key == cache_key and now - cached_at < _FAMILY_CENTER_CACHE_TTL_SECONDS:
+                return _deepcopy_json(cached_payload)
+
+    try:
+        normalized_url = _normalize_family_center_url(url, allow_blank=False)
+        _normalize_family_center_api_key(api_key, allow_blank=False)
+        kids_payload = _family_center_http_json(normalized_url, api_key, "/api/v1/kids")
+        privileges_payload = _family_center_http_json(normalized_url, api_key, "/api/v1/privileges")
+        privileges = privileges_payload.get("privileges") if isinstance(privileges_payload.get("privileges"), list) else []
+        kids_out: list[dict] = []
+        for kid in kids_payload.get("kids") if isinstance(kids_payload.get("kids"), list) else []:
+            if not isinstance(kid, dict):
+                continue
+            available = _family_center_available_privileges(kid, privileges)
+            clean_privileges = []
+            for item in available:
+                clean_privileges.append({
+                    "id": item.get("id"),
+                    "name": str(item.get("name") or "")[:80],
+                    "emoji": str(item.get("emoji") or "")[:16],
+                    "controlKind": str(item.get("control_kind") or "")[:40],
+                })
+            try:
+                score = int(kid.get("score") or 0)
+            except (TypeError, ValueError):
+                score = 0
+            kids_out.append({
+                "id": kid.get("id"),
+                "name": str(kid.get("display_name") or kid.get("nickname") or kid.get("name") or "Kid")[:80],
+                "score": score,
+                "privileges": clean_privileges,
+            })
+        payload = {"ok": True, "configured": True, "kids": kids_out}
+    except Exception as exc:
+        # Integration failures should never break the thermostat page. Keep the
+        # optional family strip visible (because it is configured) and provide a
+        # compact unavailable state while the next poll retries.
+        payload = {"ok": False, "configured": True, "kids": [], "error": str(exc)[:240]}
+
+    with _FAMILY_CENTER_CACHE_LOCK:
+        _FAMILY_CENTER_CACHE = (now, cache_key, _deepcopy_json(payload))
+    return payload
 
 
 HVAC_HISTORY_RELAYS = ("fan", "heat", "cool")
@@ -3704,6 +3898,7 @@ def _config_settings_current() -> dict:
     config = config if isinstance(config, dict) else {}
     integrations = config.get("integrations") if isinstance(config.get("integrations"), dict) else {}
     ha = integrations.get("homeAssistant") if isinstance(integrations.get("homeAssistant"), dict) else {}
+    family_center = integrations.get("familyCenter") if isinstance(integrations.get("familyCenter"), dict) else {}
     display = config.get("display") if isinstance(config.get("display"), dict) else {}
     alarm = config.get("alarm") if isinstance(config.get("alarm"), dict) else {}
     security = config.get("security") if isinstance(config.get("security"), dict) else {}
@@ -3755,6 +3950,8 @@ def _config_settings_current() -> dict:
         "intimacyHoldTargetTemp": thermostat.get("intimacyHoldTargetTemp", INTIMACY_HOLD_TARGET_F),
         "deviceInternetSwitchIds": _settings_switch_ids(ha.get("deviceInternetSwitchEntitiesV1")),
         "alexaLockoutSwitchIds": _settings_switch_ids(ha.get("alexaLockoutSwitchEntitiesV2")),
+        "familyCenterUrl": str(family_center.get("url") or ""),
+        "familyCenterApiKeyConfigured": bool(str(family_center.get("apiKey") or "").strip()),
         "displaySettings": _settings_display_current(config),
         "temperatureSensors": _temperature_sensor_config(),
         "audioSettings": _settings_audio_current(config),
@@ -4094,6 +4291,11 @@ def _config_settings_save(payload: dict) -> dict:
     display_settings = _settings_display_from_payload(values.get("displaySettings"), current_settings.get("displaySettings") or {})
     temperature_sensors = _normalize_temperature_sensor_config(values.get("temperatureSensors", current_settings.get("temperatureSensors") or {}))
     audio_settings = _settings_audio_from_payload(values.get("audioSettings"), current_settings.get("audioSettings") or {})
+    family_center_url = _normalize_family_center_url(values.get("familyCenterUrl", current_settings.get("familyCenterUrl") or ""))
+    family_center_api_key = str(values.get("familyCenterApiKey") or "").strip()
+    family_center_clear_key = _assistant_bool(values.get("familyCenterClearApiKey"), False)
+    if family_center_api_key:
+        family_center_api_key = _normalize_family_center_api_key(family_center_api_key, allow_blank=False)
 
     integrations = config.setdefault("integrations", {})
     if not isinstance(integrations, dict):
@@ -4103,6 +4305,17 @@ def _config_settings_save(payload: dict) -> dict:
     if not isinstance(ha, dict):
         ha = {}
         integrations["homeAssistant"] = ha
+    family_center = integrations.get("familyCenter")
+    if not isinstance(family_center, dict):
+        family_center = {}
+        integrations["familyCenter"] = family_center
+    family_center["url"] = family_center_url
+    if family_center_clear_key:
+        family_center["apiKey"] = ""
+    elif family_center_api_key:
+        family_center["apiKey"] = family_center_api_key
+    else:
+        family_center["apiKey"] = str(family_center.get("apiKey") or "").strip()[:512]
     alarm = config.setdefault("alarm", {})
     if not isinstance(alarm, dict):
         alarm = {}
@@ -4451,6 +4664,7 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
       <div id="thermostat-sections" class="section-grid">
         <div class="settings-section"><h3>Device Internet</h3><p class="muted">Select the Home Assistant network-access switches controlled by the iPad button. ONLINE = switch ON; OFFLINE = switch OFF.</p><input id="ts-device-search" class="entity-search" type="text" placeholder="Search device name or entity ID"><div id="ts-device-list" class="entity-choice-list"></div></div>
         <div class="settings-section"><h3>Alexa Lockout</h3><p class="muted">Select Alexa switch entities controlled when the thermostat screen locks or unlocks.</p><input id="ts-alexa-search" class="entity-search" type="text" placeholder="Search Alexa device or entity ID"><div id="ts-alexa-list" class="entity-choice-list"></div></div>
+        <div class="settings-section"><h3>Family Center Application</h3><p class="muted">Optional connection to the Family Center kids application. When configured, kid names, points, and available privilege icons appear below Alarmo on the thermostat.</p><div class="form-grid"><div class="field full"><label>Family Center URL</label><input id="ts-family-url" type="text" inputmode="url" placeholder="http://family-center.local:8000"><span class="hint">Enter the base URL only; do not add /api/v1.</span></div><div class="field full"><label>API Key</label><input id="ts-family-key" type="password" autocomplete="new-password" placeholder="fcapi_…"><span id="ts-family-key-status" class="hint">Leave blank to keep the saved key.</span></div><label class="check full"><input id="ts-family-clear-key" type="checkbox"> Clear saved API key</label></div></div>
         <div class="settings-section"><h3>Auto Away / Home</h3><div class="form-grid"><div class="field"><label>Heat Away</label><input id="ts-away-heat" type="number" min="40" max="75" step="1"></div><div class="field"><label>Cool Away</label><input id="ts-away-cool" type="number" min="75" max="100" step="1"></div><div class="field full"><label>Auto Away users</label><select id="ts-auto-away-people" multiple></select><span class="hint">Select one or more people used for automatic Away/Home logic.</span></div></div></div>
         <div class="settings-section"><h3>Range</h3><div class="form-grid"><div class="field"><label>Cool Low</label><input id="ts-cool-min" type="number" min="50" max="90"></div><div class="field"><label>Cool High</label><input id="ts-cool-max" type="number" min="50" max="90"></div><div class="field"><label>Heat Low</label><input id="ts-heat-min" type="number" min="40" max="80"></div><div class="field"><label>Heat High</label><input id="ts-heat-max" type="number" min="40" max="85"></div></div></div>
         <div class="settings-section"><h3>Safety / Mode Switches</h3><div class="form-grid"><div class="field"><label>Low Safety</label><input id="ts-safety-low" type="number" min="40" max="75"></div><div class="field"><label>High Safety</label><input id="ts-safety-high" type="number" min="75" max="100"></div><div class="field"><label>Cool Mode Switch</label><input id="ts-cool-switch" type="number" min="40" max="100"></div><div class="field"><label>Heat Mode Switch</label><input id="ts-heat-switch" type="number" min="40" max="100"></div></div><div class="checks"><label class="check"><input id="ts-heat-lock" type="checkbox">Heat lockout</label><label class="check"><input id="ts-cool-lock" type="checkbox">Cool lockout</label></div></div>
@@ -4577,6 +4791,7 @@ function setThermostatForm(s,e,telemetry) {{
   qs('ts-cool-min').value=s.coolMin; qs('ts-cool-max').value=s.coolMax; qs('ts-heat-min').value=s.heatMin; qs('ts-heat-max').value=s.heatMax; qs('ts-safety-low').value=s.safetyLow; qs('ts-safety-high').value=s.safetyHigh; qs('ts-cool-switch').value=s.autoCoolOutdoorTarget; qs('ts-heat-switch').value=s.autoHeatOutdoorTarget; qs('ts-heat-lock').checked=!!s.heatLocked; qs('ts-cool-lock').checked=!!s.coolLocked;
   qs('ts-auto-delay').value=s.autoChangeoverHours; qs('ts-manual-delay').value=s.manualChangeoverMinutes; qs('ts-cool-fan').value=s.coolFanRemainOnMinutes; qs('ts-differential').value=s.temperatureDifferential; qs('ts-heat-runtime').value=s.heatMinimumRuntimeMinutes; qs('ts-cool-runtime').value=s.coolMinimumRuntimeMinutes;
   qs('ts-room-mode').value=s.roomTempControlMode||'internal'; qs('ts-heat-mode').value=s.heatControlMode||'internal'; qs('ts-cool-mode').value=s.coolControlMode||'internal'; qs('ts-fan-mode').value=s.fanControlMode||'internal'; qs('ts-room-entity').value=s.currentTempEntityId||''; qs('ts-heat-entity').value=s.externalHeatEntityId||''; qs('ts-cool-entity').value=s.externalCoolEntityId||''; qs('ts-fan-entity').value=s.externalFanEntityId||''; qs('ts-outdoor-entity').value=s.outdoorTempEntityId||''; qs('ts-door-entity').value=s.doorEntityId||''; qs('ts-door-delay').value=s.doorPauseDurationMinutes; qs('ts-disarm-code').value=s.disarmCode||''; qs('ts-settings-code').value=s.settingsCode||'';
+  qs('ts-family-url').value=s.familyCenterUrl||''; qs('ts-family-key').value=''; qs('ts-family-clear-key').checked=false; qs('ts-family-key-status').textContent=s.familyCenterApiKeyConfigured?'API key is saved. Leave this blank to keep it.':'No API key is saved yet.';
   fillDatalist('temperature-entities',e.temperature||[]); fillDatalist('outdoor-entities',e.outdoor||[]); fillDatalist('air-control-entities',e.airControls||[]); fillDatalist('door-entities',e.doors||[]); fillMulti('ts-auto-away-people',e.people||[],s.autoAwayPersonIds); fillMulti('ts-tracked-people',e.people||[],s.trackedPersonIds); fillMulti('ts-sync',e.syncThermostats||[],s.syncThermostatIds); fillHouseSync(e.syncThermostats||[]);
   window.deviceSelected=s.deviceInternetSwitchIds||[];window.alexaSelected=s.alexaLockoutSwitchIds||[];renderChecklist('ts-device-list',e.switches||[],window.deviceSelected,value('ts-device-search'));renderChecklist('ts-alexa-list',e.switches||[],window.alexaSelected,value('ts-alexa-search'),true);
   const sensor=s.temperatureSensors||{{}};qs('ts-sensor-primary').value=String(sensor.primarySensor||2);qs('ts-sensor1-offset').value=sensor.sensor1OffsetF;qs('ts-sensor2-offset').value=sensor.sensor2OffsetF;qs('ts-sensor-delta').value=sensor.maxDisagreementF;qs('ts-sensor-jump').value=sensor.maxJumpF;renderSensorTelemetry(telemetry||{{}});
@@ -4584,7 +4799,7 @@ function setThermostatForm(s,e,telemetry) {{
   setAudioForm(s.audioSettings||{{}});
 }}
 async function loadThermostatSettings() {{ try{{setBox(qs('ts-status'),'Loading current thermostat settings...','muted');setBox(qs('audio-status'),'Loading Audio Settings...','muted'); const response=await fetch('/api/settings/web'); const data=await response.json().catch(()=>({{}})); if(!response.ok||!data.ok)throw new Error(data.error||'Could not load settings.'); window.lastThermostatEntities=data.entities||{{}}; setThermostatForm(data.settings||{{}},window.lastThermostatEntities,data.temperatureTelemetry||{{}}); window.thermostatSettingsLoaded=true; const warning=(data.warnings||[]).join('\\n'); const msg=warning||'Current values loaded. Changes are not applied until Save is pressed.';setBox(qs('ts-status'),msg,warning?'muted':'ok');setBox(qs('audio-status'),msg,warning?'muted':'ok');}}catch(err){{setBox(qs('ts-status'),err.message||String(err),'bad');setBox(qs('audio-status'),err.message||String(err),'bad');}} }}
-function thermostatPayload() {{ return {{settings:{{ name:value('ts-name').trim(),fan:value('ts-fan'),screenOrientation:value('ts-orientation'),awayHeat:numberValue('ts-away-heat'),awayCool:numberValue('ts-away-cool'),intimacyHoldTargetTemp:numberValue('ts-intimacy-temp'),autoAwayPersonIds:selectedValues('ts-auto-away-people'),coolMin:numberValue('ts-cool-min'),coolMax:numberValue('ts-cool-max'),heatMin:numberValue('ts-heat-min'),heatMax:numberValue('ts-heat-max'),safetyLow:numberValue('ts-safety-low'),safetyHigh:numberValue('ts-safety-high'),autoCoolOutdoorTarget:numberValue('ts-cool-switch'),autoHeatOutdoorTarget:numberValue('ts-heat-switch'),heatLocked:qs('ts-heat-lock').checked,coolLocked:qs('ts-cool-lock').checked,autoChangeoverHours:numberValue('ts-auto-delay'),manualChangeoverMinutes:numberValue('ts-manual-delay'),coolFanRemainOnMinutes:numberValue('ts-cool-fan'),temperatureDifferential:numberValue('ts-differential'),heatMinimumRuntimeMinutes:numberValue('ts-heat-runtime'),coolMinimumRuntimeMinutes:numberValue('ts-cool-runtime'),roomTempControlMode:value('ts-room-mode'),heatControlMode:value('ts-heat-mode'),coolControlMode:value('ts-cool-mode'),fanControlMode:value('ts-fan-mode'),currentTempEntityId:value('ts-room-entity').trim(),externalHeatEntityId:value('ts-heat-entity').trim(),externalCoolEntityId:value('ts-cool-entity').trim(),externalFanEntityId:value('ts-fan-entity').trim(),outdoorTempEntityId:value('ts-outdoor-entity').trim(),syncThermostatIds:selectedValues('ts-sync'),trackedPersonIds:selectedValues('ts-tracked-people'),doorEntityId:value('ts-door-entity').trim(),doorPauseDurationMinutes:numberValue('ts-door-delay'),deviceInternetSwitchIds:window.deviceSelected||[],alexaLockoutSwitchIds:window.alexaSelected||[],temperatureSensors:{{primarySensor:Number(value('ts-sensor-primary')),sensor1OffsetF:numberValue('ts-sensor1-offset'),sensor2OffsetF:numberValue('ts-sensor2-offset'),maxDisagreementF:numberValue('ts-sensor-delta'),maxJumpF:numberValue('ts-sensor-jump')}},displaySettings:{{inactivityAutoOffEnabled:qs('ts-screen-inactivity').checked,inactivityAutoOffMinutes:numberValue('ts-screen-inactivity-min'),motionAutoSleepEnabled:qs('ts-screen-motion-sleep').checked,motionAutoSleepMinutes:numberValue('ts-screen-motion-sleep-min'),motionAutoWakeEnabled:qs('ts-screen-motion-wake').checked,timeoutAdjustmentStepMinutes:Number(value('ts-screen-step')),brightnessNormalPercent:numberValue('ts-brightness-normal'),brightnessTimeEnabled:qs('ts-brightness-time-enabled').checked,brightnessTimeStart:value('ts-brightness-start'),brightnessTimeEnd:value('ts-brightness-end'),brightnessTimePercent:numberValue('ts-brightness-time-percent'),brightnessEntityRules:window.brightnessRules}},audioSettings:readAudioSettings(),disarmCode:value('ts-disarm-code').trim(),settingsCode:value('ts-settings-code').trim()}} }}; }}
+function thermostatPayload() {{ return {{settings:{{ name:value('ts-name').trim(),fan:value('ts-fan'),screenOrientation:value('ts-orientation'),awayHeat:numberValue('ts-away-heat'),awayCool:numberValue('ts-away-cool'),intimacyHoldTargetTemp:numberValue('ts-intimacy-temp'),autoAwayPersonIds:selectedValues('ts-auto-away-people'),coolMin:numberValue('ts-cool-min'),coolMax:numberValue('ts-cool-max'),heatMin:numberValue('ts-heat-min'),heatMax:numberValue('ts-heat-max'),safetyLow:numberValue('ts-safety-low'),safetyHigh:numberValue('ts-safety-high'),autoCoolOutdoorTarget:numberValue('ts-cool-switch'),autoHeatOutdoorTarget:numberValue('ts-heat-switch'),heatLocked:qs('ts-heat-lock').checked,coolLocked:qs('ts-cool-lock').checked,autoChangeoverHours:numberValue('ts-auto-delay'),manualChangeoverMinutes:numberValue('ts-manual-delay'),coolFanRemainOnMinutes:numberValue('ts-cool-fan'),temperatureDifferential:numberValue('ts-differential'),heatMinimumRuntimeMinutes:numberValue('ts-heat-runtime'),coolMinimumRuntimeMinutes:numberValue('ts-cool-runtime'),roomTempControlMode:value('ts-room-mode'),heatControlMode:value('ts-heat-mode'),coolControlMode:value('ts-cool-mode'),fanControlMode:value('ts-fan-mode'),currentTempEntityId:value('ts-room-entity').trim(),externalHeatEntityId:value('ts-heat-entity').trim(),externalCoolEntityId:value('ts-cool-entity').trim(),externalFanEntityId:value('ts-fan-entity').trim(),outdoorTempEntityId:value('ts-outdoor-entity').trim(),syncThermostatIds:selectedValues('ts-sync'),trackedPersonIds:selectedValues('ts-tracked-people'),doorEntityId:value('ts-door-entity').trim(),doorPauseDurationMinutes:numberValue('ts-door-delay'),deviceInternetSwitchIds:window.deviceSelected||[],alexaLockoutSwitchIds:window.alexaSelected||[],familyCenterUrl:value('ts-family-url').trim(),familyCenterApiKey:value('ts-family-key').trim(),familyCenterClearApiKey:qs('ts-family-clear-key').checked,temperatureSensors:{{primarySensor:Number(value('ts-sensor-primary')),sensor1OffsetF:numberValue('ts-sensor1-offset'),sensor2OffsetF:numberValue('ts-sensor2-offset'),maxDisagreementF:numberValue('ts-sensor-delta'),maxJumpF:numberValue('ts-sensor-jump')}},displaySettings:{{inactivityAutoOffEnabled:qs('ts-screen-inactivity').checked,inactivityAutoOffMinutes:numberValue('ts-screen-inactivity-min'),motionAutoSleepEnabled:qs('ts-screen-motion-sleep').checked,motionAutoSleepMinutes:numberValue('ts-screen-motion-sleep-min'),motionAutoWakeEnabled:qs('ts-screen-motion-wake').checked,timeoutAdjustmentStepMinutes:Number(value('ts-screen-step')),brightnessNormalPercent:numberValue('ts-brightness-normal'),brightnessTimeEnabled:qs('ts-brightness-time-enabled').checked,brightnessTimeStart:value('ts-brightness-start'),brightnessTimeEnd:value('ts-brightness-end'),brightnessTimePercent:numberValue('ts-brightness-time-percent'),brightnessEntityRules:window.brightnessRules}},audioSettings:readAudioSettings(),disarmCode:value('ts-disarm-code').trim(),settingsCode:value('ts-settings-code').trim()}} }}; }}
 async function saveAllSettings(source) {{ const button=qs(source==='audio'?'audio-save':'ts-save');const other=qs(source==='audio'?'ts-save':'audio-save');try{{button.disabled=true;other.disabled=true;setBox(qs('ts-status'),'Validating and saving thermostat, screen, sensor and audio settings...','muted');setBox(qs('audio-status'),'Validating and saving Audio Settings...','muted');const response=await fetch('/api/settings/web',{{method:'POST',headers:{{'Accept':'application/json','Content-Type':'application/json'}},body:JSON.stringify(thermostatPayload())}});const data=await response.json().catch(()=>({{}}));if(!response.ok||!data.ok)throw new Error(data.error||'Could not save settings.');if(data.settings)setThermostatForm(data.settings,window.lastThermostatEntities||{{}},data.temperatureTelemetry||{{}});const warning=(data.warnings||[]).join('\\n');const msg=(data.message||'Settings saved.')+(warning?'\\n'+warning:'');setBox(qs('ts-status'),msg,warning?'muted':'ok');setBox(qs('audio-status'),msg,warning?'muted':'ok');}}catch(err){{setBox(qs('ts-status'),err.message||String(err),'bad');setBox(qs('audio-status'),err.message||String(err),'bad');}}finally{{button.disabled=false;other.disabled=false;}} }}
 qs('ts-save').addEventListener('click',()=>saveAllSettings('thermostat'));qs('audio-save').addEventListener('click',()=>saveAllSettings('audio'));
 qs('ts-reload').addEventListener('click',()=>{{window.thermostatSettingsLoaded=false;loadThermostatSettings();}});qs('audio-reload').addEventListener('click',()=>{{window.thermostatSettingsLoaded=false;loadThermostatSettings();}});
@@ -15543,6 +15758,11 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
             if not _request_client_is_private_network(self):
                 return _json(self, 403, {"ok": False, "error": "Device Internet configuration is available only on the local network."})
             return _json(self, 200, _device_internet_config_payload())
+        if path == "/api/family-center/status":
+            if not _request_client_is_loopback(self):
+                return _json(self, 403, {"ok": False, "error": "Family Center status is local-only."})
+            refresh = str((query.get("refresh") or [""])[0]).strip().lower() in {"1", "true", "yes", "on"}
+            return _json(self, 200, _family_center_status_payload(force=refresh))
         if path == "/api/thermostat/status":
             return _json(self, 200, _thermostat_status_payload(refresh_runtime=False, apply_hardware=False))
         if path == "/api/sync/status":
