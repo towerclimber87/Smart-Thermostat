@@ -4771,6 +4771,14 @@ def _family_privilege_kind(privilege: dict) -> str:
     return "star"
 
 
+def _family_center_display_scale_percent(value: object, default: int = 100) -> int:
+    try:
+        number = int(round(float(value)))
+    except (TypeError, ValueError):
+        number = int(default)
+    return max(75, min(150, number))
+
+
 class FamilyCenterStatusPanel(QWidget):
     """Mirror-style kid/points/privilege strip shown only when configured."""
     def __init__(self, parent=None):
@@ -4779,10 +4787,18 @@ class FamilyCenterStatusPanel(QWidget):
         self._error = ""
         self._configured = False
         self._signature = ""
+        self._display_scale_percent = 100
         self.setFixedSize(226, 54)
         self.setAttribute(Qt.WA_StyledBackground, False)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.hide()
+
+    def set_display_scale(self, percent: object):
+        value = _family_center_display_scale_percent(percent)
+        if value == self._display_scale_percent:
+            return
+        self._display_scale_percent = value
+        self.update()
 
     def set_data(self, kids: list[dict] | None, *, configured: bool, error: str = ""):
         clean = [item for item in (kids or []) if isinstance(item, dict)][:4]
@@ -4815,8 +4831,8 @@ class FamilyCenterStatusPanel(QWidget):
         p.save()
         p.setRenderHint(QPainter.Antialiasing, True)
         p.setBrush(Qt.NoBrush)
-        p.setPen(QPen(QColor(218, 241, 255, 235), 1.25, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
         x, y, w, h = rect.x(), rect.y(), rect.width(), rect.height()
+        p.setPen(QPen(QColor(218, 241, 255, 235), max(0.9, min(2.0, w / 12.0)), Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
         cx, cy = x + w / 2.0, y + h / 2.0
         if kind == "tablet":
             p.drawRoundedRect(QRectF(x + w*.26, y + h*.08, w*.48, h*.84), 2, 2)
@@ -4867,17 +4883,20 @@ class FamilyCenterStatusPanel(QWidget):
         p.setBrush(Qt.NoBrush)
         p.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 10, 10)
 
+        scale = float(self._display_scale_percent) / 100.0
         if self._error:
-            p.setPen(QColor("#f0c4a8")); p.setFont(font(7, QFont.Black)); p.drawText(self.rect().adjusted(6,0,-6,0), Qt.AlignCenter, "FAMILY CENTER UNAVAILABLE")
+            p.setPen(QColor("#f0c4a8")); p.setFont(font(max(5, int(round(7 * scale))), QFont.Black)); p.drawText(self.rect().adjusted(6,0,-6,0), Qt.AlignCenter, "FAMILY CENTER UNAVAILABLE")
             return
         if not self._kids:
-            p.setPen(QColor("#aebbd0")); p.setFont(font(7, QFont.Black)); p.drawText(self.rect().adjusted(6,0,-6,0), Qt.AlignCenter, "NO FAMILY PROFILES")
+            p.setPen(QColor("#aebbd0")); p.setFont(font(max(5, int(round(7 * scale))), QFont.Black)); p.drawText(self.rect().adjusted(6,0,-6,0), Qt.AlignCenter, "NO FAMILY PROFILES")
             return
 
         row_count = max(1, len(self._kids))
         row_h = self.height() / float(row_count)
-        name_font = font(7 if row_count <= 3 else 6, QFont.Black)
-        point_font = font(6 if row_count <= 3 else 5, QFont.Black)
+        name_base = 7 if row_count <= 3 else 6
+        point_base = 6 if row_count <= 3 else 5
+        name_font = font(max(5, int(round(name_base * scale))), QFont.Black)
+        point_font = font(max(4, int(round(point_base * scale))), QFont.Black)
         for idx, kid in enumerate(self._kids):
             y = idx * row_h
             if idx:
@@ -4888,7 +4907,7 @@ class FamilyCenterStatusPanel(QWidget):
             p.setPen(QColor("#f3f8ff")); p.setFont(name_font); p.drawText(QRectF(6,y,70,row_h), Qt.AlignVCenter|Qt.AlignLeft, name)
             p.setPen(QColor("#70eaff")); p.setFont(point_font); p.drawText(QRectF(76,y,43,row_h), Qt.AlignVCenter|Qt.AlignLeft, f"{score} pts")
             privileges = [x for x in (kid.get("privileges") or []) if isinstance(x, dict)]
-            icon_size = max(10.0, min(15.0, row_h - 2.0))
+            icon_size = max(8.0, min(15.0 * scale, row_h - 1.0))
             x = 120.0
             for privilege in privileges[:6]:
                 if x + icon_size > self.width() - 3:
@@ -7554,10 +7573,12 @@ class ThermostatScreen(Page):
         return {
             "url": str(raw.get("url") or "").strip(),
             "apiKey": str(raw.get("apiKey") or "").strip(),
+            "displayScalePercent": _family_center_display_scale_percent(raw.get("displayScalePercent", 100)),
         }
 
     def refresh_family_center(self, *, force: bool = False):
         cfg = self.family_center_config()
+        self.family_center_panel.set_display_scale(cfg.get("displayScalePercent", 100))
         configured = bool(cfg.get("url") and cfg.get("apiKey"))
         if not configured:
             self._family_center_config_signature = ""
@@ -15255,7 +15276,7 @@ class SettingsDialog(QDialog):
         if not isinstance(family, dict):
             if not create:
                 return {}
-            family = {"url": "", "apiKey": ""}
+            family = {"url": "", "apiKey": "", "displayScalePercent": 100}
             integrations["familyCenter"] = family
         return family
 
@@ -15265,6 +15286,26 @@ class SettingsDialog(QDialog):
 
     def family_center_key_text(self) -> str:
         return "Configured" if str(self.family_center_config(False).get("apiKey") or "").strip() else "Not configured"
+
+    def family_center_display_scale_percent(self) -> int:
+        return _family_center_display_scale_percent(self.family_center_config(False).get("displayScalePercent", 100))
+
+    def family_center_display_scale_text(self) -> str:
+        return f"{self.family_center_display_scale_percent()}%"
+
+    def adjust_family_center_display_scale(self, delta: int):
+        value = _family_center_display_scale_percent(self.family_center_display_scale_percent() + int(delta))
+        family = self.family_center_config(True)
+        if _family_center_display_scale_percent(family.get("displayScalePercent", 100)) == value:
+            return
+        family["displayScalePercent"] = value
+        self.mark_family_center_dirty()
+        self.refresh_family_center_settings_labels()
+        top = self.window()
+        thermostat_page = getattr(top, "thermostat", None) if top is not None else None
+        panel = getattr(thermostat_page, "family_center_panel", None) if thermostat_page is not None else None
+        if panel is not None:
+            panel.set_display_scale(value)
 
     def mark_family_center_dirty(self):
         self._family_center_dirty = True
@@ -15276,6 +15317,8 @@ class SettingsDialog(QDialog):
             self.family_center_url_label.setText(self.family_center_url_text())
         if hasattr(self, "family_center_key_label"):
             self.family_center_key_label.setText(self.family_center_key_text())
+        if hasattr(self, "family_center_display_scale_label"):
+            self.family_center_display_scale_label.setText(self.family_center_display_scale_text())
 
     def edit_family_center_url(self):
         current = str(self.family_center_config(False).get("url") or "").strip()
@@ -17838,6 +17881,15 @@ class SettingsDialog(QDialog):
         clear_key = RoundButton("Clear Key", active=False, kind="danger", min_h=34); clear_key.setMinimumWidth(116); clear_key.clicked.connect(self.clear_family_center_api_key)
         key_buttons.addWidget(set_key); key_buttons.addWidget(clear_key)
         family_grid.addWidget(key_title, 2, 0); family_grid.addWidget(self.family_center_key_label, 3, 0); family_grid.addLayout(key_buttons, 3, 1)
+        size_title = QLabel("Text & Icon Size")
+        size_title.setFont(font(8, QFont.Black)); size_title.setStyleSheet("color:#e8f2ff; background:transparent; border:0;")
+        size_controls = QHBoxLayout(); size_controls.setSpacing(7)
+        size_minus = RoundButton("−", min_h=34); size_minus.setFixedSize(40, 34); size_minus.clicked.connect(lambda: self.adjust_family_center_display_scale(-5))
+        self.family_center_display_scale_label = QLabel(self.family_center_display_scale_text())
+        self.family_center_display_scale_label.setAlignment(Qt.AlignCenter); self.family_center_display_scale_label.setMinimumWidth(62); self.family_center_display_scale_label.setFont(font(10, QFont.Black)); self.family_center_display_scale_label.setStyleSheet("color:#ffffff; background:rgba(5,10,20,0.42); border:1px solid rgba(160,180,210,0.26); border-radius:8px; padding:6px;")
+        size_plus = RoundButton("+", min_h=34); size_plus.setFixedSize(40, 34); size_plus.clicked.connect(lambda: self.adjust_family_center_display_scale(5))
+        size_controls.addWidget(size_minus); size_controls.addWidget(self.family_center_display_scale_label); size_controls.addWidget(size_plus); size_controls.addStretch(1)
+        family_grid.addWidget(size_title, 4, 0); family_grid.addLayout(size_controls, 5, 0, 1, 2)
         family_section.layout().addLayout(family_grid)
         family_save_note = QLabel("The saved API key is never shown again. Use the browser Backup portal if you prefer to paste the URL and key from a computer.")
         family_save_note.setWordWrap(True); family_save_note.setFont(font(7, QFont.Black)); family_save_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
