@@ -5262,12 +5262,20 @@ class ThermostatScreen(Page):
         self.schedule_shortcuts_lay.setSpacing(9)
         self.schedule_shortcuts.setWidget(self.schedule_shortcuts_content)
         self.schedule_shortcuts.hide()
-        # Schedule hotkeys live in the spacer band directly above Off/Cool/Heat/Away.
-        # Family Center is intentionally NOT a grid item. It floats beneath
-        # Alarmo so changing its content width can extend leftward without
-        # resizing the Alarmo grid column or shifting the dial/primary controls.
-        mid.addWidget(self.schedule_shortcuts, 2, 0, 1, 4, Qt.AlignBottom)
-        self.family_center_panel.setParent(self.controls_band)
+        # Keep optional content inside one layout-managed spacer row. Schedule
+        # shortcuts stay on the left while Family Center stays right-aligned.
+        # Because the wrapper spans the full grid, Family Center can widen to
+        # the left (or grow taller for larger text) without changing the main
+        # control columns and without floating over the mode/fan buttons.
+        self.optional_status_row = QWidget()
+        self.optional_status_row.setStyleSheet("background:transparent; border:0;")
+        optional_status_lay = QHBoxLayout(self.optional_status_row)
+        optional_status_lay.setContentsMargins(0, 0, 0, 0)
+        optional_status_lay.setSpacing(12)
+        optional_status_lay.addWidget(self.schedule_shortcuts, 1, Qt.AlignLeft | Qt.AlignTop)
+        optional_status_lay.addStretch(1)
+        optional_status_lay.addWidget(self.family_center_panel, 0, Qt.AlignRight | Qt.AlignTop)
+        mid.addWidget(self.optional_status_row, 2, 0, 1, 5, Qt.AlignTop)
 
         mode_wrap = QWidget()
         mode_lay = QHBoxLayout(mode_wrap)
@@ -5557,60 +5565,8 @@ class ThermostatScreen(Page):
         self.position_notice_action_popup()
 
     def position_family_center_panel(self):
-        """Right-anchor Family Center below Alarmo with stable geometry.
-
-        The card owns its content-driven width/height. This method only moves
-        it, so longer names, larger text, or additional icons expand the left
-        edge without feeding a resize back into Qt's layout engine.
-        """
-        panel = getattr(self, "family_center_panel", None)
-        alarm = getattr(self, "alarm_card", None)
-        band = getattr(self, "controls_band", None)
-        if panel is None or alarm is None or band is None:
-            return
-        try:
-            alarm_pos = alarm.mapTo(band, QPoint(0, 0))
-            right_edge = alarm_pos.x() + alarm.width()
-
-            # Keep Alarmo's right edge fixed. The Family Center card consumes
-            # only the width its rendered content needs and grows to the left.
-            x = max(8, right_edge - panel.width())
-
-            # Use the same spacer row that originally held Family Center, but
-            # lift it slightly so it stays clear of the bottom Sleep button.
-            desired_y = alarm_pos.y() + alarm.height() + 4
-            grid = getattr(self, "controls_grid", None)
-            if grid is not None:
-                try:
-                    family_cell = grid.cellRect(2, 4)
-                    if family_cell.isValid():
-                        desired_y = family_cell.top() - 12
-                except Exception:
-                    pass
-
-            y = desired_y
-            window = self.window()
-            sleep_button = getattr(window, "sleep_button", None)
-            if sleep_button is not None and sleep_button.isVisible():
-                try:
-                    # sleep_button is not a child of controls_band. Converting
-                    # through global coordinates is safe; mapTo(band, ...) is
-                    # undefined for unrelated widget branches in Qt.
-                    sleep_global = sleep_button.mapToGlobal(QPoint(0, 0))
-                    sleep_pos = band.mapFromGlobal(sleep_global)
-                    safe_bottom = sleep_pos.y() - 10
-                    y = min(y, safe_bottom - panel.height())
-                except Exception:
-                    pass
-
-            y = max(0, y)
-            target = QPoint(int(x), int(y))
-            if panel.pos() != target:
-                panel.move(target)
-            if panel.isVisible():
-                panel.raise_()
-        except Exception:
-            pass
+        """Family Center is layout-managed; retained for existing refresh callers."""
+        return
 
     def position_main_controls(self):
         """Center the five primary thermostat controls on one horizontal line."""
@@ -5631,9 +5587,6 @@ class ThermostatScreen(Page):
 
         self.controls_band.setGeometry(0, y, w, band_h)
         self.controls_band.raise_()
-        # Family Center is a floating child of controls_band. Position it
-        # directly; do not enqueue layout callbacks on every status refresh.
-        self.position_family_center_panel()
 
         # Temporary alert controls stay outside the grid so they do not push
         # the Doors card around.  The compact notice is explicitly positioned
