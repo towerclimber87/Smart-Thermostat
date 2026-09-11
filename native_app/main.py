@@ -108,7 +108,7 @@ def install_crash_logging():
 
 
 from PyQt5.QtCore import QEvent, QEasingCurve, QPoint, QPointF, QPropertyAnimation, QRectF, QSize, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QCursor, QFont, QIcon, QImage, QPainter, QPen, QBrush, QLinearGradient, QPainterPath, QRadialGradient, QPixmap
+from PyQt5.QtGui import QColor, QCursor, QFont, QFontMetrics, QIcon, QImage, QPainter, QPen, QBrush, QLinearGradient, QPainterPath, QRadialGradient, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
     QAbstractButton,
@@ -4780,7 +4780,17 @@ def _family_center_display_scale_percent(value: object, default: int = 100) -> i
 
 
 class FamilyCenterStatusPanel(QWidget):
-    """Mirror-style kid/points/privilege strip shown only when configured."""
+    """Mirror-style kid/points/privilege strip shown only when configured.
+
+    The panel keeps the original 226px compact footprint while the content fits,
+    then grows only when a longer name, larger display scale, or more privilege
+    icons actually require it. ThermostatScreen anchors the right edge beneath
+    Alarmo so any extra width expands toward the left instead of moving Alarmo.
+    """
+    COMPACT_WIDTH = 226
+    COMPACT_HEIGHT = 54
+    MAX_WIDTH = 680
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._kids: list[dict] = []
@@ -4788,16 +4798,84 @@ class FamilyCenterStatusPanel(QWidget):
         self._configured = False
         self._signature = ""
         self._display_scale_percent = 100
-        self.setFixedSize(226, 54)
+        self.setFixedSize(self.COMPACT_WIDTH, self.COMPACT_HEIGHT)
         self.setAttribute(Qt.WA_StyledBackground, False)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.hide()
+
+    def _scaled_fonts(self, row_count: int):
+        scale = float(self._display_scale_percent) / 100.0
+        name_base = 7 if row_count <= 3 else 6
+        point_base = 6 if row_count <= 3 else 5
+        return (
+            scale,
+            font(max(5, int(round(name_base * scale))), QFont.Black),
+            font(max(4, int(round(point_base * scale))), QFont.Black),
+        )
+
+    def _content_size(self) -> tuple[int, int]:
+        scale = float(self._display_scale_percent) / 100.0
+        if self._error:
+            msg_font = font(max(5, int(round(7 * scale))), QFont.Black)
+            width = QFontMetrics(msg_font).horizontalAdvance("FAMILY CENTER UNAVAILABLE") + 18
+            return max(self.COMPACT_WIDTH, min(self.MAX_WIDTH, width)), self.COMPACT_HEIGHT
+        if not self._kids:
+            msg_font = font(max(5, int(round(7 * scale))), QFont.Black)
+            width = QFontMetrics(msg_font).horizontalAdvance("NO FAMILY PROFILES") + 18
+            return max(self.COMPACT_WIDTH, min(self.MAX_WIDTH, width)), self.COMPACT_HEIGHT
+
+        row_count = max(1, len(self._kids))
+        scale, name_font, point_font = self._scaled_fonts(row_count)
+        name_metrics = QFontMetrics(name_font)
+        point_metrics = QFontMetrics(point_font)
+        gap = max(5, int(round(6 * scale)))
+        icon_gap = max(2, int(round(2 * scale)))
+        icon_size = max(8, int(round(15 * scale)))
+        widest = self.COMPACT_WIDTH
+
+        for kid in self._kids:
+            name = str(kid.get("name") or "Kid").strip() or "Kid"
+            try:
+                score = int(kid.get("score") or 0)
+            except (TypeError, ValueError):
+                score = 0
+            point_text = f"{score} pts"
+            privileges = [x for x in (kid.get("privileges") or []) if isinstance(x, dict)]
+            icons_width = 0
+            if privileges:
+                icons_width = len(privileges) * icon_size + max(0, len(privileges) - 1) * icon_gap
+            required = (
+                8
+                + name_metrics.horizontalAdvance(name)
+                + gap
+                + point_metrics.horizontalAdvance(point_text)
+                + (gap + icons_width if icons_width else 0)
+                + 8
+            )
+            widest = max(widest, required)
+
+        # Let larger text/icons create taller rows instead of being squeezed or
+        # painted over each other. At 100% the usual 1-3 child layout remains
+        # the same compact 54px height.
+        content_h = max(name_metrics.height(), point_metrics.height(), icon_size) + max(2, int(round(2 * scale)))
+        height = max(self.COMPACT_HEIGHT, int(math.ceil(content_h * row_count)))
+        return max(self.COMPACT_WIDTH, min(self.MAX_WIDTH, int(math.ceil(widest)))), height
+
+    def _refresh_size(self):
+        width, height = self._content_size()
+        if self.width() == width and self.height() == height:
+            return
+        self.setFixedSize(width, height)
+        owner = self.parentWidget().parentWidget() if self.parentWidget() is not None else None
+        if owner is not None and hasattr(owner, "position_family_center_panel"):
+            QTimer.singleShot(0, owner.position_family_center_panel)
 
     def set_display_scale(self, percent: object):
         value = _family_center_display_scale_percent(percent)
         if value == self._display_scale_percent:
             return
         self._display_scale_percent = value
+        self._refresh_size()
         self.update()
 
     def set_data(self, kids: list[dict] | None, *, configured: bool, error: str = ""):
@@ -4805,6 +4883,7 @@ class FamilyCenterStatusPanel(QWidget):
         signature = repr((configured, error, clean))
         if signature == self._signature:
             self.setVisible(bool(configured))
+            self._refresh_size()
             return
         self._signature = signature
         self._configured = bool(configured)
@@ -4815,6 +4894,7 @@ class FamilyCenterStatusPanel(QWidget):
         else:
             names = ", ".join(str(k.get("name") or "Kid") for k in clean)
             self.setToolTip(f"Family Center: {names}" if names else "Family Center")
+        self._refresh_size()
         self.setVisible(self._configured)
         self.update()
 
@@ -4823,6 +4903,7 @@ class FamilyCenterStatusPanel(QWidget):
         self._configured = False
         self._kids = []
         self._error = ""
+        self.setFixedSize(self.COMPACT_WIDTH, self.COMPACT_HEIGHT)
         self.hide()
         self.update()
 
@@ -4893,27 +4974,44 @@ class FamilyCenterStatusPanel(QWidget):
 
         row_count = max(1, len(self._kids))
         row_h = self.height() / float(row_count)
-        name_base = 7 if row_count <= 3 else 6
-        point_base = 6 if row_count <= 3 else 5
-        name_font = font(max(5, int(round(name_base * scale))), QFont.Black)
-        point_font = font(max(4, int(round(point_base * scale))), QFont.Black)
+        scale, name_font, point_font = self._scaled_fonts(row_count)
+        name_metrics = QFontMetrics(name_font)
+        point_metrics = QFontMetrics(point_font)
+        gap = max(5.0, round(6.0 * scale))
+        icon_gap = max(2.0, round(2.0 * scale))
+        desired_icon_size = max(8.0, 15.0 * scale)
+        icon_size = max(8.0, min(desired_icon_size, row_h - 2.0))
         for idx, kid in enumerate(self._kids):
             y = idx * row_h
             if idx:
                 p.setPen(QPen(QColor(255,255,255,25), 1)); p.drawLine(QPointF(5,y), QPointF(self.width()-5,y))
-            name = compact_name(str(kid.get("name") or "Kid"), 11)
+            name = str(kid.get("name") or "Kid").strip() or "Kid"
             try: score = int(kid.get("score") or 0)
             except (TypeError, ValueError): score = 0
-            p.setPen(QColor("#f3f8ff")); p.setFont(name_font); p.drawText(QRectF(6,y,70,row_h), Qt.AlignVCenter|Qt.AlignLeft, name)
-            p.setPen(QColor("#70eaff")); p.setFont(point_font); p.drawText(QRectF(76,y,43,row_h), Qt.AlignVCenter|Qt.AlignLeft, f"{score} pts")
-            privileges = [x for x in (kid.get("privileges") or []) if isinstance(x, dict)]
-            icon_size = max(8.0, min(15.0 * scale, row_h - 1.0))
-            x = 120.0
-            for privilege in privileges[:6]:
-                if x + icon_size > self.width() - 3:
+            point_text = f"{score} pts"
+
+            # Every horizontal position is derived from the actual rendered
+            # text width. This keeps a long/scaled child name from ever being
+            # covered by the points, and keeps points clear of the icons.
+            x = 8.0
+            name_w = float(name_metrics.horizontalAdvance(name))
+            p.setPen(QColor("#f3f8ff")); p.setFont(name_font)
+            p.drawText(QRectF(x, y, name_w + 2.0, row_h), Qt.AlignVCenter|Qt.AlignLeft, name)
+            x += name_w + gap
+
+            point_w = float(point_metrics.horizontalAdvance(point_text))
+            p.setPen(QColor("#70eaff")); p.setFont(point_font)
+            p.drawText(QRectF(x, y, point_w + 2.0, row_h), Qt.AlignVCenter|Qt.AlignLeft, point_text)
+            x += point_w
+
+            privileges = [item for item in (kid.get("privileges") or []) if isinstance(item, dict)]
+            if privileges:
+                x += gap
+            for privilege in privileges:
+                if x + icon_size > self.width() - 5:
                     break
                 self._draw_icon(p, _family_privilege_kind(privilege), QRectF(x, y + (row_h-icon_size)/2.0, icon_size, icon_size))
-                x += icon_size + 2.0
+                x += icon_size + icon_gap
 
 
 
@@ -5104,6 +5202,7 @@ class ThermostatScreen(Page):
         self.controls_band.setAttribute(Qt.WA_StyledBackground, False)
 
         mid = QGridLayout(self.controls_band)
+        self.controls_grid = mid
         mid.setContentsMargins(42, 0, 42, 0)
         mid.setHorizontalSpacing(22)
         mid.setVerticalSpacing(4)
@@ -5159,10 +5258,11 @@ class ThermostatScreen(Page):
         self.schedule_shortcuts.setWidget(self.schedule_shortcuts_content)
         self.schedule_shortcuts.hide()
         # Schedule hotkeys live in the spacer band directly above Off/Cool/Heat/Away.
-        # Leave the lower-right Alarmo column free for the optional Family Center
-        # strip. Panels without Family Center keep this area transparent.
+        # Family Center is intentionally NOT a grid item. It floats beneath
+        # Alarmo so changing its content width can extend leftward without
+        # resizing the Alarmo grid column or shifting the dial/primary controls.
         mid.addWidget(self.schedule_shortcuts, 2, 0, 1, 4, Qt.AlignBottom)
-        mid.addWidget(self.family_center_panel, 2, 4, 1, 1, Qt.AlignCenter | Qt.AlignTop)
+        self.family_center_panel.setParent(self.controls_band)
 
         mode_wrap = QWidget()
         mode_lay = QHBoxLayout(mode_wrap)
@@ -5451,6 +5551,56 @@ class ThermostatScreen(Page):
         self.position_away_overlay()
         self.position_notice_action_popup()
 
+    def position_family_center_panel(self):
+        """Anchor Family Center under Alarmo and let extra width grow leftward."""
+        panel = getattr(self, "family_center_panel", None)
+        alarm = getattr(self, "alarm_card", None)
+        band = getattr(self, "controls_band", None)
+        if panel is None or alarm is None or band is None:
+            return
+        try:
+            alarm_pos = alarm.mapTo(band, QPoint(0, 0))
+            right_edge = alarm_pos.x() + alarm.width()
+
+            # Keep the current compact alignment under Alarmo. If Family Center
+            # needs more width, only its left edge moves. Never push the main
+            # thermostat grid around.
+            max_available_width = max(FamilyCenterStatusPanel.COMPACT_WIDTH, right_edge - 42)
+            target_width = min(panel.width(), max_available_width)
+            if target_width != panel.width():
+                panel.setFixedWidth(target_width)
+            x = max(42, right_edge - panel.width())
+
+            # Preserve the existing Family Center vertical band but nudge it
+            # upward slightly so it clears the floating Sleep control. Using the
+            # old grid cell as the vertical anchor keeps this a small visual move
+            # rather than pulling the card all the way up against Alarmo.
+            desired_y = alarm_pos.y() + alarm.height() + 4
+            grid = getattr(self, "controls_grid", None)
+            if grid is not None:
+                try:
+                    family_cell = grid.cellRect(2, 4)
+                    if family_cell.isValid():
+                        desired_y = family_cell.top() - 10
+                except Exception:
+                    pass
+            y = desired_y
+            window = self.window()
+            sleep_button = getattr(window, "sleep_button", None)
+            if sleep_button is not None and sleep_button.isVisible():
+                try:
+                    sleep_pos = sleep_button.mapTo(band, QPoint(0, 0))
+                    safe_bottom = sleep_pos.y() - 8
+                    y = min(y, safe_bottom - panel.height())
+                except Exception:
+                    pass
+            y = max(0, y)
+            panel.move(x, y)
+            if panel.isVisible():
+                panel.raise_()
+        except Exception:
+            pass
+
     def position_main_controls(self):
         """Center the five primary thermostat controls on one horizontal line."""
         if not hasattr(self, "controls_band"):
@@ -5470,6 +5620,7 @@ class ThermostatScreen(Page):
 
         self.controls_band.setGeometry(0, y, w, band_h)
         self.controls_band.raise_()
+        QTimer.singleShot(0, self.position_family_center_panel)
 
         # Temporary alert controls stay outside the grid so they do not push
         # the Doors card around.  The compact notice is explicitly positioned
@@ -7601,16 +7752,19 @@ class ThermostatScreen(Page):
             payload = data if isinstance(data, dict) else {}
             if not payload.get("configured"):
                 self.family_center_panel.clear_and_hide()
+                self.position_family_center_panel()
                 return
             self.family_center_panel.set_data(
                 payload.get("kids") if isinstance(payload.get("kids"), list) else [],
                 configured=True,
                 error=str(payload.get("error") or "") if not payload.get("ok", True) else "",
             )
+            self.position_family_center_panel()
 
         def failed(message):
             self._family_center_polling = False
             self.family_center_panel.set_data([], configured=True, error=message)
+            self.position_family_center_panel()
 
         self.run_async(
             "family-center-status",
