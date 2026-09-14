@@ -5245,6 +5245,7 @@ class ThermostatScreen(Page):
         self.schedule_shortcuts = QScrollArea()
         self.schedule_shortcuts.setObjectName("thermostatScheduleShortcuts")
         self.schedule_shortcuts.setFixedHeight(44)
+        self.schedule_shortcuts.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.schedule_shortcuts.setFrameShape(QFrame.NoFrame)
         self.schedule_shortcuts.setWidgetResizable(True)
         self.schedule_shortcuts.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -5262,19 +5263,29 @@ class ThermostatScreen(Page):
         self.schedule_shortcuts_lay.setSpacing(9)
         self.schedule_shortcuts.setWidget(self.schedule_shortcuts_content)
         self.schedule_shortcuts.hide()
-        # Keep optional content inside one layout-managed spacer row. Schedule
-        # shortcuts stay on the left while Family Center stays right-aligned.
-        # Because the wrapper spans the full grid, Family Center can widen to
-        # the left (or grow taller for larger text) without changing the main
-        # control columns and without floating over the mode/fan buttons.
+        # Keep the optional front-screen items in separate vertical lanes.
+        # Family Center can become substantially wider/taller when several kids,
+        # privilege icons, or a larger display scale are shown.  Sharing one
+        # horizontal row with the schedule shortcuts let that panel consume the
+        # shortcuts' width, which made the routine buttons look covered/clipped.
+        # Stack the two areas instead: Family Center keeps its right alignment,
+        # while the schedule bar always receives the full controls-band width.
         self.optional_status_row = QWidget()
         self.optional_status_row.setStyleSheet("background:transparent; border:0;")
-        optional_status_lay = QHBoxLayout(self.optional_status_row)
+        optional_status_lay = QVBoxLayout(self.optional_status_row)
         optional_status_lay.setContentsMargins(0, 0, 0, 0)
-        optional_status_lay.setSpacing(12)
-        optional_status_lay.addWidget(self.schedule_shortcuts, 1, Qt.AlignLeft | Qt.AlignTop)
-        optional_status_lay.addStretch(1)
-        optional_status_lay.addWidget(self.family_center_panel, 0, Qt.AlignRight | Qt.AlignTop)
+        optional_status_lay.setSpacing(8)
+
+        family_status_row = QWidget()
+        family_status_row.setStyleSheet("background:transparent; border:0;")
+        family_status_lay = QHBoxLayout(family_status_row)
+        family_status_lay.setContentsMargins(0, 0, 0, 0)
+        family_status_lay.setSpacing(0)
+        family_status_lay.addStretch(1)
+        family_status_lay.addWidget(self.family_center_panel, 0, Qt.AlignRight | Qt.AlignTop)
+
+        optional_status_lay.addWidget(family_status_row, 0)
+        optional_status_lay.addWidget(self.schedule_shortcuts, 0)
         mid.addWidget(self.optional_status_row, 2, 0, 1, 5, Qt.AlignTop)
 
         mode_wrap = QWidget()
