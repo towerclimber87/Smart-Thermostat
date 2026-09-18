@@ -11022,62 +11022,6 @@ class PeopleSelectionDialog(QDialog):
     def fit_to_screen(self):
         fit_dialog_to_available_screen(self, margin=0)
 
-    def _refresh_config_save_state(self):
-        busy = bool(self._config_save_inflight or self._config_save_pending)
-        if hasattr(self, "close_btn"):
-            self.close_btn.setEnabled(not busy)
-            self.close_btn.setText("Saving…" if busy else "Close")
-
-    def queue_config_save(self):
-        """Persist room settings without blocking Qt touch handling.
-
-        Multiple quick edits are coalesced. If another edit lands while a save
-        is in flight, the latest full config snapshot is written immediately
-        after the first request completes, avoiding out-of-order saves.
-        """
-        self._config_save_pending = True
-        self._refresh_config_save_state()
-        if self._config_save_inflight:
-            return
-        self._start_config_save()
-
-    def _start_config_save(self):
-        if self._config_save_inflight or not self._config_save_pending:
-            return
-        self._config_save_pending = False
-        self._config_save_inflight = True
-        self._refresh_config_save_state()
-        snapshot = copy.deepcopy(self.s.config)
-
-        def worker():
-            try:
-                result = self.s.api.save_config(snapshot)
-                payload = {"result": result, "error": None}
-            except Exception as exc:
-                payload = {"result": None, "error": str(exc)}
-            try:
-                self.configSaveCompleted.emit(payload)
-            except RuntimeError:
-                pass
-
-        threading.Thread(target=worker, name="room-settings-save", daemon=True).start()
-
-    def _handle_config_save_completed(self, info: object):
-        self._config_save_inflight = False
-        data = info if isinstance(info, dict) else {}
-        error = str(data.get("error") or "")
-        if error:
-            self._config_save_pending = False
-            self._refresh_config_save_state()
-            QMessageBox.warning(self, "Save failed", error)
-            return
-        self.saved.emit()
-        if self._config_save_pending:
-            self._start_config_save()
-        else:
-            self._refresh_config_save_state()
-
-
 
     def _seed_selected_people(self):
         by_id: dict[str, dict] = {}
@@ -13300,6 +13244,62 @@ class RoomManagerSettingsDialog(QDialog):
 
     def fit_to_screen(self):
         fit_dialog_to_available_screen(self, margin=0)
+
+    def _refresh_config_save_state(self):
+        busy = bool(self._config_save_inflight or self._config_save_pending)
+        if hasattr(self, "close_btn"):
+            self.close_btn.setEnabled(not busy)
+            self.close_btn.setText("Saving…" if busy else "Close")
+
+    def queue_config_save(self):
+        """Persist room settings without blocking Qt touch handling.
+
+        Multiple quick edits are coalesced. If another edit lands while a save
+        is in flight, the latest full config snapshot is written immediately
+        after the first request completes, avoiding out-of-order saves.
+        """
+        self._config_save_pending = True
+        self._refresh_config_save_state()
+        if self._config_save_inflight:
+            return
+        self._start_config_save()
+
+    def _start_config_save(self):
+        if self._config_save_inflight or not self._config_save_pending:
+            return
+        self._config_save_pending = False
+        self._config_save_inflight = True
+        self._refresh_config_save_state()
+        snapshot = copy.deepcopy(self.s.config)
+
+        def worker():
+            try:
+                result = self.s.api.save_config(snapshot)
+                payload = {"result": result, "error": None}
+            except Exception as exc:
+                payload = {"result": None, "error": str(exc)}
+            try:
+                self.configSaveCompleted.emit(payload)
+            except RuntimeError:
+                pass
+
+        threading.Thread(target=worker, name="room-settings-save", daemon=True).start()
+
+    def _handle_config_save_completed(self, info: object):
+        self._config_save_inflight = False
+        data = info if isinstance(info, dict) else {}
+        error = str(data.get("error") or "")
+        if error:
+            self._config_save_pending = False
+            self._refresh_config_save_state()
+            QMessageBox.warning(self, "Save failed", error)
+            return
+        self.saved.emit()
+        if self._config_save_pending:
+            self._start_config_save()
+        else:
+            self._refresh_config_save_state()
+
 
     def select_settings_tab(self, tab: str):
         if self.page_name != "Room":
