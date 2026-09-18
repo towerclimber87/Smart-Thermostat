@@ -2586,6 +2586,82 @@ def _read_panel_config_record() -> dict:
         return {"version": 1, "updatedAt": 0, "config": None}
 
 
+ROOM_CODE_POLICY_FIELDS = ("accessCode", "codeRequiredStates", "codePolicyRevision")
+
+
+def _room_code_policy_revision(control: object) -> int:
+    if not isinstance(control, dict):
+        return 0
+    try:
+        return max(0, int(control.get("codePolicyRevision") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _preserve_newer_room_code_policies(candidate: dict, existing_config: dict) -> None:
+    """Protect per-entry Room PIN policy from unrelated stale full-config saves.
+
+    Native pages save a complete panel-config snapshot. A request that started
+    before a Room PIN edit can therefore finish later with a control object that
+    has no PIN fields at all. Preserve the persisted policy when the incoming
+    control omits it, or when its explicit policy revision is older. Deliberate
+    clears remain possible because the native app sends blank policy fields with
+    a newer ``codePolicyRevision``.
+    """
+    incoming_section = candidate.get("roomControl") if isinstance(candidate.get("roomControl"), dict) else None
+    existing_section = existing_config.get("roomControl") if isinstance(existing_config.get("roomControl"), dict) else None
+    if incoming_section is None or existing_section is None:
+        return
+    incoming_rooms = incoming_section.get("rooms") if isinstance(incoming_section.get("rooms"), dict) else {}
+    existing_rooms = existing_section.get("rooms") if isinstance(existing_section.get("rooms"), dict) else {}
+
+    for room_key, incoming_room in incoming_rooms.items():
+        if not isinstance(incoming_room, dict):
+            continue
+        existing_room = existing_rooms.get(room_key)
+        if not isinstance(existing_room, dict):
+            continue
+        incoming_controls = incoming_room.get("controls") if isinstance(incoming_room.get("controls"), list) else []
+        existing_controls = existing_room.get("controls") if isinstance(existing_room.get("controls"), list) else []
+        by_id = {}
+        by_entity = {}
+        for existing_control in existing_controls:
+            if not isinstance(existing_control, dict):
+                continue
+            control_id = str(existing_control.get("id") or "").strip()
+            entity_id = str(existing_control.get("haEntityId") or "").strip()
+            if control_id:
+                by_id[control_id] = existing_control
+            if entity_id:
+                by_entity[entity_id] = existing_control
+
+        for incoming_control in incoming_controls:
+            if not isinstance(incoming_control, dict):
+                continue
+            control_id = str(incoming_control.get("id") or "").strip()
+            entity_id = str(incoming_control.get("haEntityId") or "").strip()
+            existing_control = by_id.get(control_id) if control_id else None
+            if existing_control is None and entity_id:
+                existing_control = by_entity.get(entity_id)
+            if not isinstance(existing_control, dict):
+                continue
+
+            existing_explicit = any(field in existing_control for field in ROOM_CODE_POLICY_FIELDS)
+            if not existing_explicit:
+                continue
+            incoming_explicit = any(field in incoming_control for field in ROOM_CODE_POLICY_FIELDS)
+            existing_revision = _room_code_policy_revision(existing_control)
+            incoming_revision = _room_code_policy_revision(incoming_control)
+            preserve = (not incoming_explicit) or (existing_revision > 0 and incoming_revision < existing_revision)
+            if not preserve:
+                continue
+            for field in ROOM_CODE_POLICY_FIELDS:
+                if field in existing_control:
+                    incoming_control[field] = _deepcopy_json(existing_control[field])
+                else:
+                    incoming_control.pop(field, None)
+
+
 def _write_panel_config_record(config: dict) -> dict:
     with _PANEL_CONFIG_LOCK:
         primary = _panel_config_record_from_path(PANEL_CONFIG_FILE)
@@ -2622,6 +2698,10 @@ def _write_panel_config_record(config: dict) -> dict:
                 incoming_integrations = {}
                 candidate["integrations"] = incoming_integrations
             incoming_integrations["familyCenter"] = _deepcopy_json(existing_family)
+
+        # Room entry PIN policy is local security state. Protect it from a stale
+        # full-config save that started before a newer code/protection edit.
+        _preserve_newer_room_code_policies(candidate, existing_config)
 
         safe_config = _normalize_panel_config(candidate) or {}
         if existing.get("config") == safe_config and PANEL_CONFIG_FILE.exists():
@@ -3188,7 +3268,7 @@ def _validate_house_sync_section(section_name: str, value: object) -> dict:
     # Room-entry PINs and any future secret-like fields remain local to the
     # destination panel. House Sync transfers layout and entity assignments,
     # never credentials.
-    secret_keys = {"accesscode", "coderequiredstates", "pin", "password", "token", "apikey", "secret"}
+    secret_keys = {"accesscode", "coderequiredstates", "codepolicyrevision", "pin", "password", "token", "apikey", "secret"}
 
     def strip_secrets(value: object) -> object:
         if isinstance(value, dict):

@@ -406,6 +406,21 @@ def room_control_has_code_protection(ctl: dict | None) -> bool:
     return bool(str((ctl or {}).get("accessCode") or "").strip()) and any(room_control_required_state_map(ctl).values())
 
 
+def bump_room_control_code_policy_revision(ctl: dict) -> int:
+    """Mark a Room entry PIN-policy edit with a monotonically increasing revision.
+
+    The backend uses this revision to keep an unrelated stale full-config save
+    from rolling a newer Room entry code/protection choice backward.
+    """
+    try:
+        previous = int(ctl.get("codePolicyRevision") or 0)
+    except (TypeError, ValueError):
+        previous = 0
+    revision = max(previous + 1, int(time.time() * 1000))
+    ctl["codePolicyRevision"] = revision
+    return revision
+
+
 def room_control_next_action(ctl: dict) -> str:
     domain = room_control_domain_for(ctl)
     state = str((ctl or {}).get("state") or "").strip().lower()
@@ -13082,6 +13097,11 @@ class RoomManagerSettingsDialog(QDialog):
         self.configSaveCompleted.connect(self._handle_config_save_completed)
         self.page_name = page_name
         self.domain, title, self.item_key, self.item_label, self.max_entries = self.PROFILES.get(page_name, self.PROFILES["Room"])
+        # Always open this manager from the backend's authoritative config. The
+        # main window can legitimately still hold an older object while a prior
+        # asynchronous reload/save is finishing; using it here made a code that
+        # had saved successfully appear as NO CODE the next time Settings opened.
+        self.refresh_authoritative_config()
         self.selected_key = str((self.s.config.get(self.domain) or {}).get("room") or "")
         self.setWindowTitle(title)
         self.setModal(True)
@@ -13238,6 +13258,24 @@ class RoomManagerSettingsDialog(QDialog):
         self.rebuild()
         QTimer.singleShot(0, self.fit_to_screen)
 
+    def refresh_authoritative_config(self):
+        """Refresh the persisted panel config before painting Rooms settings.
+
+        Room/entry edits are written asynchronously. Other pages also save full
+        config snapshots, so ``AppState.config`` may briefly point at an older
+        in-memory object even though the backend already has the newest Room PIN
+        policy. A small loopback GET makes every newly opened manager reflect the
+        persisted source of truth. If the local backend is unavailable, keep the
+        existing in-memory config rather than preventing Settings from opening.
+        """
+        try:
+            record = self.s.api.get_config_record()
+            config = record.get("config") if isinstance(record, dict) else None
+            if isinstance(config, dict):
+                self.s.config = config
+        except Exception as exc:
+            trace_runtime(f"room settings config refresh failed page={self.page_name}: {exc}")
+
     def showEvent(self, event):
         super().showEvent(event)
         self.fit_to_screen()
@@ -13294,11 +13332,24 @@ class RoomManagerSettingsDialog(QDialog):
             self._refresh_config_save_state()
             QMessageBox.warning(self, "Save failed", error)
             return
-        self.saved.emit()
+
+        record = data.get("result")
+        # Do not replace AppState.config with the just-finished snapshot when a
+        # newer edit was made while that request was in flight. The pending edit
+        # lives in the current object and must be the snapshot used by the next
+        # save. Once the final queued save finishes, adopt the backend-returned
+        # canonical config and rebuild so the displayed protection state exactly
+        # matches what will be loaded after closing/reopening Settings.
         if self._config_save_pending:
+            self.saved.emit()
             self._start_config_save()
-        else:
-            self._refresh_config_save_state()
+            return
+
+        if isinstance(record, dict) and isinstance(record.get("config"), dict):
+            self.s.config = record.get("config")
+        self.saved.emit()
+        self._refresh_config_save_state()
+        self.rebuild()
 
 
     def select_settings_tab(self, tab: str):
@@ -13486,6 +13537,7 @@ class RoomManagerSettingsDialog(QDialog):
         ctl["accessCode"] = str(code)
         if not isinstance(ctl.get("codeRequiredStates"), dict):
             ctl["codeRequiredStates"] = self._default_code_required_states(ctl)
+        bump_room_control_code_policy_revision(ctl)
         self.queue_config_save()
         # Refresh immediately after the keypad closes so the row changes from
         # NO CODE / Set Code to CODE SET / Change Code and enables the state
@@ -13504,12 +13556,17 @@ class RoomManagerSettingsDialog(QDialog):
             states = self._default_code_required_states(ctl)
         ctl["codeRequiredStates"] = {state_action: bool(states.get(state_action, False)) for state_action in choices}
         ctl["codeRequiredStates"][action] = bool(required)
+        bump_room_control_code_policy_revision(ctl)
         self.queue_config_save()
         self.rebuild_code_entries()
 
     def clear_entry_code(self, ctl: dict):
-        ctl.pop("accessCode", None)
-        ctl.pop("codeRequiredStates", None)
+        # Keep an explicit blank policy plus a newer revision. The backend can
+        # then distinguish a deliberate Clear from an unrelated stale snapshot
+        # that simply predates this entry's code settings.
+        ctl["accessCode"] = ""
+        ctl["codeRequiredStates"] = {}
+        bump_room_control_code_policy_revision(ctl)
         self.queue_config_save()
         self.rebuild_code_entries()
 
