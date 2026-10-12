@@ -1,0 +1,7 @@
+Smart Thermostat 16.80 - 10/12/2026
+
+- Added a prominent red UNIT IS TOO HOT thermal-protection banner on the thermostat display.
+- The thermal warning now shows the current Raspberry Pi CPU temperature when available.
+- Thermal protection still blocks normal controls until the unit safely cools and the recovery hold completes.
+- Fixed on-unit Kid Mode persistence: toggling Kid Mode now saves immediately to the backend thermostat record instead of remaining a local unsaved UI change.
+- Kid Mode now survives service restarts and full power cycles.

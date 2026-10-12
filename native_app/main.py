@@ -2109,7 +2109,7 @@ class ScreenSleepOverlay(QWidget):
 
 
 class ThermalProtectionOverlay(QWidget):
-    """Static black emergency screen with one high-contrast warning."""
+    """Thermal safety shield with an unmistakable over-temperature banner."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2117,14 +2117,54 @@ class ThermalProtectionOverlay(QWidget):
         self.setAttribute(Qt.WA_StyledBackground, False)
         self.setAttribute(Qt.WA_AcceptTouchEvents, True)
         self.setMouseTracking(True)
+        self._cpu_temp_c = None
+        self._cpu_temp_f = None
         self.hide()
+
+    def set_status(self, thermal: object):
+        data = thermal if isinstance(thermal, dict) else {}
+        self._cpu_temp_c = data.get("cpuTempC")
+        self._cpu_temp_f = data.get("cpuTempF")
+        self.update()
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor(0, 0, 0))
-        painter.setPen(QColor(255, 35, 35))
-        painter.setFont(font(44, QFont.Black, 8))
-        painter.drawText(self.rect(), Qt.AlignCenter, "UNIT OVERHEATING")
+
+        # A full-width red banner makes the warning obvious from across the room
+        # while the black safety shield keeps normal controls unavailable during
+        # thermal protection.
+        margin = max(20, int(self.width() * 0.035))
+        banner_h = max(120, min(190, int(self.height() * 0.28)))
+        banner = QRectF(margin, margin, max(1, self.width() - (margin * 2)), banner_h)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(205, 20, 20))
+        painter.drawRoundedRect(banner, 18, 18)
+
+        painter.setPen(QColor(255, 255, 255))
+        painter.setFont(font(38, QFont.Black, 7))
+        painter.drawText(banner, Qt.AlignCenter, "UNIT IS TOO HOT")
+
+        detail = "THERMAL PROTECTION ACTIVE"
+        try:
+            if self._cpu_temp_f is not None and self._cpu_temp_c is not None:
+                detail = f"CPU {float(self._cpu_temp_f):.1f}°F / {float(self._cpu_temp_c):.1f}°C  •  THERMAL PROTECTION ACTIVE"
+        except (TypeError, ValueError):
+            pass
+
+        detail_rect = QRectF(margin, banner.bottom() + 28, max(1, self.width() - (margin * 2)), 58)
+        painter.setPen(QColor(255, 215, 215))
+        painter.setFont(font(16, QFont.Bold, 5))
+        painter.drawText(detail_rect, Qt.AlignHCenter | Qt.AlignTop, detail)
+
+        help_rect = QRectF(margin, detail_rect.bottom() + 6, max(1, self.width() - (margin * 2)), 90)
+        painter.setPen(QColor(210, 210, 210))
+        painter.setFont(font(12, QFont.Bold, 4))
+        painter.drawText(
+            help_rect,
+            Qt.AlignHCenter | Qt.AlignTop | Qt.TextWordWrap,
+            "Normal controls are temporarily disabled. The thermostat will automatically recover after the unit cools down.",
+        )
 
 
 
@@ -18061,7 +18101,9 @@ class SettingsDialog(QDialog):
 
     def toggle_kid_mode(self):
         enabled = not bool((self.s.thermostat or {}).get("kidMode"))
-        self.set_thermostat({"kidMode": enabled}, quiet=True, debounce=False, push=False)
+        # Kid Mode is an appliance setting, not a temporary UI preference. Save
+        # it immediately so a power cycle/restart reloads the same state.
+        self.set_thermostat({"kidMode": enabled}, quiet=True, debounce=False, push=True)
         if hasattr(self, "kid_mode_button"):
             self.kid_mode_button.setText(self.kid_mode_text())
             self.kid_mode_button.setActive(enabled)
@@ -22878,6 +22920,8 @@ class MainWindow(Background):
 
     def apply_thermal_protection_state(self, payload: object):
         thermal = self.thermal_protection_from_payload(payload)
+        if hasattr(self, "thermal_overlay"):
+            self.thermal_overlay.set_status(thermal)
         active = bool(thermal.get("active"))
         if active:
             if getattr(self, "_thermal_protection_active", False):

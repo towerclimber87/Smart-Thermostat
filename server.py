@@ -7809,7 +7809,7 @@ def _thermal_protection_status(*, cpu_temp_c: float | None = None, refresh: bool
         payload = {
             "enabled": bool(THERMAL_PROTECTION_ENABLED),
             "active": active,
-            "message": "UNIT OVERHEATING" if active else "",
+            "message": "UNIT IS TOO HOT" if active else "",
             "mode": "safety-only" if active else "normal",
             "normalOperationsSuspended": active,
             "safetyClimateEnabled": active,
