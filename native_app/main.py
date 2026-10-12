@@ -5583,6 +5583,9 @@ class ThermostatScreen(Page):
         family_status_lay.setSpacing(0)
         family_status_lay.addStretch(1)
         family_status_lay.addWidget(self.family_center_panel, 0, Qt.AlignRight | Qt.AlignTop)
+        self.family_status_row = family_status_row
+        self.family_status_lay = family_status_lay
+        self._family_center_in_kid_slot = False
 
         optional_status_lay.addWidget(family_status_row, 0)
         optional_status_lay.addWidget(self.schedule_shortcuts, 0)
@@ -5880,8 +5883,45 @@ class ThermostatScreen(Page):
         self.position_notice_action_popup()
 
     def position_family_center_panel(self):
-        """Family Center is layout-managed; retained for existing refresh callers."""
-        return
+        """Keep Kid Mode family cards in the dedicated upper-right lane.
+
+        In normal mode Family Center stays in its original lower status row.
+        Kid Mode hides Alarmo, so reuse that right-side grid cell for the compact
+        vertical kid stack. This lifts the cards clear of the bottom sleep-moon
+        control without moving the thermostat dial or the other Kid Mode controls.
+        """
+        if not hasattr(self, "family_center_panel") or not hasattr(self, "controls_grid"):
+            return
+        kid_mode = self.kid_mode_active()
+        already = bool(getattr(self, "_family_center_in_kid_slot", False))
+        if kid_mode == already:
+            return
+        try:
+            if kid_mode:
+                # Row 1 / column 4 is the former Alarmo lane. Aligning to the
+                # bottom of that cell raises the stack roughly 45-55 px on the
+                # 10.1" panel while keeping its right edge fixed.
+                if hasattr(self, "family_status_lay"):
+                    self.family_status_lay.removeWidget(self.family_center_panel)
+                self.controls_grid.addWidget(
+                    self.family_center_panel,
+                    1, 4, 1, 1,
+                    Qt.AlignRight | Qt.AlignBottom,
+                )
+                self._family_center_in_kid_slot = True
+            else:
+                self.controls_grid.removeWidget(self.family_center_panel)
+                if hasattr(self, "family_status_lay"):
+                    self.family_status_lay.addWidget(
+                        self.family_center_panel,
+                        0,
+                        Qt.AlignRight | Qt.AlignTop,
+                    )
+                self._family_center_in_kid_slot = False
+            self.controls_grid.invalidate()
+            self.controls_band.updateGeometry()
+        except Exception as exc:
+            trace_runtime(f"family center placement failed: {exc}")
 
     def position_main_controls(self):
         """Center the five primary thermostat controls on one horizontal line."""
@@ -8245,6 +8285,7 @@ class ThermostatScreen(Page):
         # than one child can be shown cleanly at the same time.
         self.kid_device_lock_card.hide()
         self.family_center_panel.set_kid_mode(kid_mode)
+        self.position_family_center_panel()
         self.virtual_panel.updateData(t)
         self.apply_screen_lock_state()
         self.refresh_family_center()
@@ -9119,6 +9160,75 @@ class LightsScreen(Page):
         self.on_btn.held.connect(self.open_room_color_picker)
         self.off_btn.held.connect(self.open_room_color_picker)
 
+    @staticmethod
+    def _light_capabilities_from_entity(entity: dict) -> tuple[bool, bool]:
+        """Return (brightness_supported, color_supported) from HA metadata.
+
+        Home Assistant can expose a perfectly valid light.* entity that only
+        supports on/off. Treat `supported_color_modes: [onoff]` as authoritative
+        even when older saved panel config says the card is dimmable.
+        """
+        entity = entity if isinstance(entity, dict) else {}
+        entity_id = str(entity.get("entityId") or "")
+        domain = str(entity.get("domain") or (entity_id.split(".", 1)[0] if "." in entity_id else "light")).lower()
+        if domain == "switch":
+            return False, False
+
+        modes = {
+            str(mode or "").strip().lower()
+            for mode in (entity.get("supportedColorModes") or entity.get("supported_color_modes") or [])
+            if str(mode or "").strip()
+        }
+        explicit_brightness = entity.get("brightnessSupported")
+        if modes == {"onoff"}:
+            brightness_supported = False
+        elif explicit_brightness is not None:
+            brightness_supported = bool(explicit_brightness)
+        elif modes:
+            brightness_supported = any(mode != "onoff" for mode in modes)
+        else:
+            brightness_supported = False
+
+        explicit_color = entity.get("colorSupported")
+        if explicit_color is not None:
+            color_supported = bool(explicit_color)
+        else:
+            color_supported = bool(modes.intersection({"hs", "rgb", "rgbw", "rgbww", "xy"}))
+        return brightness_supported, color_supported
+
+    def _sync_light_metadata_from_entity(self, light: dict, entity: dict) -> bool:
+        if not isinstance(light, dict) or not isinstance(entity, dict):
+            return False
+        changed = False
+        entity_id = str(entity.get("entityId") or light.get("haEntityId") or "").strip()
+        domain = str(entity.get("domain") or (entity_id.split(".", 1)[0] if "." in entity_id else "light"))
+        brightness_supported, color_supported = self._light_capabilities_from_entity(entity)
+        updates = {
+            "domain": domain,
+            "brightnessSupported": brightness_supported,
+            "colorSupported": color_supported,
+        }
+        state = entity.get("state")
+        if state is not None:
+            updates["state"] = state
+            updates["on"] = as_bool_state(state)
+        modes = entity.get("supportedColorModes")
+        if modes is not None:
+            updates["supportedColorModes"] = modes
+        for key, value in updates.items():
+            if light.get(key) != value:
+                light[key] = value
+                changed = True
+        if not brightness_supported:
+            power_brightness = 100 if bool(light.get("on")) else 0
+            if light.get("brightness") != power_brightness:
+                light["brightness"] = power_brightness
+                changed = True
+            if light.get("on") and light.get("lastBrightness") != 100:
+                light["lastBrightness"] = 100
+                changed = True
+        return changed
+
     def _repair_stale_light_entities(self) -> bool:
         """Repair saved light entity IDs only when Home Assistant gives one safe match.
 
@@ -9156,10 +9266,12 @@ class LightsScreen(Page):
                 continue
             current_entity = by_id.get(entity_id)
             current_state = str((current_entity or {}).get("state") or "").strip().lower()
-            # A live existing entity wins. An unavailable saved entity is allowed
-            # to look for one safe replacement so old Z-Wave light entities can
-            # migrate to a switch-domain replacement without user intervention.
+            # A live existing entity wins, but its capabilities must also win.
+            # This is critical for HA light.* entities whose only color mode is
+            # `onoff`: they are real lights, but they are NOT dimmers.
             if current_entity is not None and current_state not in {"unavailable", "unknown"}:
+                if self._sync_light_metadata_from_entity(light, current_entity):
+                    changed = True
                 continue
 
             candidates = []
@@ -9216,13 +9328,7 @@ class LightsScreen(Page):
             old_ha_name = str(light.get("haName") or "").strip()
             if not old_ha_name or old_ha_name == entity_id:
                 light["haName"] = resolved.get("name") or new_id
-            new_domain = str(resolved.get("domain") or new_id.split(".", 1)[0] or "light")
-            light["domain"] = new_domain
-            light["brightnessSupported"] = False if new_domain == "switch" else bool(resolved.get("brightnessSupported", True))
-            light["colorSupported"] = False if new_domain == "switch" else bool(resolved.get("colorSupported", light.get("colorSupported", False)))
-            if resolved.get("state") is not None:
-                light["state"] = resolved.get("state")
-                light["on"] = as_bool_state(resolved.get("state"))
+            self._sync_light_metadata_from_entity(light, resolved)
             changed = True
             trace_runtime(f"light entity repaired: {entity_id} -> {new_id}")
         return changed

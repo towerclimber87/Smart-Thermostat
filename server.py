@@ -15539,6 +15539,28 @@ def _call_light_service(ha_url: str, token: str, entity_id: str, action: str, br
         raise ValueError("Unsupported light action")
 
     domain = entity_id.split(".", 1)[0]
+    capability_state = None
+    if domain == "light":
+        # Do not trust client-side brightness metadata. Home Assistant supports
+        # light.* entities whose only capability is plain on/off
+        # (`supported_color_modes: [onoff]`, supported_features: 0). If an older
+        # panel config still thinks one of those is a dimmer, strip dim/color
+        # fields here before calling HA so light.turn_on remains a clean power
+        # command and cannot immediately snap back off.
+        try:
+            capability_state = _fetch_ha_light_state(ha_url, token, entity_id)
+        except Exception:
+            capability_state = None
+        if isinstance(capability_state, dict) and capability_state.get("brightnessSupported") is False:
+            brightness = None
+            transition = None
+            if action in {"brightness", "color"}:
+                action = "on"
+        if isinstance(capability_state, dict) and capability_state.get("colorSupported") is False:
+            color = None
+            if action == "color":
+                action = "on"
+
     if domain == "switch":
         if action in {"brightness", "color"}:
             action = "on"
@@ -15606,14 +15628,19 @@ def _call_light_service(ha_url: str, token: str, entity_id: str, action: str, br
                 fallback_brightness = max(0, min(100, int(round(float(brightness if brightness is not None else 100)))))
             except (TypeError, ValueError):
                 fallback_brightness = 100
+        known_power_only = bool(
+            isinstance(capability_state, dict)
+            and capability_state.get("brightnessSupported") is False
+        )
         return {
             "entityId": entity_id,
             "domain": "light",
-            "name": entity_id,
+            "name": (capability_state or {}).get("name") or entity_id,
             "state": "off" if action == "off" else "on",
-            "brightnessPct": fallback_brightness,
-            "brightnessSupported": brightness is not None,
-            "colorSupported": bool(_light_hex_to_rgb(color)),
+            "brightnessPct": (0 if action == "off" else 100) if known_power_only else fallback_brightness,
+            "brightnessSupported": False if known_power_only else brightness is not None,
+            "supportedColorModes": (capability_state or {}).get("supportedColorModes") or [],
+            "colorSupported": False if known_power_only else bool(_light_hex_to_rgb(color)),
             "colorHex": f"#{str(color or '').strip().lstrip('#').lower()}" if _light_hex_to_rgb(color) else "#ffd76f",
         }
 

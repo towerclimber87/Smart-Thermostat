@@ -1,0 +1,8 @@
+Smart Thermostat 16.88 - 10/12/2026
+
+- Raised the Kid Mode Family Center vertical stack into the former Alarmo/right-side lane by roughly 45-55 pixels so it stays clear of the sleep moon button.
+- Kept the smaller stacked Kid Mode cards and right-edge alignment from 16.87.
+- Fixed Home Assistant light.* entities that are power-only rather than dimmable (for example supported_color_modes: onoff / supported_features: 0).
+- Existing live light metadata is now authoritative: the Lights page refreshes brightness/color capability flags even when the saved entity ID itself is still valid.
+- Power-only light.* cards hide the brightness slider, follow the actual Home Assistant ON/OFF state, and send a clean light.turn_on/light.turn_off without brightness or color data.
+- Added a backend capability guard so stale panel metadata can never force brightness_pct onto a Home Assistant on/off-only light.
