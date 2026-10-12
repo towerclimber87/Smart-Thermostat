@@ -108,7 +108,7 @@ def install_crash_logging():
 
 
 from PyQt5.QtCore import QEvent, QEasingCurve, QPoint, QPointF, QPropertyAnimation, QRectF, QSize, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QCursor, QFont, QFontMetrics, QIcon, QImage, QPainter, QPen, QBrush, QLinearGradient, QPainterPath, QRadialGradient, QPixmap
+from PyQt5.QtGui import QColor, QCursor, QFont, QFontMetrics, QIcon, QImage, QPainter, QPen, QBrush, QLinearGradient, QPainterPath, QPolygonF, QRadialGradient, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
     QAbstractButton,
@@ -5807,6 +5807,228 @@ class ThermostatScreen(Page):
     def _alpha_color(color: QColor, alpha: int) -> QColor:
         return QColor(color.red(), color.green(), color.blue(), int(clamp(alpha, 0, 255)))
 
+    def _render_kid_environment_background(
+        self,
+        width: int,
+        height: int,
+        current: float,
+        neutral_off: bool,
+        safety_alert: bool,
+        phase: int,
+    ) -> QPixmap:
+        """Draw a kid-friendly cartoon backdrop that still follows room temperature."""
+        pixmap = QPixmap(width, height)
+        pixmap.fill(Qt.transparent)
+        p = QPainter(pixmap)
+        p.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing | QPainter.SmoothPixmapTransform)
+        r = QRectF(0, 0, width, height)
+        w = float(width)
+        h = float(height)
+        palette = self._temperature_environment_palette(current, neutral_off)
+        base0 = palette["base0"]
+        base1 = palette["base1"]
+        base2 = palette["base2"]
+        primary = palette["primary"]
+        secondary = palette["secondary"]
+        highlight = palette["highlight"]
+        visual_scale = 0.72 if neutral_off else 1.0
+        if safety_alert:
+            visual_scale = min(1.18, visual_scale + 0.12)
+
+        sky = QLinearGradient(0, 0, 0, h)
+        sky.setColorAt(0.0, highlight.lighter(120 if not neutral_off else 108))
+        sky.setColorAt(0.24, primary.lighter(116 if not neutral_off else 106))
+        sky.setColorAt(0.62, secondary.lighter(102 if not neutral_off else 100))
+        sky.setColorAt(1.0, base1.darker(130 if not neutral_off else 142))
+        p.fillRect(r, sky)
+
+        sun = QRadialGradient(QPointF(w * 0.86, h * 0.16), w * 0.19)
+        sun.setColorAt(0.0, QColor(255, 248, 194, int(220 * visual_scale)))
+        sun.setColorAt(0.35, QColor(255, 218, 133, int(165 * visual_scale)))
+        sun.setColorAt(1.0, QColor(255, 255, 255, 0))
+        p.fillRect(r, sun)
+
+        for cx, cy, scale in ((0.16, 0.18, 0.95), (0.33, 0.12, 0.72), (0.70, 0.27, 0.86)):
+            cloud_color = self._alpha_color(QColor(255, 255, 255), int(78 * visual_scale))
+            p.setPen(Qt.NoPen)
+            p.setBrush(cloud_color)
+            base_w = w * 0.10 * scale
+            base_h = h * 0.045 * scale
+            center = QPointF(w * cx, h * cy)
+            for ox, oy, rx, ry in ((-0.42, 0.08, 0.52, 0.46), (-0.04, -0.12, 0.56, 0.54), (0.34, 0.05, 0.50, 0.42)):
+                p.drawEllipse(QPointF(center.x() + base_w * ox, center.y() + base_h * oy), base_w * rx, base_h * ry)
+            p.drawRoundedRect(QRectF(center.x() - base_w * 0.78, center.y() - base_h * 0.18, base_w * 1.56, base_h * 0.70), base_h * 0.28, base_h * 0.28)
+
+        def draw_hill(y_ratio: float, color: QColor, height_ratio: float, wobble: float) -> None:
+            path = QPainterPath(QPointF(0, h * y_ratio))
+            path.cubicTo(QPointF(w * 0.12, h * (y_ratio - wobble * 0.7)), QPointF(w * 0.28, h * (y_ratio - height_ratio)), QPointF(w * 0.43, h * (y_ratio - wobble * 0.5)))
+            path.cubicTo(QPointF(w * 0.57, h * (y_ratio - wobble * 0.3)), QPointF(w * 0.68, h * (y_ratio - height_ratio * 0.9)), QPointF(w * 0.83, h * (y_ratio - wobble * 0.65)))
+            path.cubicTo(QPointF(w * 0.93, h * (y_ratio - wobble * 0.2)), QPointF(w, h * (y_ratio - height_ratio * 0.3)), QPointF(w, h * y_ratio))
+            path.lineTo(w, h)
+            path.lineTo(0, h)
+            path.closeSubpath()
+            p.setBrush(color)
+            p.setPen(Qt.NoPen)
+            p.drawPath(path)
+
+        draw_hill(0.83, self._alpha_color(base2.lighter(155), 255), 0.10, 0.05)
+        draw_hill(0.90, self._alpha_color(base1.lighter(125), 255), 0.08, 0.035)
+
+        ground = QPainterPath(QPointF(0, h * 0.92))
+        ground.cubicTo(QPointF(w * 0.16, h * 0.88), QPointF(w * 0.36, h * 0.97), QPointF(w * 0.52, h * 0.91))
+        ground.cubicTo(QPointF(w * 0.68, h * 0.86), QPointF(w * 0.82, h * 0.96), QPointF(w, h * 0.90))
+        ground.lineTo(w, h)
+        ground.lineTo(0, h)
+        ground.closeSubpath()
+        p.setBrush(QColor(60, 112, 66, 255) if current < 74 else QColor(126, 108, 62, 255))
+        p.drawPath(ground)
+
+        def color_mix(a: QColor, b: QColor, amt: float) -> QColor:
+            amt = clamp(amt, 0.0, 1.0)
+            return QColor(
+                int(a.red() + (b.red() - a.red()) * amt),
+                int(a.green() + (b.green() - a.green()) * amt),
+                int(a.blue() + (b.blue() - a.blue()) * amt),
+                255,
+            )
+
+        dino_fill = color_mix(primary, QColor(92, 193, 111), 0.45 if current < 72 else 0.25)
+        dino_fill2 = color_mix(secondary, QColor(245, 190, 92), 0.55 if current < 72 else 0.35)
+        dino_shadow = self._alpha_color(QColor(0, 0, 0), 48)
+        outline = self._alpha_color(QColor(255, 255, 255), 58)
+
+        def draw_sauropod(x: float, y: float, scale: float, body_color: QColor) -> None:
+            body = QPainterPath()
+            body.moveTo(x, y)
+            body.cubicTo(QPointF(x + 36 * scale, y - 24 * scale), QPointF(x + 112 * scale, y - 18 * scale), QPointF(x + 132 * scale, y + 10 * scale))
+            body.cubicTo(QPointF(x + 144 * scale, y + 28 * scale), QPointF(x + 126 * scale, y + 48 * scale), QPointF(x + 95 * scale, y + 46 * scale))
+            body.cubicTo(QPointF(x + 72 * scale, y + 58 * scale), QPointF(x + 36 * scale, y + 56 * scale), QPointF(x + 20 * scale, y + 40 * scale))
+            body.cubicTo(QPointF(x - 10 * scale, y + 34 * scale), QPointF(x - 12 * scale, y + 10 * scale), QPointF(x, y))
+            neck = QPainterPath(QPointF(x + 104 * scale, y + 4 * scale))
+            neck.cubicTo(QPointF(x + 126 * scale, y - 18 * scale), QPointF(x + 132 * scale, y - 60 * scale), QPointF(x + 121 * scale, y - 94 * scale))
+            neck.cubicTo(QPointF(x + 116 * scale, y - 108 * scale), QPointF(x + 134 * scale, y - 118 * scale), QPointF(x + 148 * scale, y - 104 * scale))
+            neck.cubicTo(QPointF(x + 160 * scale, y - 92 * scale), QPointF(x + 158 * scale, y - 72 * scale), QPointF(x + 151 * scale, y - 56 * scale))
+            neck.cubicTo(QPointF(x + 144 * scale, y - 38 * scale), QPointF(x + 146 * scale, y - 16 * scale), QPointF(x + 158 * scale, y - 2 * scale))
+            neck.cubicTo(QPointF(x + 150 * scale, y + 9 * scale), QPointF(x + 130 * scale, y + 10 * scale), QPointF(x + 118 * scale, y + 8 * scale))
+            tail = QPainterPath(QPointF(x + 6 * scale, y + 16 * scale))
+            tail.cubicTo(QPointF(x - 28 * scale, y + 2 * scale), QPointF(x - 60 * scale, y + 4 * scale), QPointF(x - 82 * scale, y + 18 * scale))
+            tail.cubicTo(QPointF(x - 70 * scale, y + 26 * scale), QPointF(x - 50 * scale, y + 32 * scale), QPointF(x - 16 * scale, y + 32 * scale))
+            leg_positions = (22, 48, 82, 110)
+            p.setPen(Qt.NoPen)
+            p.setBrush(dino_shadow)
+            p.drawEllipse(QRectF(x - 20 * scale, y + 34 * scale, 180 * scale, 24 * scale))
+            p.setBrush(body_color)
+            p.drawPath(body)
+            p.drawPath(neck)
+            p.drawPath(tail)
+            p.setPen(QPen(outline, max(1.0, 1.4 * scale)))
+            p.setBrush(Qt.NoBrush)
+            p.drawPath(body)
+            p.drawPath(neck)
+            p.drawPath(tail)
+            p.setPen(Qt.NoPen)
+            p.setBrush(body_color)
+            for lx in leg_positions:
+                p.drawRoundedRect(QRectF(x + lx * scale, y + 26 * scale, 13 * scale, 42 * scale), 5 * scale, 5 * scale)
+            p.setBrush(QColor(255, 255, 255, 220))
+            p.drawEllipse(QPointF(x + 146 * scale, y - 93 * scale), 3.2 * scale, 3.2 * scale)
+            p.setBrush(QColor(43, 58, 59, 220))
+            p.drawEllipse(QPointF(x + 147 * scale, y - 93 * scale), 1.5 * scale, 1.5 * scale)
+            for sx in (28, 44, 60, 76, 92, 108):
+                p.setBrush(self._alpha_color(highlight, 48))
+                p.drawEllipse(QPointF(x + sx * scale, y + 10 * scale), 4.5 * scale, 4.5 * scale)
+
+        def draw_stegosaurus(x: float, y: float, scale: float, body_color: QColor) -> None:
+            p.setPen(Qt.NoPen)
+            p.setBrush(dino_shadow)
+            p.drawEllipse(QRectF(x - 12 * scale, y + 26 * scale, 136 * scale, 20 * scale))
+            body = QPainterPath(QPointF(x + 8 * scale, y + 14 * scale))
+            body.cubicTo(QPointF(x + 30 * scale, y - 8 * scale), QPointF(x + 86 * scale, y - 9 * scale), QPointF(x + 106 * scale, y + 18 * scale))
+            body.cubicTo(QPointF(x + 114 * scale, y + 30 * scale), QPointF(x + 98 * scale, y + 44 * scale), QPointF(x + 72 * scale, y + 44 * scale))
+            body.cubicTo(QPointF(x + 38 * scale, y + 46 * scale), QPointF(x + 16 * scale, y + 40 * scale), QPointF(x + 8 * scale, y + 28 * scale))
+            head = QPainterPath(QPointF(x + 103 * scale, y + 19 * scale))
+            head.cubicTo(QPointF(x + 121 * scale, y + 10 * scale), QPointF(x + 130 * scale, y + 12 * scale), QPointF(x + 135 * scale, y + 25 * scale))
+            head.cubicTo(QPointF(x + 130 * scale, y + 34 * scale), QPointF(x + 119 * scale, y + 35 * scale), QPointF(x + 106 * scale, y + 31 * scale))
+            tail = QPainterPath(QPointF(x + 10 * scale, y + 20 * scale))
+            tail.cubicTo(QPointF(x - 8 * scale, y + 12 * scale), QPointF(x - 24 * scale, y + 7 * scale), QPointF(x - 44 * scale, y - 2 * scale))
+            tail.cubicTo(QPointF(x - 32 * scale, y + 11 * scale), QPointF(x - 24 * scale, y + 21 * scale), QPointF(x - 11 * scale, y + 30 * scale))
+            p.setBrush(body_color)
+            for path in (body, head, tail):
+                p.drawPath(path)
+            p.setPen(QPen(outline, max(1.0, 1.3 * scale)))
+            p.setBrush(Qt.NoBrush)
+            for path in (body, head, tail):
+                p.drawPath(path)
+            p.setPen(Qt.NoPen)
+            for idx, plate_x in enumerate((26, 40, 55, 70, 84)):
+                plate = QPolygonF([
+                    QPointF(x + plate_x * scale, y + 5 * scale),
+                    QPointF(x + (plate_x + 8) * scale, y - 18 * scale - idx * scale),
+                    QPointF(x + (plate_x + 17) * scale, y + 7 * scale),
+                ])
+                p.setBrush(color_mix(highlight, QColor(255, 236, 123), 0.32))
+                p.drawPolygon(plate)
+            for lx in (26, 52, 80, 98):
+                p.setBrush(body_color)
+                p.drawRoundedRect(QRectF(x + lx * scale, y + 28 * scale, 10 * scale, 32 * scale), 4 * scale, 4 * scale)
+            p.setBrush(QColor(255, 255, 255, 220))
+            p.drawEllipse(QPointF(x + 124 * scale, y + 22 * scale), 2.8 * scale, 2.8 * scale)
+            p.setBrush(QColor(43, 58, 59, 220))
+            p.drawEllipse(QPointF(x + 125 * scale, y + 22 * scale), 1.2 * scale, 1.2 * scale)
+            for sx in range(4):
+                p.setBrush(color_mix(body_color, QColor(255,255,255), 0.24))
+                p.drawEllipse(QPointF(x + (36 + sx * 14) * scale, y + 18 * scale), 3.0 * scale, 3.0 * scale)
+
+        def draw_fern(x: float, y: float, scale: float) -> None:
+            stem = QPainterPath(QPointF(x, y))
+            stem.cubicTo(QPointF(x + 4 * scale, y - 25 * scale), QPointF(x - 2 * scale, y - 52 * scale), QPointF(x + 6 * scale, y - 78 * scale))
+            p.setPen(QPen(QColor(57, 110, 73, 190), max(1.0, 2.2 * scale), Qt.SolidLine, Qt.RoundCap))
+            p.drawPath(stem)
+            for idx, direction in enumerate((-1, 1, -1, 1, -1, 1)):
+                yy = y - (18 + idx * 10) * scale
+                leaf = QPainterPath(QPointF(x, yy))
+                leaf.cubicTo(QPointF(x + 12 * direction * scale, yy - 8 * scale), QPointF(x + 26 * direction * scale, yy - 9 * scale), QPointF(x + 30 * direction * scale, yy + 7 * scale))
+                leaf.cubicTo(QPointF(x + 16 * direction * scale, yy + 4 * scale), QPointF(x + 6 * direction * scale, yy + 2 * scale), QPointF(x, yy))
+                p.fillPath(leaf, color_mix(primary, QColor(92, 185, 93), 0.55))
+
+        draw_fern(w * 0.08, h * 0.94, 1.10)
+        draw_fern(w * 0.92, h * 0.95, 0.95)
+        draw_fern(w * 0.20, h * 0.96, 0.82)
+        draw_sauropod(w * 0.09, h * 0.76, 1.02, dino_fill)
+        draw_stegosaurus(w * 0.73, h * 0.80, 0.92, dino_fill2)
+
+        if current <= 66:
+            for snow_x in (0.18, 0.30, 0.44, 0.58, 0.76, 0.88):
+                cx = w * snow_x
+                cy = h * (0.11 + (snow_x % 0.07))
+                p.setPen(QPen(QColor(255,255,255,185), 2))
+                p.drawLine(QPointF(cx - 8, cy), QPointF(cx + 8, cy))
+                p.drawLine(QPointF(cx, cy - 8), QPointF(cx, cy + 8))
+                p.drawLine(QPointF(cx - 5.5, cy - 5.5), QPointF(cx + 5.5, cy + 5.5))
+                p.drawLine(QPointF(cx - 5.5, cy + 5.5), QPointF(cx + 5.5, cy - 5.5))
+        elif current >= 76:
+            for hx, hy in ((0.14, 0.20), (0.26, 0.25), (0.83, 0.31)):
+                flame = QPainterPath(QPointF(w * hx, h * hy + 26))
+                flame.cubicTo(QPointF(w * hx - 12, h * hy + 10), QPointF(w * hx - 6, h * hy - 8), QPointF(w * hx + 4, h * hy - 16))
+                flame.cubicTo(QPointF(w * hx + 18, h * hy - 2), QPointF(w * hx + 16, h * hy + 12), QPointF(w * hx, h * hy + 26))
+                p.fillPath(flame, QColor(255, 180, 77, 120))
+
+        title_sheen = QLinearGradient(0, 0, 0, h)
+        title_sheen.setColorAt(0.0, QColor(255, 255, 255, 28 if not neutral_off else 16))
+        title_sheen.setColorAt(0.22, QColor(255, 255, 255, 4))
+        title_sheen.setColorAt(0.60, QColor(255, 255, 255, 0))
+        title_sheen.setColorAt(1.0, QColor(0, 0, 0, 0))
+        p.fillRect(r, title_sheen)
+
+        vignette = QRadialGradient(QPointF(w * 0.52, h * 0.46), max(w, h) * 0.82)
+        vignette.setColorAt(0.0, QColor(0, 0, 0, 0))
+        vignette.setColorAt(0.66, QColor(0, 0, 0, 0))
+        vignette.setColorAt(1.0, QColor(0, 0, 0, 88 if not neutral_off else 104))
+        p.fillRect(r, vignette)
+
+        p.end()
+        return pixmap
+
     def _render_environment_background(
         self,
         width: int,
@@ -6024,6 +6246,7 @@ class ThermostatScreen(Page):
         # Quantize only the cache key—not the palette calculation—to prevent
         # needless redraws from tiny sensor jitter while preserving smooth 0.1°F
         # visible transitions whenever the reported temperature meaningfully changes.
+        kid_mode = self.kid_mode_active()
         cache_key = (
             w,
             h,
@@ -6032,17 +6255,28 @@ class ThermostatScreen(Page):
             round(high, 1),
             neutral_off,
             safety_alert,
+            kid_mode,
             phase % 10000,
         )
         if self._environment_background_cache_key != cache_key or self._environment_background_cache.isNull():
-            self._environment_background_cache = self._render_environment_background(
-                w,
-                h,
-                current,
-                neutral_off,
-                safety_alert,
-                phase,
-            )
+            if kid_mode:
+                self._environment_background_cache = self._render_kid_environment_background(
+                    w,
+                    h,
+                    current,
+                    neutral_off,
+                    safety_alert,
+                    phase,
+                )
+            else:
+                self._environment_background_cache = self._render_environment_background(
+                    w,
+                    h,
+                    current,
+                    neutral_off,
+                    safety_alert,
+                    phase,
+                )
             self._environment_background_cache_key = cache_key
 
         p.drawPixmap(0, 0, self._environment_background_cache)

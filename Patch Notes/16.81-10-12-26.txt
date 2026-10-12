@@ -1,0 +1,7 @@
+Smart Thermostat 16.81 - 10/12/2026
+
+- Added a kid-friendly cartoon thermostat background for Kid Mode.
+- The Kid Mode background includes friendly dinosaur scenery while keeping the existing temperature-reactive color behavior.
+- Cold rooms still render cooler blue/cyan tones, comfortable rooms stay in the mid palette, and warmer rooms shift into pink/orange/red tones.
+- The cartoon background is drawn as a cached vector scene so it stays lightweight on Raspberry Pi hardware.
+- Normal (non-Kid-Mode) thermostat backgrounds are unchanged.
