@@ -1,0 +1,6 @@
+Smart Thermostat 16.84 - 10/12/2026
+
+- Fixed Kid Mode persistence across power cycles and software updates by keeping Kid Mode synchronized in both thermostat-state.json and panel-config.json.
+- A stale full Settings/config save can no longer overwrite a newer Kid Mode value.
+- An explicit Kid Mode toggle now mirrors immediately into the panel configuration after the thermostat state is durably saved.
+- Keeps the Family Center Kid Mode display changes from 16.83.

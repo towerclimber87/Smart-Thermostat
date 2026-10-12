@@ -2685,6 +2685,22 @@ def _write_panel_config_record(config: dict) -> dict:
         incoming_security = candidate.get("security") if isinstance(candidate.get("security"), dict) else {}
         incoming_code = str(incoming_security.get("settingsCode") or "").strip()
         existing_config = existing.get("config") if isinstance(existing.get("config"), dict) else {}
+
+        # Kid Mode is owned by the live thermostat record. A Settings dialog or
+        # browser page can hold an older panel-config snapshot and save it after
+        # Kid Mode was toggled. Never let that stale full-config write roll the
+        # persisted mode back. Mirror the current thermostat value into every
+        # panel-config write so both long-term stores agree.
+        try:
+            live_thermostat = _read_thermostat_record().get("thermostat") or {}
+            live_kid_mode = bool(live_thermostat.get("kidMode"))
+            candidate_thermostat = candidate.get("thermostat") if isinstance(candidate.get("thermostat"), dict) else {}
+            candidate_thermostat = dict(candidate_thermostat)
+            candidate_thermostat["kidMode"] = live_kid_mode
+            candidate["thermostat"] = candidate_thermostat
+        except Exception:
+            pass
+
         existing_security = existing_config.get("security") if isinstance(existing_config.get("security"), dict) else {}
         existing_code = str(existing_security.get("settingsCode") or "").strip()
         if not re.fullmatch(r"\d{4}", incoming_code) and re.fullmatch(r"\d{4}", existing_code):
@@ -2732,6 +2748,25 @@ def _write_panel_config_record(config: dict) -> dict:
             _atomic_write_json(PANEL_CONFIG_BACKUP_FILE, record)
         return record
 
+
+
+def _mirror_kid_mode_to_panel_config(enabled: bool) -> None:
+    """Keep Kid Mode synchronized in both durable thermostat settings stores."""
+    try:
+        record = _read_panel_config_record()
+        config = record.get("config") if isinstance(record, dict) else None
+        if not isinstance(config, dict):
+            return
+        candidate = _deepcopy_json(config)
+        thermostat = candidate.get("thermostat") if isinstance(candidate.get("thermostat"), dict) else {}
+        thermostat = dict(thermostat)
+        if bool(thermostat.get("kidMode")) == bool(enabled):
+            return
+        thermostat["kidMode"] = bool(enabled)
+        candidate["thermostat"] = thermostat
+        _write_panel_config_record(candidate)
+    except Exception as exc:
+        print(f"Could not mirror Kid Mode to panel config: {exc}", flush=True)
 
 
 def _normalize_family_center_url(value: object, *, allow_blank: bool = True) -> str:
@@ -7575,6 +7610,8 @@ def _handle_thermostat_update_locked(payload: dict) -> tuple[dict, dict, dict]:
 
     saved_record = _write_thermostat_record(merged)
     merged = saved_record.get("thermostat") or merged
+    if "kidMode" in incoming:
+        _mirror_kid_mode_to_panel_config(bool(merged.get("kidMode")))
     command_result["targetRevision"] = int(_number(merged.get("targetRevision"), 0, 0, None) or 0)
     command_result["modeRevision"] = int(_number(merged.get("modeRevision"), 0, 0, None) or 0)
     if incoming_has_schedules:
