@@ -1,0 +1,10 @@
+Smart Thermostat 16.85 - 10/12/2026
+
+- Redesigned the Family Center display in Kid Mode for households with multiple children.
+- Removed the single DEVICE LOCKED replacement card from the former Alarmo position; the Alarmo area now remains intentionally open in Kid Mode.
+- Kid Mode now shows a dedicated Kids Status Board below the main thermostat controls.
+- Every child receives an independent card with name, points, and available privilege icons.
+- If a child's device is locked, only that child's card turns red and shows that child's Family Center lock reason.
+- Unlocked children show DEVICE AVAILABLE in their own green/cyan status area.
+- Supports up to six child cards: 1-3 display in one row, 4 display as 2x2, and 5-6 display as 3x2.
+- Normal non-Kid-Mode Family Center and Alarmo layout is unchanged.

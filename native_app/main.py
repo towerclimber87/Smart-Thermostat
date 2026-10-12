@@ -4844,7 +4844,7 @@ class FamilyCenterStatusPanel(QWidget):
     """
     COMPACT_WIDTH = 226
     COMPACT_HEIGHT = 54
-    MAX_WIDTH = 680
+    MAX_WIDTH = 980
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -4875,6 +4875,28 @@ class FamilyCenterStatusPanel(QWidget):
 
     def _content_size(self) -> tuple[int, int]:
         scale = float(self._display_scale_percent) / 100.0
+        if self._kid_mode and self._kids and not self._error:
+            count = max(1, min(6, len(self._kids)))
+            # Kid Mode becomes a true multi-child status board instead of a
+            # single-row mirror strip. Keep one row through three children, a
+            # 2x2 board for four, and a 3x2 board for five or six so every child
+            # gets their own readable lock reason instead of "+N more".
+            if count <= 3:
+                columns = count
+                rows = 1
+            elif count == 4:
+                columns = 2
+                rows = 2
+            else:
+                columns = 3
+                rows = 2
+            tile_width = int(round(236 * scale))
+            tile_height = int(round(132 * scale))
+            gap = int(round(10 * scale))
+            pad = int(round(10 * scale))
+            width = pad * 2 + columns * tile_width + max(0, columns - 1) * gap
+            height = pad * 2 + rows * tile_height + max(0, rows - 1) * gap
+            return max(self.COMPACT_WIDTH, min(self.MAX_WIDTH, width)), max(92, height)
         if self._error:
             msg_font = font(max(5, int(round(7 * scale))), QFont.Black)
             width = QFontMetrics(msg_font).horizontalAdvance("FAMILY CENTER UNAVAILABLE") + 18
@@ -4959,7 +4981,7 @@ class FamilyCenterStatusPanel(QWidget):
         self.update()
 
     def set_data(self, kids: list[dict] | None, *, configured: bool, error: str = ""):
-        clean = [item for item in (kids or []) if isinstance(item, dict)][:4]
+        clean = [item for item in (kids or []) if isinstance(item, dict)][:6]
         signature = repr((configured, error, clean))
         if signature == self._signature:
             self.setVisible(bool(configured))
@@ -5050,6 +5072,116 @@ class FamilyCenterStatusPanel(QWidget):
             return
         if not self._kids:
             p.setPen(QColor("#aebbd0")); p.setFont(font(max(5, int(round(7 * scale))), QFont.Black)); p.drawText(self.rect().adjusted(6,0,-6,0), Qt.AlignCenter, "NO FAMILY PROFILES")
+            return
+
+        if self._kid_mode:
+            count = max(1, min(6, len(self._kids)))
+            if count <= 3:
+                columns = count
+                rows = 1
+            elif count == 4:
+                columns = 2
+                rows = 2
+            else:
+                columns = 3
+                rows = 2
+            pad = max(8.0, round(10.0 * scale))
+            gap = max(7.0, round(10.0 * scale))
+            available_w = self.width() - pad * 2.0 - gap * max(0, columns - 1)
+            available_h = self.height() - pad * 2.0 - gap * max(0, rows - 1)
+            tile_w = available_w / float(columns)
+            tile_h = available_h / float(rows)
+
+            for idx, kid in enumerate(self._kids[:6]):
+                col = idx % columns
+                row = idx // columns
+                tile = QRectF(
+                    pad + col * (tile_w + gap),
+                    pad + row * (tile_h + gap),
+                    tile_w,
+                    tile_h,
+                )
+                notice = kid.get("deviceLock") if isinstance(kid.get("deviceLock"), dict) else {}
+                locked = bool(notice.get("active"))
+
+                # Each child receives a fully independent status card. Locked
+                # cards turn red; available cards stay calm cyan/green.
+                if locked:
+                    border = QColor(255, 112, 128, 230)
+                    fill = QColor(78, 13, 29, 220)
+                    accent = QColor("#ff8192")
+                    subtext = QColor("#ffdce2")
+                else:
+                    border = QColor(94, 226, 191, 175)
+                    fill = QColor(7, 40, 42, 205)
+                    accent = QColor("#70e8b0")
+                    subtext = QColor("#d9fff1")
+
+                p.setPen(QPen(border, 1.7))
+                p.setBrush(fill)
+                p.drawRoundedRect(tile, 16, 16)
+
+                name = str(kid.get("name") or "Kid").strip() or "Kid"
+                try:
+                    score = int(kid.get("score") or 0)
+                except (TypeError, ValueError):
+                    score = 0
+
+                name_font = font(max(10, int(round(13 * scale))), QFont.Black)
+                pts_font = font(max(7, int(round(8 * scale))), QFont.Black)
+                status_font = font(max(7, int(round(8 * scale))), QFont.Black)
+                reason_font = font(max(7, int(round(8 * scale))), QFont.DemiBold)
+
+                header_y = tile.y() + 10.0
+                p.setPen(QColor("#ffffff"))
+                p.setFont(name_font)
+                p.drawText(QRectF(tile.x()+12, header_y, tile.width()-24, 24*scale), Qt.AlignLeft|Qt.AlignVCenter, name)
+
+                points_text = f"{score} POINTS"
+                p.setPen(accent)
+                p.setFont(pts_font)
+                p.drawText(QRectF(tile.x()+12, header_y + 26*scale, tile.width()-24, 18*scale), Qt.AlignLeft|Qt.AlignVCenter, points_text)
+
+                privileges = [item for item in (kid.get("privileges") or []) if isinstance(item, dict)]
+                icon_size = max(11.0, 17.0 * scale)
+                icon_gap = max(3.0, 4.0 * scale)
+                icon_x = tile.x() + tile.width() - 12.0
+                icon_y = header_y + 22.0 * scale
+                for privilege in reversed(privileges):
+                    if icon_x - icon_size < tile.x() + tile.width()*0.46:
+                        break
+                    icon_x -= icon_size
+                    self._draw_icon(p, _family_privilege_kind(privilege), QRectF(icon_x, icon_y, icon_size, icon_size))
+                    icon_x -= icon_gap
+
+                status_top = tile.y() + 58.0 * scale
+                status_rect = QRectF(tile.x()+10, status_top, tile.width()-20, tile.height()-(status_top-tile.y())-10)
+                if locked:
+                    p.setPen(QPen(QColor(255, 120, 136, 145), 1.0))
+                    p.setBrush(QColor(120, 18, 39, 135))
+                    p.drawRoundedRect(status_rect, 11, 11)
+                    p.setPen(QColor("#fff2f4"))
+                    p.setFont(status_font)
+                    p.drawText(QRectF(status_rect.x()+8, status_rect.y()+5, status_rect.width()-16, 18*scale), Qt.AlignLeft|Qt.AlignVCenter, "DEVICE LOCKED")
+
+                    title = str(notice.get("title") or "").strip()
+                    message = str(notice.get("message") or "Your device is currently locked.").strip()
+                    reason = title
+                    if reason.lower().startswith("locked due to "):
+                        reason = reason[14:].strip()
+                    if not reason or reason.lower().startswith("device locked"):
+                        reason = message
+                    p.setPen(subtext)
+                    p.setFont(reason_font)
+                    reason_box = QRectF(status_rect.x()+8, status_rect.y()+23*scale, status_rect.width()-16, status_rect.height()-27*scale)
+                    p.drawText(reason_box, Qt.AlignLeft|Qt.AlignTop|Qt.TextWordWrap, reason)
+                else:
+                    p.setPen(QPen(QColor(91, 219, 178, 95), 1.0))
+                    p.setBrush(QColor(26, 95, 76, 82))
+                    p.drawRoundedRect(status_rect, 11, 11)
+                    p.setPen(QColor("#dffff0"))
+                    p.setFont(status_font)
+                    p.drawText(status_rect, Qt.AlignCenter, "DEVICE AVAILABLE")
             return
 
         row_count = max(1, len(self._kids))
@@ -8116,9 +8248,10 @@ class ThermostatScreen(Page):
         self.alarm_card.setAlarmState(str(alarm.get("state") or "disarmed"))
         kid_mode = self.kid_mode_active()
         self.alarm_card.setVisible(not kid_mode)
-        self.kid_device_lock_card.setVisible(
-            kid_mode and self.kid_device_lock_card.has_active_locks()
-        )
+        # Kid Mode intentionally leaves the former Alarmo slot open. Device
+        # status now lives in the multi-child Family Center board below so more
+        # than one child can be shown cleanly at the same time.
+        self.kid_device_lock_card.hide()
         self.family_center_panel.set_kid_mode(kid_mode)
         self.virtual_panel.updateData(t)
         self.apply_screen_lock_state()
@@ -8169,9 +8302,7 @@ class ThermostatScreen(Page):
                 error=str(payload.get("error") or "") if not payload.get("ok", True) else "",
             )
             self.kid_device_lock_card.set_kids(family_kids)
-            self.kid_device_lock_card.setVisible(
-                self.kid_mode_active() and self.kid_device_lock_card.has_active_locks()
-            )
+            self.kid_device_lock_card.hide()
             self.position_family_center_panel()
 
         def failed(message):
