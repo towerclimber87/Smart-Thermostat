@@ -9524,11 +9524,39 @@ class LightsScreen(Page):
         if not light.get("haEntityId"):
             self.requestAssign.emit("light", light, "light")
             return
+
+        entity_id = str(light.get("haEntityId") or "").strip()
+
+        # Power-only Home Assistant lights (supported_color_modes: [onoff]) do
+        # not expose brightness.  Never decide their next command from cached
+        # brightness/card state: ask HA for the live state first, then send the
+        # opposite clean power command.  This prevents an ON/OFF-only wall light
+        # from briefly looking ON and then snapping back because stale card data
+        # said it was a dimmer or had brightness 0.
+        if light.get("brightnessSupported") is False:
+            payload = self.s.ha_payload({"entityIds": [entity_id], "fresh": True})
+
+            def done(result):
+                states = (result or {}).get("lights") or [] if isinstance(result, dict) else []
+                live = next((item for item in states if str(item.get("entityId") or "") == entity_id), None)
+                if isinstance(live, dict):
+                    self._apply_light_state(light, live)
+                    action = "off" if as_bool_state(live.get("state")) else "on"
+                else:
+                    action = "off" if bool(light.get("on")) else "on"
+                self._send_light(light, action, None)
+
+            self.run_async(
+                f"light-power-preflight-{entity_id}",
+                lambda: self.s.api.post("/api/ha/light/states", payload),
+                done,
+                lambda err: self.requestToast.emit(f"Light state check failed: {err}"),
+            )
+            return
+
         action = "off" if bool(light.get("on")) else "on"
-        # A true on/off light must never receive brightness_pct.  Home Assistant
-        # capability data marks those as brightnessSupported=False.
         bright = None
-        if action == "on" and light.get("brightnessSupported") is not False:
+        if action == "on":
             bright = int(light.get("lastBrightness") or light.get("brightness") or 100)
         self._send_light(light, action, bright)
 

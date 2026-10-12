@@ -1,0 +1,6 @@
+Smart Thermostat 16.89 - 10/12/2026
+
+- Fixed power-only Home Assistant light toggles such as light.guest_bathroom.
+- ON/OFF-only lights now fetch their fresh Home Assistant state before every tap and send the opposite clean power command.
+- Power-only lights no longer use cached brightness/card state to decide whether to turn on or off.
+- Dimmable/RGB light behavior is unchanged.
