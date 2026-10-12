@@ -5359,6 +5359,10 @@ class ThermostatScreen(Page):
         self.notice.hide()
         QTimer.singleShot(0, self.position_alert_banner)
 
+    def kid_mode_active(self) -> bool:
+        t = self.thermostat_view()
+        return bool(t.get("kidMode"))
+
     def screen_control_locked(self) -> bool:
         return bool(getattr(self, "_screen_locked", False))
 
@@ -6805,8 +6809,10 @@ class ThermostatScreen(Page):
             return
         schedules = self.s.thermostat_schedules()
         locked = bool(self.screen_control_locked())
+        kid_mode = self.kid_mode_active()
         signature = (
             locked,
+            kid_mode,
             tuple(
                 (
                     str(sched.get("name") or "Schedule"),
@@ -6824,8 +6830,8 @@ class ThermostatScreen(Page):
             item = self.schedule_shortcuts_lay.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        self.schedule_shortcuts.setVisible(bool(schedules))
-        if not schedules:
+        self.schedule_shortcuts.setVisible(bool(schedules) and not kid_mode)
+        if not schedules or kid_mode:
             return
         for sched in schedules:
             full_name = str(sched.get("name") or "Schedule").strip() or "Schedule"
@@ -7091,6 +7097,8 @@ class ThermostatScreen(Page):
 
     def set_mode(self, mode: str):
         if self.reject_locked_control():
+            return
+        if self.kid_mode_active():
             return
         mode = str(mode or "").strip().lower()
         if mode not in {"off", "heat", "cool", "away", "arriving"}:
@@ -7483,6 +7491,8 @@ class ThermostatScreen(Page):
         self.alarm_card.setAlarmState("checking")
 
     def show_alarm_dialog(self):
+        if self.kid_mode_active():
+            return
         """Confirm live HA state before exposing any alarm control.
 
         The former flow rendered from cached panel config and refreshed after the
@@ -7653,10 +7663,13 @@ class ThermostatScreen(Page):
         self.plus.setVisible(setpoint_visible)
         self.minus.setEnabled(setpoint_visible)
         self.plus.setEnabled(setpoint_visible)
+        kid_mode = self.kid_mode_active()
         arriving = self.arriving_override_active(t) and not away
         for m, b in self.mode_buttons.items():
             selected = (m == mode and not away and not arriving) or (m == "away" and away) or (m == "arriving" and arriving)
             b.setStyleSheet(self._floating_button_style(selected))
+            if m == "arriving":
+                b.setVisible(not kid_mode)
         fan = str(t.get("fan") or "auto").lower()
         if self.cooling_is_active(t) and fan == "off":
             fan = "auto"
@@ -7687,7 +7700,7 @@ class ThermostatScreen(Page):
             self.person_presence_strip.update_people(t.get("people") or [])
         self.notice.hide()
         self.refresh_schedule_shortcuts()
-        if away and not self.screen_control_locked():
+        if away and not self.screen_control_locked() and not kid_mode:
             source = str(t.get("awaySource") or "").lower()
             if source == "presence":
                 self.away_body.setText("No assigned Auto Away users are home. Tap Return Home to hold Home for up to 6 hours; normal presence control resumes sooner if someone returns.")
@@ -15447,6 +15460,7 @@ class SettingsDialog(QDialog):
             "Device Internet": "Choose device network-access switches for the main-screen iPad button",
             "Alexa Lockout": "Choose which Alexa devices are blocked while this screen is locked",
             "Family Center Application": "Connect the Family Center URL and API key for kid points and privileges",
+            "Kid Mode": "Limit main-screen controls for a child-safe thermostat display",
         }
         return descriptions.get(str(title or ""), "Open this section to view its settings")
 
@@ -18042,8 +18056,29 @@ class SettingsDialog(QDialog):
 
         self.run_settings_write("screen-orientation", worker, done, failed)
 
+    def kid_mode_text(self) -> str:
+        return f"Kid Mode: {'ON' if bool((self.s.thermostat or {}).get('kidMode')) else 'OFF'}"
+
+    def toggle_kid_mode(self):
+        enabled = not bool((self.s.thermostat or {}).get("kidMode"))
+        self.set_thermostat({"kidMode": enabled}, quiet=True, debounce=False, push=False)
+        if hasattr(self, "kid_mode_button"):
+            self.kid_mode_button.setText(self.kid_mode_text())
+            self.kid_mode_button.setActive(enabled)
+            self.kid_mode_button.repaint()
+
     def build(self):
         t = self.s.thermostat or {}
+
+        kid_mode = self.add_section("Kid Mode", -4, 0, 1, 4)
+        kid_note = QLabel("Restricts the main thermostat screen for kid use. Intimacy and Sync are hidden, schedule shortcut buttons are hidden, Arriving is hidden, Off/Cool/Heat/Away become display-only, and Alarmo cannot be opened.")
+        kid_note.setWordWrap(True)
+        kid_note.setFont(font(8, QFont.Bold))
+        kid_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
+        kid_mode.layout().addWidget(kid_note)
+        self.kid_mode_button = RoundButton(self.kid_mode_text(), active=bool(t.get("kidMode")), min_h=44)
+        self.kid_mode_button.clicked.connect(self.toggle_kid_mode)
+        kid_mode.layout().addWidget(self.kid_mode_button)
 
         family_section = self.add_section("Family Center Application", -3, 0, 1, 4)
         family_note = QLabel("Optional connection to the Family Center kids application. When both values are configured, the thermostat shows each kid's points and available privileges directly below Alarmo.")
@@ -18799,6 +18834,7 @@ class SettingsDialog(QDialog):
         pause = self.s.thermostat.get("pauseFunction") if isinstance(self.s.thermostat.get("pauseFunction"), dict) else {}
         pause_entries = pause.get("entries") if isinstance(pause.get("entries"), list) else []
         return {
+            "kidMode": bool((self.s.thermostat or {}).get("kidMode")),
             "safetyLow": self.val_number("safetyLow"),
             "safetyHigh": self.val_number("safetyHigh"),
             "awayHeat": self.val_number("awayHeat"),
@@ -20450,10 +20486,12 @@ class MainWindow(Background):
             # Keep the three thermostat quick controls together as one row
             # immediately above the Alarmo card. Their left-to-right order is:
             # Intimacy Hold | device internet (iPad) | Thermostat Sync.
+            kid_mode = self.kid_mode_active()
             show_sync = False
             if hasattr(self, "sync_button"):
                 show_sync = (
-                    not assistant_active
+                    not kid_mode
+                    and not assistant_active
                     and not getattr(self, "_display_sleeping", False)
                     and self.current_name == "Thermostat"
                     and bool(self.sync_peer_entities())
@@ -20473,7 +20511,8 @@ class MainWindow(Background):
             show_intimacy = False
             if hasattr(self, "intimacy_button"):
                 show_intimacy = (
-                    not assistant_active
+                    not kid_mode
+                    and not assistant_active
                     and not getattr(self, "_display_sleeping", False)
                     and self.current_name == "Thermostat"
                 )
@@ -20546,6 +20585,10 @@ class MainWindow(Background):
                 self.thermal_overlay.raise_()
         except Exception:
             pass
+
+    def kid_mode_active(self) -> bool:
+        thermostat = self.s.thermostat if isinstance(self.s.thermostat, dict) else {}
+        return bool(thermostat.get("kidMode"))
 
     def sync_peer_entities(self) -> list[dict]:
         try:

@@ -1,0 +1,18 @@
+Smart Thermostat 16.79 - 10/12/2026
+
+Added Kid Mode.
+
+When Kid Mode is enabled:
+- Hides the Intimacy Hold button from the thermostat front page.
+- Hides the Thermostat Sync button from the thermostat front page.
+- Hides the bottom-left schedule shortcut buttons.
+- Hides the Arriving mode button.
+- Keeps Off, Cool, Heat, and Away visible, but tapping them does not change thermostat mode.
+- Keeps Alarmo visible for status, but tapping it does not open arm/disarm controls.
+- Suppresses the actionable Return Home overlay while the thermostat is already in Away mode.
+- Temperature +/- controls remain available.
+
+Configuration:
+- Added a Kid Mode section to the on-unit Comfort Setup settings menu.
+- Added Enable Kid Mode to the browser Backup Config > Thermostat Settings page.
+- Kid Mode is stored in the canonical thermostat state so it persists through reloads and reboots.
