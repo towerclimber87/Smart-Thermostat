@@ -1,0 +1,6 @@
+Smart Thermostat 16.86 - 10/12/2026
+
+- Fixed stale Home Assistant light entity mappings that can make one light ignore taps and show the wrong state while other lights work normally.
+- The Lights page now self-repairs a saved light entity ID only when Home Assistant provides one unambiguous replacement by exact friendly name or a unique entity-ID extension.
+- Corrected mappings are saved back to panel configuration so subsequent power commands and state polling use the same live Home Assistant entity.
+- This specifically covers cases like light.guest_bathroom being renamed/discovered as light.guest_bathroom_light.

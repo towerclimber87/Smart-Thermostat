@@ -9127,7 +9127,71 @@ class LightsScreen(Page):
         self.on_btn.held.connect(self.open_room_color_picker)
         self.off_btn.held.connect(self.open_room_color_picker)
 
+    def _repair_stale_light_entities(self) -> bool:
+        """Repair saved light entity IDs only when Home Assistant gives one safe match.
+
+        Room configs can outlive HA entity renames. A stale ID makes both the
+        power command and live state polling miss the real light. Keep this
+        deliberately conservative: repair only an exact friendly-name match or
+        one unique entity-id extension such as light.guest_bathroom ->
+        light.guest_bathroom_light.
+        """
+        available = self.s.ha().get("lightAvailableEntities") or []
+        available = [x for x in available if isinstance(x, dict) and str(x.get("entityId") or "").startswith("light.")]
+        if not available:
+            return False
+        by_id = {str(x.get("entityId") or "").strip(): x for x in available if x.get("entityId")}
+        active = nested_get(self.config, "lights", "room", default="living")
+        lights = nested_get(self.config, "lights", "rooms", active, "lights", default=[]) or []
+        changed = False
+        for light in lights:
+            if not isinstance(light, dict):
+                continue
+            entity_id = str(light.get("haEntityId") or "").strip()
+            if not entity_id or entity_id in by_id:
+                continue
+
+            candidates = []
+            saved_names = {
+                str(light.get("name") or "").strip().casefold(),
+                str(light.get("haName") or "").strip().casefold(),
+            } - {""}
+            if saved_names:
+                candidates = [
+                    ent for ent in available
+                    if str(ent.get("name") or "").strip().casefold() in saved_names
+                ]
+
+            if len(candidates) != 1:
+                prefix = entity_id + "_"
+                prefix_candidates = [
+                    ent for ent in available
+                    if str(ent.get("entityId") or "").strip().startswith(prefix)
+                ]
+                candidates = prefix_candidates if len(prefix_candidates) == 1 else []
+
+            if len(candidates) != 1:
+                continue
+            resolved = candidates[0]
+            new_id = str(resolved.get("entityId") or "").strip()
+            if not new_id or new_id == entity_id:
+                continue
+            light["haEntityId"] = new_id
+            # Keep a custom card label intact, but refresh the canonical HA name
+            # when it was empty or simply mirrored the stale entity id.
+            old_ha_name = str(light.get("haName") or "").strip()
+            if not old_ha_name or old_ha_name == entity_id:
+                light["haName"] = resolved.get("name") or new_id
+            light["domain"] = "light"
+            if resolved.get("state") is not None:
+                light["state"] = resolved.get("state")
+                light["on"] = as_bool_state(resolved.get("state"))
+            changed = True
+            trace_runtime(f"light entity repaired: {entity_id} -> {new_id}")
+        return changed
+
     def rebuild(self):
+        repaired = self._repair_stale_light_entities()
         while self.room_tabs.count():
             item = self.room_tabs.takeAt(0)
             if item.widget(): item.widget().deleteLater()
@@ -9141,6 +9205,14 @@ class LightsScreen(Page):
             self.room_buttons[key] = b
             self.room_tabs.addWidget(b)
         self.populate_cards()
+        if repaired:
+            snapshot = copy.deepcopy(self.config)
+            self.run_async(
+                "lights-repair-save",
+                lambda: self.s.api.save_config(snapshot),
+                None,
+                lambda err: trace_runtime(f"light entity repair save failed: {err}"),
+            )
 
     def set_room(self, key):
         self.config.setdefault("lights", {})["room"] = key
