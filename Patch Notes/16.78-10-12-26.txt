@@ -1,0 +1,8 @@
+Smart Thermostat 16.78-10-12-26
+
+Backup Config freshness / save verification fix
+
+- Marked dynamic JSON API responses no-store/no-cache so browsers cannot reuse stale thermostat settings.
+- Backup Config thermostat/audio settings loads explicitly bypass the browser cache.
+- After Save, Backup Config performs a fresh read from the backend and redraws the form from persisted server state.
+- Prevents Heat/Cool Internal/External selections and external Heat/Cool/Fan entity choices from appearing to revert or show an older value after reload/reopen.
