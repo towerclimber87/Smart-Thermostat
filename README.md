@@ -195,7 +195,7 @@ Every updated IHA panel reads the same profile. The default behavior is:
   - the old goofy spoken prefixes and screen jokes are removed;
   - spoken replies begin directly with `Sir, ...` without an extra acknowledgement.
 
-The router decides the destination before making the conversation request. A clear home-control command therefore does not wait for an OpenAI probe. A two-step request occurs only for a read-only question that local Assist cannot resolve; the cloud agent then receives the question and can summarize the relevant exposed entities.
+The Home Assistant integration decides the destination before making the conversation request and makes exactly one `conversation.process` call. A clear home-control or home-status command goes directly to the local Home Assistant agent; a broad/general-knowledge request goes directly to the configured cloud conversation agent. The thermostat is no longer part of the reasoning path for `iha.ask_jarvis`; it only mirrors JARVIS state/response text and supplies its saved announcement-volume/display preferences.
 
 Recommended shared settings under **Backup Config → JARVIS Voice → Shared Routing & Personality**:
 
@@ -221,6 +221,23 @@ Explain how a heat pump works.
 ```
 
 The light command should show `home_assistant_local`. Garage and light-status summaries should show `home_assistant_status_summary`. A Home Assistant forecast should show `home_assistant_weather`; if no usable local forecast exists, it should show a cloud route. The saved temperature request should show `iha_shared_temperature`, and the general explanation should show `cloud_conversation`. With the lowest-cost speech policy, every answer should still show the local Piper speech path.
+
+
+### Fast Home Assistant-owned JARVIS path
+
+Starting with bundled IHA integration **10.20.0**, normal `iha.ask_jarvis` calls use this path:
+
+```text
+Home Assistant service/automation
+  -> one selected conversation agent (local Assist OR OpenAI)
+  -> final response text
+  -> Home Assistant native TTS / Sonos
+  -> thermostat display callbacks only
+```
+
+The panel no longer calls Home Assistant's conversation API on behalf of the integration. Display callbacks are scheduled independently so a slow/offline thermostat cannot hold up conversation processing. The panel's saved Sonos target, announcement volume, response-text visibility, and response-hold time remain authoritative; Home Assistant executes the actual volume set/TTS/restore sequence.
+
+The `iha.ask_jarvis` response includes timing diagnostics for the single conversation request, the initial TTS request, and total synchronous service time.
 
 ### Install Piper for free local speech
 

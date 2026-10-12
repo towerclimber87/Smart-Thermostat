@@ -18089,7 +18089,7 @@ class SettingsDialog(QDialog):
         jarvis_defaults = self.jarvis_voice_defaults()
         self.jarvis_toggle_buttons: dict[str, RoundButton] = {}
         jarvis = self.add_section("Jarvis", -1, 0, 1, 4)
-        jarvis_note = QLabel("Home Assistant handles speech and Sonos playback. This screen controls announcement volume, response text, and how long the JARVIS overlay remains visible.")
+        jarvis_note = QLabel("Home Assistant handles JARVIS processing, speech, and Sonos playback. This screen controls announcement volume, response text, and how long the JARVIS overlay remains visible.")
         jarvis_note.setWordWrap(True)
         jarvis_note.setFont(font(8, QFont.Bold))
         jarvis_note.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")

@@ -6891,6 +6891,19 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
         "jarvis_volume_percent": jarvis_volume_percent,
         "jarvisVolumeLevel": jarvis_volume_level,
         "jarvis_volume_level": jarvis_volume_level,
+        "jarvis": {
+            "enabled": bool(assistant_config.get("enabled", True)),
+            "agentId": str(assistant_config.get("agentId") or ""),
+            "ttsEntityId": str(assistant_config.get("ttsEntityId") or ""),
+            "mediaPlayerId": str(assistant_config.get("mediaPlayerId") or ""),
+            "effectiveMediaPlayerId": str(assistant_config.get("effectiveMediaPlayerId") or ""),
+            "language": str(assistant_config.get("language") or "en-US"),
+            "speak": bool(assistant_config.get("speak", True)),
+            "showResponseText": bool(assistant_config.get("showResponseText", True)),
+            "responseHoldSeconds": float(assistant_config.get("responseHoldSeconds") or 0.0),
+            "announcementVolumePercent": jarvis_volume_percent,
+            "haCloudTtsVoice": str(assistant_config.get("haCloudTtsVoice") or "JennyNeural"),
+        },
         "thermalProtection": thermal_protection,
         "thermal_protection": thermal_protection,
         "screenLock": _screen_lock_status_payload(),
@@ -6975,6 +6988,19 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
         "jarvis_volume_percent": jarvis_volume_percent,
         "jarvisVolumeLevel": jarvis_volume_level,
         "jarvis_volume_level": jarvis_volume_level,
+        "jarvis": {
+            "enabled": bool(assistant_config.get("enabled", True)),
+            "agentId": str(assistant_config.get("agentId") or ""),
+            "ttsEntityId": str(assistant_config.get("ttsEntityId") or ""),
+            "mediaPlayerId": str(assistant_config.get("mediaPlayerId") or ""),
+            "effectiveMediaPlayerId": str(assistant_config.get("effectiveMediaPlayerId") or ""),
+            "language": str(assistant_config.get("language") or "en-US"),
+            "speak": bool(assistant_config.get("speak", True)),
+            "showResponseText": bool(assistant_config.get("showResponseText", True)),
+            "responseHoldSeconds": float(assistant_config.get("responseHoldSeconds") or 0.0),
+            "announcementVolumePercent": jarvis_volume_percent,
+            "haCloudTtsVoice": str(assistant_config.get("haCloudTtsVoice") or "JennyNeural"),
+        },
         "thermalProtection": thermal_protection,
         "thermal_protection": thermal_protection,
         "screenLock": _screen_lock_status_payload(),
@@ -11136,9 +11162,13 @@ def _assistant_external_playback_payload(payload: dict) -> dict:
         request_id = int(payload.get("requestId") or 0)
     except (TypeError, ValueError):
         request_id = 0
+    action = str(payload.get("action") or "started").strip().lower()
     with _ASSISTANT_LOCK:
         current_request_id = int(_ASSISTANT_STATE.get("requestId") or 0)
-    if request_id and current_request_id and request_id != current_request_id:
+    # A processing event starts a brand-new HA-owned request and is therefore
+    # allowed to replace the previous request id. Follow-up response/playback
+    # events still reject stale ids so an older task cannot overwrite the UI.
+    if action != "processing" and request_id and current_request_id and request_id != current_request_id:
         return {
             "ok": False,
             "stale": True,
@@ -11146,7 +11176,6 @@ def _assistant_external_playback_payload(payload: dict) -> dict:
             "assistant": _assistant_status_payload().get("assistant"),
         }
 
-    action = str(payload.get("action") or "started").strip().lower()
     media_player_id = str(payload.get("mediaPlayerId") or "").strip()[:255]
     tts_entity_id = str(payload.get("ttsEntityId") or "").strip()[:255]
     error = str(payload.get("error") or "").strip()[:1000]
@@ -11159,7 +11188,39 @@ def _assistant_external_playback_payload(payload: dict) -> dict:
     except (TypeError, ValueError):
         estimated_seconds = 12.0
 
-    if action == "started":
+    if action == "processing":
+        command = str(payload.get("command") or "").strip()[:1200]
+        state = _assistant_set_state(
+            "processing",
+            requestId=request_id or int(time.time() * 1000),
+            command=command,
+            response="",
+            spokenResponse="",
+            statusText=str(payload.get("statusText") or "Processing your request.").strip()[:255],
+            error="",
+            mediaPlayerId=media_player_id or str(_ASSISTANT_STATE.get("mediaPlayerId") or ""),
+            ttsEntityId=tts_entity_id or str(_ASSISTANT_STATE.get("ttsEntityId") or ""),
+            speechPlayed=False,
+            speechDelegated=True,
+            clearAtMonotonic=time.monotonic() + 120.0,
+        )
+    elif action == "response":
+        response = str(payload.get("response") or "").strip()[:8000]
+        spoken_response = str(payload.get("spokenResponse") or response).strip()[:8000]
+        show_response = _assistant_bool(payload.get("showResponseText"), True)
+        state = _assistant_set_state(
+            "speaking",
+            response=response if show_response else "",
+            spokenResponse=spoken_response,
+            statusText=str(payload.get("statusText") or "Response ready.").strip()[:255],
+            error="",
+            mediaPlayerId=media_player_id or str(_ASSISTANT_STATE.get("mediaPlayerId") or ""),
+            ttsEntityId=tts_entity_id or str(_ASSISTANT_STATE.get("ttsEntityId") or ""),
+            speechPlayed=False,
+            speechDelegated=True,
+            clearAtMonotonic=time.monotonic() + estimated_seconds + hold_seconds + 15.0,
+        )
+    elif action == "started":
         state = _assistant_set_state(
             "speaking",
             statusText="Speaking through Home Assistant.",
@@ -11189,7 +11250,7 @@ def _assistant_external_playback_payload(payload: dict) -> dict:
             clearAtMonotonic=time.monotonic() + max(8.0, hold_seconds),
         )
     else:
-        return {"ok": False, "error": "action must be started, finished, or failed"}
+        return {"ok": False, "error": "action must be processing, response, started, finished, or failed"}
     return {"ok": True, "assistant": state}
 
 

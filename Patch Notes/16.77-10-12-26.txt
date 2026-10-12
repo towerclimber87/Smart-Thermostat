@@ -1,0 +1,22 @@
+Smart Thermostat 16.77-10-12-26
+Bundled Home Assistant IHA integration 10.20.0
+
+JARVIS performance / architecture update
+
+- Moved normal iha.ask_jarvis reasoning and routing fully into Home Assistant.
+- Removed the thermostat /api/assistant/process endpoint from the normal Home Assistant service path.
+- Hybrid routing now selects one conversation agent before processing; it no longer performs a serial local-then-cloud retry.
+- Clear home/device/status requests route directly to Home Assistant Assist.
+- Broad/general-knowledge requests route directly to the configured OpenAI/ChatGPT conversation agent.
+- Thermostat remains the UI/config surface for JARVIS announcement volume, Sonos target, response text display, and response hold time.
+- Home Assistant snapshots Sonos volume, applies the panel-selected JARVIS volume, calls native tts.speak, waits for playback completion, restores the prior volume, then clears the panel overlay.
+- Panel callbacks are display-only and run outside the AI processing critical path: processing, response, speaking, finished/failed.
+- Added token-free JARVIS presentation configuration to the thermostat status payload so Home Assistant can use current panel settings without asking the panel to process the request.
+- Added timing diagnostics in iha.ask_jarvis responses: conversationMs, ttsRequestMs, totalMs.
+- iha.jarvis_announcement now bypasses both the thermostat processor and any conversation model; supplied text goes straight to HA TTS/Sonos and the panel display.
+
+Deployment note
+
+Both sides should be updated together:
+1. Update/restart the thermostat with this patch/full package.
+2. Merge Supporting/iha.zip into Home Assistant /config/custom_components/ and restart Home Assistant.

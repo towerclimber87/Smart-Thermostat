@@ -1,7 +1,16 @@
-## Current bundled IHA integration (10.18.0)
+## Current bundled IHA integration (10.20.0)
 
-The included `Supporting/iha.zip` currently contains IHA integration version **10.18.0**. Install/merge this package into Home Assistant's existing `/config/custom_components/iha/` directory and restart Home Assistant after updating.
+The included `Supporting/iha.zip` currently contains IHA integration version **10.20.0**. Install/merge this package into Home Assistant's existing `/config/custom_components/iha/` directory and restart Home Assistant after updating.
 
+
+
+## Home Assistant-owned JARVIS processing (10.20.0)
+
+Version **10.20.0** removes the thermostat backend from the normal `iha.ask_jarvis` processing path. Home Assistant now chooses the local or cloud conversation agent first and makes exactly one `conversation.process` call. The panel receives only lightweight `processing`, `response`, `speaking`, and `finished` display callbacks.
+
+The thermostat remains authoritative for its saved JARVIS presentation settings: selected Sonos player, announcement volume, response-text visibility, and response hold time. Home Assistant reads those settings from the normal thermostat status payload, snapshots the current Sonos volume, applies the JARVIS volume, calls native `tts.speak`, waits for completion, restores the previous volume, and then clears the panel overlay. Panel callbacks run outside the conversation critical path, so an offline or slow panel cannot delay the AI answer.
+
+Hybrid routing no longer performs the old local-then-cloud serial fallback. Clear home/device/status requests go directly to the local Home Assistant agent; broad/general-knowledge requests go directly to the configured OpenAI/ChatGPT conversation agent. If no cloud agent is configured, Home Assistant makes one deterministic local attempt rather than waiting through two agents. Service responses now include `timings.conversationMs`, `timings.ttsRequestMs`, and `timings.totalMs` for latency diagnostics.
 
 ## Home Assistant Screen Lock (10.19.0)
 
