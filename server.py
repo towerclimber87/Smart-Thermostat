@@ -15456,9 +15456,24 @@ def _light_supports_color(color_modes) -> bool:
     return bool(color_mode_set.intersection({"hs", "rgb", "rgbw", "rgbww", "xy"}))
 
 
+def _light_supports_brightness(attrs: dict, color_modes) -> bool:
+    # Home Assistant's on/off-only lights advertise the `onoff` color mode and
+    # do not expose a brightness attribute. Every other normal light color mode
+    # supports brightness, and an explicit brightness attribute is authoritative.
+    if attrs.get("brightness") is not None:
+        return True
+    modes = {str(mode or "").strip().lower() for mode in (color_modes or []) if str(mode or "").strip()}
+    if modes == {"onoff"}:
+        return False
+    if modes:
+        return any(mode != "onoff" for mode in modes)
+    return False
+
+
 def _normalize_light_item(item: dict) -> dict:
     attrs = item.get("attributes") or {}
     entity_id = str(item.get("entity_id", ""))
+    domain = entity_id.split(".", 1)[0] if "." in entity_id else "light"
     raw_brightness = attrs.get("brightness")
     try:
         brightness_pct = int(round((float(raw_brightness) / 255.0) * 100)) if raw_brightness is not None else 0
@@ -15485,30 +15500,31 @@ def _normalize_light_item(item: dict) -> dict:
 
     return {
         "entityId": entity_id,
-        "domain": "light",
+        "domain": domain,
         "name": attrs.get("friendly_name") or entity_id,
         "state": state,
-        "brightnessPct": brightness_pct,
+        "brightnessPct": brightness_pct if domain == "light" else (100 if str(state).lower() == "on" else 0),
+        "brightnessSupported": False if domain == "switch" else _light_supports_brightness(attrs, supported_color_modes),
         "supportedColorModes": supported_color_modes,
         "colorMode": attrs.get("color_mode") or "",
-        "colorSupported": _light_supports_color(supported_color_modes) or bool(rgb_color or hs_color),
+        "colorSupported": False if domain == "switch" else (_light_supports_color(supported_color_modes) or bool(rgb_color or hs_color)),
         "colorHex": color_hex,
     }
 
 
 def _fetch_ha_light_state(ha_url: str, token: str, entity_id: str) -> dict:
     entity_id = (entity_id or "").strip()
-    if not entity_id.startswith("light."):
-        raise ValueError("Entity must be a light.* entity")
+    if not entity_id.startswith(("light.", "switch.")):
+        raise ValueError("Entity must be a light.* or switch.* entity")
     item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
     return _normalize_light_item(item)
 
 
 def _fetch_ha_light_states_for_entities(ha_url: str, token: str, entity_ids: list[str], fresh: bool = False) -> list[dict]:
-    wanted = _ordered_unique_entity_ids(entity_ids, {"light"})
+    wanted = _ordered_unique_entity_ids(entity_ids, {"light", "switch"})
     if len(wanted) == 1 and not fresh:
         return [_fetch_ha_light_state(ha_url, token, wanted[0])]
-    items = _fetch_ha_state_items_for_entities(ha_url, token, wanted, {"light"}, all_states_threshold=2, use_cache=not fresh)
+    items = _fetch_ha_state_items_for_entities(ha_url, token, wanted, {"light", "switch"}, all_states_threshold=2, use_cache=not fresh)
     lights = [_normalize_light_item(item) for item in items]
     by_id = {item["entityId"]: item for item in lights}
     return [by_id[entity_id] for entity_id in wanted if entity_id in by_id]
@@ -15516,11 +15532,43 @@ def _fetch_ha_light_states_for_entities(ha_url: str, token: str, entity_ids: lis
 
 def _call_light_service(ha_url: str, token: str, entity_id: str, action: str, brightness: int | float | None = None, color: str | None = None, transition: int | float | None = None, refresh: bool = True) -> dict:
     entity_id = (entity_id or "").strip()
-    if not entity_id.startswith("light."):
-        raise ValueError("Entity must be a light.* entity")
+    if not entity_id.startswith(("light.", "switch.")):
+        raise ValueError("Entity must be a light.* or switch.* entity")
     action = (action or "on").strip().lower()
     if action not in {"on", "off", "toggle", "brightness", "color"}:
         raise ValueError("Unsupported light action")
+
+    domain = entity_id.split(".", 1)[0]
+    if domain == "switch":
+        if action in {"brightness", "color"}:
+            action = "on"
+        service = {"on": "turn_on", "off": "turn_off", "toggle": "toggle"}.get(action, "turn_on")
+        _ha_json_request(ha_url, token, "POST", f"/api/services/switch/{service}", {"entity_id": entity_id})
+        _invalidate_ha_state_cache(ha_url, token)
+        if not refresh:
+            return {
+                "entityId": entity_id,
+                "domain": "switch",
+                "name": entity_id,
+                "state": "off" if action == "off" else "on",
+                "brightnessPct": 0 if action == "off" else 100,
+                "brightnessSupported": False,
+                "colorSupported": False,
+                "colorHex": "#ffd76f",
+            }
+        try:
+            return _fetch_ha_light_state(ha_url, token, entity_id)
+        except Exception:
+            return {
+                "entityId": entity_id,
+                "domain": "switch",
+                "name": entity_id,
+                "state": "off" if action == "off" else "on",
+                "brightnessPct": 0 if action == "off" else 100,
+                "brightnessSupported": False,
+                "colorSupported": False,
+                "colorHex": "#ffd76f",
+            }
 
     if action == "off":
         payload = {"entity_id": entity_id}
@@ -15564,6 +15612,7 @@ def _call_light_service(ha_url: str, token: str, entity_id: str, action: str, br
             "name": entity_id,
             "state": "off" if action == "off" else "on",
             "brightnessPct": fallback_brightness,
+            "brightnessSupported": brightness is not None,
             "colorSupported": bool(_light_hex_to_rgb(color)),
             "colorHex": f"#{str(color or '').strip().lstrip('#').lower()}" if _light_hex_to_rgb(color) else "#ffd76f",
         }

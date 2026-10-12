@@ -1083,12 +1083,14 @@ class LightCard(HoldCard):
         return super().eventFilter(obj, event)
 
     def resizeEvent(self, event):
-        top = 128 if self.height() >= 320 else 118
-        # Leave just enough room for the percent/brightness labels; the light
-        # page now stretches the card rows, so this gives the slider more throw
-        # and pulls it closer to the bottom of the card.
-        bottom = 60
-        self.slider.setGeometry(int(self.width() / 2 - 21), top, 42, max(78, self.height() - top - bottom))
+        supports_brightness = self.light.get("brightnessSupported") is not False
+        self.slider.setVisible(supports_brightness)
+        if supports_brightness:
+            top = 128 if self.height() >= 320 else 118
+            # Leave just enough room for the percent/brightness labels; the light
+            # page now stretches the card rows, so this gives the slider more throw.
+            bottom = 60
+            self.slider.setGeometry(int(self.width() / 2 - 21), top, 42, max(78, self.height() - top - bottom))
 
     def isSliderActive(self) -> bool:
         return bool(self.slider.isSliderDown() or self._slider_dragging)
@@ -1096,7 +1098,9 @@ class LightCard(HoldCard):
     def setLight(self, light: dict, preserve_slider: bool = False):
         self.light = light
         self.dashed = not bool(light.get("haEntityId"))
-        val = int(light.get("brightness") or 0)
+        supports_brightness = light.get("brightnessSupported") is not False
+        self.slider.setVisible(supports_brightness)
+        val = int(light.get("brightness") or (100 if light.get("on") else 0))
         if not preserve_slider and not self.slider.isSliderDown():
             # External HA updates should not be interpreted as user input.
             was_blocked = self.slider.blockSignals(True)
@@ -1108,11 +1112,12 @@ class LightCard(HoldCard):
         self.update()
         # While the user is actively sliding, emit live previews so the light can
         # follow the finger. Programmatic setLight() updates are signal-blocked.
-        if self.slider.isSliderDown():
+        if self.light.get("brightnessSupported") is not False and self.slider.isSliderDown():
             self.brightnessChanged.emit(self.light, int(value))
 
     def _release(self):
-        self.brightnessChanged.emit(self.light, int(self.slider.value()))
+        if self.light.get("brightnessSupported") is not False:
+            self.brightnessChanged.emit(self.light, int(self.slider.value()))
 
     def _fire_power_hold(self):
         self._power_held = True
@@ -1150,8 +1155,11 @@ class LightCard(HoldCard):
         r = QRectF(self.rect())
         name = self.light.get("haName") or self.light.get("name") or "Light"
         assigned = bool(self.light.get("haEntityId"))
-        bright = int(self.slider.value())
-        on = bright > 0 and bool(self.light.get("on", bright > 0))
+        supports_brightness = self.light.get("brightnessSupported") is not False
+        bright = int(self.slider.value()) if supports_brightness else (100 if self.light.get("on") else 0)
+        # Power state comes from Home Assistant state, not from brightness.  A
+        # switch-like light can be ON without exposing any brightness attribute.
+        on = bool(self.light.get("on", bright > 0))
         color = QColor(str(self.light.get("color") or "#ffd76f"))
         if not color.isValid():
             color = T.YELLOW
@@ -1199,10 +1207,16 @@ class LightCard(HoldCard):
 
         p.setFont(font(18, QFont.Black))
         p.setPen(T.TEXT if on else T.TEXT_DIM)
-        p.drawText(QRectF(0, r.height()-55, r.width(), 23), Qt.AlignCenter, f"{bright}%")
-        p.setFont(font(7, QFont.Black, 16))
-        p.setPen(T.TEXT_DIM)
-        p.drawText(QRectF(0, r.height()-33, r.width(), 18), Qt.AlignCenter, "BRIGHTNESS")
+        if supports_brightness:
+            p.drawText(QRectF(0, r.height()-55, r.width(), 23), Qt.AlignCenter, f"{bright}%")
+            p.setFont(font(7, QFont.Black, 16))
+            p.setPen(T.TEXT_DIM)
+            p.drawText(QRectF(0, r.height()-33, r.width(), 18), Qt.AlignCenter, "BRIGHTNESS")
+        else:
+            p.drawText(QRectF(0, r.height()-55, r.width(), 23), Qt.AlignCenter, "ON" if on else "OFF")
+            p.setFont(font(7, QFont.Black, 16))
+            p.setPen(T.TEXT_DIM)
+            p.drawText(QRectF(0, r.height()-33, r.width(), 18), Qt.AlignCenter, "POWER ONLY")
 
 
 class BlindPreview(QWidget):

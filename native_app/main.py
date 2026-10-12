@@ -4877,26 +4877,17 @@ class FamilyCenterStatusPanel(QWidget):
         scale = float(self._display_scale_percent) / 100.0
         if self._kid_mode and self._kids and not self._error:
             count = max(1, min(6, len(self._kids)))
-            # Kid Mode becomes a true multi-child status board instead of a
-            # single-row mirror strip. Keep one row through three children, a
-            # 2x2 board for four, and a 3x2 board for five or six so every child
-            # gets their own readable lock reason instead of "+N more".
-            if count <= 3:
-                columns = count
-                rows = 1
-            elif count == 4:
-                columns = 2
-                rows = 2
-            else:
-                columns = 3
-                rows = 2
-            tile_width = int(round(236 * scale))
-            tile_height = int(round(132 * scale))
-            gap = int(round(10 * scale))
-            pad = int(round(10 * scale))
-            width = pad * 2 + columns * tile_width + max(0, columns - 1) * gap
-            height = pad * 2 + rows * tile_height + max(0, rows - 1) * gap
-            return max(self.COMPACT_WIDTH, min(self.MAX_WIDTH, width)), max(92, height)
+            # Kid Mode owns the narrow right-side lane only.  Each child is a
+            # compact row stacked vertically so Family Center never stretches
+            # across the thermostat dial.  Display scale still applies, but the
+            # base footprint is intentionally much smaller than the normal board.
+            tile_width = int(round(186 * scale))
+            tile_height = int(round(74 * scale))
+            gap = max(4, int(round(5 * scale)))
+            pad = max(4, int(round(5 * scale)))
+            width = pad * 2 + tile_width
+            height = pad * 2 + count * tile_height + max(0, count - 1) * gap
+            return max(188, min(300, width)), max(82, height)
         if self._error:
             msg_font = font(max(5, int(round(7 * scale))), QFont.Black)
             width = QFontMetrics(msg_font).horizontalAdvance("FAMILY CENTER UNAVAILABLE") + 18
@@ -5076,36 +5067,23 @@ class FamilyCenterStatusPanel(QWidget):
 
         if self._kid_mode:
             count = max(1, min(6, len(self._kids)))
-            if count <= 3:
-                columns = count
-                rows = 1
-            elif count == 4:
-                columns = 2
-                rows = 2
-            else:
-                columns = 3
-                rows = 2
-            pad = max(8.0, round(10.0 * scale))
-            gap = max(7.0, round(10.0 * scale))
-            available_w = self.width() - pad * 2.0 - gap * max(0, columns - 1)
-            available_h = self.height() - pad * 2.0 - gap * max(0, rows - 1)
-            tile_w = available_w / float(columns)
-            tile_h = available_h / float(rows)
+            pad = max(4.0, round(5.0 * scale))
+            gap = max(4.0, round(5.0 * scale))
+            available_w = self.width() - pad * 2.0
+            available_h = self.height() - pad * 2.0 - gap * max(0, count - 1)
+            tile_w = available_w
+            tile_h = available_h / float(count)
 
             for idx, kid in enumerate(self._kids[:6]):
-                col = idx % columns
-                row = idx // columns
                 tile = QRectF(
-                    pad + col * (tile_w + gap),
-                    pad + row * (tile_h + gap),
+                    pad,
+                    pad + idx * (tile_h + gap),
                     tile_w,
                     tile_h,
                 )
                 notice = kid.get("deviceLock") if isinstance(kid.get("deviceLock"), dict) else {}
                 locked = bool(notice.get("active"))
 
-                # Each child receives a fully independent status card. Locked
-                # cards turn red; available cards stay calm cyan/green.
                 if locked:
                     border = QColor(255, 112, 128, 230)
                     fill = QColor(78, 13, 29, 220)
@@ -5117,9 +5095,9 @@ class FamilyCenterStatusPanel(QWidget):
                     accent = QColor("#70e8b0")
                     subtext = QColor("#d9fff1")
 
-                p.setPen(QPen(border, 1.7))
+                p.setPen(QPen(border, 1.35))
                 p.setBrush(fill)
-                p.drawRoundedRect(tile, 16, 16)
+                p.drawRoundedRect(tile, 12, 12)
 
                 name = str(kid.get("name") or "Kid").strip() or "Kid"
                 try:
@@ -5127,45 +5105,57 @@ class FamilyCenterStatusPanel(QWidget):
                 except (TypeError, ValueError):
                     score = 0
 
-                name_font = font(max(10, int(round(13 * scale))), QFont.Black)
-                pts_font = font(max(7, int(round(8 * scale))), QFont.Black)
-                status_font = font(max(7, int(round(8 * scale))), QFont.Black)
-                reason_font = font(max(7, int(round(8 * scale))), QFont.DemiBold)
+                name_font = font(max(8, int(round(10 * scale))), QFont.Black)
+                pts_font = font(max(6, int(round(7 * scale))), QFont.Black)
+                status_font = font(max(6, int(round(7 * scale))), QFont.Black)
+                reason_font = font(max(6, int(round(7 * scale))), QFont.DemiBold)
 
-                header_y = tile.y() + 10.0
+                x = tile.x() + max(7.0, 8.0 * scale)
+                inner_w = tile.width() - max(14.0, 16.0 * scale)
+                top = tile.y() + max(5.0, 6.0 * scale)
+                name_h = max(15.0, 17.0 * scale)
+
+                p.setFont(name_font)
+                name_metrics = QFontMetrics(name_font)
+                point_text = f"{score} pts"
+                p.setFont(pts_font)
+                point_metrics = QFontMetrics(pts_font)
+                point_w = point_metrics.horizontalAdvance(point_text) + 2
+
                 p.setPen(QColor("#ffffff"))
                 p.setFont(name_font)
-                p.drawText(QRectF(tile.x()+12, header_y, tile.width()-24, 24*scale), Qt.AlignLeft|Qt.AlignVCenter, name)
+                clipped_name = name_metrics.elidedText(name, Qt.ElideRight, max(36, int(inner_w - point_w - 8 * scale)))
+                p.drawText(QRectF(x, top, inner_w - point_w - 6*scale, name_h), Qt.AlignLeft|Qt.AlignVCenter, clipped_name)
 
-                points_text = f"{score} POINTS"
                 p.setPen(accent)
                 p.setFont(pts_font)
-                p.drawText(QRectF(tile.x()+12, header_y + 26*scale, tile.width()-24, 18*scale), Qt.AlignLeft|Qt.AlignVCenter, points_text)
+                p.drawText(QRectF(x + inner_w - point_w, top, point_w, name_h), Qt.AlignRight|Qt.AlignVCenter, point_text)
 
                 privileges = [item for item in (kid.get("privileges") or []) if isinstance(item, dict)]
-                icon_size = max(11.0, 17.0 * scale)
-                icon_gap = max(3.0, 4.0 * scale)
-                icon_x = tile.x() + tile.width() - 12.0
-                icon_y = header_y + 22.0 * scale
-                for privilege in reversed(privileges):
-                    if icon_x - icon_size < tile.x() + tile.width()*0.46:
+                icon_size = max(9.0, 11.0 * scale)
+                icon_gap = max(2.0, 2.5 * scale)
+                icon_x = x
+                icon_y = top + name_h + max(1.0, 1.5 * scale)
+                for privilege in privileges[:7]:
+                    if icon_x + icon_size > x + inner_w:
                         break
-                    icon_x -= icon_size
                     self._draw_icon(p, _family_privilege_kind(privilege), QRectF(icon_x, icon_y, icon_size, icon_size))
-                    icon_x -= icon_gap
+                    icon_x += icon_size + icon_gap
 
-                status_top = tile.y() + 58.0 * scale
-                status_rect = QRectF(tile.x()+10, status_top, tile.width()-20, tile.height()-(status_top-tile.y())-10)
+                status_top = icon_y + icon_size + max(2.0, 3.0 * scale)
+                status_h = max(18.0, tile.bottom() - status_top - max(5.0, 6.0 * scale))
+                status_rect = QRectF(x, status_top, inner_w, status_h)
                 if locked:
                     p.setPen(QPen(QColor(255, 120, 136, 145), 1.0))
                     p.setBrush(QColor(120, 18, 39, 135))
-                    p.drawRoundedRect(status_rect, 11, 11)
+                    p.drawRoundedRect(status_rect, 8, 8)
                     p.setPen(QColor("#fff2f4"))
                     p.setFont(status_font)
-                    p.drawText(QRectF(status_rect.x()+8, status_rect.y()+5, status_rect.width()-16, 18*scale), Qt.AlignLeft|Qt.AlignVCenter, "DEVICE LOCKED")
+                    label_w = min(status_rect.width() * 0.43, QFontMetrics(status_font).horizontalAdvance("LOCKED") + 12*scale)
+                    p.drawText(QRectF(status_rect.x()+6, status_rect.y()+2, label_w, status_rect.height()-4), Qt.AlignLeft|Qt.AlignVCenter, "LOCKED")
 
                     title = str(notice.get("title") or "").strip()
-                    message = str(notice.get("message") or "Your device is currently locked.").strip()
+                    message = str(notice.get("message") or "Device is currently locked.").strip()
                     reason = title
                     if reason.lower().startswith("locked due to "):
                         reason = reason[14:].strip()
@@ -5173,12 +5163,14 @@ class FamilyCenterStatusPanel(QWidget):
                         reason = message
                     p.setPen(subtext)
                     p.setFont(reason_font)
-                    reason_box = QRectF(status_rect.x()+8, status_rect.y()+23*scale, status_rect.width()-16, status_rect.height()-27*scale)
-                    p.drawText(reason_box, Qt.AlignLeft|Qt.AlignTop|Qt.TextWordWrap, reason)
+                    reason_metrics = QFontMetrics(reason_font)
+                    reason_w = max(20, int(status_rect.width() - label_w - 14*scale))
+                    compact_reason = reason_metrics.elidedText(reason, Qt.ElideRight, reason_w)
+                    p.drawText(QRectF(status_rect.x()+label_w+8*scale, status_rect.y()+2, reason_w, status_rect.height()-4), Qt.AlignLeft|Qt.AlignVCenter, compact_reason)
                 else:
                     p.setPen(QPen(QColor(91, 219, 178, 95), 1.0))
                     p.setBrush(QColor(26, 95, 76, 82))
-                    p.drawRoundedRect(status_rect, 11, 11)
+                    p.drawRoundedRect(status_rect, 8, 8)
                     p.setPen(QColor("#dffff0"))
                     p.setFont(status_font)
                     p.drawText(status_rect, Qt.AlignCenter, "DEVICE AVAILABLE")
@@ -9136,8 +9128,20 @@ class LightsScreen(Page):
         one unique entity-id extension such as light.guest_bathroom ->
         light.guest_bathroom_light.
         """
-        available = self.s.ha().get("lightAvailableEntities") or []
-        available = [x for x in available if isinstance(x, dict) and str(x.get("entityId") or "").startswith("light.")]
+        ha = self.s.ha()
+        available = [x for x in (ha.get("lightAvailableEntities") or []) if isinstance(x, dict)]
+        # Some wall controls are exposed by Home Assistant as switch.* rather
+        # than light.*. Treat those as power-only lights so the Lights page can
+        # represent a real on/off device without inventing a dimmer.
+        room_entities = [x for x in (ha.get("roomAvailableEntities") or []) if isinstance(x, dict)]
+        available.extend(
+            x for x in room_entities
+            if str(x.get("entityId") or "").startswith("switch.")
+        )
+        available = [
+            x for x in available
+            if str(x.get("entityId") or "").startswith(("light.", "switch."))
+        ]
         if not available:
             return False
         by_id = {str(x.get("entityId") or "").strip(): x for x in available if x.get("entityId")}
@@ -9148,7 +9152,14 @@ class LightsScreen(Page):
             if not isinstance(light, dict):
                 continue
             entity_id = str(light.get("haEntityId") or "").strip()
-            if not entity_id or entity_id in by_id:
+            if not entity_id:
+                continue
+            current_entity = by_id.get(entity_id)
+            current_state = str((current_entity or {}).get("state") or "").strip().lower()
+            # A live existing entity wins. An unavailable saved entity is allowed
+            # to look for one safe replacement so old Z-Wave light entities can
+            # migrate to a switch-domain replacement without user intervention.
+            if current_entity is not None and current_state not in {"unavailable", "unknown"}:
                 continue
 
             candidates = []
@@ -9170,6 +9181,29 @@ class LightsScreen(Page):
                 ]
                 candidates = prefix_candidates if len(prefix_candidates) == 1 else []
 
+            if len(candidates) != 1 and current_entity is not None and current_state in {"unavailable", "unknown"}:
+                # Cross-domain recovery for renamed/replaced wall controls. Match
+                # a conservative root (guest_bathroom_light / guest_bathroom_old
+                # -> guest_bathroom) and only accept one live candidate.
+                def entity_root(value: str) -> str:
+                    obj = str(value or "").split(".", 1)[-1].strip().lower()
+                    changed = True
+                    while changed:
+                        changed = False
+                        for suffix in ("_light", "_switch", "_old"):
+                            if obj.endswith(suffix) and len(obj) > len(suffix):
+                                obj = obj[:-len(suffix)]
+                                changed = True
+                    return obj
+                wanted_root = entity_root(entity_id)
+                root_candidates = [
+                    ent for ent in available
+                    if str(ent.get("entityId") or "").strip() != entity_id
+                    and entity_root(str(ent.get("entityId") or "")) == wanted_root
+                    and str(ent.get("state") or "").strip().lower() not in {"unavailable", "unknown"}
+                ]
+                candidates = root_candidates if len(root_candidates) == 1 else []
+
             if len(candidates) != 1:
                 continue
             resolved = candidates[0]
@@ -9182,7 +9216,10 @@ class LightsScreen(Page):
             old_ha_name = str(light.get("haName") or "").strip()
             if not old_ha_name or old_ha_name == entity_id:
                 light["haName"] = resolved.get("name") or new_id
-            light["domain"] = "light"
+            new_domain = str(resolved.get("domain") or new_id.split(".", 1)[0] or "light")
+            light["domain"] = new_domain
+            light["brightnessSupported"] = False if new_domain == "switch" else bool(resolved.get("brightnessSupported", True))
+            light["colorSupported"] = False if new_domain == "switch" else bool(resolved.get("colorSupported", light.get("colorSupported", False)))
             if resolved.get("state") is not None:
                 light["state"] = resolved.get("state")
                 light["on"] = as_bool_state(resolved.get("state"))
@@ -9312,8 +9349,10 @@ class LightsScreen(Page):
     def room_action(self, turn_on: bool):
         lights = self._active_lights()
         for light in lights:
-            bright = int(light.get("lastBrightness") or light.get("brightness") or 100)
-            self._send_light(light, "on" if turn_on else "off", bright if turn_on else 0)
+            bright = None
+            if turn_on and light.get("brightnessSupported") is not False:
+                bright = int(light.get("lastBrightness") or light.get("brightness") or 100)
+            self._send_light(light, "on" if turn_on else "off", bright)
 
     def _open_live_color_dialog(self, lights: list[dict], current: str, title: str):
         """Open a touch-friendly RGB picker and push color changes live.
@@ -9380,7 +9419,11 @@ class LightsScreen(Page):
             self.requestAssign.emit("light", light, "light")
             return
         action = "off" if bool(light.get("on")) else "on"
-        bright = int(light.get("lastBrightness") or light.get("brightness") or 100) if action == "on" else 0
+        # A true on/off light must never receive brightness_pct.  Home Assistant
+        # capability data marks those as brightnessSupported=False.
+        bright = None
+        if action == "on" and light.get("brightnessSupported") is not False:
+            bright = int(light.get("lastBrightness") or light.get("brightness") or 100)
         self._send_light(light, action, bright)
 
     def _cancel_pending_light_adjustments(self, entity_id: str):
@@ -9498,7 +9541,7 @@ class LightsScreen(Page):
 
     def set_brightness(self, light: dict, value: int):
         entity_id = str(light.get("haEntityId") or "")
-        if not entity_id:
+        if not entity_id or light.get("brightnessSupported") is False:
             return
         value = int(clamp(value, 0, 100))
         self._set_light_optimistic(light, value, action="brightness")
@@ -9584,6 +9627,8 @@ class LightsScreen(Page):
                 return
             self._light_power_pending.pop(entity_id, None)
         payload = {"entityId": entity_id, "action": action, "refresh": False}
+        if light.get("brightnessSupported") is False:
+            brightness = None
         if brightness is not None:
             payload["brightness"] = int(clamp(brightness, 0, 100))
             # A transition on light.turn_off is unreliable on some Z-Wave
@@ -9630,6 +9675,14 @@ class LightsScreen(Page):
             light["color"] = st.get("colorHex")
         if st.get("colorSupported") is not None:
             light["colorSupported"] = bool(st.get("colorSupported"))
+        if st.get("brightnessSupported") is not None:
+            light["brightnessSupported"] = bool(st.get("brightnessSupported"))
+            # On/off-only lights have no meaningful brightness value. Keep their
+            # power state authoritative instead of turning an ON light into 0%.
+            if not light["brightnessSupported"]:
+                light["brightness"] = 100 if light.get("on") else 0
+                if light.get("on"):
+                    light["lastBrightness"] = 100
         light["haName"] = st.get("name") or light.get("haName")
 
     def poll(self):
@@ -23690,7 +23743,7 @@ class MainWindow(Background):
         if group == "room":
             return ["switch", "input_boolean", "button", "fan", "cover", "light", "lock"]
         if group == "light":
-            return ["light"]
+            return ["light", "switch"]
         if group == "cover":
             return ["cover"]
         if group == "audio-number":
@@ -23706,7 +23759,12 @@ class MainWindow(Background):
         if group == "room":
             return ha.get("roomAvailableEntities") or []
         if group == "light":
-            return ha.get("lightAvailableEntities") or []
+            entities = list(ha.get("lightAvailableEntities") or [])
+            entities.extend(
+                x for x in (ha.get("roomAvailableEntities") or [])
+                if isinstance(x, dict) and str(x.get("entityId") or "").startswith("switch.")
+            )
+            return entities
         if group == "cover":
             return ha.get("coverEntities") or []
         if group == "audio-number":
@@ -23841,9 +23899,12 @@ class MainWindow(Background):
                 obj["domain"] = ent.get("domain")
             obj["state"] = ent.get("state") or obj.get("state") or "unknown"
             obj["on"] = room_control_active(obj.get("state"), obj.get("domain"))
-            for meta_key in ("deviceClass", "icon", "supportedFeatures", "currentPosition"):
+            for meta_key in ("deviceClass", "icon", "supportedFeatures", "currentPosition", "brightnessSupported", "colorSupported", "supportedColorModes"):
                 if meta_key in ent:
                     obj[meta_key] = ent.get(meta_key)
+            if group == "light" and str(obj.get("domain") or "") == "switch":
+                obj["brightnessSupported"] = False
+                obj["colorSupported"] = False
             try:
                 snapshot = copy.deepcopy(self.s.config)
                 self.sync_runtime_only()

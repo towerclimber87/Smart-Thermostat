@@ -1,0 +1,11 @@
+Smart Thermostat 16.87 - 10/12/2026
+
+- Reworked the Kid Mode Family Center status board into a compact vertical stack on the far right side of the thermostat screen.
+- Reduced Kid Mode family-card width, padding, font size, privilege icon size, and lock-status footprint so the cards no longer overlap the thermostat dial.
+- Each kid still keeps an independent card with name, points, privileges, and that kid's lock reason.
+- Added Home Assistant capability detection for dimmable versus power-only lights.
+- Power-only lights hide the brightness slider and show simple ON/OFF status instead of an artificial 0% brightness state.
+- Power-only light commands no longer send brightness_pct or color data.
+- The Lights page can now use switch.* Home Assistant entities as power-only lights in addition to light.* entities.
+- Added conservative self-repair for unavailable/stale light mappings: when one matching live replacement exists, including a switch-domain replacement, the saved card is updated automatically.
+- Light state rendering now follows Home Assistant's actual on/off state instead of treating brightness=0 as proof that the light is off.
