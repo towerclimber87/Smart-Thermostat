@@ -6842,26 +6842,33 @@ def _thermostat_outputs(thermostat: dict, *, ignore_thermal_protection: bool = F
     heat_was_on = _known_equipment_output_on(thermostat, "heat")
     cool_was_on = _known_equipment_output_on(thermostat, "cool")
 
-    # Temperature differential is a start threshold, not an early shutoff.
-    # Example with target 70 and differential 1:
-    # - Cooling that is already running keeps cooling until the room reaches 70,
-    #   then waits until the room rises to 71 before starting again.
-    # - Heating that is already running keeps heating until the room reaches 70,
-    #   then waits until the room falls to 69 before starting again.
-    # A value of 0 preserves the original exact-setpoint behavior.
+    # Temperature differential remains the START threshold.  Once equipment is
+    # running, use a small built-in run-through hysteresis so sensor rounding or
+    # a one-tenth-degree bounce at the setpoint cannot immediately stop the
+    # compressor and then strand the room behind the minimum-off timer.
+    #
+    # Example with a 74F cooling target and differential 0:
+    # - start cooling when the room rises above 74F
+    # - once running, continue through 74F until the room reaches 73.5F
+    #
+    # Heating is symmetric: with a 70F target it continues to 70.5F.
+    # Safety heat/cool intentionally keeps exact safety thresholds.
+    run_hysteresis_f = 0.0 if safety_mode else 0.5
     heat_start_threshold = target - differential
     cool_start_threshold = target + differential
+    heat_stop_threshold = target + run_hysteresis_f
+    cool_stop_threshold = target - run_hysteresis_f
     starting_heat_call = current <= heat_start_threshold if differential > 0 else current < target
     starting_cool_call = current >= cool_start_threshold if differential > 0 else current > target
     heat = (
         (not thermostat.get("heatLocked"))
         and active_mode == "heat"
-        and (current < target if heat_was_on else starting_heat_call)
+        and (current < heat_stop_threshold if heat_was_on else starting_heat_call)
     )
     cool = (
         (not thermostat.get("coolLocked"))
         and active_mode == "cool"
-        and (current > target if cool_was_on else starting_cool_call)
+        and (current > cool_stop_threshold if cool_was_on else starting_cool_call)
     )
     pending_mode = ""
     manual_lockout_until = 0

@@ -1,0 +1,19 @@
+Smart Thermostat 16.93 - 2026-10-12
+
+Changed
+- Added 0.5 F run-through hysteresis to normal thermostat operation.
+- Cooling that is already running now continues until 0.5 F below the target.
+  Example: target 74 F -> stop cooling at 73.5 F.
+- Heating that is already running now continues until 0.5 F above the target.
+  Example: target 70 F -> stop heating at 70.5 F.
+- The configured Temperature Differential still controls when a new heat/cool
+  call starts; this patch does not repurpose or overwrite that setting.
+- Safety-temperature operation continues to use exact safety thresholds.
+- Existing minimum runtime, minimum off-time, fan hold, external HA ownership,
+  and 16.90-16.92 persistence/reconciliation protections remain unchanged.
+
+Reason
+- With an exact target shutdown, cooling could stop at exactly the setpoint
+  (for example 74.0 F), then the sensor could rebound to 74.1 F while compressor
+  minimum-off protection prevented an immediate restart. The 0.5 F run-through
+  gives the system a stable deadband before shutting equipment down.
