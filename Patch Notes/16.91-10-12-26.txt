@@ -1,0 +1,9 @@
+Smart Thermostat 16.91 - 10/12/2026
+
+External HVAC Home Assistant output stability fix
+
+- Fixed stale Heat/Cool/Fan Home Assistant entity mappings continuing to control a previously selected entity after the setting was changed or cleared.
+- Removed the old last-entity fallback as an active control target. Previous entities are now used only for a one-time safe release.
+- Prevented contradictory commands when the same HA entity is assigned to more than one HVAC role. The backend now aggregates by physical entity and issues only one command per entity per control pass; an active ON request wins over an inactive role.
+- Active external HVAC outputs are now verified every 5 seconds (idle outputs remain on the normal 30-second verification cadence), allowing the thermostat to recover quickly if an external switch is changed elsewhere.
+- Includes the 16.90 persistence/cache synchronization fixes.

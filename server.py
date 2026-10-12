@@ -67,6 +67,7 @@ HA_REQUEST_TIMEOUT_SECONDS = max(0.5, float(os.environ.get("SMART_THERMOSTAT_HA_
 ASSISTANT_HA_TIMEOUT_SECONDS = max(5.0, float(os.environ.get("SMART_THERMOSTAT_ASSISTANT_HA_TIMEOUT_SECONDS", "45") or "45"))
 HA_REQUEST_CONCURRENCY = max(1, int(float(os.environ.get("SMART_THERMOSTAT_HA_REQUEST_CONCURRENCY", "4") or "4")))
 EXTERNAL_HA_AIR_VERIFY_INTERVAL_SECONDS = max(5.0, float(os.environ.get("SMART_THERMOSTAT_EXTERNAL_AIR_VERIFY_SECONDS", "30") or "30"))
+EXTERNAL_HA_AIR_ACTIVE_VERIFY_INTERVAL_SECONDS = max(2.0, float(os.environ.get("SMART_THERMOSTAT_EXTERNAL_AIR_ACTIVE_VERIFY_SECONDS", "5") or "5"))
 ACCESS_LOGS_ENABLED = os.environ.get("SMART_THERMOSTAT_ACCESS_LOGS", "0").strip().lower() in {"1", "true", "yes", "on"}
 HISTORY_PERSISTENCE_MODE = os.environ.get("SMART_THERMOSTAT_HISTORY_PERSISTENCE", "daily").strip().lower() or "daily"
 HISTORY_SAVE_ON_SHUTDOWN = os.environ.get("SMART_THERMOSTAT_HISTORY_SAVE_ON_SHUTDOWN", "0").strip().lower() in {"1", "true", "yes", "on"}
@@ -8257,7 +8258,15 @@ def _external_ha_state_is_on(item: dict | None) -> bool | None:
 
 
 def _apply_external_ha_air_outputs(thermostat: dict, outputs: dict) -> None:
-    """Apply each independently configured external HVAC output in Home Assistant."""
+    """Apply configured external HVAC outputs without stale or conflicting HA commands.
+
+    Entity identity is authoritative from the *current* thermostat configuration.
+    A previously selected entity is remembered only long enough to release it once;
+    it must never remain an active control target after the setting is cleared or
+    moved to another Heat/Cool/Fan output.  When more than one HVAC role points at
+    the same HA entity, ON wins so one role cannot periodically turn OFF equipment
+    that another active role still requires.
+    """
     ha_url, token = _ha_credentials_from_panel_config()
     if not ha_url or not token:
         return
@@ -8269,65 +8278,124 @@ def _apply_external_ha_air_outputs(thermostat: dict, outputs: dict) -> None:
     if desired["heat"] and desired["cool"]:
         desired["cool"] = False
 
+    # Resolve entity ids strictly from the current configuration.  Do NOT fall
+    # back to _EXTERNAL_HA_AIR_LAST_ENTITIES here; that old behavior allowed a
+    # cleared/reassigned Fan/Heat/Cool mapping to keep issuing commands forever.
+    configured_entities: dict[str, str] = {}
+    for kind in ("heat", "cool", "fan"):
+        entry = _external_air_entity_for_kind(thermostat, kind)
+        configured_entities[kind] = str((entry or {}).get("entityId") or "").strip()
+
+    # Aggregate desired state by physical HA entity.  This prevents contradictory
+    # commands when the same switch/helper is accidentally selected for two roles.
+    # If any currently configured role needs the entity ON, another inactive role
+    # is not allowed to turn it OFF.
+    desired_by_entity: dict[str, bool] = {}
+    kinds_by_entity: dict[str, list[str]] = {}
+    for kind, entity_id in configured_entities.items():
+        if not entity_id:
+            continue
+        desired_by_entity[entity_id] = bool(desired_by_entity.get(entity_id)) or bool(desired[kind])
+        kinds_by_entity.setdefault(entity_id, []).append(kind)
+
     with _EXTERNAL_HA_AIR_LOCK:
         now = time.monotonic()
-        # Turn inactive outputs off first, then energize active outputs.
-        ordered = [kind for kind in ("heat", "cool", "fan") if not desired[kind]] + [
-            kind for kind in ("heat", "cool", "fan") if desired[kind]
-        ]
-        for kind in ordered:
-            entry = _external_air_entity_for_kind(thermostat, kind)
-            entity_id = str((entry or {}).get("entityId") or _EXTERNAL_HA_AIR_LAST_ENTITIES.get(kind) or "").strip()
-            if not entity_id:
-                _EXTERNAL_HA_AIR_LAST_STATES[kind] = None
-                _EXTERNAL_HA_AIR_LAST_ENTITIES[kind] = ""
-                _EXTERNAL_HA_AIR_RETRY_AFTER[kind] = 0.0
-                continue
-            want_on = desired[kind]
-            last_entity = str(_EXTERNAL_HA_AIR_LAST_ENTITIES.get(kind) or "")
+
+        # First retire stale per-role mappings.  Release the old entity only when
+        # no currently configured role still needs that same entity ON.
+        for kind in ("heat", "cool", "fan"):
+            current_entity = configured_entities[kind]
+            last_entity = str(_EXTERNAL_HA_AIR_LAST_ENTITIES.get(kind) or "").strip()
             last_state = _EXTERNAL_HA_AIR_LAST_STATES.get(kind)
-            if last_entity and last_entity != entity_id and last_state is True:
-                try:
-                    _call_room_control_service(ha_url, token, last_entity, "off")
-                except Exception as exc:
-                    print(f"External {kind} previous entry release failed for {last_entity}: {exc}", flush=True)
-            retry_after = float(_EXTERNAL_HA_AIR_RETRY_AFTER.get(kind) or 0.0)
-            next_verify_at = float(_EXTERNAL_HA_AIR_NEXT_VERIFY_AT.get(kind) or 0.0)
+            if last_entity and last_entity != current_entity:
+                if last_state is True and not bool(desired_by_entity.get(last_entity, False)):
+                    try:
+                        _call_room_control_service(ha_url, token, last_entity, "off")
+                    except Exception as exc:
+                        print(f"External {kind} previous entry release failed for {last_entity}: {exc}", flush=True)
+                _EXTERNAL_HA_AIR_LAST_ENTITIES[kind] = ""
+                _EXTERNAL_HA_AIR_LAST_STATES[kind] = None
+                _EXTERNAL_HA_AIR_RETRY_AFTER[kind] = 0.0
+                _EXTERNAL_HA_AIR_NEXT_VERIFY_AT[kind] = 0.0
+            elif not current_entity and not last_entity:
+                _EXTERNAL_HA_AIR_LAST_STATES[kind] = None
+                _EXTERNAL_HA_AIR_RETRY_AFTER[kind] = 0.0
+                _EXTERNAL_HA_AIR_NEXT_VERIFY_AT[kind] = 0.0
+
+        # Control each HA entity exactly once per pass. Inactive entities are
+        # handled first, then active entities, preserving heat/cool safety while
+        # eliminating per-role ON/OFF fights against the same physical switch.
+        ordered_entities = [eid for eid, on in desired_by_entity.items() if not on] + [
+            eid for eid, on in desired_by_entity.items() if on
+        ]
+        for entity_id in ordered_entities:
+            kinds = kinds_by_entity.get(entity_id) or []
+            if not kinds:
+                continue
+            want_on = bool(desired_by_entity[entity_id])
+            primary = kinds[0]
+
+            # Any role tracking this entity may have the freshest cache.
+            tracking_kind = next(
+                (k for k in kinds if str(_EXTERNAL_HA_AIR_LAST_ENTITIES.get(k) or "") == entity_id),
+                primary,
+            )
+            last_entity = str(_EXTERNAL_HA_AIR_LAST_ENTITIES.get(tracking_kind) or "")
+            last_state = _EXTERNAL_HA_AIR_LAST_STATES.get(tracking_kind)
+            retry_after = max(float(_EXTERNAL_HA_AIR_RETRY_AFTER.get(k) or 0.0) for k in kinds)
+            verify_times = [float(_EXTERNAL_HA_AIR_NEXT_VERIFY_AT.get(k) or 0.0) for k in kinds]
+            next_verify_at = min(verify_times) if verify_times else 0.0
             needs_call = last_entity != entity_id or last_state is None or bool(last_state) != want_on
-            can_try_now = not (retry_after and now < retry_after and last_entity == entity_id)
+            can_try_now = not (retry_after and now < retry_after)
 
             if (not needs_call) and can_try_now and now >= next_verify_at:
                 try:
                     item = _ha_state_cached(ha_url, token, entity_id, ttl=0.0)
                     actual_on = _external_ha_state_is_on(item)
                     if actual_on is not None:
-                        _EXTERNAL_HA_AIR_LAST_ENTITIES[kind] = entity_id
-                        _EXTERNAL_HA_AIR_LAST_STATES[kind] = actual_on
+                        last_state = actual_on
                         needs_call = actual_on != want_on
-                    _EXTERNAL_HA_AIR_NEXT_VERIFY_AT[kind] = now + EXTERNAL_HA_AIR_VERIFY_INTERVAL_SECONDS
+                    interval = (
+                        EXTERNAL_HA_AIR_ACTIVE_VERIFY_INTERVAL_SECONDS
+                        if want_on else EXTERNAL_HA_AIR_VERIFY_INTERVAL_SECONDS
+                    )
+                    for kind in kinds:
+                        _EXTERNAL_HA_AIR_LAST_ENTITIES[kind] = entity_id
+                        _EXTERNAL_HA_AIR_LAST_STATES[kind] = actual_on if actual_on is not None else last_state
+                        _EXTERNAL_HA_AIR_NEXT_VERIFY_AT[kind] = now + interval
                 except Exception as exc:
-                    _EXTERNAL_HA_AIR_RETRY_AFTER[kind] = time.monotonic() + 30.0
-                    _EXTERNAL_HA_AIR_NEXT_VERIFY_AT[kind] = now + EXTERNAL_HA_AIR_VERIFY_INTERVAL_SECONDS
-                    last_error_at = float(_EXTERNAL_HA_AIR_LAST_ERROR_AT.get(kind) or 0.0)
+                    retry_until = time.monotonic() + 30.0
+                    for kind in kinds:
+                        _EXTERNAL_HA_AIR_RETRY_AFTER[kind] = retry_until
+                        _EXTERNAL_HA_AIR_NEXT_VERIFY_AT[kind] = now + EXTERNAL_HA_AIR_VERIFY_INTERVAL_SECONDS
+                    last_error_at = float(_EXTERNAL_HA_AIR_LAST_ERROR_AT.get(primary) or 0.0)
                     if now - last_error_at > 60.0:
-                        _EXTERNAL_HA_AIR_LAST_ERROR_AT[kind] = now
-                        print(f"External {kind} state verify failed for {entity_id}: {exc}", flush=True)
+                        _EXTERNAL_HA_AIR_LAST_ERROR_AT[primary] = now
+                        print(f"External {primary} state verify failed for {entity_id}: {exc}", flush=True)
                     continue
 
             if not needs_call or not can_try_now:
                 continue
             try:
                 _call_room_control_service(ha_url, token, entity_id, "on" if want_on else "off")
-                _EXTERNAL_HA_AIR_LAST_ENTITIES[kind] = entity_id
-                _EXTERNAL_HA_AIR_LAST_STATES[kind] = want_on
-                _EXTERNAL_HA_AIR_RETRY_AFTER[kind] = 0.0
-                _EXTERNAL_HA_AIR_NEXT_VERIFY_AT[kind] = time.monotonic() + EXTERNAL_HA_AIR_VERIFY_INTERVAL_SECONDS
+                interval = (
+                    EXTERNAL_HA_AIR_ACTIVE_VERIFY_INTERVAL_SECONDS
+                    if want_on else EXTERNAL_HA_AIR_VERIFY_INTERVAL_SECONDS
+                )
+                next_verify = time.monotonic() + interval
+                for kind in kinds:
+                    _EXTERNAL_HA_AIR_LAST_ENTITIES[kind] = entity_id
+                    _EXTERNAL_HA_AIR_LAST_STATES[kind] = want_on
+                    _EXTERNAL_HA_AIR_RETRY_AFTER[kind] = 0.0
+                    _EXTERNAL_HA_AIR_NEXT_VERIFY_AT[kind] = next_verify
             except Exception as exc:
-                _EXTERNAL_HA_AIR_RETRY_AFTER[kind] = time.monotonic() + 30.0
-                last_error_at = float(_EXTERNAL_HA_AIR_LAST_ERROR_AT.get(kind) or 0.0)
+                retry_until = time.monotonic() + 30.0
+                for kind in kinds:
+                    _EXTERNAL_HA_AIR_RETRY_AFTER[kind] = retry_until
+                last_error_at = float(_EXTERNAL_HA_AIR_LAST_ERROR_AT.get(primary) or 0.0)
                 if now - last_error_at > 60.0:
-                    _EXTERNAL_HA_AIR_LAST_ERROR_AT[kind] = now
-                    print(f"External {kind} control failed for {entity_id}: {exc}", flush=True)
+                    _EXTERNAL_HA_AIR_LAST_ERROR_AT[primary] = now
+                    print(f"External {primary} control failed for {entity_id}: {exc}", flush=True)
 
 
 def _release_external_ha_air_outputs(thermostat: dict) -> None:
