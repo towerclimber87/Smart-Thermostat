@@ -4853,6 +4853,7 @@ class FamilyCenterStatusPanel(QWidget):
         self._configured = False
         self._signature = ""
         self._display_scale_percent = 100
+        self._kid_mode = False
         self.setFixedSize(self.COMPACT_WIDTH, self.COMPACT_HEIGHT)
         self.setAttribute(Qt.WA_StyledBackground, False)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
@@ -4860,8 +4861,12 @@ class FamilyCenterStatusPanel(QWidget):
 
     def _scaled_fonts(self, row_count: int):
         scale = float(self._display_scale_percent) / 100.0
-        name_base = 7 if row_count <= 3 else 6
-        point_base = 6 if row_count <= 3 else 5
+        if self._kid_mode:
+            name_base = 10 if row_count <= 3 else 8
+            point_base = 8 if row_count <= 3 else 7
+        else:
+            name_base = 7 if row_count <= 3 else 6
+            point_base = 6 if row_count <= 3 else 5
         return (
             scale,
             font(max(5, int(round(name_base * scale))), QFont.Black),
@@ -4899,12 +4904,18 @@ class FamilyCenterStatusPanel(QWidget):
             icons_width = 0
             if privileges:
                 icons_width = len(privileges) * icon_size + max(0, len(privileges) - 1) * icon_gap
+            lock_notice = kid.get("deviceLock") if isinstance(kid.get("deviceLock"), dict) else None
+            lock_width = 0
+            if self._kid_mode and lock_notice and bool(lock_notice.get("active")):
+                lock_font = font(max(6, int(round(7 * scale))), QFont.Black)
+                lock_width = QFontMetrics(lock_font).horizontalAdvance("DEVICE LOCKED") + max(14, int(round(18 * scale)))
             required = (
                 8
                 + name_metrics.horizontalAdvance(name)
                 + gap
                 + point_metrics.horizontalAdvance(point_text)
                 + (gap + icons_width if icons_width else 0)
+                + (gap + lock_width if lock_width else 0)
                 + 8
             )
             widest = max(widest, required)
@@ -4913,7 +4924,8 @@ class FamilyCenterStatusPanel(QWidget):
         # painted over each other. At 100% the usual 1-3 child layout remains
         # the same compact 54px height.
         content_h = max(name_metrics.height(), point_metrics.height(), icon_size) + max(2, int(round(2 * scale)))
-        height = max(self.COMPACT_HEIGHT, int(math.ceil(content_h * row_count)))
+        min_height = 68 if self._kid_mode else self.COMPACT_HEIGHT
+        height = max(min_height, int(math.ceil((content_h + (4 if self._kid_mode else 0)) * row_count)))
         return max(self.COMPACT_WIDTH, min(self.MAX_WIDTH, int(math.ceil(widest)))), height
 
     def _refresh_size(self):
@@ -4935,6 +4947,14 @@ class FamilyCenterStatusPanel(QWidget):
         if value == self._display_scale_percent:
             return
         self._display_scale_percent = value
+        self._refresh_size()
+        self.update()
+
+    def set_kid_mode(self, active: bool):
+        active = bool(active)
+        if active == self._kid_mode:
+            return
+        self._kid_mode = active
         self._refresh_size()
         self.update()
 
@@ -5018,9 +5038,9 @@ class FamilyCenterStatusPanel(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing, True)
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor(8, 17, 31, 150))
-        p.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 10, 10)
-        p.setPen(QPen(QColor(126, 207, 238, 75), 1))
+        p.setBrush(QColor(8, 17, 31, 198 if self._kid_mode else 150))
+        p.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 12 if self._kid_mode else 10, 12 if self._kid_mode else 10)
+        p.setPen(QPen(QColor(126, 207, 238, 125 if self._kid_mode else 75), 2 if self._kid_mode else 1))
         p.setBrush(Qt.NoBrush)
         p.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 10, 10)
 
@@ -5072,6 +5092,105 @@ class FamilyCenterStatusPanel(QWidget):
                     break
                 self._draw_icon(p, _family_privilege_kind(privilege), QRectF(x, y + (row_h-icon_size)/2.0, icon_size, icon_size))
                 x += icon_size + icon_gap
+
+            lock_notice = kid.get("deviceLock") if isinstance(kid.get("deviceLock"), dict) else None
+            if self._kid_mode and lock_notice and bool(lock_notice.get("active")):
+                lock_font = font(max(6, int(round(7 * scale))), QFont.Black)
+                lock_text = "DEVICE LOCKED"
+                lock_w = QFontMetrics(lock_font).horizontalAdvance(lock_text) + max(14, int(round(18 * scale)))
+                if x + gap + lock_w <= self.width() - 5:
+                    x += gap
+                    pill = QRectF(x, y + max(4.0, (row_h - 24.0 * scale) / 2.0), lock_w, max(22.0, 24.0 * scale))
+                    p.setPen(QPen(QColor(255, 116, 130, 210), 1.2))
+                    p.setBrush(QColor(132, 25, 42, 190))
+                    p.drawRoundedRect(pill, pill.height() / 2.0, pill.height() / 2.0)
+                    p.setPen(QColor("#fff1f3"))
+                    p.setFont(lock_font)
+                    p.drawText(pill, Qt.AlignCenter, lock_text)
+
+
+class KidDeviceLockCard(QWidget):
+    """Kid-mode replacement for Alarmo that explains active device locks."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._kids: list[dict] = []
+        self.setFixedSize(226, 164)
+        self.setAttribute(Qt.WA_StyledBackground, False)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.hide()
+
+    def set_kids(self, kids: list[dict] | None):
+        clean = [item for item in (kids or []) if isinstance(item, dict)]
+        locked = [
+            item for item in clean
+            if isinstance(item.get("deviceLock"), dict) and bool(item["deviceLock"].get("active"))
+        ]
+        if repr(locked) == repr(self._kids):
+            return
+        self._kids = locked[:3]
+        self.update()
+
+    def has_active_locks(self) -> bool:
+        return bool(self._kids)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        rect = self.rect().adjusted(0, 0, -1, -1)
+
+        if not self._kids:
+            p.setPen(QPen(QColor(112, 232, 176, 145), 1.4))
+            p.setBrush(QColor(9, 40, 35, 178))
+            p.drawRoundedRect(rect, 20, 20)
+            p.setPen(QColor("#dfffee"))
+            p.setFont(font(12, QFont.Black, 1))
+            p.drawText(QRectF(12, 28, self.width()-24, 34), Qt.AlignCenter, "DEVICE STATUS")
+            p.setPen(QColor("#70e8b0"))
+            p.setFont(font(14, QFont.Black))
+            p.drawText(QRectF(12, 68, self.width()-24, 56), Qt.AlignCenter | Qt.TextWordWrap, "AVAILABLE")
+            p.end()
+            return
+
+        first = self._kids[0]
+        notice = first.get("deviceLock") if isinstance(first.get("deviceLock"), dict) else {}
+        name = str(first.get("name") or "Kid").strip() or "Kid"
+        title = str(notice.get("title") or "Device locked").strip()
+        message = str(notice.get("message") or "Your device is currently locked.").strip()
+
+        p.setPen(QPen(QColor(255, 111, 126, 225), 2))
+        p.setBrush(QColor(74, 12, 27, 222))
+        p.drawRoundedRect(rect, 20, 20)
+
+        p.setPen(QColor("#ff8292"))
+        p.setFont(font(11, QFont.Black, 1))
+        p.drawText(QRectF(12, 12, self.width()-24, 26), Qt.AlignCenter, "DEVICE LOCKED")
+
+        p.setPen(QColor("#ffffff"))
+        p.setFont(font(15, QFont.Black))
+        p.drawText(QRectF(12, 40, self.width()-24, 30), Qt.AlignCenter, name)
+
+        display_title = title
+        if display_title.lower().startswith("locked due to "):
+            display_title = display_title[14:]
+        elif display_title.lower().startswith("device locked"):
+            display_title = ""
+        body = display_title or message
+        p.setPen(QColor("#ffdce1"))
+        p.setFont(font(9, QFont.Black))
+        p.drawText(
+            QRectF(14, 74, self.width()-28, 68),
+            Qt.AlignCenter | Qt.TextWordWrap,
+            body,
+        )
+
+        if len(self._kids) > 1:
+            more = f"+{len(self._kids)-1} more locked"
+            p.setPen(QColor("#ffb7c1"))
+            p.setFont(font(7, QFont.Black))
+            p.drawText(QRectF(12, 140, self.width()-24, 18), Qt.AlignCenter, more)
+        p.end()
 
 
 
@@ -5196,6 +5315,7 @@ class ThermostatScreen(Page):
             press_feedback=True,
         )
         self.alarm_card = InfoTile("Alarmo", "DISARMED", "盾", good=True)
+        self.kid_device_lock_card = KidDeviceLockCard(self)
         self.family_center_panel = FamilyCenterStatusPanel(self)
         self._door_action_pending = False
         self.door_card.clicked.connect(self.run_door_action)
@@ -5296,6 +5416,7 @@ class ThermostatScreen(Page):
         mid.addWidget(self.dial, 1, 2, 1, 1, Qt.AlignCenter)
         mid.addWidget(self.plus, 1, 3, 1, 1, Qt.AlignCenter)
         mid.addWidget(self.alarm_card, 1, 4, 1, 1, Qt.AlignCenter)
+        mid.addWidget(self.kid_device_lock_card, 1, 4, 1, 1, Qt.AlignCenter)
 
         self.schedule_shortcuts = QScrollArea()
         self.schedule_shortcuts.setObjectName("thermostatScheduleShortcuts")
@@ -7993,6 +8114,12 @@ class ThermostatScreen(Page):
         alarm = ha.get("alarmEntity") or {}
         self.alarm_card.setValue(str(alarm.get("state") or "disarmed").upper())
         self.alarm_card.setAlarmState(str(alarm.get("state") or "disarmed"))
+        kid_mode = self.kid_mode_active()
+        self.alarm_card.setVisible(not kid_mode)
+        self.kid_device_lock_card.setVisible(
+            kid_mode and self.kid_device_lock_card.has_active_locks()
+        )
+        self.family_center_panel.set_kid_mode(kid_mode)
         self.virtual_panel.updateData(t)
         self.apply_screen_lock_state()
         self.refresh_family_center()
@@ -8009,11 +8136,13 @@ class ThermostatScreen(Page):
     def refresh_family_center(self, *, force: bool = False):
         cfg = self.family_center_config()
         self.family_center_panel.set_display_scale(cfg.get("displayScalePercent", 100))
+        self.family_center_panel.set_kid_mode(self.kid_mode_active())
         configured = bool(cfg.get("url") and cfg.get("apiKey"))
         if not configured:
             self._family_center_config_signature = ""
             self._family_center_next_poll_at = 0.0
             self.family_center_panel.clear_and_hide()
+            self.kid_device_lock_card.set_kids([])
             return
         signature = f"{cfg.get('url')}|{cfg.get('apiKey')}"
         if signature != self._family_center_config_signature:
@@ -8033,16 +8162,22 @@ class ThermostatScreen(Page):
                 self.family_center_panel.clear_and_hide()
                 self.position_family_center_panel()
                 return
+            family_kids = payload.get("kids") if isinstance(payload.get("kids"), list) else []
             self.family_center_panel.set_data(
-                payload.get("kids") if isinstance(payload.get("kids"), list) else [],
+                family_kids,
                 configured=True,
                 error=str(payload.get("error") or "") if not payload.get("ok", True) else "",
+            )
+            self.kid_device_lock_card.set_kids(family_kids)
+            self.kid_device_lock_card.setVisible(
+                self.kid_mode_active() and self.kid_device_lock_card.has_active_locks()
             )
             self.position_family_center_panel()
 
         def failed(message):
             self._family_center_polling = False
             self.family_center_panel.set_data([], configured=True, error=message)
+            self.kid_device_lock_card.set_kids([])
             self.position_family_center_panel()
 
         self.run_async(

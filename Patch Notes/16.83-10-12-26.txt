@@ -1,0 +1,8 @@
+Smart Thermostat 16.83 - 10/12/2026
+
+- Kid Mode now removes the Alarmo card entirely from the thermostat screen.
+- When a Family Center child device is actively locked, the freed right-side area displays a clean DEVICE LOCKED card with the child's name and the same lock reason supplied by IHA Family Center.
+- When no child device is locked, the former Alarmo area remains empty in Kid Mode.
+- The Family Center child/points/privileges strip is larger and higher-contrast in Kid Mode.
+- Locked children also receive a visible DEVICE LOCKED pill in the Family Center strip.
+- Normal non-Kid-Mode thermostat layout and Alarmo behavior are unchanged.

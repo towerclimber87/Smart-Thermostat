@@ -2882,11 +2882,21 @@ def _family_center_status_payload(*, force: bool = False) -> dict:
                 score = int(kid.get("score") or 0)
             except (TypeError, ValueError):
                 score = 0
+            lock_notice = kid.get("device_lock_notice") if isinstance(kid.get("device_lock_notice"), dict) else None
+            clean_lock_notice = None
+            if lock_notice and bool(lock_notice.get("active")):
+                clean_lock_notice = {
+                    "active": True,
+                    "reason": str(lock_notice.get("reason") or "")[:180],
+                    "title": str(lock_notice.get("title") or "Device locked")[:120],
+                    "message": str(lock_notice.get("message") or "Your device is currently locked.")[:240],
+                }
             kids_out.append({
                 "id": kid.get("id"),
                 "name": str(kid.get("display_name") or kid.get("nickname") or kid.get("name") or "Kid")[:80],
                 "score": score,
                 "privileges": clean_privileges,
+                "deviceLock": clean_lock_notice,
             })
         payload = {"ok": True, "configured": True, "kids": kids_out}
     except Exception as exc:
