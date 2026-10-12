@@ -1,0 +1,11 @@
+Smart Thermostat 16.92-10-12-26
+
+Fixes external HVAC switch dropouts that could still occur for a few seconds while cooling/heating remained requested.
+
+Changes:
+- Adds central external-HVAC ownership arbitration before backend OFF/toggle commands.
+- Uses the current persisted thermostat record and current thermostat output decision, not a caller's possibly stale snapshot.
+- Blocks room-control, audio switch, generic light/switch, Device Internet, and stale HVAC OFF/toggle commands when the thermostat still requires the same external entity ON.
+- Logs blocked conflicts as: BLOCKED conflicting HA ...
+- Keeps legitimate thermostat shutdowns working once the current thermostat decision no longer requests that output.
+- Includes all 16.91 external HVAC stale-mapping and fast re-verification fixes.

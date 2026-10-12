@@ -2176,6 +2176,9 @@ def _apply_device_internet_schedule_transitions(now: datetime | None = None) -> 
         blocked = any(_device_internet_schedule_is_active(schedule, entity_id, current_time) for schedule in schedules)
         action = "off" if blocked else "on"
         try:
+            if _block_external_hvac_off_if_owned(entity_id, action, "device-internet"):
+                print(f"Device Internet schedule transition blocked by thermostat entity={entity_id} action={action}", flush=True)
+                continue
             service = "turn_off" if blocked else "turn_on"
             _ha_json_request(ha_url, token, "POST", f"/api/services/switch/{service}", {"entity_id": entity_id})
             _invalidate_ha_state_cache(ha_url, token)
@@ -15414,12 +15417,67 @@ def _fetch_ha_switch_control_states(ha_url: str, token: str, controls: dict) -> 
     return refreshed
 
 
+def _external_hvac_entity_required_on(entity_id: str) -> tuple[bool, str]:
+    """Return whether the *current persisted thermostat decision* owns entity ON.
+
+    This is the final arbitration point for HA-controlled HVAC equipment.  It is
+    intentionally based on the current thermostat record rather than a caller's
+    possibly stale snapshot, so concurrent backend paths cannot momentarily turn
+    off an external compressor/fan that the live thermostat still requires.
+    """
+    entity_id = str(entity_id or "").strip()
+    if not entity_id:
+        return False, ""
+    try:
+        thermostat = _merge_thermostat_state(_read_thermostat_record().get("thermostat") or {})
+        outputs = _thermostat_outputs(thermostat)
+    except Exception as exc:
+        # Fail open here: inability to calculate thermostat state must not make
+        # unrelated HA controls unusable. The HVAC loop will still reassert.
+        print(f"HVAC ownership check failed entity={entity_id}: {exc}", flush=True)
+        return False, ""
+
+    for kind in ("heat", "cool", "fan"):
+        if _equipment_control_mode(thermostat, kind) != "external":
+            continue
+        entry = _external_air_entity_for_kind(thermostat, kind)
+        configured_id = str((entry or {}).get("entityId") or "").strip()
+        if configured_id == entity_id and bool(outputs.get(kind)):
+            return True, kind
+    return False, ""
+
+
+def _block_external_hvac_off_if_owned(entity_id: str, action: str, source: str) -> bool:
+    """Block OFF/toggle commands that conflict with the current HVAC decision."""
+    normalized_action = str(action or "").strip().lower()
+    if normalized_action not in {"off", "toggle"}:
+        return False
+    required, kind = _external_hvac_entity_required_on(entity_id)
+    if not required:
+        return False
+    print(
+        f"BLOCKED conflicting HA {normalized_action}: source={source} "
+        f"entity={entity_id} thermostat_requires={kind}:on",
+        flush=True,
+    )
+    return True
+
+
 def _call_switch_service(ha_url: str, token: str, entity_id: str, action: str) -> dict:
     entity_id = (entity_id or "").strip()
     domain = entity_id.split(".", 1)[0] if "." in entity_id else ""
     if domain not in {"switch", "input_boolean"}:
         raise ValueError("Entity must be a switch.* or input_boolean.* entity")
     action = (action or "toggle").strip().lower()
+    if _block_external_hvac_off_if_owned(entity_id, action, "audio-switch"):
+        try:
+            item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
+            control = _normalize_generic_entity(item) if isinstance(item, dict) else {"entityId": entity_id, "domain": domain, "state": "on"}
+        except Exception:
+            control = {"entityId": entity_id, "name": entity_id, "domain": domain, "state": "on"}
+        control["actionApplied"] = False
+        control["blockedByThermostat"] = True
+        return control
     service = {"on": "turn_on", "off": "turn_off", "toggle": "toggle"}.get(action)
     if not service:
         raise ValueError("Unsupported switch action")
@@ -15539,6 +15597,15 @@ def _call_room_control_service(ha_url: str, token: str, entity_id: str, action: 
     entity_id = (entity_id or "").strip()
     domain = _room_control_domain(entity_id)
     action = (action or "toggle").strip().lower()
+    if domain in {"switch", "input_boolean"} and _block_external_hvac_off_if_owned(entity_id, action, "room-control"):
+        try:
+            item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
+            control = _normalize_generic_entity(item) if isinstance(item, dict) else {"entityId": entity_id, "domain": domain, "state": "on"}
+        except Exception:
+            control = {"entityId": entity_id, "name": entity_id, "domain": domain, "state": "on"}
+        control["actionApplied"] = False
+        control["blockedByThermostat"] = True
+        return control
     spec = _room_control_service_for_action(domain, action)
     if spec is None:
         item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
@@ -15730,6 +15797,19 @@ def _call_light_service(ha_url: str, token: str, entity_id: str, action: str, br
     if domain == "switch":
         if action in {"brightness", "color"}:
             action = "on"
+        if _block_external_hvac_off_if_owned(entity_id, action, "light-switch"):
+            return {
+                "entityId": entity_id,
+                "domain": "switch",
+                "name": entity_id,
+                "state": "on",
+                "brightnessPct": 100,
+                "brightnessSupported": False,
+                "colorSupported": False,
+                "colorHex": "#ffd76f",
+                "actionApplied": False,
+                "blockedByThermostat": True,
+            }
         service = {"on": "turn_on", "off": "turn_off", "toggle": "toggle"}.get(action, "turn_on")
         _ha_json_request(ha_url, token, "POST", f"/api/services/switch/{service}", {"entity_id": entity_id})
         _invalidate_ha_state_cache(ha_url, token)
