@@ -77,8 +77,11 @@ class ApiClient:
     def get_config_record(self) -> dict[str, Any]:
         return self.get("/api/config")
 
-    def save_config(self, config: dict[str, Any]) -> dict[str, Any]:
-        return self.post("/api/config", {"config": config})
+    def save_config(self, config: dict[str, Any], *, authoritative_external_air: bool = False) -> dict[str, Any]:
+        payload: dict[str, Any] = {"config": config}
+        if authoritative_external_air:
+            payload["authoritativeExternalAir"] = True
+        return self.post("/api/config", payload)
 
     def thermostat_status(self) -> dict[str, Any]:
         return self.get("/api/thermostat/status")

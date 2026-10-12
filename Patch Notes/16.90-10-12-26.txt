@@ -1,0 +1,9 @@
+Smart Thermostat 16.90 - 10/12/2026
+
+- Fixed Home Assistant Heat/Cool/Fan source selections being able to revert to an older cached entity after selecting a new device on the thermostat.
+- External HVAC source changes now persist to thermostat-state first and are immediately mirrored into panel-config.
+- Unrelated full panel-config saves can no longer overwrite the currently saved Heat/Cool/Fan source assignments with stale screen data.
+- Backup export now reconciles the panel config against the authoritative thermostat state before creating the backup, preventing old external source entities from appearing in a newly downloaded config.
+- Web Settings and config restore remain authoritative when intentionally changing external Heat/Cool/Fan source assignments.
+- Live thermostat status now reports the freshest confirmed/commanded Home Assistant state for the selected external Heat/Cool/Fan entity instead of displaying the stale state captured when the entity was selected.
+- No changes were made to cooling setpoint, differential, minimum-runtime, or compressor protection behavior.

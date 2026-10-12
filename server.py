@@ -781,6 +781,25 @@ def _normalize_external_air_entity(value: object) -> dict | None:
     }
 
 
+def _external_air_entity_status(thermostat: dict, kind: str) -> dict | None:
+    """Return the selected external entity with the freshest known runtime state."""
+    kind = str(kind or "").strip().lower()
+    key = {
+        "heat": "externalHeatEntity",
+        "cool": "externalCoolEntity",
+        "fan": "externalFanEntity",
+    }.get(kind)
+    entry = _normalize_external_air_entity(thermostat.get(key)) if key else None
+    if not isinstance(entry, dict):
+        return None
+    entity_id = str(entry.get("entityId") or "").strip()
+    last_entity = str(_EXTERNAL_HA_AIR_LAST_ENTITIES.get(kind) or "").strip()
+    last_state = _EXTERNAL_HA_AIR_LAST_STATES.get(kind)
+    if entity_id and entity_id == last_entity and last_state is not None:
+        entry["state"] = "on" if bool(last_state) else "off"
+    return entry
+
+
 def _normalize_person_entries(value: object) -> list[dict]:
     if not isinstance(value, list):
         return []
@@ -2669,7 +2688,7 @@ def _preserve_newer_room_code_policies(candidate: dict, existing_config: dict) -
                     incoming_control.pop(field, None)
 
 
-def _write_panel_config_record(config: dict) -> dict:
+def _write_panel_config_record(config: dict, *, allow_external_air_source_change: bool = False) -> dict:
     with _PANEL_CONFIG_LOCK:
         primary = _panel_config_record_from_path(PANEL_CONFIG_FILE)
         backup = _panel_config_record_from_path(PANEL_CONFIG_BACKUP_FILE)
@@ -2700,6 +2719,25 @@ def _write_panel_config_record(config: dict) -> dict:
             candidate["thermostat"] = candidate_thermostat
         except Exception:
             pass
+
+        # Heat/Cool/Fan Home Assistant equipment assignments are shared with
+        # thermostat-state.json. Most native pages save a complete panel-config
+        # snapshot, and an older page can finish after a newer HVAC-source edit.
+        # Unless the caller explicitly owns those source fields, keep the
+        # currently persisted assignments instead of allowing a stale full-config
+        # write to roll them backward.
+        if not allow_external_air_source_change:
+            existing_integrations_for_air = existing_config.get("integrations") if isinstance(existing_config.get("integrations"), dict) else {}
+            existing_ha_for_air = existing_integrations_for_air.get("homeAssistant") if isinstance(existing_integrations_for_air.get("homeAssistant"), dict) else {}
+            candidate_integrations_for_air = candidate.get("integrations") if isinstance(candidate.get("integrations"), dict) else {}
+            candidate_ha_for_air = candidate_integrations_for_air.get("homeAssistant") if isinstance(candidate_integrations_for_air.get("homeAssistant"), dict) else {}
+            candidate_integrations_for_air = dict(candidate_integrations_for_air)
+            candidate_ha_for_air = dict(candidate_ha_for_air)
+            for selected_key in ("externalHeatControlEntity", "externalCoolControlEntity", "externalFanControlEntity"):
+                if selected_key in existing_ha_for_air:
+                    candidate_ha_for_air[selected_key] = _deepcopy_json(existing_ha_for_air.get(selected_key))
+            candidate_integrations_for_air["homeAssistant"] = candidate_ha_for_air
+            candidate["integrations"] = candidate_integrations_for_air
 
         existing_security = existing_config.get("security") if isinstance(existing_config.get("security"), dict) else {}
         existing_code = str(existing_security.get("settingsCode") or "").strip()
@@ -2767,6 +2805,59 @@ def _mirror_kid_mode_to_panel_config(enabled: bool) -> None:
         _write_panel_config_record(candidate)
     except Exception as exc:
         print(f"Could not mirror Kid Mode to panel config: {exc}", flush=True)
+
+
+def _mirror_external_air_sources_to_panel_config(thermostat: dict) -> None:
+    """Keep persisted HA Heat/Cool/Fan selections identical in both stores.
+
+    thermostat-state.json is authoritative for the live equipment assignment.
+    Mirror any persisted selection into panel-config.json immediately so backup
+    exports, restarts, and unrelated Settings saves cannot resurrect an older
+    cached entity.
+    """
+    try:
+        record = _read_panel_config_record()
+        config = record.get("config") if isinstance(record, dict) else None
+        if not isinstance(config, dict):
+            return
+        candidate = _deepcopy_json(config)
+        integrations = candidate.setdefault("integrations", {})
+        if not isinstance(integrations, dict):
+            integrations = {}
+            candidate["integrations"] = integrations
+        ha = integrations.setdefault("homeAssistant", {})
+        if not isinstance(ha, dict):
+            ha = {}
+            integrations["homeAssistant"] = ha
+
+        changed = False
+        available = ha.get("externalAirControlAvailableEntities")
+        available = _deepcopy_json(available) if isinstance(available, list) else []
+        for thermostat_key, selected_key in (
+            ("externalHeatEntity", "externalHeatControlEntity"),
+            ("externalCoolEntity", "externalCoolControlEntity"),
+            ("externalFanEntity", "externalFanControlEntity"),
+        ):
+            normalized = _normalize_external_air_entity(thermostat.get(thermostat_key))
+            if ha.get(selected_key) != normalized:
+                ha[selected_key] = _deepcopy_json(normalized)
+                changed = True
+            entity_id = str((normalized or {}).get("entityId") or "").strip()
+            if entity_id:
+                filtered = [
+                    item for item in available
+                    if not isinstance(item, dict)
+                    or str(item.get("entityId") or item.get("entity_id") or "").strip() != entity_id
+                ]
+                available = [_deepcopy_json(normalized)] + filtered
+
+        if ha.get("externalAirControlAvailableEntities") != available:
+            ha["externalAirControlAvailableEntities"] = available
+            changed = True
+        if changed:
+            _write_panel_config_record(candidate, allow_external_air_source_change=True)
+    except Exception as exc:
+        print(f"Could not mirror external HVAC sources to panel config: {exc}", flush=True)
 
 
 def _normalize_family_center_url(value: object, *, allow_blank: bool = True) -> str:
@@ -3547,6 +3638,11 @@ def _config_backup_filename() -> str:
 
 def _config_export_payload(server_port: int | str | None = None) -> dict:
     _flush_thermostat_state_to_disk()
+    live_thermostat = _read_thermostat_record().get("thermostat") or {}
+    # Backups must never serialize an older panel-config HVAC assignment when
+    # thermostat-state has the newer touchscreen selection. Repair the panel
+    # record first, then take both snapshots from synchronized stores.
+    _mirror_external_air_sources_to_panel_config(live_thermostat)
     panel_record = _read_panel_config_record()
     thermostat_record = _thermostat_record_for_disk(_read_thermostat_record())
     exported_at = int(time.time())
@@ -4585,11 +4681,11 @@ def _config_settings_save(payload: dict) -> dict:
 
     # Validate and commit only after every field has been normalized. If the
     # thermostat write unexpectedly fails, restore the prior config record.
-    saved_config = _write_panel_config_record(config)
+    saved_config = _write_panel_config_record(config, allow_external_air_source_change=True)
     try:
         thermostat_result = _handle_thermostat_update(thermostat_changes)
     except Exception:
-        _write_panel_config_record(old_config)
+        _write_panel_config_record(old_config, allow_external_air_source_change=True)
         raise
 
     _LOCAL_TEMP_SENSOR_CONFIG_CACHE["mtimeNs"] = None
@@ -5420,7 +5516,7 @@ def _config_import_payload(payload: object) -> dict:
     if config is None:
         return {"ok": False, "error": "The uploaded file does not contain a valid Smart Thermostat config."}
 
-    panel_record = _write_panel_config_record(config)
+    panel_record = _write_panel_config_record(config, allow_external_air_source_change=True)
     thermostat_record = None
     if thermostat is not None:
         thermostat_record = _write_thermostat_record(thermostat, force=True)
@@ -6923,9 +7019,9 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
         "heatControlMode": _equipment_control_mode(thermostat, "heat"),
         "coolControlMode": _equipment_control_mode(thermostat, "cool"),
         "fanControlMode": _equipment_control_mode(thermostat, "fan"),
-        "externalHeatEntity": _normalize_external_air_entity(thermostat.get("externalHeatEntity")),
-        "externalCoolEntity": _normalize_external_air_entity(thermostat.get("externalCoolEntity")),
-        "externalFanEntity": _normalize_external_air_entity(thermostat.get("externalFanEntity")),
+        "externalHeatEntity": _external_air_entity_status(thermostat, "heat"),
+        "externalCoolEntity": _external_air_entity_status(thermostat, "cool"),
+        "externalFanEntity": _external_air_entity_status(thermostat, "fan"),
         "relays": {"fan": outputs["fan"], "heat": outputs["heat"], "cool": outputs["cool"]},
         "outputs": outputs,
         "serial": serial,
@@ -7027,9 +7123,9 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
         "heatControlMode": _equipment_control_mode(thermostat, "heat"),
         "coolControlMode": _equipment_control_mode(thermostat, "cool"),
         "fanControlMode": _equipment_control_mode(thermostat, "fan"),
-        "externalHeatEntity": _normalize_external_air_entity(thermostat.get("externalHeatEntity")),
-        "externalCoolEntity": _normalize_external_air_entity(thermostat.get("externalCoolEntity")),
-        "externalFanEntity": _normalize_external_air_entity(thermostat.get("externalFanEntity")),
+        "externalHeatEntity": _external_air_entity_status(thermostat, "heat"),
+        "externalCoolEntity": _external_air_entity_status(thermostat, "cool"),
+        "externalFanEntity": _external_air_entity_status(thermostat, "fan"),
         "relays": {"fan": outputs["fan"], "heat": outputs["heat"], "cool": outputs["cool"]},
         "relayFan": outputs["fan"],
         "relayHeat": outputs["heat"],
@@ -7610,6 +7706,8 @@ def _handle_thermostat_update_locked(payload: dict) -> tuple[dict, dict, dict]:
 
     saved_record = _write_thermostat_record(merged)
     merged = saved_record.get("thermostat") or merged
+    if any(key in incoming for key in ("externalHeatEntity", "externalCoolEntity", "externalFanEntity")):
+        _mirror_external_air_sources_to_panel_config(merged)
     if "kidMode" in incoming:
         _mirror_kid_mode_to_panel_config(bool(merged.get("kidMode")))
     command_result["targetRevision"] = int(_number(merged.get("targetRevision"), 0, 0, None) or 0)
@@ -16171,7 +16269,10 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                 config_payload = payload.get("config", payload) if isinstance(payload, dict) else {}
                 if not isinstance(config_payload, dict):
                     return _json(self, 400, {"ok": False, "error": "config must be an object"})
-                record = _write_panel_config_record(config_payload)
+                record = _write_panel_config_record(
+                    config_payload,
+                    allow_external_air_source_change=bool(payload.get("authoritativeExternalAir")),
+                )
                 return _json(self, 200, {"ok": True, "version": record["version"], "updatedAt": record["updatedAt"], "config": record["config"]})
 
             if path == "/api/thermostat/run-schedule":

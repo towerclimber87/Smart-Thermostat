@@ -17932,8 +17932,15 @@ class SettingsDialog(QDialog):
                 config_snapshot = copy.deepcopy(self.s.config)
 
                 def worker():
-                    config_record = self.s.api.save_config(config_snapshot)
+                    # Persist the live thermostat assignment first. The backend
+                    # mirrors it into panel-config immediately, then this full
+                    # config save records the picker/catalog snapshot as an
+                    # explicitly authoritative HVAC-source edit.
                     thermostat_result = self.s.api.thermostat_update(changes)
+                    config_record = self.s.api.save_config(
+                        config_snapshot,
+                        authoritative_external_air=True,
+                    )
                     return {"config": config_record, "thermostat": thermostat_result}
 
                 def done(result):
