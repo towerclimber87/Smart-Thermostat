@@ -1740,6 +1740,7 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
 
 THERMOSTAT_PERSIST_KEYS = (
     "name",
+    "kidMode",
     "currentTempSource",
     "currentTempSourceName",
     "targetTemp",

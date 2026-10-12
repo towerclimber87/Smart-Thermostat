@@ -1,0 +1,5 @@
+Smart Thermostat 16.82 - 10/12/2026
+
+- Fixed Kid Mode persistence across full power cycles, backend restarts, and software updates.
+- Added kidMode to the thermostat long-term persistence allowlist so it is retained in thermostat-state.json and panel-config normalization instead of being dropped from disk writes.
+- Existing Kid Mode UI behavior and the Kid Mode dinosaur background are unchanged.
