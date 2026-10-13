@@ -784,8 +784,15 @@ def _normalize_external_air_entity(value: object) -> dict | None:
 
 
 def _external_air_entity_status(thermostat: dict, kind: str) -> dict | None:
-    """Return the selected external entity with the freshest known runtime state."""
+    """Return the active external entity with the freshest known runtime state.
+
+    An entity is only active while that specific HVAC output is configured for
+    External control. Old saved mappings must not leak through after switching
+    the output back to Internal.
+    """
     kind = str(kind or "").strip().lower()
+    if _equipment_control_mode(thermostat, kind) != "external":
+        return None
     key = {
         "heat": "externalHeatEntity",
         "cool": "externalCoolEntity",
@@ -1750,6 +1757,20 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
         base["awaySource"] = ""
         base["manualAwayPresenceLatch"] = None
         base["presenceHomeOverride"] = None
+    # An Internal output must never retain an old Home Assistant target.  Older
+    # builds kept the last selected entity even after the route changed back to
+    # local GPIO.  The runtime correctly wanted the external output OFF, but the
+    # stale entity made it repeatedly send switch.turn_off to equipment that no
+    # longer belonged to this thermostat. Scrub those inactive assignments while
+    # normalizing so old state repairs itself on the next read/write.
+    for kind, mode_key, entity_key in (
+        ("heat", "heatControlMode", "externalHeatEntity"),
+        ("cool", "coolControlMode", "externalCoolEntity"),
+        ("fan", "fanControlMode", "externalFanEntity"),
+    ):
+        if _normalize_air_control_mode(base.get(mode_key), "internal") != "external":
+            base[entity_key] = None
+
     # Preserve a meaningful legacy value for older clients. Mixed routing cannot
     # be represented by the old flag, so only report External when both sides are.
     base["airControlMode"] = "external" if (
@@ -4513,6 +4534,17 @@ def _config_settings_save(payload: dict) -> dict:
     external_heat = _settings_entity_for_id(values.get("externalHeatEntityId", ""), {"switch", "input_boolean"}, lookup)
     external_cool = _settings_entity_for_id(values.get("externalCoolEntityId", ""), {"switch", "input_boolean"}, lookup)
     external_fan = _settings_entity_for_id(values.get("externalFanEntityId", ""), {"switch", "input_boolean"}, lookup)
+
+    # The entity picker can still contain the previous selection when the user
+    # changes a route back to Internal. Internal means there is no external target,
+    # so clear it before saving to both thermostat-state and panel-config.
+    if heat_mode != "external":
+        external_heat = None
+    if cool_mode != "external":
+        external_cool = None
+    if fan_mode != "external":
+        external_fan = None
+
     if room_mode == "external" and not current_temp_entity:
         raise ValueError("Select a room temperature entity before using External room temperature")
     if heat_mode == "external" and not external_heat:
@@ -8249,11 +8281,16 @@ def _write_relay_outputs_locked(relays: dict, source: str, *, record_history: bo
 
 
 def _external_air_entity_for_kind(thermostat: dict, kind: str) -> dict | None:
+    kind = str(kind or "").strip().lower()
+    # Runtime safety barrier: an Internal route can never target Home Assistant,
+    # even if a stale entity somehow survives in an imported/legacy config.
+    if _equipment_control_mode(thermostat, kind) != "external":
+        return None
     key = {
         "heat": "externalHeatEntity",
         "cool": "externalCoolEntity",
         "fan": "externalFanEntity",
-    }.get(str(kind or "").strip().lower())
+    }.get(kind)
     return _normalize_external_air_entity(thermostat.get(key)) if key else None
 
 
