@@ -1,0 +1,8 @@
+Smart Thermostat 16.94-10-12-26
+
+Diagnostic patch for nursery AC power cycling.
+
+- Adds centralized Home Assistant command tracing for switch.nursery_ac_power.
+- Logs every POST service call to that switch with the HA service path and exact Python caller stack.
+- Does not change thermostat temperature logic or compressor protection behavior.
+- Intended to identify the remaining backend path issuing unexpected OFF/ON commands.

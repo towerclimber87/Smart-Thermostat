@@ -24,6 +24,7 @@ import shlex
 import subprocess
 import threading
 import time
+import traceback
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -11065,6 +11066,24 @@ def _fetch_ha_cover_states_for_entities(ha_url: str, token: str, entity_ids: lis
 
 
 def _ha_json_request(ha_url: str, token: str, method: str, path: str, payload: dict | None = None, *, timeout: float | None = None) -> object:
+    # Diagnostic trace for the nursery AC switch.  Every Home Assistant service
+    # call in this backend passes through this helper, so logging here tells us
+    # the exact code path that issued a turn_on/turn_off/toggle command.
+    try:
+        traced_entity = str((payload or {}).get("entity_id") or "").strip() if isinstance(payload, dict) else ""
+        if traced_entity == "switch.nursery_ac_power" and str(method or "").upper() == "POST":
+            stack = traceback.extract_stack(limit=12)[:-1]
+            callers = " <- ".join(
+                f"{frame.name}@{Path(frame.filename).name}:{frame.lineno}"
+                for frame in reversed(stack[-8:])
+            )
+            print(
+                f"HA COMMAND TRACE entity={traced_entity} method={method} path={path} callers={callers}",
+                flush=True,
+            )
+    except Exception as exc:
+        print(f"HA COMMAND TRACE logging error: {exc}", flush=True)
+
     ha_url = _normalize_ha_url(ha_url)
     token = (token or "").strip()
     if not token:
