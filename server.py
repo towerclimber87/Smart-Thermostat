@@ -7750,6 +7750,19 @@ def _handle_thermostat_update_locked(payload: dict) -> tuple[dict, dict, dict]:
 
     saved_record = _write_thermostat_record(merged)
     merged = saved_record.get("thermostat") or merged
+
+    # Retire removed external HVAC targets from the authoritative before/after
+    # snapshots. This prevents a previously ON HA switch from being stranded ON
+    # when Heat/Cool/Fan is changed back to Internal or moved to another entity.
+    if any(
+        key in incoming
+        for key in (
+            "heatControlMode", "coolControlMode", "fanControlMode",
+            "externalHeatEntity", "externalCoolEntity", "externalFanEntity",
+        )
+    ):
+        _schedule_retired_external_air_release(existing, merged)
+
     if any(key in incoming for key in ("externalHeatEntity", "externalCoolEntity", "externalFanEntity")):
         _mirror_external_air_sources_to_panel_config(merged)
     if "kidMode" in incoming:
@@ -8450,6 +8463,71 @@ def _release_external_ha_air_outputs(thermostat: dict) -> None:
     # Retained for callers outside this module. Feeding all-false outputs turns
     # off every previously energized HA helper, including the external fan.
     _apply_external_ha_air_outputs(thermostat, {"heat": False, "cool": False, "fan": False})
+
+
+def _schedule_retired_external_air_release(previous: dict, current: dict) -> None:
+    """Explicitly turn off external HVAC entities removed by a settings change.
+
+    The normal external-output driver remembers its last entity in process memory,
+    but that cache is intentionally transient. If a panel is restarted while an
+    external switch is on, then the user changes that output back to Internal,
+    relying only on the cache can strand the old Home Assistant switch ON forever.
+
+    Compare the persisted before/after thermostat snapshots so a removed or moved
+    external mapping is retired even when the runtime cache was empty. Current
+    external mappings always win; an entity reused by another active HVAC role is
+    never forcibly turned off here.
+    """
+    before = _merge_thermostat_state(previous or {})
+    after = _merge_thermostat_state(current or {})
+
+    current_external_entities: set[str] = set()
+    for kind in ("heat", "cool", "fan"):
+        if _equipment_control_mode(after, kind) != "external":
+            continue
+        entry = _external_air_entity_for_kind(after, kind)
+        entity_id = str((entry or {}).get("entityId") or "").strip()
+        if entity_id:
+            current_external_entities.add(entity_id)
+
+    retired: list[tuple[str, str]] = []
+    for kind in ("heat", "cool", "fan"):
+        if _equipment_control_mode(before, kind) != "external":
+            continue
+        entry = _external_air_entity_for_kind(before, kind)
+        entity_id = str((entry or {}).get("entityId") or "").strip()
+        if entity_id and entity_id not in current_external_entities:
+            retired.append((kind, entity_id))
+
+    if not retired:
+        return
+
+    def _worker() -> None:
+        ha_url, token = _ha_credentials_from_panel_config()
+        if not ha_url or not token:
+            return
+        released: set[str] = set()
+        for kind, entity_id in retired:
+            if entity_id in released:
+                continue
+            try:
+                _call_room_control_service(ha_url, token, entity_id, "off")
+                released.add(entity_id)
+                print(f"Retired external {kind} control released: {entity_id}", flush=True)
+            except Exception as exc:
+                print(f"Retired external {kind} control release failed for {entity_id}: {exc}", flush=True)
+
+        if not released:
+            return
+        with _EXTERNAL_HA_AIR_LOCK:
+            for kind in ("heat", "cool", "fan"):
+                if str(_EXTERNAL_HA_AIR_LAST_ENTITIES.get(kind) or "").strip() in released:
+                    _EXTERNAL_HA_AIR_LAST_ENTITIES[kind] = ""
+                    _EXTERNAL_HA_AIR_LAST_STATES[kind] = None
+                    _EXTERNAL_HA_AIR_RETRY_AFTER[kind] = 0.0
+                    _EXTERNAL_HA_AIR_NEXT_VERIFY_AT[kind] = 0.0
+
+    threading.Thread(target=_worker, name="thermostat-retired-external-release", daemon=True).start()
 
 
 def _expire_manual_hardware_locked(now: float | None = None) -> bool:

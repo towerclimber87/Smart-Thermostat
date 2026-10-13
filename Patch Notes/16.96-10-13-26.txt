@@ -1,0 +1,10 @@
+Smart Thermostat 16.96-10-13-26
+
+Thermostat availability and external cooling release fix.
+
+- Home Assistant IHA climate polling now retains the last-known-good thermostat state through short API interruptions instead of marking the climate entity unavailable after one missed poll.
+- A real continuous panel/API outage still marks the entity unavailable after a 60-second grace window.
+- Adds HA climate diagnostics for cached/live status, consecutive failures, last success time/age, last error, and grace interval.
+- When Heat/Cool/Fan control is changed from External to Internal, or an external HVAC entity is changed/cleared, the previously controlled Home Assistant entity is explicitly sent OFF.
+- The external release uses persisted before/after thermostat state, so it still works after a service restart when the old in-memory external-output cache is empty.
+- Existing 2-minute minimum compressor runtime and 2-minute cooling fan overrun behavior are unchanged.
