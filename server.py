@@ -8371,7 +8371,7 @@ def _apply_external_ha_air_outputs(thermostat: dict, outputs: dict) -> None:
             if last_entity and last_entity != current_entity:
                 if last_state is True and not bool(desired_by_entity.get(last_entity, False)):
                     try:
-                        _call_room_control_service(ha_url, token, last_entity, "off")
+                        _call_room_control_service(ha_url, token, last_entity, "off", authoritative_hvac=True)
                     except Exception as exc:
                         print(f"External {kind} previous entry release failed for {last_entity}: {exc}", flush=True)
                 _EXTERNAL_HA_AIR_LAST_ENTITIES[kind] = ""
@@ -8438,7 +8438,7 @@ def _apply_external_ha_air_outputs(thermostat: dict, outputs: dict) -> None:
             if not needs_call or not can_try_now:
                 continue
             try:
-                _call_room_control_service(ha_url, token, entity_id, "on" if want_on else "off")
+                _call_room_control_service(ha_url, token, entity_id, "on" if want_on else "off", authoritative_hvac=True)
                 interval = (
                     EXTERNAL_HA_AIR_ACTIVE_VERIFY_INTERVAL_SECONDS
                     if want_on else EXTERNAL_HA_AIR_VERIFY_INTERVAL_SECONDS
@@ -8511,7 +8511,7 @@ def _schedule_retired_external_air_release(previous: dict, current: dict) -> Non
             if entity_id in released:
                 continue
             try:
-                _call_room_control_service(ha_url, token, entity_id, "off")
+                _call_room_control_service(ha_url, token, entity_id, "off", authoritative_hvac=True)
                 released.add(entity_id)
                 print(f"Retired external {kind} control released: {entity_id}", flush=True)
             except Exception as exc:
@@ -15734,11 +15734,19 @@ def _room_control_service_for_action(domain: str, action: str) -> tuple[str, str
     return (domain, service) if service else None
 
 
-def _call_room_control_service(ha_url: str, token: str, entity_id: str, action: str, code: str | None = None, position: int | float | str | None = None) -> dict:
+def _call_room_control_service(ha_url: str, token: str, entity_id: str, action: str, code: str | None = None, position: int | float | str | None = None, *, authoritative_hvac: bool = False) -> dict:
     entity_id = (entity_id or "").strip()
     domain = _room_control_domain(entity_id)
     action = (action or "toggle").strip().lower()
-    if domain in {"switch", "input_boolean"} and _block_external_hvac_off_if_owned(entity_id, action, "room-control"):
+    # Thermostat-owned HVAC reconciliation has already made the authoritative
+    # heat/cool/fan decision. Do not let the generic room-control ownership guard
+    # second-guess that same decision (which can strand an external compressor ON
+    # after a missed OFF). All user/audio/room-control calls still use the guard.
+    if (
+        not authoritative_hvac
+        and domain in {"switch", "input_boolean"}
+        and _block_external_hvac_off_if_owned(entity_id, action, "room-control")
+    ):
         try:
             item = _ha_json_request(ha_url, token, "GET", f"/api/states/{entity_id}")
             control = _normalize_generic_entity(item) if isinstance(item, dict) else {"entityId": entity_id, "domain": domain, "state": "on"}
