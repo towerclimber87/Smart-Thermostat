@@ -17391,8 +17391,17 @@ class SettingsDialog(QDialog):
                 self.people_summary.repaint()
 
             def done(result):
-                if isinstance(result, dict):
-                    self.s.ingest_thermostat(result)
+                # Only confirm a selection after the backend echoes the exact
+                # authoritative Auto Away list; never silently keep old users.
+                detail = thermostat_detail_payload(result) if isinstance(result, dict) else {}
+                def ids(entries):
+                    return [str(item.get("entityId") or item.get("entity_id") or "").strip()
+                            for item in entries if isinstance(item, dict)]
+                reported = detail.get("autoAwayPeople")
+                if not isinstance(reported, list) or ids(reported) != ids(clean):
+                    failed("Backend did not confirm the selected Auto Away users. Please retry.")
+                    return
+                self.s.ingest_thermostat(result)
                 if hasattr(self, "people_summary"):
                     self.people_summary.setText(self.auto_away_people_summary_text())
                 self.saved.emit()

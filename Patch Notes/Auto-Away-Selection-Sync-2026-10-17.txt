@@ -1,0 +1,8 @@
+Auto Away/Home user selection sync correction
+
+- Check that the backend persisted the exact configured participant IDs on each settings save.
+- Reset pending departure confirmation when selection changes.
+- Require the thermostat settings UI to verify the backend acknowledgement before indicating success; rollback the optimistic selection and display an error otherwise.
+- Does not change manual Away semantics, temperature safety controls, or unrelated person tracking.
+
+After installing, reselect David and Kitten in Auto Away Users and save. This update does not implicitly remove Tony during installation.

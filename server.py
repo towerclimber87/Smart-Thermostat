@@ -7751,6 +7751,21 @@ def _handle_thermostat_update_locked(payload: dict) -> tuple[dict, dict, dict]:
     saved_record = _write_thermostat_record(merged)
     merged = saved_record.get("thermostat") or merged
 
+    # A saved selection is authoritative: removed people must disappear from
+    # the runtime decision list and the persisted state on the same request.
+    if _source_has_auto_away_people(incoming):
+        requested_people = _normalize_person_entries(_auto_away_people_from_source(incoming))
+        requested_ids = _person_entity_ids_from_entries(requested_people)
+        actual_ids = _thermostat_auto_away_entity_ids(merged)
+        if requested_ids != actual_ids:
+            raise RuntimeError(
+                "Auto Away selection was not saved: "
+                f"requested={requested_ids}, actual={actual_ids}"
+            )
+        if _thermostat_auto_away_entity_ids(existing) != actual_ids:
+            _clear_auto_away_pending("Auto Away user selection changed")
+            print(f"Auto Away selection saved: {actual_ids}", flush=True)
+
     # Retire removed external HVAC targets from the authoritative before/after
     # snapshots. This prevents a previously ON HA switch from being stranded ON
     # when Heat/Cool/Fan is changed back to Internal or moved to another entity.
