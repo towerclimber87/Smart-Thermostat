@@ -1,0 +1,13 @@
+17.01 — Configuration backup/restore reliability patch (2026-10-18)
+
+Changed server.py only.
+- Full configuration export upgraded to version 2 and now includes independently persisted thermostat schedules, device Internet settings, and shared Volume Lock records.
+- Full v2 restore validates required records and settings shapes before writing anything.
+- Restore snapshots affected files first; if any write or verification fails, attempts to restore all prior on-disk content and restores thermostat state cache.
+- Importing legacy version-1 backups remains supported, but does NOT overwrite independent settings files missing from those older backups. Response includes fullRestore flag.
+- A deliberately emptied schedule list is now saved into the schedule recovery file as well, preventing the older nonempty recovery snapshot from resurfacing.
+- Successful restores are verified by reading back disk files.
+
+Verification: Python syntax check, valid v2 restore, invalid schedule rejection, and simulated mid-restore write failure/rollback all passed in isolated temporary directories.
+
+Important: No physical thermostat or simultaneous multi-client integration testing was performed. Restart the server after deploying server.py. Export a fresh v2 backup after the update.
