@@ -36,7 +36,7 @@ def runtime_log_dir() -> Path:
     # behavior when main.py is started by hand.
     candidates = [
         Path("/dev/shm/smart-thermostat-native/logs"),
-        Path(os.environ.get("SMART_THERMOSTAT_RUNTIME_DIR", "/tmp/smart-thermostat-native")) / "logs",
+        Path(os.environ.get("SMART_THERMOSTAT_RUNTIME_DIR", "/dev/shm/smart-thermostat-native")) / "logs",
     ]
     for candidate in candidates:
         try:

@@ -1,0 +1,12 @@
+17.04 — SD wear and configuration reliability (2026-10-18)
+
+Changed files: server.py, native_app/main.py, scripts/native-xinit.sh, scripts/run-native.sh.
+- Native/backend non-systemd runtime defaults use RAM-backed /dev/shm; installed systemd /run runtime remains unchanged.
+- Schedule primary and recovery read/compare/write sequence shares the disk transaction lock. No write for identical content.
+- Config download no longer flushes thermostat state or mirrors external HVAC source settings to the panel config as a side effect. Existing intentional save pathways retain mirroring.
+- Restore rollback and interrupted recovery synchronize the data directory after file replacements/deletions; recovery journal is removed with durable directory sync only during actual restores.
+- No periodic write jobs or additional routine SD writes were introduced.
+
+Verification: all Python sources compile; shell scripts pass bash -n; focused read-only export, unchanged schedule and recovery repair, and journal removal tests pass. Hardware crash/power testing not performed.
+
+Deploy: replace only the changed files, preserving folder paths; restart backend and native UI services. For live hardware confirm saved HVAC selections and schedules remain correct after reboot and a backup/restore exercise.

@@ -5,7 +5,7 @@ APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Runtime logs/caches must not live in the Git checkout. Caches stay under the
 # systemd RuntimeDirectory. Logs go to /dev/shm by default so they survive a
 # native service restart without writing normal activity to the SD card.
-RUNTIME_DIR="${SMART_THERMOSTAT_RUNTIME_DIR:-/tmp/smart-thermostat-native}"
+RUNTIME_DIR="${SMART_THERMOSTAT_RUNTIME_DIR:-/dev/shm/smart-thermostat-native}"
 DEFAULT_LOG_DIR="/dev/shm/smart-thermostat-native/logs"
 if [ ! -d /dev/shm ] || [ ! -w /dev/shm ]; then
   DEFAULT_LOG_DIR="$RUNTIME_DIR/logs"

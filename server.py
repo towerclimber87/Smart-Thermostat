@@ -39,7 +39,7 @@ VERSION_FILE = ROOT / "VERSION"
 # systemd overrides RUNTIME_DIR to /run; /dev/shm is used for self-update state
 # because it must survive a backend service restart while the transient updater
 # finishes the deployment.
-RUNTIME_DIR = Path(os.environ.get("SMART_THERMOSTAT_RUNTIME_DIR", "/tmp/smart-thermostat-runtime")).expanduser()
+RUNTIME_DIR = Path(os.environ.get("SMART_THERMOSTAT_RUNTIME_DIR", "/dev/shm/smart-thermostat-runtime")).expanduser()
 _DEFAULT_UPDATE_RUNTIME_DIR = Path("/dev/shm/smart-thermostat-self-update") if Path("/dev/shm").is_dir() else (RUNTIME_DIR / "self-update")
 UPDATE_RUNTIME_DIR = Path(os.environ.get("SMART_THERMOSTAT_UPDATE_RUNTIME_DIR", str(_DEFAULT_UPDATE_RUNTIME_DIR))).expanduser()
 UPDATE_STATUS_FILE = UPDATE_RUNTIME_DIR / "update-status.json"
@@ -2593,6 +2593,12 @@ def _fallback_saved_schedules() -> list[dict]:
 
 
 def _write_schedule_backup(schedules: object) -> None:
+    # Hold the transaction lock for read/compare/write of BOTH schedule files.
+    with _CONFIG_DISK_TRANSACTION_LOCK:
+        _write_schedule_backup_locked(schedules)
+
+
+def _write_schedule_backup_locked(schedules: object) -> None:
     safe = _normalize_schedule_entries(schedules)
     # Schedule persistence is event-driven. Repeated updates with the same
     # normalized entries must not change updatedAt or rewrite either SD file.
@@ -3831,12 +3837,10 @@ def _backup_read_optional_json(path: Path) -> dict | None:
 
 
 def _config_export_payload_unlocked(server_port: int | str | None = None) -> dict:
-    _flush_thermostat_state_to_disk()
+    # A download is a read-only snapshot: never flush state or repair panel
+    # configuration just because someone requests a backup. Save paths remain
+    # responsible for persisting intentional settings changes.
     live_thermostat = _read_thermostat_record().get("thermostat") or {}
-    # Backups must never serialize an older panel-config HVAC assignment when
-    # thermostat-state has the newer touchscreen selection. Repair the panel
-    # record first, then take both snapshots from synchronized stores.
-    _mirror_external_air_sources_to_panel_config(live_thermostat)
     panel_record = _read_panel_config_record()
     thermostat_record = _thermostat_record_for_disk(_read_thermostat_record())
     exported_at = int(time.time())
@@ -5951,6 +5955,21 @@ _CONFIG_RESTORE_LOCK = threading.RLock()
 _CONFIG_RESTORE_JOURNAL = DATA_DIR / "config-restore-rollback.json"
 
 
+def _sync_config_directory() -> None:
+    """Persist directory metadata after restore/rollback rename or deletion."""
+    fd = os.open(str(DATA_DIR), os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _remove_restore_journal() -> None:
+    if _CONFIG_RESTORE_JOURNAL.exists():
+        _CONFIG_RESTORE_JOURNAL.unlink()
+        _sync_config_directory()
+
+
 def _restore_original_files(original: dict) -> list[str]:
     import base64
     errors = []
@@ -5970,6 +5989,11 @@ def _restore_original_files(original: dict) -> list[str]:
                 os.replace(temp, path)
         except Exception as exc:
             errors.append(f"{filename}: {exc}")
+    if not errors:
+        try:
+            _sync_config_directory()
+        except OSError as exc:
+            errors.append(f"directory sync: {exc}")
     return errors
 
 
@@ -5989,7 +6013,7 @@ def _recover_interrupted_config_restore() -> None:
         failures = _restore_original_files(original)
         if failures:
             raise RuntimeError("Configuration restore recovery failed: " + "; ".join(failures))
-        _CONFIG_RESTORE_JOURNAL.unlink()
+        _remove_restore_journal()
 
 
 
@@ -6110,11 +6134,13 @@ def _config_import_payload(payload: object) -> dict:
                             raise ValueError("Restored schedule contents differ from expected values")
                     elif _backup_read_optional_json(path) != records[key]:
                         raise ValueError(f"Restored {key} differs from expected values")
-            _CONFIG_RESTORE_JOURNAL.unlink(missing_ok=True)
+            # Persist deletions of optional records before marking restore complete.
+            _sync_config_directory()
+            _remove_restore_journal()
         except Exception as exc:
             rollback_errors = _restore_original_files(original)
             if not rollback_errors:
-                _CONFIG_RESTORE_JOURNAL.unlink(missing_ok=True)
+                _remove_restore_journal()
             _THERMOSTAT_RECORD_CACHE = previous_cache
             _THERMOSTAT_RECORD_LAST_PERSIST_SIGNATURE = previous_signature
             _THERMOSTAT_RECORD_DIRTY = previous_dirty

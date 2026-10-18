@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RUNTIME_DIR="${SMART_THERMOSTAT_RUNTIME_DIR:-/tmp/smart-thermostat-native}"
+RUNTIME_DIR="${SMART_THERMOSTAT_RUNTIME_DIR:-/dev/shm/smart-thermostat-native}"
 DEFAULT_LOG_DIR="/dev/shm/smart-thermostat-native/logs"
 if [ ! -d /dev/shm ] || [ ! -w /dev/shm ]; then
   DEFAULT_LOG_DIR="$RUNTIME_DIR/logs"
