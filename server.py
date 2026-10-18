@@ -1573,7 +1573,7 @@ def _merge_thermostat_state(existing: dict | None = None, incoming: dict | None 
             # presence strip and Auto Away/Home. Copy the saved list into the new
             # Auto Away list when reading old state, but do not let future person
             # tracking edits keep changing the Auto Away users.
-            if source_index == 0 and not auto_away_people_explicit and not base.get("autoAwayPeople"):
+            if source_index == 0 and not auto_away_people_explicit and not _source_has_auto_away_people(source) and not base.get("autoAwayPeople"):
                 base["autoAwayPeople"] = _normalize_person_entries(source.get("people"))
         if source_has_auto_away_people:
             auto_away_people_explicit = True
@@ -6269,13 +6269,39 @@ def _apply_presence_away_logic(thermostat: dict) -> dict:
             # even before its six-hour maximum duration has elapsed.
             updated["presenceHomeOverride"] = None
             home_override = None
-        if bool(updated.get("away")) and away_source in {"presence", "auto", ""}:
+        # Manual Away is also released by an actual NEW arrival. Do not cancel
+        # a manual Away that was selected while somebody was already Home.
+        manual_latch = _normalize_manual_away_presence_latch(updated.get("manualAwayPresenceLatch"))
+        arrived_after_manual_away = bool(
+            manual_latch and set(home_entity_ids).intersection(manual_latch.get("seenAway") or [])
+        )
+        if bool(updated.get("away")) and (
+            away_source in {"presence", "auto", ""}
+            or (away_source == "manual" and arrived_after_manual_away)
+        ):
             updated["away"] = False
             updated["awaySource"] = "presence"
             updated["manualAwayPresenceLatch"] = None
             if updated.get("lastComfortTarget"):
                 updated["targetTemp"] = updated.get("lastComfortTarget")
+            print(f"Auto Home: selected arrival detected ({home_entity_ids}); previous source={away_source or 'auto'}", flush=True)
+        elif bool(updated.get("away")) and away_source == "manual" and manual_latch:
+            # A person who was initially Home may leave and return later.
+            # Only that return should override an intentional manual Away.
+            seen = set(manual_latch.get("seenAway") or [])
+            for entity_id in entity_ids:
+                if _presence_state_confidently_away(states.get(entity_id)):
+                    seen.add(entity_id)
+            manual_latch["seenAway"] = sorted(seen)
+            updated["manualAwayPresenceLatch"] = manual_latch
     else:
+        if bool(updated.get("away")) and away_source == "manual":
+            manual_latch = _normalize_manual_away_presence_latch(updated.get("manualAwayPresenceLatch"))
+            if manual_latch:
+                seen = set(manual_latch.get("seenAway") or [])
+                seen.update(confidently_away_entity_ids)
+                manual_latch["seenAway"] = sorted(seen)
+                updated["manualAwayPresenceLatch"] = manual_latch
         if home_override:
             _clear_auto_away_pending("Home/Arriving override is active")
             # A Home override blocks Auto Away while all assigned people still
@@ -7418,7 +7444,10 @@ def _handle_thermostat_update_locked(payload: dict) -> tuple[dict, dict, dict]:
         incoming = dict(incoming)
         incoming["away"] = requested_preset == "away"
         incoming["awaySource"] = "manual" if requested_preset == "away" else ""
-        incoming["manualAwayPresenceLatch"] = None
+        incoming["manualAwayPresenceLatch"] = (
+            {"active": True, "startedAt": int(time.time() * 1000), "baselineHome": [], "seenAway": []}
+            if requested_preset == "away" and _thermostat_auto_away_entity_ids(existing) else None
+        )
         if requested_preset == "away":
             incoming["presenceHomeOverride"] = None
         elif requested_preset == "arriving":
@@ -7483,6 +7512,18 @@ def _handle_thermostat_update_locked(payload: dict) -> tuple[dict, dict, dict]:
             _thermostat_auto_away_entity_ids(existing),
             reason="manual-return-home",
         )
+
+    # Other clients can request manual Away with away=true rather than a
+    # preset. Arm the same arrival latch without overwriting a supplied latch.
+    if (incoming.get("away") is True and
+            str(incoming.get("awaySource") or "").strip().lower() == "manual" and
+            "manualAwayPresenceLatch" not in incoming and
+            _thermostat_auto_away_entity_ids(existing)):
+        incoming = dict(incoming)
+        incoming["manualAwayPresenceLatch"] = {
+            "active": True, "startedAt": int(time.time() * 1000),
+            "baselineHome": [], "seenAway": [],
+        }
 
     requested_mode_raw = incoming.get("mode", incoming.get("hvac_mode", incoming.get("hvacMode")))
     requested_mode = _normalize_mode(requested_mode_raw, "") if requested_mode_raw is not None else ""

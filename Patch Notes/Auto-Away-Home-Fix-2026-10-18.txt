@@ -1,0 +1,15 @@
+Smart Thermostat Auto Away/Home fix — 2026-10-18
+
+Files: server.py, native_app/main.py (only modified source files relative to the original development ZIP).
+
+Changes:
+- Preserve an explicit empty Auto Away selection during thermostat state merging; never fill it from display people.
+- Preserve prior selection-save verification and touchscreen save confirmation.
+- A deliberate manual Away now enters Home when a selected person is observed Away and then Home after manual activation.
+- Someone already Home when manual Away is selected does NOT instantly cancel manual Away.
+- Automatic Away retains its five-minute all-selected-people-confidently-away confirmation.
+- Log a successful presence-driven Home transition.
+
+Important: Installing code does NOT remove Tony from a saved thermostat state. On Living Room, open Auto Away settings, remove Tony, save, and verify selection. Do not copy Bedroom's full config onto Living Room: settings differ.
+
+Install: back up existing server.py and native_app/main.py; replace only those files in /home/david/Smart-Thermostat-Development; compile-check; restart smart-thermostat-backend.service and the native UI service as appropriate. Test on one unit before rolling out to all four. If an older version of the system is deployed, inspect differences before replacing source files.
