@@ -1,8 +1,12 @@
-## Current bundled IHA integration (10.20.0)
+## Current bundled IHA integration (10.20.1)
 
-The included `Supporting/iha.zip` currently contains IHA integration version **10.20.0**. Install/merge this package into Home Assistant's existing `/config/custom_components/iha/` directory and restart Home Assistant after updating.
+The included `Supporting/iha.zip` currently contains IHA integration version **10.20.1**. Install/merge this package into Home Assistant's existing `/config/custom_components/iha/` directory and restart Home Assistant after updating.
 
 
+
+## Home Assistant integration display name (10.20.1)
+
+Home Assistant now displays this integration as **IHA Smart Thermostat** in the integration catalog and setup flow. The internal `iha` domain, existing entities, services, and thermostat device names are unchanged.
 
 ## Home Assistant-owned JARVIS processing (10.20.0)
 

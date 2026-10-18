@@ -1,0 +1,12 @@
+Smart Thermostat - Home Assistant integration label patch (2026-10-18)
+
+Changes:
+- Supporting/iha.zip: bump integration manifest version 10.20.0 -> 10.20.1; change integration display label to "IHA Smart Thermostat" in manifest, strings, and English translation.
+- Supporting/README.md: describe updated included integration and branding.
+
+Unchanged:
+- Internal integration domain remains "iha". No changes to thermostat software version (16.97), API, entity IDs, automations, services, or configuration storage.
+
+GitHub usage:
+- Apply files at their original paths within Smart-Thermostat-Development repository. Do not extract Supporting/iha.zip into the repository; the nested archive is the project's existing packaged integration format.
+- Deploy updated Supporting/iha.zip to Home Assistant custom_components/iha and restart Home Assistant Core for the renamed integration to appear.
