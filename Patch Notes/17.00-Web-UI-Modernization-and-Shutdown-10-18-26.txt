@@ -1,0 +1,9 @@
+Smart Thermostat 17.00 — Web UI modernization and remote shutdown
+
+- Redesigned Thermostat and Audio settings menu buttons as responsive, larger cards to reduce unnecessary text wrapping.
+- Replaced Ctrl-click multi-select interactions for Auto Away users, tracked people, synced thermostats and Audio speaker group members with independent checkboxes.
+- Preserved existing API fields, selected values and save/reload behavior; no change to physical thermostat logic.
+- Added 'Shut Down Web UI' action at top of the browser page with confirmation and success/failure feedback.
+- Shutdown uses the existing /api/system/config-web-portal/close endpoint, the same portal state used by the thermostat and Home Assistant, so browser sessions can no longer access portal settings until reopened.
+
+Changed files: server.py, VERSION and this patch note.
