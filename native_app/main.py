@@ -16352,6 +16352,7 @@ class SettingsDialog(QDialog):
             "Alexa Lockout": "Choose which Alexa devices are blocked while this screen is locked",
             "Family Center Application": "Connect the Family Center URL and API key for kid points and privileges",
             "Kid Mode": "Limit main-screen controls for a child-safe thermostat display",
+            "Features": "Kid Mode, Family Center, Jarvis, internet access, Alexa lockout, and intimacy hold",
         }
         return descriptions.get(str(title or ""), "Open this section to view its settings")
 
@@ -16629,8 +16630,77 @@ class SettingsDialog(QDialog):
         })
         return header
 
+    def open_features_dialog(self, entries: list[dict]):
+        """Feature category navigation; keep the original setting panels and save paths."""
+        if self._active_section_dialog is not None:
+            return
+        dlg = QDialog(self)
+        self._active_section_dialog = dlg
+        dlg.setWindowTitle("Features")
+        dlg.setModal(True)
+        dlg.setWindowFlag(Qt.FramelessWindowHint, True)
+        dlg.setStyleSheet("QDialog { background:#081321; color:#f7fbff; border:2px solid #356e84; border-radius:18px; }")
+        dlg.resize(min(850, max(620, self.width() - 120)), min(690, max(460, self.height() - 90)))
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+        heading_row = QHBoxLayout()
+        heading = QLabel("Features")
+        heading.setFont(font(19, QFont.Black))
+        heading_row.addWidget(heading, 1)
+        back = RoundButton("Back", active=True, min_h=38)
+        back.clicked.connect(dlg.reject)
+        heading_row.addWidget(back)
+        layout.addLayout(heading_row)
+        hint = QLabel("Choose a feature to view its settings.")
+        hint.setStyleSheet("color:#9fb0c8; background:transparent; border:0;")
+        layout.addWidget(hint)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        container = QWidget()
+        container.setStyleSheet("background:transparent;")
+        grid = QGridLayout(container)
+        grid.setSpacing(8)
+        grid.setContentsMargins(3, 3, 3, 3)
+        selected = []
+        for index, entry in enumerate(entries):
+            button = self.section_header_button(entry["title"])
+            def choose(checked=False, item=entry):
+                selected.append(item)
+                dlg.accept()
+            button.clicked.connect(choose)
+            grid.addWidget(button, index // 2, index % 2)
+        for col in range(2):
+            grid.setColumnStretch(col, 1)
+        scroll.setWidget(container)
+        layout.addWidget(scroll, 1)
+        try:
+            dlg.exec_()
+        finally:
+            self._active_section_dialog = None
+            dlg.deleteLater()
+        if selected:
+            entry = selected[0]
+            self.open_section_dialog(entry["title"], entry["panel"])
+
     def finalize_section_index(self):
-        entries = sorted(self._section_entries, key=lambda item: (item["row"], item["col"], item["title"]))
+        feature_titles = (
+            "Kid Mode", "Family Center Application", "Jarvis",
+            "Device Internet", "Alexa Lockout", "Intimacy Hold",
+        )
+        feature_entries = [entry for entry in self._section_entries if entry["title"] in feature_titles]
+        entries = [entry for entry in self._section_entries if entry["title"] not in feature_titles]
+        if feature_entries:
+            feature_entries.sort(key=lambda entry: feature_titles.index(entry["title"]))
+            feature_button = self.section_header_button("Features")
+            feature_button.clicked.connect(lambda checked=False, items=feature_entries: self.open_features_dialog(items))
+            entries.insert(0, {
+                "title": "Features", "row": -4, "col": 0,
+                "header": feature_button, "panel": None,
+            })
+        entries.sort(key=lambda item: (item["row"], item["col"], item["title"]))
         # Present the section index as two balanced columns. The source row/column
         # values still define the logical order, while the compact index avoids a
         # long single-column list and normally fits without vertical scrolling.

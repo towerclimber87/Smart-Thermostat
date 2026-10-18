@@ -1,0 +1,12 @@
+Smart Thermostat 16.98 — Settings Features Navigation (2026-10-18)
+
+- Simplified the physical thermostat Comfort Setup main index by grouping six settings under a single Features entry.
+- Features includes Kid Mode, Family Center Application, Jarvis, Device Internet, Alexa Lockout, and Intimacy Hold.
+- Each feature opens its existing settings panel with the same controls, callbacks, and save handling; no changes to thermostat operations or stored settings.
+- Features menu has a Back button to return to the main settings index.
+- The remaining settings retain their original panels and ordering.
+
+Changed repository files:
+- native_app/main.py
+- VERSION
+- Patch Notes/16.98-Settings-Features-10-18-26.txt
