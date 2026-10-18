@@ -1,0 +1,11 @@
+16.99 - Web UI and on-device Settings alignment - 2026-10-18
+
+- Renamed on-device Backup Config entry and popup to Web UI.
+- Renamed Home Assistant Backup Portal switch display name to Web UI; preserves unique ID and iha domain.
+- Existing backup/export/restore functions remain under Backup & Restore within the Web UI.
+- Reworked Web UI Thermostat settings into touchscreen-like menu: Features submenu with Kid Mode, Device Internet, Alexa Lockout, Family Center Application, Intimacy Hold; other settings show as one selectable panel at a time.
+- Audio Settings now uses a menu of on-device audio option groups instead of displaying every settings card at once.
+- Added Room tab, with Rooms/Code views. Supports room add/delete/select, control count up to 12, and per-control PIN + protected action settings.
+- Added narrowly scoped, temporary-portal-only Room settings endpoint that updates the latest panel configuration while retaining unrelated settings. Conflict check prevents stale writes.
+- Existing Home Assistant entity IDs, configuration endpoints, Volume Lock sync and thermostat control logic unchanged.
+- Limitation: web UI mirrors navigation and editable settings, not a pixel-for-pixel remote rendering of the PyQt screen; page-specific live controls remain on physical screen.

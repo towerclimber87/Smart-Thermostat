@@ -3894,7 +3894,7 @@ def _config_web_portal_stop_payload() -> dict:
         "ok": True,
         "active": False,
         "wasActive": was_active,
-        "message": "Config backup portal stopped.",
+        "message": "Web UI stopped.",
     }
 
 
@@ -3923,7 +3923,7 @@ def _config_transfer_closed_html() -> str:
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Config Backup Closed</title>
+  <title>Web UI Closed</title>
   <style>
     :root { color-scheme: dark; font-family: Arial, Helvetica, sans-serif; }
     body { margin:0; min-height:100vh; display:grid; place-items:center; color:#f7fbff; background:linear-gradient(135deg,#071222,#101d35,#050913); }
@@ -3936,8 +3936,8 @@ def _config_transfer_closed_html() -> str:
 <body>
   <main class="card">
     <div class="eyebrow">Smart Thermostat</div>
-    <h1>Config backup is closed</h1>
-    <p>Press Open Backup in Home Assistant or open Backup Config on the thermostat panel to temporarily enable this page.</p>
+    <h1>Web UI is closed</h1>
+    <p>Enable Web UI in Home Assistant or open Web UI on the thermostat panel to temporarily enable this page.</p>
   </main>
 </body>
 </html>"""
@@ -3949,13 +3949,13 @@ def _config_web_portal_payload(server_port: int | str | None = None) -> dict:
     portal = _config_web_portal_activate()
     return {
         "ok": True,
-        "message": "Config backup portal is ready.",
+        "message": "Web UI is ready.",
         "url": url,
         "ipAddress": info.get("ipAddress"),
         "port": info.get("port"),
         "address": info.get("address"),
         "thermostatName": info.get("thermostatName") or info.get("name"),
-        "note": "Open this address from a computer on the same network. The portal automatically closes after its inactivity timeout, or immediately when the panel Backup popup is closed.",
+        "note": "Open this address from a computer on the same network. The portal automatically closes after its inactivity timeout, or immediately when the panel Web UI popup is closed.",
         "resourceMode": "temporary-root-backup-route",
         "active": portal.get("active"),
         "timeoutSeconds": portal.get("timeoutSeconds"),
@@ -4867,7 +4867,7 @@ def _config_settings_save(payload: dict) -> dict:
 
     return {
         "ok": True,
-        "message": "Thermostat settings saved. Close Backup Config when finished so the panel reloads every config-backed selection.",
+        "message": "Thermostat settings saved. Close Web UI when finished so the panel reloads every config-backed selection.",
         "version": saved_config.get("version"),
         "updatedAt": saved_config.get("updatedAt"),
         "settings": _config_settings_current(),
@@ -4875,6 +4875,99 @@ def _config_settings_save(payload: dict) -> dict:
         "warnings": warnings,
     }
 
+
+
+def _web_room_settings_payload() -> dict:
+    """Expose only Room manager fields through an active Web UI session."""
+    record = _read_panel_config_record()
+    config = record.get("config") if isinstance(record.get("config"), dict) else {}
+    section = config.get("roomControl") if isinstance(config.get("roomControl"), dict) else {}
+    rooms = section.get("rooms") if isinstance(section.get("rooms"), dict) else {}
+    safe_rooms = _deepcopy_json(rooms)
+    for room in safe_rooms.values():
+        if not isinstance(room, dict):
+            continue
+        for control in room.get("controls") or []:
+            if isinstance(control, dict):
+                control["hasAccessCode"] = bool(control.get("accessCode"))
+                control.pop("accessCode", None)
+    return {"ok": True, "version": record.get("version"), "selectedRoom": section.get("room"),
+            "rooms": safe_rooms}
+
+
+def _web_room_settings_update(payload: dict) -> dict:
+    """Apply one Room-manager edit to the latest config, preserving unrelated fields."""
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid Room settings request")
+    operation = str(payload.get("action") or "").strip()
+    record = _read_panel_config_record()
+    if str(payload.get("version")) != str(record.get("version")):
+        raise ValueError("Room settings changed on another device. Reload before saving.")
+    config = _deepcopy_json(record.get("config") or {})
+    section = config.setdefault("roomControl", {})
+    rooms = section.setdefault("rooms", {})
+    if not isinstance(rooms, dict):
+        raise ValueError("Invalid saved Room settings")
+    key = str(payload.get("room") or "").strip()
+    if operation == "add":
+        label = str(payload.get("label") or "").strip()[:60]
+        if not label or len(rooms) >= 50:
+            raise ValueError("Enter a room name (maximum 50 rooms)")
+        key = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-") or "room"
+        base = key
+        counter = 2
+        while key in rooms:
+            key = f"{base}-{counter}"
+            counter += 1
+        rooms[key] = {"label": label, "controls": []}
+        section["room"] = key
+    elif operation == "delete":
+        if key not in rooms or len(rooms) <= 1:
+            raise ValueError("At least one Room must remain")
+        rooms.pop(key)
+        section["room"] = next(iter(rooms))
+    elif operation == "select":
+        if key not in rooms:
+            raise ValueError("Room not found")
+        section["room"] = key
+    elif operation == "count":
+        if key not in rooms:
+            raise ValueError("Room not found")
+        count = int(payload.get("count"))
+        if count < 0 or count > 12:
+            raise ValueError("Room supports 0–12 controls")
+        controls = rooms[key].setdefault("controls", [])
+        if not isinstance(controls, list):
+            raise ValueError("Invalid control list")
+        if count < len(controls):
+            del controls[count:]
+        while len(controls) < count:
+            index = len(controls) + 1
+            controls.append({"id": f"{key}-control-{index}", "name": f"Control {index}", "domain": "switch", "on": False})
+    elif operation == "code":
+        if key not in rooms:
+            raise ValueError("Room not found")
+        controls = rooms[key].get("controls") or []
+        index = int(payload.get("index", -1))
+        if not 0 <= index < len(controls) or not isinstance(controls[index], dict):
+            raise ValueError("Room control not found")
+        control = controls[index]
+        code_value = payload.get("code")
+        code = str(control.get("accessCode") or "") if code_value is None else str(code_value)
+        if code and (len(code) != 4 or not code.isdigit()):
+            raise ValueError("Code must be exactly four digits")
+        states = payload.get("states")
+        if states is None:
+            states = control.get("codeRequiredStates") or {}
+        if not isinstance(states, dict) or any(k not in ("on", "off", "open", "close", "lock", "unlock", "press", "run", "play_pause", "start", "return_to_base", "stop") for k in states):
+            raise ValueError("Invalid protected states")
+        control["accessCode"] = code
+        control["codeRequiredStates"] = {k: bool(v) for k, v in states.items()} if code else {}
+        control["codePolicyRevision"] = max(int(control.get("codePolicyRevision") or 0) + 1, int(time.time() * 1000))
+    else:
+        raise ValueError("Unsupported Room settings action")
+    _write_panel_config_record(config)
+    return _web_room_settings_payload()
 
 def _config_transfer_html(server_port: int | str | None = None) -> str:
     info = _system_info_payload(server_port)
@@ -4945,6 +5038,19 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
     .tab-button {{ min-height:46px; border-radius:13px; padding:0 20px; background:transparent; border:1px solid transparent; box-shadow:none; color:#b9c8de; }}
     .tab-button.active {{ color:white; background:linear-gradient(135deg,#14b8ff,#7c3aed); box-shadow:0 10px 28px rgba(20,184,255,.20); }}
     .tab-panel {{ display:none; }} .tab-panel.active {{ display:block; }}
+    [hidden] {{ display:none !important; }}
+    .settings-menu {{ display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:11px;margin:12px 0; }}
+    .settings-menu button {{ justify-content:space-between;min-height:64px;text-align:left;background:rgba(255,255,255,.07);border:1px solid rgba(70,232,255,.2);box-shadow:none; }}
+    .settings-menu button:hover,.settings-menu button:focus-visible {{ border-color:#46e8ff;background:rgba(70,232,255,.13); }}
+    .settings-back {{ margin-bottom:14px; }}
+    .settings-detail[hidden],.settings-menu[hidden] {{ display:none !important; }}
+    #tab-thermostat .settings-section {{ display:none; }}
+    #tab-thermostat .settings-section.settings-visible {{ display:block;grid-column:1/-1; }}
+    #tab-audio .settings-section {{ display:none; }}
+    #tab-audio .settings-section.settings-visible {{ display:block; }}
+    .room-card {{ display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px;margin:8px 0;border-radius:14px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.05); }}
+    .room-card button {{ min-height:40px; }}
+
     .actions {{ display:grid; grid-template-columns:1fr 1fr; gap:16px; }}
     .action-card {{ min-height:230px; display:flex; flex-direction:column; gap:12px; }}
     button,.button {{ border:0; border-radius:16px; min-height:52px; padding:0 20px; display:inline-flex; align-items:center; justify-content:center; text-decoration:none; font-weight:1000; font-size:15px; color:white; cursor:pointer; background:linear-gradient(135deg,#14b8ff,#7c3aed); box-shadow:0 12px 36px rgba(20,184,255,.22); }}
@@ -5044,7 +5150,7 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
 <body>
 <main class="wrap">
   <section class="hero">
-    <div><div class="eyebrow">Smart Thermostat Configuration</div><h1>{name}</h1><div class="muted">The portal is temporary. It closes when the panel Backup popup is closed or after its inactivity timeout.</div></div>
+    <div><div class="eyebrow">Smart Thermostat Web UI</div><h1>{name}</h1><div class="muted">The portal is temporary. It closes when the panel Web UI popup is closed or after its inactivity timeout.</div></div>
     <div class="pill">{address}</div>
   </section>
   <section class="summary-grid">
@@ -5057,8 +5163,9 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
   </section>
   <nav class="tabs" aria-label="Configuration tabs">
     <button class="tab-button active" data-tab="backup" type="button">Backup &amp; Restore</button>
-    <button class="tab-button" data-tab="thermostat" type="button">Thermostat Settings</button>
-    <button class="tab-button" data-tab="audio" type="button">Audio Settings</button>
+    <button class="tab-button" data-tab="thermostat" type="button">Thermostat</button>
+    <button class="tab-button" data-tab="audio" type="button">Audio</button>
+    <button class="tab-button" data-tab="room" type="button">Room</button>
     <button class="tab-button" data-tab="jarvis" type="button">JARVIS Voice</button>
   </nav>
 
@@ -5072,6 +5179,9 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
   <section id="tab-thermostat" class="tab-panel">
     <div class="card">
       <div class="eyebrow">Comfort Setup</div><h2>Thermostat Settings</h2>
+      <div id="thermostat-menu" class="settings-menu"></div>
+      <button id="thermostat-back" type="button" class="secondary settings-back" hidden>← All Thermostat Settings</button>
+      <div id="thermostat-features" class="settings-menu" hidden></div>
       <p class="muted">This page mirrors the wall-panel Settings layout. Changes are staged here and applied together with Save Thermostat Settings.</p>
       <div id="thermostat-sections" class="section-grid">
         <div class="settings-section full"><h3>Kid Mode</h3><p class="muted">Limit the main thermostat screen for kid use. Intimacy and Sync are hidden, schedule shortcut buttons are hidden, Arriving is hidden, Off/Cool/Heat/Away remain visible but cannot be changed, and Alarmo cannot be opened.</p><div class="checks"><label class="check"><input id="ts-kid-mode" type="checkbox"> Enable Kid Mode</label></div></div>
@@ -5109,6 +5219,8 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
   <section id="tab-audio" class="tab-panel">
     <div class="card">
       <div class="eyebrow">Audio Settings</div><h2>Audio Options, Scenes &amp; Groups</h2>
+      <div id="audio-menu" class="settings-menu"></div>
+      <button id="audio-back" type="button" class="secondary settings-back" hidden>← All Audio Settings</button>
       <p class="muted">This mirrors the wall-panel Audio Settings dialog. Save here with the main thermostat settings button; unrelated Audio-page entity assignments are preserved.</p>
       <div class="audio-grid">
         <div class="settings-section"><h3>Visible Controls</h3><p class="muted">Disabled controls are hidden from Audio and skipped by scene buttons.</p><div class="checks"><label class="check"><input id="audio-enable-gain" type="checkbox">Gain</label><label class="check"><input id="audio-enable-bass" type="checkbox">Bass</label><label class="check"><input id="audio-enable-treble" type="checkbox">Treble</label><label class="check"><input id="audio-enable-music_surround" type="checkbox">Music Surround</label><label class="check"><input id="audio-enable-tv_power" type="checkbox">TV Power</label><label class="check"><input id="audio-enable-projector" type="checkbox">Projector</label><label class="check"><input id="audio-enable-subwoofer" type="checkbox">Sub</label><label class="check"><input id="audio-enable-surround" type="checkbox">Surround Sound</label></div></div>
@@ -5118,6 +5230,17 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
       </div>
       <div class="button-row"><button id="audio-save" type="button">Save Audio &amp; Thermostat Settings</button><button id="audio-reload" type="button" class="secondary">Reload Values</button></div>
       <div id="audio-status" class="status muted">Open this tab to load Audio Settings.</div>
+    </div>
+  </section>
+
+  <section id="tab-room" class="tab-panel">
+    <div class="card"><div class="eyebrow">Room Page</div><h2>Room Settings</h2>
+    <p class="muted">The same Room manager controls as the touchscreen: Rooms and Codes. Room entries are assigned on the Room page itself.</p>
+    <div class="button-row"><button type="button" class="secondary" id="room-rooms">Rooms</button><button type="button" class="secondary" id="room-codes">Code</button><button type="button" class="secondary" id="room-reload">Reload</button></div>
+    <div id="room-list-panel"><div id="room-list"></div>
+       <div class="button-row"><button id="room-add" type="button">Add Room</button></div></div>
+    <div id="room-code-panel" hidden><div class="field"><label>Filter room</label><select id="room-code-filter"></select></div><div id="room-code-list"></div></div>
+    <div id="room-status" class="status muted">Select Room to load the saved settings.</div>
     </div>
   </section>
 
@@ -5163,9 +5286,77 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
 <script>
 const qs = (id) => document.getElementById(id);
 function setBox(box,text,kind) {{ box.textContent=text; box.className='status '+(kind||'muted'); }}
-for (const button of document.querySelectorAll('.tab-button')) {{ button.addEventListener('click',()=>{{ document.querySelectorAll('.tab-button').forEach(x=>x.classList.toggle('active',x===button)); document.querySelectorAll('.tab-panel').forEach(x=>x.classList.toggle('active',x.id==='tab-'+button.dataset.tab)); if((button.dataset.tab==='thermostat'||button.dataset.tab==='audio')&&!window.thermostatSettingsLoaded) loadThermostatSettings(); if(button.dataset.tab==='jarvis'&&!window.jarvisKnowledgeLoaded) loadJarvisKnowledge(); }}); }}
-function initThermostatSectionCards() {{ for(const section of document.querySelectorAll('#tab-thermostat .settings-section')) {{ const heading=section.querySelector(':scope > h3');if(!heading)continue;section.classList.add('collapsed');heading.tabIndex=0;heading.setAttribute('role','button');heading.setAttribute('aria-expanded','false');const toggle=()=>{{const collapsed=section.classList.toggle('collapsed');heading.setAttribute('aria-expanded',collapsed?'false':'true');}};heading.addEventListener('click',toggle);heading.addEventListener('keydown',event=>{{if(event.key==='Enter'||event.key===' '){{event.preventDefault();toggle();}}}}); }} }}
-initThermostatSectionCards();
+for (const button of document.querySelectorAll('.tab-button')) {{ button.addEventListener('click',()=>{{ document.querySelectorAll('.tab-button').forEach(x=>x.classList.toggle('active',x===button)); document.querySelectorAll('.tab-panel').forEach(x=>x.classList.toggle('active',x.id==='tab-'+button.dataset.tab)); if((button.dataset.tab==='thermostat'||button.dataset.tab==='audio')&&!window.thermostatSettingsLoaded) loadThermostatSettings(); if(button.dataset.tab==='room')loadRoomSettings(); if(button.dataset.tab==='jarvis'&&!window.jarvisKnowledgeLoaded) loadJarvisKnowledge(); }}); }}
+function makeMenuButton(name, callback) {{ const b=document.createElement('button');b.type='button';b.textContent=name+'  ›';b.addEventListener('click',callback);return b; }}
+const featureNames=new Set(['Kid Mode','Device Internet','Alexa Lockout','Family Center Application','Intimacy Hold']);
+function initializeSettingsMenus() {{
+  const thermostatSections=Array.from(document.querySelectorAll('#tab-thermostat .settings-section'));
+  const audioSections=Array.from(document.querySelectorAll('#tab-audio .settings-section'));
+  const thermostatMenu=qs('thermostat-menu'),featuresMenu=qs('thermostat-features'),thermostatBack=qs('thermostat-back');
+  let activeThermostat='';
+  function showThermostat(name) {{
+    activeThermostat=name;
+    const inFeatures=name==='Features';
+    thermostatMenu.hidden=!!name;
+    featuresMenu.hidden=!inFeatures;
+    thermostatBack.hidden=!name;
+    thermostatBack.textContent=inFeatures?'← All Thermostat Settings':(featureNames.has(name)?'← Features':'← All Thermostat Settings');
+    for(const section of thermostatSections){{const heading=section.querySelector(':scope > h3');section.classList.toggle('settings-visible',!!heading&&heading.textContent.trim()===name);}}
+  }}
+  thermostatBack.addEventListener('click',()=>showThermostat(featureNames.has(activeThermostat)?'Features':''));
+  thermostatMenu.append(makeMenuButton('Features',()=>showThermostat('Features')));
+  for(const section of thermostatSections){{const heading=section.querySelector(':scope > h3');if(!heading)continue;const name=heading.textContent.trim();(featureNames.has(name)?featuresMenu:thermostatMenu).append(makeMenuButton(name,()=>showThermostat(name)));}}
+  featuresMenu.append(makeMenuButton('Jarvis',()=>document.querySelector('[data-tab=jarvis]').click()));
+  const audioMenu=qs('audio-menu');const audioBack=qs('audio-back');
+  function showAudio(name){{audioMenu.hidden=!!name;audioBack.hidden=!name;for(const section of audioSections){{const heading=section.querySelector(':scope > h3');section.classList.toggle('settings-visible',!!heading&&heading.textContent.trim()===name);}}}}
+  audioBack.addEventListener('click',()=>showAudio(''));
+  for(const section of audioSections){{const heading=section.querySelector(':scope > h3');if(heading)audioMenu.append(makeMenuButton(heading.textContent.trim(),()=>showAudio(heading.textContent.trim())));}}
+  showThermostat('');showAudio('');
+}}
+initializeSettingsMenus();
+
+let roomSettings=null, roomCodeMode=false;
+function roomMessage(message,kind){{setBox(qs('room-status'),message,kind||'muted');}}
+async function loadRoomSettings(){{try{{roomMessage('Loading Room settings...');const r=await fetch('/api/settings/web/room?fresh='+Date.now(),{{cache:'no-store'}});const d=await r.json();if(!r.ok||!d.ok)throw Error(d.error||'Could not load Room settings');roomSettings=d;renderRooms();roomMessage('Room settings loaded.');}}catch(e){{roomMessage(String(e.message||e),'bad');}}}}
+async function roomAction(action,room,extra={{}}){{
+  if(!roomSettings)return;
+  try{{roomMessage('Saving Room settings...');const r=await fetch('/api/settings/web/room',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{action,room,version:roomSettings.version,...extra}})}});const d=await r.json();if(!r.ok||!d.ok)throw Error(d.error||'Room settings could not be saved');roomSettings=d;renderRooms();roomMessage('Room settings saved.','ok');}}
+  catch(e){{roomMessage(String(e.message||e),'bad');await loadRoomSettings();}}
+}}
+function renderRooms(){{
+  if(!roomSettings)return;
+  const rooms=roomSettings.rooms||{{}};qs('room-list').replaceChildren();const filter=qs('room-code-filter');const previous=filter.value;filter.replaceChildren();
+  for(const [key,room] of Object.entries(rooms)){{
+    const option=document.createElement('option');option.value=key;option.textContent=room.label||key;filter.append(option);
+    const row=document.createElement('div');row.className='room-card';const info=document.createElement('div');const title=document.createElement('strong');title.textContent=(room.label||key)+(key===roomSettings.selectedRoom?'  ✓':'');const small=document.createElement('div');small.className='muted';small.textContent=(room.controls||[]).length+'/12 controls';info.append(title,small);
+    const actions=document.createElement('div');actions.className='button-row';actions.style.margin='0';
+    const pick=document.createElement('button');pick.className='secondary';pick.textContent='Select';pick.onclick=()=>roomAction('select',key);
+    const minus=document.createElement('button');minus.className='secondary';minus.textContent='−';minus.onclick=()=>{{const count=(room.controls||[]).length;if(count>0&&confirm('Remove the last Room control? Its assignments and code will be deleted.'))roomAction('count',key,{{count:count-1}});}};
+    const plus=document.createElement('button');plus.className='secondary';plus.textContent='+';plus.onclick=()=>roomAction('count',key,{{count:(room.controls||[]).length+1}});
+    const del=document.createElement('button');del.className='secondary';del.textContent='Delete';del.disabled=Object.keys(rooms).length<=1;del.onclick=()=>{{if(confirm('Delete '+(room.label||key)+' and all of its Room controls?'))roomAction('delete',key);}};
+    actions.append(pick,minus,plus,del);row.append(info,actions);qs('room-list').append(row);
+  }}
+  filter.value=rooms[previous]?previous:(rooms[roomSettings.selectedRoom]?roomSettings.selectedRoom:Object.keys(rooms)[0]||'');renderRoomCodes();
+}}
+function renderRoomCodes(){{
+  const box=qs('room-code-list');box.replaceChildren();if(!roomSettings)return;const key=qs('room-code-filter').value;const controls=((roomSettings.rooms||{{}})[key]||{{}}).controls||[];
+  controls.forEach((ctl,index)=>{{
+    const row=document.createElement('div');row.className='settings-section';const title=document.createElement('h3');title.textContent=ctl.name||('Control '+(index+1));row.append(title);
+    const info=document.createElement('p');info.className='muted';info.textContent=ctl.hasAccessCode?'4-digit code is set':'No code set';row.append(info);
+    const field=document.createElement('div');field.className='field';const label=document.createElement('label');label.textContent='4-digit code (blank to clear)';const input=document.createElement('input');input.type='password';input.inputMode='numeric';input.maxLength=4;input.placeholder=ctl.hasAccessCode?'••••':'New code';input.autocomplete='off';field.append(label,input);row.append(field);
+    const states=ctl.codeRequiredStates||{{}};const domain=ctl.domain||(ctl.haEntityId||'').split('.')[0];const kinds=domain==='cover'?['open','close']:domain==='lock'?['lock','unlock']:['button','input_button'].includes(domain)?['press']:['scene','script'].includes(domain)?['run']:domain==='media_player'?['on','off','play_pause']:domain==='vacuum'?['start','return_to_base','stop']:['on','off'];const checkboxes={{}};const checks=document.createElement('div');checks.className='checks';for(const state of kinds){{const l=document.createElement('label');l.className='check';const c=document.createElement('input');c.type='checkbox';c.checked=ctl.hasAccessCode?(Object.keys(states).length?!!states[state]:(domain==='lock'?state==='unlock':true)):false;checkboxes[state]=c;l.append(c,document.createTextNode(' Require code for '+state));checks.append(l);}}row.append(checks);
+    const save=document.createElement('button');save.type='button';save.textContent='Save Code / Protected States';save.onclick=()=>{{const code=input.value;const currentCode=ctl.hasAccessCode?null:'';const selected={{}};for(const [name,c] of Object.entries(checkboxes))selected[name]=c.checked;if(code&&(!/^[0-9]{{4}}$/.test(code))){{roomMessage('Code must contain exactly 4 digits.','bad');return;}}roomAction('code',key,{{index,code:code||currentCode,states:selected}});}};
+    const clear=document.createElement('button');clear.type='button';clear.className='secondary';clear.textContent='Clear Code';clear.onclick=()=>{{if(confirm('Remove this control code and its protected-state rules?'))roomAction('code',key,{{index,code:'',states:{{}}}});}};
+    const actions=document.createElement('div');actions.className='button-row';actions.append(save,clear);row.append(actions);box.append(row);
+  }});
+  if(!controls.length){{const p=document.createElement('p');p.className='muted';p.textContent='No Room controls in this room. Add controls under Rooms first.';box.append(p);}}
+}}
+qs('room-rooms').onclick=()=>{{roomCodeMode=false;qs('room-list-panel').hidden=false;qs('room-code-panel').hidden=true;}};
+qs('room-codes').onclick=()=>{{roomCodeMode=true;qs('room-list-panel').hidden=true;qs('room-code-panel').hidden=false;renderRoomCodes();}};
+qs('room-code-filter').addEventListener('change',renderRoomCodes);
+qs('room-add').onclick=()=>{{const label=prompt('New room name');if(label&&label.trim())roomAction('add','',{{label:label.trim()}});}};
+qs('room-reload').onclick=loadRoomSettings;
+
 
 qs('upload').addEventListener('click',async()=>{{ const file=qs('file').files&&qs('file').files[0]; if(!file){{setBox(qs('status'),'Select a config JSON file first.','bad');return;}} try{{setBox(qs('status'),'Uploading config...','muted'); const payload=JSON.parse(await file.text()); const response=await fetch('/api/system/config-import',{{method:'POST',headers:{{'Accept':'application/json','Content-Type':'application/json'}},body:JSON.stringify(payload)}}); const data=await response.json().catch(()=>({{}})); if(!response.ok||!data.ok)throw new Error(data.error||data.message||'Upload failed.'); setBox(qs('status'),data.message||'Config uploaded.','ok');}}catch(err){{setBox(qs('status'),err.message||String(err),'bad');}} }});
 
@@ -5693,7 +5884,7 @@ def _config_import_payload(payload: object) -> dict:
 
     return {
         "ok": True,
-        "message": "Config uploaded. Close the Backup Config popup on the thermostat to apply the restored settings immediately.",
+        "message": "Config uploaded. Close the Web UI popup on the thermostat to apply the restored settings immediately.",
         "version": panel_record["version"],
         "updatedAt": panel_record["updatedAt"],
         "config": panel_record["config"],
@@ -16594,7 +16785,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
             return _send_html(self, _config_transfer_html(server_port))
         if path == "/api/system/config-export":
             if not _config_web_portal_active(touch=True):
-                self.send_error(403, "Config backup portal is closed")
+                self.send_error(403, "Web UI is closed")
                 return
             server_port = getattr(self.server, "server_address", (None, None))[1]
             return _send_json_download(self, _config_backup_filename(), _config_export_payload(server_port))
@@ -16618,6 +16809,10 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
             return _json(self, 200, _hvac_history_payload(requested_date))
         if path == "/api/history/dates":
             return _json(self, 200, _hvac_history_dates_payload())
+        if path == "/api/settings/web/room":
+            if not _config_web_portal_active(touch=True):
+                return _json(self, 403, {"ok": False, "error": "Web UI is closed"})
+            return _json(self, 200, _web_room_settings_payload())
         if path == "/api/config":
             if not _request_client_is_loopback(self):
                 return _json(self, 403, {"ok": False, "error": "Panel configuration is local-only."})
@@ -16688,7 +16883,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/thermostat/run-schedule", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/hardware/temperature-sensors", "/api/screen/lock-status", "/api/screen/lock-control", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/entity/state", "/api/ha/alexa-lockout/devices", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/group", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/device-internet/config", "/api/device-internet/config/sync", "/api/audio/volume-lock/shared", "/api/audio/volume-lock/shared/sync", "/api/sync/thermostats", "/api/sync/apply", "/api/house-sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/playback", "/api/assistant/config", "/api/assistant/knowledge", "/api/settings/web", "/api/settings/house-sync"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/thermostat/run-schedule", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/hardware/temperature-sensors", "/api/screen/lock-status", "/api/screen/lock-control", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/entity/state", "/api/ha/alexa-lockout/devices", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/group", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/device-internet/config", "/api/device-internet/config/sync", "/api/audio/volume-lock/shared", "/api/audio/volume-lock/shared/sync", "/api/sync/thermostats", "/api/sync/apply", "/api/house-sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/playback", "/api/assistant/config", "/api/assistant/knowledge", "/api/settings/web", "/api/settings/web/room", "/api/settings/house-sync"}:
             self.send_error(404, "Not found")
             return
 
@@ -16764,6 +16959,14 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                 result = _apply_house_sync_payload(payload)
                 return _json(self, 200 if result.get("ok") else 400, result)
 
+            if path == "/api/settings/web/room":
+                if not _config_web_portal_active(touch=True):
+                    return _json(self, 403, {"ok": False, "error": "Web UI is closed"})
+                try:
+                    return _json(self, 200, _web_room_settings_update(payload))
+                except (ValueError, TypeError) as exc:
+                    return _json(self, 409, {"ok": False, "error": str(exc)})
+
             if path == "/api/config":
                 config_payload = payload.get("config", payload) if isinstance(payload, dict) else {}
                 if not isinstance(config_payload, dict):
@@ -16802,7 +17005,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
             if path == "/api/system/config-import":
                 if not _config_web_portal_active(touch=True):
-                    return _json(self, 403, {"ok": False, "error": "Config backup portal is closed. Open Backup Config again on the thermostat panel."})
+                    return _json(self, 403, {"ok": False, "error": "Web UI is closed. Open Web UI again on the thermostat panel."})
                 result = _config_import_payload(payload)
                 return _json(self, 200 if result.get("ok") else 400, result)
 

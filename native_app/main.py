@@ -24464,7 +24464,7 @@ class MainWindow(Background):
             button_grid.setVerticalSpacing(10)
             fetch = RoundButton("Fetch Update", active=True, min_h=46)
             reboot = RoundButton("Restart", kind="purple", min_h=46)
-            backup = RoundButton("Backup Config", active=False, min_h=46)
+            backup = RoundButton("Web UI", active=False, min_h=46)
             close = RoundButton("Close", active=False, min_h=46)
 
             for b in [fetch, reboot, backup, close]:
@@ -24736,7 +24736,7 @@ class MainWindow(Background):
             data = data if isinstance(data, dict) else {}
             url = str(data.get("url") or "").strip()
             if not url:
-                self.toast.show_message(f"Backup portal failed: {data.get('error') or 'The backup portal address was not returned.'}", 8000)
+                self.toast.show_message(f"Web UI failed: {data.get('error') or 'The backup portal address was not returned.'}", 8000)
                 return
             self.show_config_portal_dialog(data, mode=mode)
 
@@ -24744,18 +24744,18 @@ class MainWindow(Background):
             "config-portal",
             lambda: self.s.api.post("/api/system/config-web-portal", {}, timeout=4.0),
             done,
-            lambda err: self.toast.show_message(f"Backup portal failed: {err}", 8000),
+            lambda err: self.toast.show_message(f"Web UI failed: {err}", 8000),
         )
 
     def show_config_portal_dialog(self, data: dict, mode: str = ""):
         url = str(data.get("url") or "").strip()
         address = str(data.get("address") or "").strip()
         name = str(data.get("thermostatName") or "Smart Thermostat").strip() or "Smart Thermostat"
-        action_text = "download or upload a config backup"
+        action_text = "manage the panel settings, rooms, audio, and configuration backups"
 
         dlg = QDialog(self)
         dlg.setModal(True)
-        dlg.setWindowTitle("Backup Config")
+        dlg.setWindowTitle("Web UI")
         dlg.setFixedSize(720, 410)
         dlg.setStyleSheet("""
             QDialog {
@@ -24776,13 +24776,13 @@ class MainWindow(Background):
         root.setContentsMargins(26, 24, 26, 22)
         root.setSpacing(14)
 
-        title = QLabel("<span style='color:#46e8ff; letter-spacing:4px; font-size:11px; font-weight:900'>BACKUP PORTAL READY</span><br><span style='font-size:30px; font-weight:1000; color:#ffffff'>Backup Config</span>")
+        title = QLabel("<span style='color:#46e8ff; letter-spacing:4px; font-size:11px; font-weight:900'>WEB UI READY</span><br><span style='font-size:30px; font-weight:1000; color:#ffffff'>Web UI</span>")
         title.setTextFormat(Qt.RichText)
         root.addWidget(title)
 
         help_text = QLabel(
             f"Open this address from a computer on the same network to {action_text}. "
-            "Keep this popup open while transferring; closing it shuts off the backup portal."
+            "Keep this popup open while transferring; closing it shuts off the Web UI."
         )
         help_text.setWordWrap(True)
         help_text.setFont(font(12, QFont.Bold))
