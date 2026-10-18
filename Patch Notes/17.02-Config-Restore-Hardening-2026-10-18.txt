@@ -1,0 +1,23 @@
+17.02 — Config Restore Hardening — 2026-10-18
+
+Changed: server.py only.
+
+- Lock exported settings snapshot against the backend's normal settings stores and restore operations.
+- Serialize atomic JSON writes against restore transactions.
+- Before multi-file restore, save a durable rollback journal with exact original file bytes.
+- During service startup, recover interrupted restores before starting hardware/control loops.
+- Verify restored independent settings against the expected values (including deletions and empty schedules).
+- Use the schedules file as the authoritative schedule source during full v2 restores.
+- Invalidate cached local sensor settings after restore.
+- Support atomic optimistic version checks on /api/config when clients send expectedVersion or baseVersion.
+- Preserve backward compatibility for API clients that omit an expected version.
+
+Verification: Python compilation; isolated restore roundtrip, invalid schedule rejection,
+write-failure rollback, interrupted-restore journal recovery.
+
+Limitations:
+- Legacy clients not passing expectedVersion/baseVersion remain subject to stale-save risks.
+- This is not a process-wide transactional filesystem; hardware runtime application after
+  restore requires on-device verification and, if needed, service restart.
+- Live thermostat hardware, concurrent multi-threaded load testing, and power-cut testing
+  have not been performed.

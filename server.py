@@ -1918,7 +1918,9 @@ def _thermostat_record_for_disk(record: dict) -> dict:
     }
 
 
-def _atomic_write_json(path: Path, record: dict) -> None:
+_CONFIG_DISK_TRANSACTION_LOCK = threading.RLock()
+
+def _atomic_write_json_unlocked(path: Path, record: dict) -> None:
     """Durably write JSON without leaving a half-written file on SD-card power loss."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f".{path.name}.tmp")
@@ -1937,6 +1939,11 @@ def _atomic_write_json(path: Path, record: dict) -> None:
     except Exception:
         pass
 
+
+
+def _atomic_write_json(path: Path, record: dict) -> None:
+    with _CONFIG_DISK_TRANSACTION_LOCK:
+        _atomic_write_json_unlocked(path, record)
 
 
 
@@ -3801,7 +3808,7 @@ def _backup_read_optional_json(path: Path) -> dict | None:
     return value
 
 
-def _config_export_payload(server_port: int | str | None = None) -> dict:
+def _config_export_payload_unlocked(server_port: int | str | None = None) -> dict:
     _flush_thermostat_state_to_disk()
     live_thermostat = _read_thermostat_record().get("thermostat") or {}
     # Backups must never serialize an older panel-config HVAC assignment when
@@ -3830,6 +3837,12 @@ def _config_export_payload(server_port: int | str | None = None) -> dict:
         "config": panel_record.get("config") or {},
         "thermostat": thermostat_record.get("thermostat") or {},
     }
+
+
+def _config_export_payload(server_port: int | str | None = None) -> dict:
+    """Export against the shared restore/disk-write transaction boundary."""
+    with _PANEL_CONFIG_LOCK, _THERMOSTAT_RECORD_LOCK, _DEVICE_INTERNET_CONFIG_LOCK, _VOLUME_LOCK_SHARED_LOCK, _CONFIG_DISK_TRANSACTION_LOCK, _CONFIG_RESTORE_LOCK:
+        return _config_export_payload_unlocked(server_port)
 
 
 def _send_json_download(handler: BaseHTTPRequestHandler, filename: str, payload: dict) -> None:
@@ -5913,6 +5926,49 @@ def _extract_import_record(payload: object) -> tuple[dict | None, dict | None]:
 
 
 _CONFIG_RESTORE_LOCK = threading.RLock()
+_CONFIG_RESTORE_JOURNAL = DATA_DIR / "config-restore-rollback.json"
+
+
+def _restore_original_files(original: dict) -> list[str]:
+    import base64
+    errors = []
+    for filename, encoded in original.items():
+        path = DATA_DIR / filename
+        try:
+            if encoded is None:
+                path.unlink(missing_ok=True)
+            else:
+                content = base64.b64decode(encoded, validate=True)
+                temp = path.with_name(f".{path.name}.restore-rollback")
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with temp.open("wb") as handle:
+                    handle.write(content)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temp, path)
+        except Exception as exc:
+            errors.append(f"{filename}: {exc}")
+    return errors
+
+
+def _recover_interrupted_config_restore() -> None:
+    """Run before any control loop loads configuration after an abrupt shutdown."""
+    if not _CONFIG_RESTORE_JOURNAL.exists():
+        return
+    with _CONFIG_DISK_TRANSACTION_LOCK, _CONFIG_RESTORE_LOCK:
+        journal = json.loads(_CONFIG_RESTORE_JOURNAL.read_text(encoding="utf-8"))
+        original = journal.get("original")
+        if not isinstance(original, dict) or any(name not in {
+            PANEL_CONFIG_FILE.name, PANEL_CONFIG_BACKUP_FILE.name, THERMOSTAT_STATE_FILE.name,
+            THERMOSTAT_SCHEDULES_FILE.name, THERMOSTAT_SCHEDULES_BACKUP_FILE.name,
+            DEVICE_INTERNET_CONFIG_FILE.name, _VOLUME_LOCK_SHARED_FILE.name,
+        } for name in original):
+            raise RuntimeError("Invalid configuration restore recovery journal")
+        failures = _restore_original_files(original)
+        if failures:
+            raise RuntimeError("Configuration restore recovery failed: " + "; ".join(failures))
+        _CONFIG_RESTORE_JOURNAL.unlink()
+
 
 
 def _config_import_payload(payload: object) -> dict:
@@ -5980,16 +6036,30 @@ def _config_import_payload(payload: object) -> dict:
     targets = [PANEL_CONFIG_FILE, PANEL_CONFIG_BACKUP_FILE, THERMOSTAT_STATE_FILE]
     if is_full and version == 2:
         targets += [path for _, path in independent] + [THERMOSTAT_SCHEDULES_BACKUP_FILE]
-    with _CONFIG_RESTORE_LOCK, _PANEL_CONFIG_LOCK, _THERMOSTAT_RECORD_LOCK, _DEVICE_INTERNET_CONFIG_LOCK, _VOLUME_LOCK_SHARED_LOCK:
+    with _PANEL_CONFIG_LOCK, _THERMOSTAT_RECORD_LOCK, _DEVICE_INTERNET_CONFIG_LOCK, _VOLUME_LOCK_SHARED_LOCK, _CONFIG_DISK_TRANSACTION_LOCK, _CONFIG_RESTORE_LOCK:
         original = {}
         previous_cache = _deepcopy_json(_THERMOSTAT_RECORD_CACHE) if _THERMOSTAT_RECORD_CACHE is not None else None
         previous_signature = _THERMOSTAT_RECORD_LAST_PERSIST_SIGNATURE
         previous_dirty = _THERMOSTAT_RECORD_DIRTY
         try:
+            import base64
             for path in targets:
-                original[path] = path.read_bytes() if path.exists() else None
+                raw = path.read_bytes() if path.exists() else None
+                original[path.name] = base64.b64encode(raw).decode("ascii") if raw is not None else None
+            # The durable journal must exist before touching the first target.
+            _atomic_write_json(_CONFIG_RESTORE_JOURNAL, {"version": 1, "original": original})
             # Save the thermostat first: panel save mirrors live Kid Mode from it.
             chosen_thermostat = thermostat if thermostat is not None else normalized.get("thermostat")
+            if is_full and version == 2 and isinstance(chosen_thermostat, dict):
+                # The dedicated schedule record is authoritative in v2 backups.
+                # Keep thermostat state consistent with it, including explicit clears.
+                chosen_thermostat = _deepcopy_json(chosen_thermostat)
+                if records["thermostatSchedules"] is not None:
+                    chosen_thermostat["schedules"] = _normalize_schedule_entries(
+                        _schedule_entries_from_object(records["thermostatSchedules"])
+                    )
+                else:
+                    chosen_thermostat["schedules"] = []
             thermostat_record = _write_thermostat_record(chosen_thermostat, force=True) if isinstance(chosen_thermostat, dict) else None
             panel_record = _write_panel_config_record(normalized, allow_external_air_source_change=True)
             if is_full and version == 2:
@@ -6010,28 +6080,26 @@ def _config_import_payload(payload: object) -> dict:
                 raise ValueError("Restored thermostat state failed verification")
             if is_full and version == 2:
                 for key, path in independent:
-                    if records[key] is not None and _backup_read_optional_json(path) is None:
-                        raise ValueError(f"Restored {key} failed verification")
+                    if records[key] is None:
+                        if path.exists():
+                            raise ValueError(f"Restored {key} deletion failed verification")
+                    elif key == "thermostatSchedules":
+                        if _read_schedule_entries_from_file(path) != _normalize_schedule_entries(_schedule_entries_from_object(records[key])):
+                            raise ValueError("Restored schedule contents differ from expected values")
+                    elif _backup_read_optional_json(path) != records[key]:
+                        raise ValueError(f"Restored {key} differs from expected values")
+            _CONFIG_RESTORE_JOURNAL.unlink(missing_ok=True)
         except Exception as exc:
-            rollback_errors = []
-            for path, content in original.items():
-                try:
-                    if content is None:
-                        path.unlink(missing_ok=True)
-                    else:
-                        path.parent.mkdir(parents=True, exist_ok=True)
-                        temp = path.with_name(f".{path.name}.restore-rollback")
-                        with temp.open("wb") as stream:
-                            stream.write(content)
-                            stream.flush()
-                            os.fsync(stream.fileno())
-                        os.replace(temp, path)
-                except Exception as rollback_exc:
-                    rollback_errors.append(f"{path.name}: {rollback_exc}")
+            rollback_errors = _restore_original_files(original)
+            if not rollback_errors:
+                _CONFIG_RESTORE_JOURNAL.unlink(missing_ok=True)
             _THERMOSTAT_RECORD_CACHE = previous_cache
             _THERMOSTAT_RECORD_LAST_PERSIST_SIGNATURE = previous_signature
             _THERMOSTAT_RECORD_DIRTY = previous_dirty
             return {"ok": False, "error": f"Restore failed: {exc}", "rollbackErrors": rollback_errors}
+    # Cached local sensor settings must not survive a successful restoration.
+    _LOCAL_TEMP_SENSOR_CONFIG_CACHE["mtimeNs"] = None
+    _LOCAL_TEMP_SENSOR_CONFIG_CACHE["config"] = None
     return {
         "ok": True,
         "message": "Config verified and restored. Close the Web UI popup to reload the touchscreen settings.",
@@ -17121,10 +17189,16 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                 config_payload = payload.get("config", payload) if isinstance(payload, dict) else {}
                 if not isinstance(config_payload, dict):
                     return _json(self, 400, {"ok": False, "error": "config must be an object"})
-                record = _write_panel_config_record(
-                    config_payload,
-                    allow_external_air_source_change=bool(payload.get("authoritativeExternalAir")),
-                )
+                expected_version = payload.get("expectedVersion", payload.get("baseVersion")) if isinstance(payload, dict) else None
+                with _PANEL_CONFIG_LOCK:
+                    if expected_version is not None:
+                        current_version = int(_read_panel_config_record().get("version", 0) or 0)
+                        if type(expected_version) is not int or expected_version != current_version:
+                            return _json(self, 409, {"ok": False, "error": "Config changed since it was loaded. Refresh before saving.", "currentVersion": current_version})
+                    record = _write_panel_config_record(
+                        config_payload,
+                        allow_external_air_source_change=bool(payload.get("authoritativeExternalAir")),
+                    )
                 return _json(self, 200, {"ok": True, "version": record["version"], "updatedAt": record["updatedAt"], "config": record["config"]})
 
             if path == "/api/thermostat/run-schedule":
@@ -17445,6 +17519,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8080")))
     args = parser.parse_args()
     _SERVER_PORT = int(args.port)
+    _recover_interrupted_config_restore()
 
     class SmartThermostatHTTPServer(ThreadingHTTPServer):
         daemon_threads = True
