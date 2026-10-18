@@ -2248,6 +2248,137 @@ def _device_internet_peer_urls() -> list[str]:
     return urls
 
 
+# Volume Lock is shared by Home Assistant media-player entity, not thermostat.
+# Its own record avoids copying unrelated panel settings between thermostats.
+_VOLUME_LOCK_SHARED_FILE = DATA_DIR / "volume-lock-shared.json"
+_VOLUME_LOCK_SHARED_LOCK = threading.RLock()
+_VOLUME_LOCK_RECONCILE_LOCK = threading.Lock()
+_VOLUME_LOCK_LAST_RECONCILE = 0.0
+_VOLUME_LOCK_RECONCILING = False
+
+
+def _volume_lock_shared_record() -> dict:
+    try:
+        raw = json.loads(_VOLUME_LOCK_SHARED_FILE.read_text(encoding="utf-8"))
+        return raw if isinstance(raw, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _volume_lock_shared_validate(entry: object) -> dict:
+    if not isinstance(entry, dict):
+        raise ValueError("Invalid Volume Lock record")
+    player = str(entry.get("player") or "").strip().lower()
+    if not player.startswith("media_player.") or len(player) > 180:
+        raise ValueError("Invalid media player")
+    settings = entry.get("settings")
+    if not isinstance(settings, dict):
+        raise ValueError("Invalid Volume Lock settings")
+    days = sorted({int(d) for d in settings.get("days", []) if str(d) in map(str, range(7))})
+    def valid_time(value, default):
+        t = str(value or default)
+        if len(t) == 5 and t[2] == ":" and t[:2].isdigit() and t[3:].isdigit() and int(t[:2]) < 24 and int(t[3:]) < 60:
+            return t
+        return default
+    return {
+        "player": player,
+        "settings": {
+            "active": bool(settings.get("active", False)),
+            "autoEnabled": bool(settings.get("autoEnabled", False)),
+            "days": days,
+            "startTime": valid_time(settings.get("startTime"), "08:00"),
+            "endTime": valid_time(settings.get("endTime"), "22:00"),
+            "maxVolume": max(1, min(100, int(settings.get("maxVolume", 50)))),
+            "lastScheduleEventKey": str(settings.get("lastScheduleEventKey") or "")[:80],
+        },
+        "updatedAt": max(0, int(entry.get("updatedAt") or 0)),
+        "origin": str(entry.get("origin") or "")[:120],
+    }
+
+
+def _volume_lock_shared_apply(payload: object, *, incoming: bool) -> dict:
+    candidate = _volume_lock_shared_validate(payload)
+    with _VOLUME_LOCK_SHARED_LOCK:
+        records = _volume_lock_shared_record()
+        player = candidate["player"]
+        old = records.get(player) or {}
+        if incoming:
+            new_key = (candidate["updatedAt"], candidate["origin"])
+            old_key = (int(old.get("updatedAt") or 0), str(old.get("origin") or ""))
+            if new_key <= old_key:
+                return {"ok": True, "changed": False, "record": old}
+        else:
+            candidate["updatedAt"] = max(int(time.time() * 1000), int(old.get("updatedAt") or 0) + 1)
+            candidate["origin"] = _device_internet_origin()
+        records[player] = candidate
+        _atomic_write_json(_VOLUME_LOCK_SHARED_FILE, records)
+    if not incoming:
+        threading.Thread(target=_volume_lock_shared_broadcast, args=(candidate,), daemon=True).start()
+    return {"ok": True, "changed": True, "record": candidate}
+
+
+def _volume_lock_shared_peer_request(url: str, *, payload: dict | None = None) -> dict:
+    base = _house_sync_safe_panel_url(url)
+    target = base + "/api/audio/volume-lock/shared" + ("/sync" if payload is not None else "")
+    body = json.dumps(payload).encode("utf-8") if payload is not None else None
+    req = request.Request(target, data=body, method="POST" if payload is not None else "GET",
+                          headers={"Accept": "application/json", "Content-Type": "application/json", "Connection": "close"})
+    with request.urlopen(req, timeout=max(2.0, HA_REQUEST_TIMEOUT_SECONDS)) as resp:
+        return json.loads(resp.read().decode("utf-8") or "{}")
+
+
+def _volume_lock_shared_broadcast(entry: dict) -> None:
+    for url in _device_internet_peer_urls():
+        try:
+            _volume_lock_shared_peer_request(url, payload=entry)
+        except Exception as exc:
+            print(f"Volume Lock peer delivery failed {url}: {exc}", flush=True)
+
+
+def _volume_lock_shared_reconcile() -> None:
+    records = _volume_lock_shared_record()
+    peers = []
+    for url in _device_internet_peer_urls():
+        try:
+            remote = _volume_lock_shared_peer_request(url).get("records") or {}
+            if isinstance(remote, dict):
+                peers.append((url, remote))
+                for entry in remote.values():
+                    try:
+                        validated = _volume_lock_shared_validate(entry)
+                        _volume_lock_shared_apply(validated, incoming=True)
+                    except (TypeError, ValueError):
+                        pass
+        except Exception as exc:
+            print(f"Volume Lock peer fetch failed {url}: {exc}", flush=True)
+    newest = _volume_lock_shared_record()
+    for url, remote in peers:
+        for player, entry in newest.items():
+            other = remote.get(player) or {}
+            if (int(entry["updatedAt"]), entry["origin"]) > (int(other.get("updatedAt") or 0), str(other.get("origin") or "")):
+                try:
+                    _volume_lock_shared_peer_request(url, payload=entry)
+                except Exception:
+                    pass
+
+
+def _volume_lock_shared_reconcile_if_due() -> None:
+    global _VOLUME_LOCK_LAST_RECONCILE, _VOLUME_LOCK_RECONCILING
+    with _VOLUME_LOCK_RECONCILE_LOCK:
+        if _VOLUME_LOCK_RECONCILING or time.monotonic() - _VOLUME_LOCK_LAST_RECONCILE < 15:
+            return
+        _VOLUME_LOCK_RECONCILING = True
+        _VOLUME_LOCK_LAST_RECONCILE = time.monotonic()
+    def task():
+        global _VOLUME_LOCK_RECONCILING
+        try:
+            _volume_lock_shared_reconcile()
+        finally:
+            with _VOLUME_LOCK_RECONCILE_LOCK:
+                _VOLUME_LOCK_RECONCILING = False
+    threading.Thread(target=task, daemon=True).start()
+
+
 def _send_device_internet_config_to_peer(panel_url: str, record: dict) -> dict:
     base_url = _house_sync_safe_panel_url(panel_url)
     data = json.dumps(_normalize_device_internet_config(record)).encode("utf-8")
@@ -10077,6 +10208,7 @@ def _thermostat_control_loop() -> None:
             # alone until the next scheduled transition.
             _apply_device_internet_schedule_transitions()
             _start_device_internet_peer_reconcile_if_due()
+            _volume_lock_shared_reconcile_if_due()
         except Exception as exc:  # noqa: BLE001 - keep local HVAC control alive
             print(f"Thermostat autonomous control loop error: {exc}", flush=True)
 
@@ -16490,6 +16622,11 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
             if not _request_client_is_loopback(self):
                 return _json(self, 403, {"ok": False, "error": "Panel configuration is local-only."})
             return _json(self, 200, _panel_config_payload())
+        if path == "/api/audio/volume-lock/shared":
+            if not _request_client_is_private_network(self):
+                return _json(self, 403, {"ok": False})
+            _volume_lock_shared_reconcile_if_due()
+            return _json(self, 200, {"ok": True, "records": _volume_lock_shared_record()})
         if path == "/api/house-sync/profile":
             result = _house_sync_profile_payload()
             return _json(self, 200 if result.get("ok") else 409, result)
@@ -16551,7 +16688,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/thermostat/run-schedule", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/hardware/temperature-sensors", "/api/screen/lock-status", "/api/screen/lock-control", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/entity/state", "/api/ha/alexa-lockout/devices", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/group", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/device-internet/config", "/api/device-internet/config/sync", "/api/sync/thermostats", "/api/sync/apply", "/api/house-sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/playback", "/api/assistant/config", "/api/assistant/knowledge", "/api/settings/web", "/api/settings/house-sync"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/thermostat/run-schedule", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/hardware/temperature-sensors", "/api/screen/lock-status", "/api/screen/lock-control", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/entity/state", "/api/ha/alexa-lockout/devices", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/group", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/device-internet/config", "/api/device-internet/config/sync", "/api/audio/volume-lock/shared", "/api/audio/volume-lock/shared/sync", "/api/sync/thermostats", "/api/sync/apply", "/api/house-sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/playback", "/api/assistant/config", "/api/assistant/knowledge", "/api/settings/web", "/api/settings/house-sync"}:
             self.send_error(404, "Not found")
             return
 
@@ -16561,6 +16698,15 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+
+            if path in {"/api/audio/volume-lock/shared", "/api/audio/volume-lock/shared/sync"}:
+                if not (_request_client_is_loopback(self) if path.endswith("/shared") else _request_client_is_private_network(self)):
+                    return _json(self, 403, {"ok": False})
+                try:
+                    result = _volume_lock_shared_apply(payload, incoming=path.endswith("/sync"))
+                except (ValueError, TypeError) as exc:
+                    return _json(self, 400, {"ok": False, "error": str(exc)})
+                return _json(self, 200, result)
 
             if path == "/api/device-internet/config":
                 if not _request_client_is_loopback(self):

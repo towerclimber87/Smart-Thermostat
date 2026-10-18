@@ -10135,6 +10135,14 @@ class AudioScreen(Page):
         self._volume_lock_enforce_running = False
         self._volume_lock_save_running = False
         self._volume_lock_save_pending = False
+        self._volume_lock_shared_busy = False
+        self._volume_lock_share_running = False
+        self._volume_lock_share_pending = False
+        self._volume_lock_share_epoch = 0
+        self._volume_lock_shared_ready = False
+        self._volume_lock_shared_version = (0, "")
+        self._volume_lock_shared_player = ""
+        self._volume_lock_shared_last_check = 0.0
         self.volume_lock_timer = QTimer(self)
         self.volume_lock_timer.timeout.connect(self.volume_lock_tick)
         self.volume_lock_timer.start(3000)
@@ -11229,6 +11237,84 @@ class AudioScreen(Page):
             failed,
         )
 
+    def publish_volume_lock_shared(self):
+        # Serialize local intent: a rapid ON/OFF/ON cannot arrive at the server
+        # in reverse order. Incoming peer updates never call this function.
+        self._volume_lock_share_epoch += 1
+        self._volume_lock_share_pending = True
+        self._volume_lock_shared_ready = False
+        if self._volume_lock_share_running:
+            return
+        self._send_volume_lock_shared()
+
+    def _send_volume_lock_shared(self):
+        if not self._volume_lock_share_pending:
+            return
+        player = str(self.player_id() or "").strip().lower()
+        if not player.startswith("media_player."):
+            self._volume_lock_share_pending = False
+            return
+        self._volume_lock_share_pending = False
+        self._volume_lock_share_running = True
+        cfg = self.volume_lock_config()
+        payload = {"player": player, "settings": {
+            key: copy.deepcopy(cfg[key]) for key in
+            ("active", "autoEnabled", "days", "startTime", "endTime", "maxVolume", "lastScheduleEventKey")
+        }}
+        def done(result):
+            entry = result.get("record") if isinstance(result, dict) else None
+            if isinstance(entry, dict):
+                self._volume_lock_shared_version = (int(entry.get("updatedAt") or 0), str(entry.get("origin") or ""))
+            self._volume_lock_share_running = False
+            if self._volume_lock_share_pending:
+                self._send_volume_lock_shared()
+            else:
+                self._volume_lock_shared_ready = isinstance(entry, dict)
+        def failed(error):
+            self._volume_lock_share_running = False
+            if self._volume_lock_share_pending:
+                self._send_volume_lock_shared()
+            else:
+                trace_runtime(f"Volume Lock sharing failed: {error}")
+        self.run_async("audio-volume-lock-share", lambda: self.s.api.post("/api/audio/volume-lock/shared", payload), done, failed)
+
+    def refresh_volume_lock_shared(self):
+        player = str(self.player_id() or "").strip().lower()
+        if not player.startswith("media_player.") or self._volume_lock_shared_busy:
+            return
+        if player != self._volume_lock_shared_player:
+            self._volume_lock_shared_player = player
+            self._volume_lock_shared_ready = False
+            self._volume_lock_shared_version = (0, "")
+        now = time.monotonic()
+        if now - self._volume_lock_shared_last_check < 2:
+            return
+        self._volume_lock_shared_last_check = now
+        self._volume_lock_shared_busy = True
+        read_epoch = self._volume_lock_share_epoch
+        def done(result):
+            self._volume_lock_shared_busy = False
+            if read_epoch != self._volume_lock_share_epoch or self._volume_lock_share_running or self._volume_lock_share_pending:
+                return
+            records = result.get("records") if isinstance(result, dict) else {}
+            entry = records.get(player) if isinstance(records, dict) else None
+            if isinstance(entry, dict) and player == str(self.player_id() or "").strip().lower():
+                version = (int(entry.get("updatedAt") or 0), str(entry.get("origin") or ""))
+                if version > self._volume_lock_shared_version:
+                    settings = entry.get("settings") or {}
+                    raw = self._volume_lock_raw()
+                    for key in ("active", "autoEnabled", "days", "startTime", "endTime", "maxVolume", "lastScheduleEventKey"):
+                        if key in settings:
+                            raw[key] = copy.deepcopy(settings[key])
+                    self._volume_lock_shared_version = version
+                    self.update_volume_lock_button()
+                    # Incoming state is never republished: prevents feedback loops.
+            self._volume_lock_shared_ready = True
+        def failed(error):
+            self._volume_lock_shared_busy = False
+            trace_runtime(f"Volume Lock shared read failed: {error}")
+        self.run_async("audio-volume-lock-shared-read", lambda: self.s.api.get("/api/audio/volume-lock/shared"), done, failed)
+
     def toggle_volume_lock(self):
         raw = self._volume_lock_raw()
         cfg = self.volume_lock_config()
@@ -11236,6 +11322,7 @@ class AudioScreen(Page):
         raw["active"] = turning_on
         self.update_volume_lock_button()
         self.queue_volume_lock_save()
+        self.publish_volume_lock_shared()
         if turning_on:
             self.requestToast.emit(f"Volume Lock on · max {cfg.get('maxVolume', 50)}%")
             QTimer.singleShot(0, self.volume_lock_tick)
@@ -11276,6 +11363,7 @@ class AudioScreen(Page):
             raw["lastScheduleEventKey"] = str(before.get("lastScheduleEventKey") or "")
         self.update_volume_lock_button()
         self.queue_volume_lock_save()
+        self.publish_volume_lock_shared()
         QTimer.singleShot(0, self.volume_lock_tick)
         self.requestToast.emit("Volume Lock settings saved")
 
@@ -11319,6 +11407,7 @@ class AudioScreen(Page):
         raw["active"] = bool(target_active)
         self.update_volume_lock_button()
         self.queue_volume_lock_save()
+        self.publish_volume_lock_shared()
         self.requestToast.emit(f"Volume Lock {'on' if target_active else 'off'} · scheduled")
         return True
 
@@ -11331,6 +11420,9 @@ class AudioScreen(Page):
         return state in {"on", "open", "true", "1", "playing", "paused", "idle"}
 
     def volume_lock_tick(self):
+        self.refresh_volume_lock_shared()
+        if not self._volume_lock_shared_ready:
+            return
         try:
             self.process_volume_lock_schedule()
         except Exception as exc:

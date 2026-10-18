@@ -1,0 +1,10 @@
+16.97 — Shared Audio Volume Lock (2026-10-18)
+
+- Audio Volume Lock shares its active state, limit and automatic schedule between thermostats targeting the same Home Assistant media player.
+- A separate per-player state file preserves shared state across panel restarts; unrelated thermostat/audio configurations are not copied.
+- Local updates are serialized, versioned and pushed to known local thermostat peers. The background reconciliation loop repairs missed updates and catches up returning/offline panels.
+- Receiving a peer update changes the button and enforcement state without rebroadcasting or creating a toggle feedback loop.
+- Enforcement waits for the authoritative local shared-state read after startup / media player selection; failed outgoing writes do not accidentally enforce stale settings.
+- Other Audio-page control assignments remain local to each thermostat.
+
+Deploy the changed files to all participating thermostats. If both existing devices have different Volume Lock states before upgrading, tap the desired state on one after both run this version to establish a shared state.
