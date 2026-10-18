@@ -1925,6 +1925,13 @@ def _atomic_write_json_unlocked(path: Path, record: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f".{path.name}.tmp")
     body = json.dumps(record, indent=2, sort_keys=True).encode("utf-8")
+    # Do not churn SD-card blocks for identical durable configuration. Keep
+    # the existing atomic replace/fsync path whenever bytes actually change.
+    try:
+        if path.read_bytes() == body:
+            return
+    except FileNotFoundError:
+        pass
     with temp_path.open("wb") as handle:
         handle.write(body)
         handle.flush()
@@ -2587,7 +2594,22 @@ def _fallback_saved_schedules() -> list[dict]:
 
 def _write_schedule_backup(schedules: object) -> None:
     safe = _normalize_schedule_entries(schedules)
-    record = {"version": 1, "updatedAt": int(time.time()), "schedules": safe}
+    # Schedule persistence is event-driven. Repeated updates with the same
+    # normalized entries must not change updatedAt or rewrite either SD file.
+    primary = _backup_read_optional_json(THERMOSTAT_SCHEDULES_FILE)
+    recovery = _backup_read_optional_json(THERMOSTAT_SCHEDULES_BACKUP_FILE)
+    if (isinstance(primary, dict) and isinstance(recovery, dict)
+            and primary.get("schedules") == safe
+            and recovery.get("schedules") == safe
+            and primary.get("version") == 1
+            and recovery.get("version") == 1):
+        return
+    # Reuse the timestamp and contents of an existing valid copy when only
+    # the other copy needs repair, avoiding an unnecessary second rewrite.
+    existing = primary if isinstance(primary, dict) and primary.get("schedules") == safe and primary.get("version") == 1 else None
+    if existing is None and isinstance(recovery, dict) and recovery.get("schedules") == safe and recovery.get("version") == 1:
+        existing = recovery
+    record = existing if existing is not None else {"version": 1, "updatedAt": int(time.time()), "schedules": safe}
     _atomic_write_json(THERMOSTAT_SCHEDULES_FILE, record)
     # An explicit empty list is a deliberate deletion. Mirror it into the
     # recovery copy as well so deleted schedules cannot reappear later.

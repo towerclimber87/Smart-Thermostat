@@ -1,0 +1,9 @@
+Patch 17.03 - SD-card write reduction
+Source: Smart-Thermostat-Development(20261018-204801).zip
+Changed files: server.py
+- Skip atomic JSON writes when the serialized contents are identical to the on-disk bytes.
+- Do not refresh schedule timestamps and rewrite both schedules files for an unchanged schedule list.
+- If only one schedule copy is missing, repair only that copy, preserving the valid version/timestamp of the other.
+- Preserve atomic replace, fsync, backup/restore transaction journal and recovery behavior whenever a change actually occurs.
+Validation: Python syntax compilation; targeted tests of no-op writes, changed writes, schedule no-op and recovery-copy repair.
+Hardware verification still required; this does not quantify physical SD-card wear.
