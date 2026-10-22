@@ -1,0 +1,9 @@
+Smart Thermostat 17.05 — Multiple Doors / Comfort Pause and hourly resume limit
+
+- Web UI: Add or remove multiple Home Assistant door/contact/cover entities, with a shared door delay and configurable maximum resumes per rolling hour.
+- Wall thermostat: Add entries from the entity chooser and remove the last configured entry; show configured entries and adjust the hourly resume limit.
+- Backend: Track accepted manual resume requests against a rolling 60-minute window; reject requests exceeding the configured maximum regardless of client.
+- Set hourly limit to 0 to disable the restriction (legacy-compatible default).
+- Hourly usage history, countdown and pause state remain volatile in memory and are not added to the persistent thermostat settings record. Counter resets if backend restarts.
+- Existing single-door configurations remain readable. Multiple configured entities use the existing any-open pause logic.
+- Test recommendation: exercise web + local touchscreen changes, sequential resumes, 60-minute expiration, reboot reset, and a door remaining open.

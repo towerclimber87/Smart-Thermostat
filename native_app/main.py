@@ -7315,6 +7315,12 @@ class ThermostatScreen(Page):
             return
         pause = self.s.thermostat.setdefault("pauseFunction", {})
         duration_minutes = int(max(1, min(60, round(self.safe_float(pause.get("durationMinutes") if isinstance(pause, dict) else 5, 5.0)))))
+        history = [x for x in (pause.get("resumeHistory") or []) if isinstance(x, (int, float)) and time.time() * 1000 - 3600000 < x <= time.time() * 1000]
+        limit = int(pause.get("maxResumesPerHour", 0))
+        if limit and len(history) >= limit:
+            remaining = max(1, int((min(history) + 3600000 - time.time() * 1000 + 59999) // 60000))
+            QMessageBox.information(self, "Comfort Pause", f"Hourly resume limit reached. Try again in about {remaining} minute(s).")
+            return
         changes = {"pauseFunction": {"action": "resume"}}
         original_pause = copy.deepcopy(pause) if isinstance(pause, dict) else {}
         original_target = self.s.thermostat.get("targetTemp")
@@ -17637,12 +17643,14 @@ class SettingsDialog(QDialog):
         return door if isinstance(door, dict) else None
 
     def inside_door_summary_text(self) -> str:
-        entry = self.current_inside_door_entry()
-        if not entry:
-            return "No entry selected. Choose the HA door/contact/cover used by the Doors tile."
-        name = str(entry.get("name") or entry.get("friendly_name") or entry.get("entityId") or "Selected Entry")
-        entity_id = str(entry.get("entityId") or entry.get("entity_id") or "")
-        return f"{name}\n{entity_id}"
+        pause = (self.s.thermostat or {}).get("pauseFunction") or {}
+        entries = pause.get("entries") or []
+        if not entries:
+            entry = self.current_inside_door_entry()
+            entries = [entry] if entry else []
+        if not entries:
+            return "No entries selected. Tap Add Entry to select door/contact/cover sensors."
+        return "\n".join(str(e.get("name") or e.get("friendlyName") or e.get("entityId") or "Door") for e in entries if isinstance(e, dict))
 
     def current_door_pause_duration(self) -> int:
         pause = self.s.thermostat.get("pauseFunction") if isinstance(self.s.thermostat, dict) else {}
@@ -17653,6 +17661,25 @@ class SettingsDialog(QDialog):
                 pass
         return 5
 
+
+    def remove_last_inside_door_entry(self):
+        pause = (self.s.thermostat or {}).get("pauseFunction") or {}
+        entries = [copy.deepcopy(x) for x in pause.get("entries", []) if isinstance(x, dict)]
+        if not entries:
+            return
+        entries.pop()
+        ha = self.s.config.setdefault("integrations", {}).setdefault("homeAssistant", {})
+        ha["doorEntity"] = copy.deepcopy(entries[0]) if entries else None
+        changes = {"pauseFunction": {
+            "durationMinutes": self.current_door_pause_duration(),
+            "maxResumesPerHour": self.val_number("doorMaxResumesPerHour") if "doorMaxResumesPerHour" in self.controls else int(pause.get("maxResumesPerHour", 0)),
+            "entries": entries,
+        }}
+        self.apply_thermostat_changes_locally(changes)
+        if hasattr(self, "inside_door_label"):
+            self.inside_door_label.setText(self.inside_door_summary_text())
+        config_snapshot = copy.deepcopy(self.s.config)
+        self.run_settings_write("door-entry-remove", lambda: (self.s.api.save_config(config_snapshot), self.s.api.thermostat_update(changes)), lambda result: self.saved.emit(), lambda error: QMessageBox.warning(self, "Doors", str(error)))
 
     def choose_inside_door_entry(self):
         if getattr(self, "_door_entities_loading", False):
@@ -17750,7 +17777,11 @@ class SettingsDialog(QDialog):
                     for key in ("doorEntity", "doorAvailableEntities", "pauseFunctionAvailableEntities")
                 }
                 previous_pause = copy.deepcopy(self.s.thermostat.get("pauseFunction"))
-                ha_config["doorEntity"] = selected
+                existing_entries = ((self.s.thermostat or {}).get("pauseFunction") or {}).get("entries") or []
+                new_entries = [copy.deepcopy(x) for x in existing_entries if isinstance(x, dict)]
+                if not any(str(x.get("entityId")) == eid for x in new_entries):
+                    new_entries.append(selected)
+                ha_config["doorEntity"] = new_entries[0] if new_entries else None
                 available = [selected] + [
                     copy.deepcopy(item)
                     for item in entities
@@ -17766,7 +17797,8 @@ class SettingsDialog(QDialog):
                 changes = {
                     "pauseFunction": {
                         "durationMinutes": duration,
-                        "entries": [selected],
+                        "entries": new_entries,
+                        "maxResumesPerHour": self.val_number("doorMaxResumesPerHour") if "doorMaxResumesPerHour" in self.controls else int((previous_pause or {}).get("maxResumesPerHour", 0)),
                         "active": False,
                         "pausedAt": 0,
                         "previousTargetTemp": None,
@@ -19524,10 +19556,14 @@ class SettingsDialog(QDialog):
         pause = t.get("pauseFunction") if isinstance(t.get("pauseFunction"), dict) else {}
         door_grid = self.section_grid(door_source, 2)
         self.add_section_value(door_grid, "doorPauseDurationMinutes", "Door Delay", int(float(pause.get("durationMinutes") or 5)), 0, 0, 1, 60, " min")
-        choose_door = RoundButton("Choose Entry", active=True, min_h=28)
+        self.add_section_value(door_grid, "doorMaxResumesPerHour", "Resumes / Hour (0 = unlimited)", int(float(pause.get("maxResumesPerHour", 0))), 1, 0, 0, 100, "")
+        choose_door = RoundButton("Add Entry", active=True, min_h=28)
         self.inside_door_choose_button = choose_door
         choose_door.clicked.connect(self.choose_inside_door_entry)
         door_grid.addWidget(choose_door, 0, 1)
+        remove_door = RoundButton("Remove Last", active=False, min_h=28)
+        remove_door.clicked.connect(self.remove_last_inside_door_entry)
+        door_grid.addWidget(remove_door, 1, 1)
 
         codes = self.add_section("Security Codes", 5, 0, 1, 2)
         code_grid = QGridLayout()
@@ -19832,6 +19868,7 @@ class SettingsDialog(QDialog):
             "pauseFunction": {
                 "durationMinutes": self.val_number("doorPauseDurationMinutes") if "doorPauseDurationMinutes" in self.controls else int(float(pause.get("durationMinutes") or 5)),
                 "entries": copy.deepcopy(pause_entries),
+                "maxResumesPerHour": self.val_number("doorMaxResumesPerHour") if "doorMaxResumesPerHour" in self.controls else int(pause.get("maxResumesPerHour", 0)),
                 "active": False,
                 "pausedAt": 0,
                 "previousTargetTemp": None,
