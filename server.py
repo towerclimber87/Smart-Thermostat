@@ -4678,6 +4678,48 @@ def _settings_audio_from_payload(raw: object, current: dict) -> dict:
     }
 
 
+def _ha_connection_settings_payload() -> dict:
+    """Credential-free status for the temporary local settings portal."""
+    config = _read_panel_config_record().get("config") or {}
+    ha = ((config.get("integrations") or {}).get("homeAssistant") or {})
+    return {"ok": True, "url": str(ha.get("url") or ""),
+            "tokenConfigured": bool(str(ha.get("token") or "").strip()),
+            "connected": bool(str(ha.get("url") or "").strip() and str(ha.get("token") or "").strip())}
+
+
+def _ha_connection_settings_save(payload: dict) -> dict:
+    """Verify new HA credentials before saving; do not expose them in responses."""
+    if not isinstance(payload, dict):
+        raise ValueError("Expected connection settings")
+    with _PANEL_CONFIG_LOCK:
+        record = _read_panel_config_record()
+        cfg = record.get("config") or {}
+        previous = ((cfg.get("integrations") or {}).get("homeAssistant") or {})
+        existing_url = str(previous.get("url") or "").strip()
+        existing_token = str(previous.get("token") or "").strip()
+    url = _normalize_ha_url(str(payload.get("url") or existing_url))
+    provided_token = str(payload.get("token") or "").strip()
+    token = provided_token or existing_token
+    if not token:
+        raise ValueError("Enter a Home Assistant long-lived access token")
+    # Explicitly probe the Home Assistant REST API. Only verified credentials save.
+    result = _ha_json_request(url, token, "GET", "/api/", timeout=7)
+    if not isinstance(result, dict) or result.get("message") != "API running.":
+        raise ValueError("Connected endpoint did not identify itself as Home Assistant")
+    if payload.get("testOnly"):
+        return {"ok": True, "message": "Home Assistant connection verified. Press Save Connection to keep it."}
+    with _PANEL_CONFIG_LOCK:
+        latest = _read_panel_config_record()
+        candidate = _deepcopy_json(latest.get("config") or {})
+        integrations = candidate.setdefault("integrations", {})
+        ha = integrations.setdefault("homeAssistant", {})
+        ha["url"] = url
+        ha["token"] = token
+        _write_panel_config_record(candidate)
+    return {"ok": True, "message": "Home Assistant connected and saved. Entity selections can now refresh.",
+            "connection": _ha_connection_settings_payload()}
+
+
 def _config_settings_save(payload: dict) -> dict:
     if not _config_web_portal_active(touch=True):
         return {"ok": False, "error": "The temporary config portal is closed."}
@@ -5242,6 +5284,7 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
   </section>
   <nav class="tabs" aria-label="Configuration tabs">
     <button class="tab-button active" data-tab="backup" type="button">Backup &amp; Restore</button>
+    <button class="tab-button" data-tab="home-assistant" type="button">Home Assistant</button>
     <button class="tab-button" data-tab="thermostat" type="button">Thermostat</button>
     <button class="tab-button" data-tab="audio" type="button">Audio</button>
     <button class="tab-button" data-tab="room" type="button">Room</button>
@@ -5252,6 +5295,20 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
     <div class="actions">
       <div class="card action-card"><div class="label">Download</div><div class="value">Save this panel's full config</div><p class="muted">The backup remains compatible with the existing restore process.</p><a class="button" href="/api/system/config-export">Download Config</a></div>
       <div class="card action-card"><div class="label">Upload</div><div class="value">Restore from a config file</div><input id="file" type="file" accept="application/json,.json" /><button id="upload" type="button">Upload Config</button><div id="status" class="status muted">Choose a Smart Thermostat config backup, then press Upload Config.</div></div>
+    </div>
+  </section>
+
+  <section id="tab-home-assistant" class="tab-panel">
+    <div class="card">
+      <div class="eyebrow">Integration</div><h2>Connect Home Assistant</h2>
+      <p class="muted">Connect this thermostat to your existing Home Assistant server. This is separate from adding the thermostat as a device inside Home Assistant. Once saved, the thermostat can discover available entities.</p>
+      <div class="form-grid">
+        <div class="field full"><label for="ha-connection-url">Home Assistant address</label><input id="ha-connection-url" type="text" inputmode="url" autocomplete="off" placeholder="http://homeassistant.local:8123"><span class="hint">Use an address reachable from this thermostat, such as http://192.168.1.135:8123.</span></div>
+        <div class="field full"><label for="ha-connection-token">Long-lived access token</label><input id="ha-connection-token" type="password" autocomplete="new-password" placeholder="Paste token to connect or replace saved token"><span id="ha-token-help" class="hint">Home Assistant → Profile → Security → Long-lived access tokens → Create token. Leave this field blank to keep an existing token.</span></div>
+      </div>
+      <div class="button-row"><button id="ha-test-connection" class="secondary" type="button">Test Connection</button><button id="ha-save-connection" type="button">Save Connection</button></div>
+      <div id="ha-connection-status" class="status muted">Checking existing connection settings...</div>
+      <p class="muted">After connecting, open Thermostat → the entity settings you need. Existing thermostat configuration and assignments are preserved.</p>
     </div>
   </section>
 
@@ -5364,8 +5421,30 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
 </main>
 <script>
 const qs = (id) => document.getElementById(id);
+async function loadHaConnection() {{
+  try {{
+    const r=await fetch('/api/ha/connection',{{cache:'no-store'}});const d=await r.json();
+    if(!r.ok||!d.ok)throw new Error(d.error||'Could not read connection');
+    qs('ha-connection-url').value=d.url||'';qs('ha-connection-token').value='';
+    setBox(qs('ha-connection-status'),d.connected?'Home Assistant credentials are saved on this thermostat.':'Home Assistant is not configured on this thermostat. Enter its address and an access token.','muted');
+  }} catch(e) {{setBox(qs('ha-connection-status'),e.message||String(e),'bad');}}
+}}
+async function submitHaConnection(testOnly) {{
+  const test=qs('ha-test-connection'),save=qs('ha-save-connection');test.disabled=true;save.disabled=true;
+  try {{
+    setBox(qs('ha-connection-status'),testOnly?'Testing Home Assistant connection...':'Verifying and saving connection...','muted');
+    const r=await fetch('/api/ha/connection',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{url:qs('ha-connection-url').value.trim(),token:qs('ha-connection-token').value.trim(),testOnly}})}});
+    const d=await r.json().catch(()=>({{}});if(!r.ok||!d.ok)throw new Error(d.error||'Connection failed');
+    setBox(qs('ha-connection-status'),d.message||'Connection verified.','ok');
+    if(!testOnly){{qs('ha-connection-token').value='';window.thermostatSettingsLoaded=false;}}
+  }}catch(e){{setBox(qs('ha-connection-status'),e.message||String(e),'bad');}}
+  finally{{test.disabled=false;save.disabled=false;}}
+}}
+qs('ha-test-connection').addEventListener('click',()=>submitHaConnection(true));
+qs('ha-save-connection').addEventListener('click',()=>submitHaConnection(false));
+
 function setBox(box,text,kind) {{ box.textContent=text; box.className='status '+(kind||'muted'); }}
-for (const button of document.querySelectorAll('.tab-button')) {{ button.addEventListener('click',()=>{{ document.querySelectorAll('.tab-button').forEach(x=>x.classList.toggle('active',x===button)); document.querySelectorAll('.tab-panel').forEach(x=>x.classList.toggle('active',x.id==='tab-'+button.dataset.tab)); if((button.dataset.tab==='thermostat'||button.dataset.tab==='audio')&&!window.thermostatSettingsLoaded) loadThermostatSettings(); if(button.dataset.tab==='room')loadRoomSettings(); if(button.dataset.tab==='jarvis'&&!window.jarvisKnowledgeLoaded) loadJarvisKnowledge(); }}); }}
+for (const button of document.querySelectorAll('.tab-button')) {{ button.addEventListener('click',()=>{{ document.querySelectorAll('.tab-button').forEach(x=>x.classList.toggle('active',x===button)); document.querySelectorAll('.tab-panel').forEach(x=>x.classList.toggle('active',x.id==='tab-'+button.dataset.tab)); if((button.dataset.tab==='thermostat'||button.dataset.tab==='audio')&&!window.thermostatSettingsLoaded) loadThermostatSettings(); if(button.dataset.tab==='home-assistant')loadHaConnection(); if(button.dataset.tab==='room')loadRoomSettings(); if(button.dataset.tab==='jarvis'&&!window.jarvisKnowledgeLoaded) loadJarvisKnowledge(); }}); }}
 function makeMenuButton(name, callback) {{ const b=document.createElement('button');b.type='button';b.textContent=name+'  ›';b.addEventListener('click',callback);return b; }}
 const featureNames=new Set(['Kid Mode','Device Internet','Alexa Lockout','Family Center Application','Intimacy Hold']);
 function initializeSettingsMenus() {{
@@ -17143,6 +17222,10 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                 return _json(self, 403, {"ok": False, "error": "Assistant status is local-only unless the temporary config portal is open."})
             include_config = str((query.get("include_config") or [""])[0]).strip().lower() in {"1", "true", "yes", "on"}
             return _json(self, 200, _assistant_status_payload(include_config=include_config))
+        if path == "/api/ha/connection":
+            if not _config_web_portal_active(touch=True):
+                return _json(self, 403, {"ok": False, "error": "The temporary config portal is closed."})
+            return _json(self, 200, _ha_connection_settings_payload())
         if path == "/api/settings/web":
             if not _config_web_portal_active(touch=True):
                 return _json(self, 403, {"ok": False, "error": "The temporary config portal is closed."})
@@ -17181,7 +17264,7 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/thermostat/run-schedule", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/hardware/temperature-sensors", "/api/screen/lock-status", "/api/screen/lock-control", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/entity/state", "/api/ha/alexa-lockout/devices", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/group", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/device-internet/config", "/api/device-internet/config/sync", "/api/audio/volume-lock/shared", "/api/audio/volume-lock/shared/sync", "/api/sync/thermostats", "/api/sync/apply", "/api/house-sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/playback", "/api/assistant/config", "/api/assistant/knowledge", "/api/settings/web", "/api/settings/web/room", "/api/settings/house-sync"}:
+        if path not in {"/api/config", "/api/thermostat/status", "/api/thermostat/control", "/api/thermostat/run-schedule", "/api/system/fetch-update", "/api/system/reboot", "/api/system/config-web-portal", "/api/system/config-web-portal/close", "/api/system/config-export-usb", "/api/system/config-import", "/api/system/config-import-usb", "/api/hardware/relay", "/api/hardware/rgb", "/api/hardware/release", "/api/hardware/motion", "/api/hardware/temperature-sensors", "/api/screen/lock-status", "/api/screen/lock-control", "/api/ha/covers", "/api/ha/cover/action", "/api/ha/cover/states", "/api/ha/entities", "/api/ha/entity/state", "/api/ha/alexa-lockout/devices", "/api/ha/weather/state", "/api/ha/media_players", "/api/ha/media/action", "/api/ha/media/group", "/api/ha/media/states", "/api/ha/audio/controls", "/api/ha/audio/control_states", "/api/ha/audio/control/action", "/api/ha/audio/switch_states", "/api/ha/audio/switch/action", "/api/ha/alarm/states", "/api/ha/alarm/action", "/api/ha/binary_sensor/states", "/api/ha/light/states", "/api/ha/light/action", "/api/ha/room/states", "/api/ha/room/action", "/api/device-internet/config", "/api/device-internet/config/sync", "/api/audio/volume-lock/shared", "/api/audio/volume-lock/shared/sync", "/api/sync/thermostats", "/api/sync/apply", "/api/house-sync/apply", "/api/sync/dispatch", "/api/sync/arm", "/api/assistant/process", "/api/assistant/playback", "/api/assistant/config", "/api/assistant/knowledge", "/api/settings/web", "/api/settings/web/room", "/api/settings/house-sync", "/api/ha/connection"}:
             self.send_error(404, "Not found")
             return
 
@@ -17226,6 +17309,15 @@ class SmartThermostatHandler(BaseHTTPRequestHandler):
                     return _json(self, 403, {"ok": False, "error": "Assistant playback updates are local-only."})
                 result = _assistant_external_playback_payload(payload)
                 return _json(self, 200 if result.get("ok") else 409 if result.get("stale") else 400, result)
+
+            if path == "/api/ha/connection":
+                if not _config_web_portal_active(touch=True):
+                    return _json(self, 403, {"ok": False, "error": "The temporary config portal is closed."})
+                try:
+                    result = _ha_connection_settings_save(payload)
+                except (ValueError, RuntimeError, TimeoutError) as exc:
+                    return _json(self, 400, {"ok": False, "error": str(exc)})
+                return _json(self, 200, result)
 
             if path == "/api/settings/web":
                 try:

@@ -1,0 +1,22 @@
+Smart Thermostat - Home Assistant Connection Setup
+2026-11-05
+
+Changed:
+- Added a Home Assistant tab to the temporary Web UI for per-thermostat setup.
+- Enter the Home Assistant URL and long-lived access token; Test Connection verifies the HA REST API before changing saved configuration.
+- Save Connection verifies before storing credentials in the existing config.integrations.homeAssistant fields.
+- The token is never sent back to the browser; blank token keeps an existing saved credential.
+- After connection save, the thermostat settings tab reloads available HA entities when next opened.
+- Configuration is local to the thermostat and does not copy credentials between units.
+- All existing thermostat options and assignments are preserved.
+
+How to use:
+- Enable Web UI from the thermostat's panel and open the temporary local page.
+- Select Home Assistant.
+- Enter the reachable Home Assistant address (e.g. http://192.168.1.135:8123).
+- Create a long-lived access token in your Home Assistant user profile > Security, paste it, then Test Connection and Save Connection.
+- Reopen Thermostat settings to select any desired Home Assistant entities.
+
+Validation:
+- Python server.py compile passed.
+- Live integration test against the user's thermostat and HA installation not performed.
