@@ -4086,6 +4086,9 @@ def _settings_entity_catalog() -> tuple[dict[str, list[dict]], dict[str, dict], 
         "doorEntity",
     ):
         add(ha.get(key))
+    add(ha.get("selectedMediaPlayerId"))
+    for item in ha.get("mediaPlayerEntities") if isinstance(ha.get("mediaPlayerEntities"), list) else []:
+        add(item)
     for key in (
         "currentTempAvailableEntities", "weatherAvailableEntities",
         "externalAirControlAvailableEntities", "doorAvailableEntities",
@@ -4407,7 +4410,8 @@ def _config_settings_current() -> dict:
         "familyCenterDisplayScalePercent": _family_center_display_scale_percent(family_center.get("displayScalePercent", 100)),
         "displaySettings": _settings_display_current(config),
         "temperatureSensors": _temperature_sensor_config(),
-        "audioSettings": _settings_audio_current(config),
+        "audioSettings": {**_settings_audio_current(config),
+                          "selectedMediaPlayerId": str(ha.get("selectedMediaPlayerId") or "")},
         "disarmCode": str(alarm.get("disarmCode") or ""),
         "settingsCode": str(security.get("settingsCode") or ""),
     }
@@ -4670,7 +4674,11 @@ def _settings_audio_from_payload(raw: object, current: dict) -> dict:
             "numbers": numbers,
             "switches": switches,
         }
+    selected_player = str(values.get("selectedMediaPlayerId", current.get("selectedMediaPlayerId", "")) or "").strip()
+    if selected_player and (not selected_player.startswith("media_player.") or len(selected_player) > 255):
+        raise ValueError("Audio media player must be a media_player.* entity")
     return {
+        "selectedMediaPlayerId": selected_player,
         "enabledControls": enabled,
         "autoNavigate": _settings_bool_value(values.get("autoNavigate"), bool(current.get("autoNavigate"))),
         "groups": groups,
@@ -4808,6 +4816,9 @@ def _config_settings_save(payload: dict) -> dict:
     display_settings = _settings_display_from_payload(values.get("displaySettings"), current_settings.get("displaySettings") or {})
     temperature_sensors = _normalize_temperature_sensor_config(values.get("temperatureSensors", current_settings.get("temperatureSensors") or {}))
     audio_settings = _settings_audio_from_payload(values.get("audioSettings"), current_settings.get("audioSettings") or {})
+    selected_audio_player = str(audio_settings.get("selectedMediaPlayerId") or "").strip()
+    if selected_audio_player and not selected_audio_player.startswith("media_player."):
+        raise ValueError("Select a valid Home Assistant media player")
     family_center_url = _normalize_family_center_url(values.get("familyCenterUrl", current_settings.get("familyCenterUrl") or ""))
     family_center_api_key = str(values.get("familyCenterApiKey") or "").strip()
     family_center_clear_key = _assistant_bool(values.get("familyCenterClearApiKey"), False)
@@ -4863,6 +4874,14 @@ def _config_settings_save(payload: dict) -> dict:
     display["xrandrRotation"] = "inverted" if orientation == "upside_down" else "normal"
     display.update(_deepcopy_json(display_settings))
     hardware["temperatureSensors"] = _deepcopy_json(temperature_sensors)
+    # This is the same primary player used by the wall-panel Audio page.
+    ha["selectedMediaPlayerId"] = selected_audio_player
+    if selected_audio_player:
+        selected_player = lookup.get(selected_audio_player) or {
+            "entityId": selected_audio_player, "name": selected_audio_player,
+            "domain": "media_player",
+        }
+        ha["mediaPlayerEntities"] = _settings_prepend_entity(ha.get("mediaPlayerEntities"), selected_player)
     audio["enabledControls"] = _deepcopy_json(audio_settings.get("enabledControls") or {})
     audio["autoNavigate"] = bool(audio_settings.get("autoNavigate"))
     audio["groups"] = _deepcopy_json(audio_settings.get("groups") or [])
@@ -5359,6 +5378,11 @@ def _config_transfer_html(server_port: int | str | None = None) -> str:
       <button id="audio-back" type="button" class="secondary settings-back" hidden>← All Audio Settings</button>
       <p class="muted">This mirrors the wall-panel Audio Settings dialog. Save here with the main thermostat settings button; unrelated Audio-page entity assignments are preserved.</p>
       <div class="audio-grid">
+        <div class="settings-section audio-wide"><h3>Primary Media Player</h3>
+          <p class="muted">Choose the Home Assistant media player this thermostat should use for its Audio page. Each thermostat has its own selection.</p>
+          <div class="field"><label for="audio-primary-player">Media player</label><select id="audio-primary-player"><option value="">No media player selected</option></select></div>
+          <span class="hint">The list is refreshed from Home Assistant. A previously selected player remains available if Home Assistant is temporarily offline.</span>
+        </div>
         <div class="settings-section"><h3>Visible Controls</h3><p class="muted">Disabled controls are hidden from Audio and skipped by scene buttons.</p><div class="checks"><label class="check"><input id="audio-enable-gain" type="checkbox">Gain</label><label class="check"><input id="audio-enable-bass" type="checkbox">Bass</label><label class="check"><input id="audio-enable-treble" type="checkbox">Treble</label><label class="check"><input id="audio-enable-music_surround" type="checkbox">Music Surround</label><label class="check"><input id="audio-enable-tv_power" type="checkbox">TV Power</label><label class="check"><input id="audio-enable-projector" type="checkbox">Projector</label><label class="check"><input id="audio-enable-subwoofer" type="checkbox">Sub</label><label class="check"><input id="audio-enable-surround" type="checkbox">Surround Sound</label></div></div>
         <div class="settings-section"><h3>Auto-Navigate</h3><label class="check"><input id="audio-auto-nav" type="checkbox">Enable auto-navigate</label><p class="muted">Real music jumps to Audio. Paused, idle, stopped, or unattended playback returns to Thermostat using the same wall-panel behavior.</p></div>
         <div class="settings-section audio-wide"><h3>Scene Save Points</h3><p class="muted">Blank volume means the scene does not force volume. Gain/Bass/Treble/Music Surround may be a number, <code>max</code>, <code>min</code>, or blank.</p><div id="audio-scenes" class="scene-grid"></div></div>
@@ -5568,8 +5592,16 @@ function groupMembersSelect(players,members) {{ const select=document.createElem
 function renderAudioGroups() {{ const box=qs('audio-groups');const players=(window.lastThermostatEntities&&window.lastThermostatEntities.mediaPlayers)||[];box.replaceChildren(...window.audioGroups.map((group,index)=>{{const row=document.createElement('div');row.className='group-row';row.dataset.index=String(index);const grid=document.createElement('div');grid.className='form-grid';const nameWrap=document.createElement('div');nameWrap.className='field';const nameLabel=document.createElement('label');nameLabel.textContent='Group name';const name=document.createElement('input');name.type='text';name.value=group.name||'';name.addEventListener('input',()=>window.audioGroups[index].name=name.value);nameWrap.append(nameLabel,name);const membersWrap=document.createElement('div');membersWrap.className='field';const membersLabel=document.createElement('label');membersLabel.textContent='Members';const members=groupMembersSelect(players,group.members||[]);members.addEventListener('change',()=>{{window.audioGroups[index].members=selectedValuesFrom(members);renderAudioGroups();}});membersWrap.append(membersLabel,members);renderMultiChoices(members);const coordWrap=document.createElement('div');coordWrap.className='field';const coordLabel=document.createElement('label');coordLabel.textContent='Coordinator';const coord=document.createElement('select');for(const eid of group.members||[]){{const item=players.find(x=>x.entityId===eid)||{{entityId:eid,name:eid}};const option=document.createElement('option');option.value=eid;option.textContent=item.name||eid;option.selected=eid===group.coordinatorId;coord.append(option);}}coord.addEventListener('change',()=>window.audioGroups[index].coordinatorId=coord.value);coordWrap.append(coordLabel,coord);grid.append(nameWrap,membersWrap,coordWrap);const actions=document.createElement('div');actions.className='group-actions';const remove=document.createElement('button');remove.type='button';remove.textContent='Delete Group';remove.addEventListener('click',()=>{{window.audioGroups.splice(index,1);renderAudioGroups();}});actions.append(remove);row.append(grid,actions);return row;}}));if(!window.audioGroups.length){{const empty=document.createElement('div');empty.className='muted';empty.textContent='No speaker groups created yet.';box.append(empty);}} }}
 function selectedValuesFrom(select) {{ return Array.from(select.selectedOptions).map(x=>x.value); }}
 function addAudioGroup() {{ window.audioGroups.push({{id:'audio-group-'+Date.now(),name:'',members:[],coordinatorId:''}});renderAudioGroups(); }}
-function setAudioForm(audio) {{ audio=audio||{{}};const enabled=audio.enabledControls||{{}};for(const key of AUDIO_CONTROLS)qs('audio-enable-'+key).checked=enabled[key]!==false;qs('audio-auto-nav').checked=!!audio.autoNavigate;window.audioGroups=JSON.parse(JSON.stringify(audio.groups||[]));renderAudioGroups();renderAudioScenes(audio.presets||{{}}); }}
-function readAudioSettings() {{ const enabled={{}};for(const key of AUDIO_CONTROLS)enabled[key]=qs('audio-enable-'+key).checked;const presets={{}};for(const [key,label] of AUDIO_SCENES){{const numbers={{}};for(const control of AUDIO_NUMBERS){{const v=value('audio-'+key+'-'+control).trim();if(v!=='')numbers[control]=v;}}const switches={{}};for(const control of AUDIO_SWITCHES)switches[control]=qs('audio-'+key+'-'+control).checked?'on':'off';const vol=value('audio-'+key+'-volume').trim();presets[key]={{label:label,volume:vol===''?null:Number(vol),numbers:numbers,switches:switches}};}}return {{enabledControls:enabled,autoNavigate:qs('audio-auto-nav').checked,groups:window.audioGroups,presets:presets}}; }}
+function fillAudioPrimaryPlayer(selected) {{
+  const selector=qs('audio-primary-player');const players=(window.lastThermostatEntities&&window.lastThermostatEntities.mediaPlayers)||[];
+  selector.replaceChildren(new Option('No media player selected',''));
+  const added=new Set();
+  for(const item of players){{const id=String(item.entityId||'');if(!id.startsWith('media_player.')||added.has(id))continue;added.add(id);selector.add(new Option((item.name||id)+' — '+id,id));}}
+  if(selected&&!added.has(selected))selector.add(new Option(selected+' (saved; not currently discovered)',selected));
+  selector.value=selected||'';
+}}
+function setAudioForm(audio) {{ audio=audio||{{}};fillAudioPrimaryPlayer(audio.selectedMediaPlayerId||'');const enabled=audio.enabledControls||{{}};for(const key of AUDIO_CONTROLS)qs('audio-enable-'+key).checked=enabled[key]!==false;qs('audio-auto-nav').checked=!!audio.autoNavigate;window.audioGroups=JSON.parse(JSON.stringify(audio.groups||[]));renderAudioGroups();renderAudioScenes(audio.presets||{{}}); }}
+function readAudioSettings() {{ const enabled={{}};for(const key of AUDIO_CONTROLS)enabled[key]=qs('audio-enable-'+key).checked;const presets={{}};for(const [key,label] of AUDIO_SCENES){{const numbers={{}};for(const control of AUDIO_NUMBERS){{const v=value('audio-'+key+'-'+control).trim();if(v!=='')numbers[control]=v;}}const switches={{}};for(const control of AUDIO_SWITCHES)switches[control]=qs('audio-'+key+'-'+control).checked?'on':'off';const vol=value('audio-'+key+'-volume').trim();presets[key]={{label:label,volume:vol===''?null:Number(vol),numbers:numbers,switches:switches}};}}return {{selectedMediaPlayerId:value('audio-primary-player'),enabledControls:enabled,autoNavigate:qs('audio-auto-nav').checked,groups:window.audioGroups,presets:presets}}; }}
 
 function setThermostatForm(s,e,telemetry) {{
   qs('ts-name').value=s.name||''; qs('ts-fan').value=s.fan||'auto'; qs('ts-kid-mode').checked=!!s.kidMode; qs('ts-orientation').value=s.screenOrientation||'upright'; qs('ts-away-heat').value=s.awayHeat; qs('ts-away-cool').value=s.awayCool; qs('ts-intimacy-temp').value=s.intimacyHoldTargetTemp;

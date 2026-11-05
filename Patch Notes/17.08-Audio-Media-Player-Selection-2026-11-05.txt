@@ -1,0 +1,20 @@
+Smart Thermostat v17.08 — Audio Primary Media Player Selection
+Date: 2026-11-05
+
+Changes
+- Added a Primary Media Player choice to the temporary Web UI > Audio settings.
+- The dropdown uses discovered Home Assistant media_player entities; a saved device is retained in the list if HA is temporarily offline.
+- Saving Audio or Thermostat settings now persists the device to integrations.homeAssistant.selectedMediaPlayerId, the setting already used by the thermostat audio/voice integration.
+- Reopening the Web UI confirms the saved media player selection.
+- Existing audio scenes, groups, selected controls, credentials and other thermostat settings are preserved.
+- Incremented VERSION from 17.07 to 17.08.
+
+Validation
+- Python compilation passed.
+- Web UI JavaScript syntax checked using Node.js.
+- No live Raspberry Pi / Home Assistant integration test performed.
+
+Files
+- server.py
+- VERSION
+- Patch Notes/17.08-Audio-Media-Player-Selection-2026-11-05.txt
