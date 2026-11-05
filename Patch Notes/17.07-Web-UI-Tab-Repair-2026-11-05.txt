@@ -1,0 +1,19 @@
+Smart Thermostat 17.07 — Web UI tab repair — 2026-11-05
+
+Fix:
+- Correct a missing closing parenthesis in the Home Assistant connection form's JavaScript error-handling expression.
+- The syntax error prevented the entire configuration portal script from running, disabling navigation between Home Assistant, Thermostat, Room, Audio, and other tabs.
+- Preserve the Home Assistant connection form and existing settings behavior.
+
+Version:
+- Bump VERSION to 17.07, above the preceding 17.06 Home Assistant patch.
+
+Files in this patch:
+- server.py
+- VERSION
+- Patch Notes/17.07-Web-UI-Tab-Repair-2026-11-05.txt
+
+Verification:
+- Python compilation passed.
+- Extracted configuration-page JavaScript passed node --check (syntax validation).
+- Live browser and thermostat hardware tests have not been performed.

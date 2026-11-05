@@ -5434,7 +5434,7 @@ async function submitHaConnection(testOnly) {{
   try {{
     setBox(qs('ha-connection-status'),testOnly?'Testing Home Assistant connection...':'Verifying and saving connection...','muted');
     const r=await fetch('/api/ha/connection',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{url:qs('ha-connection-url').value.trim(),token:qs('ha-connection-token').value.trim(),testOnly}})}});
-    const d=await r.json().catch(()=>({{}});if(!r.ok||!d.ok)throw new Error(d.error||'Connection failed');
+    const d=await r.json().catch(()=>({{}}));if(!r.ok||!d.ok)throw new Error(d.error||'Connection failed');
     setBox(qs('ha-connection-status'),d.message||'Connection verified.','ok');
     if(!testOnly){{qs('ha-connection-token').value='';window.thermostatSettingsLoaded=false;}}
   }}catch(e){{setBox(qs('ha-connection-status'),e.message||String(e),'bad');}}
