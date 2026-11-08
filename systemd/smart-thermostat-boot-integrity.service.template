@@ -1,0 +1,16 @@
+[Unit]
+Description=Smart Thermostat boot file integrity and recovery guard
+After=local-fs.target
+ConditionPathExists=/boot/firmware/cmdline.txt
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 @APP_DIR@/scripts/boot-integrity-guard.py
+Restart=always
+RestartSec=10
+ProtectSystem=full
+ReadWritePaths=/boot /var/lib/smart-thermostat-boot-guard
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

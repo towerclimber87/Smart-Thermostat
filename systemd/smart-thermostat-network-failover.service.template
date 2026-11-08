@@ -1,0 +1,14 @@
+[Unit]
+Description=Smart Thermostat Ethernet-first Wi-Fi fallback
+After=NetworkManager.service network.target
+Wants=NetworkManager.service
+ConditionPathExists=/usr/bin/nmcli
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 @APP_DIR@/scripts/network-failover.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

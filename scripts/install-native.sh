@@ -400,11 +400,27 @@ sed -e "s|@APP_DIR@|$APP_DIR|g" -e "s|@APP_USER@|$APP_USER|g" -e "s|@APP_HOME@|$
 sed -e "s|@APP_DIR@|$APP_DIR|g" -e "s|@APP_USER@|$APP_USER|g" -e "s|@APP_HOME@|$APP_HOME|g" \
   "$APP_DIR/systemd/smart-thermostat-native.service.template" | write_if_changed /etc/systemd/system/smart-thermostat-native.service
 
+# Install optional safeguards without touching fstab, root mount options or
+# existing Wi-Fi credentials. NetworkManager must already be the Wi-Fi manager.
+for service in smart-thermostat-boot-integrity smart-thermostat-network-failover; do
+  sed -e "s|@APP_DIR@|$APP_DIR|g" \
+    "$APP_DIR/systemd/${service}.service.template" | write_if_changed "/etc/systemd/system/${service}.service"
+done
+
 systemctl daemon-reload
 systemctl enable smart-thermostat-backend.service
 systemctl enable smart-thermostat-native.service
 systemctl restart smart-thermostat-backend.service
 systemctl restart smart-thermostat-native.service
+# A one-shot validation creates verified recovery snapshots before starting the guard.
+# It is safe to repeat and does not change boot files unless cmdline is clearly corrupt.
+/usr/bin/python3 "$APP_DIR/scripts/boot-integrity-guard.py" --once || true
+systemctl enable --now smart-thermostat-boot-integrity.service || true
+if command -v nmcli >/dev/null 2>&1 && systemctl is-active --quiet NetworkManager.service; then
+  systemctl enable --now smart-thermostat-network-failover.service || true
+else
+  echo "Ethernet/Wi-Fi failover not enabled: NetworkManager is not active."
+fi
 
 echo "Installed SmartThermostatNative from $APP_DIR"
 echo "Backend: systemctl status smart-thermostat-backend.service"

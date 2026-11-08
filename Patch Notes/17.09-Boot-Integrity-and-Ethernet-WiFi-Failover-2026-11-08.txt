@@ -1,0 +1,42 @@
+Smart Thermostat v17.09 — Boot Integrity and Ethernet-first Wi-Fi Failover
+Date: 2026-11-08
+
+Changes
+- Added a boot integrity service that checks cmdline.txt and config.txt while the Pi is running.
+- Saves a durable, SHA-256-verified initial copy of each healthy boot file under /var/lib/smart-thermostat-boot-guard/.
+- If cmdline.txt later becomes obviously invalid, attempts a safe, atomic restore of the verified original. It never overwrites a valid-but-changed cmdline or config.txt; such changes are logged for manual review.
+- Added wired-priority network service. Disables NetworkManager-controlled Wi-Fi only after Ethernet has carrier, a global IPv4 address, and a default IPv4 route for 3 consecutive 5-second polls. Enables Wi-Fi on the first poll when Ethernet loses these prerequisites.
+- No Wi-Fi credentials, NetworkManager connection profiles, root filesystem mounts, fstab, or user thermostat settings are altered.
+- Installer installs systemd services and enables network failover only when NetworkManager is active.
+- Incremented VERSION from 17.08 to 17.09.
+
+Limitations and safeguards
+- A service that runs in Linux cannot repair boot corruption that prevents Linux from booting. If the SD card corrupts cmdline.txt while fully powered off, manual external recovery may still be needed.
+- This patch does not change /boot/firmware to read-only. Doing so automatically could break kernel/firmware updates and has to be staged and tested with the live device's boot mount layout.
+- Not a substitute for a hardware UPS or a high-endurance SD card.
+- Wired-ready means physical carrier + IPv4 + a default route; it does not prove that the Internet is reachable.
+- If NetworkManager is not controlling Wi-Fi, the radio is left untouched.
+- For testing on a remote Wi-Fi connection, connect wired Ethernet and verify reachability before installing; Wi-Fi will be disabled automatically when Ethernet is ready.
+
+Rollback
+  sudo systemctl disable --now smart-thermostat-network-failover.service
+  sudo nmcli radio wifi on
+  sudo systemctl disable --now smart-thermostat-boot-integrity.service
+
+Inspection
+  sudo systemctl status smart-thermostat-boot-integrity.service smart-thermostat-network-failover.service
+  sudo journalctl -u smart-thermostat-boot-integrity.service -u smart-thermostat-network-failover.service -b --no-pager
+
+Validation
+- Python syntax compilation and Bash syntax validation passed locally.
+- Functional unit tests for boot-line validation and network conditions passed locally.
+- No live Raspberry Pi, power interruption, Ethernet failover or kernel-update test performed.
+
+Changed/new files
+- VERSION
+- scripts/install-native.sh
+- scripts/boot-integrity-guard.py
+- scripts/network-failover.py
+- systemd/smart-thermostat-boot-integrity.service.template
+- systemd/smart-thermostat-network-failover.service.template
+- Patch Notes/17.09-Boot-Integrity-and-Ethernet-WiFi-Failover-2026-11-08.txt
