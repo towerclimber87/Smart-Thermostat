@@ -1,0 +1,22 @@
+Smart Thermostat v17.10 — Babysitter mode (2026-11-17)
+
+Changed files:
+- server.py: 24-hour Babysitter presence override; server-side validation of all assigned Auto Away people; existing Auto Home clears Babysitter on real arrival; time-based expiry restores normal occupancy checks. Advertises Babysitter as the active climate preset.
+- native_app/main.py: Babysitter control on automatic Away overlay and conditional main mode button, status label; no changes to original manual Return Home/Arriving durations.
+- Supporting/iha.zip: Home Assistant IHA climate preset option now includes babysitter (only iha/climate.py changed within integration).
+- VERSION: 17.09 -> 17.10.
+
+IMPORTANT INSTALL NOTES:
+1. Back up the live installation before applying any files. This ZIP contains only changed project files.
+2. Copy server.py and native_app/main.py to the corresponding project paths; copy VERSION.
+3. For HA preset support, update custom_components/iha/climate.py using the copy inside Supporting/iha.zip, then restart Home Assistant when safe. Bundling Supporting/iha.zip alone does NOT automatically update an already-installed HA integration.
+4. The user's normal install/restart procedure applies; this package does not restart services itself.
+5. Static validation passed: Python compilation and focused presence-logic tests. Hardware/GUI/HA live tests were NOT performed.
+6. Rollback: restore the previous server.py, main.py, VERSION and HA climate.py files, then restart their respective services when appropriate.
+
+Behavior:
+- Babysitter appears on wall-screen automatically only in automatic Away with assigned Auto Away people; an HA preset option is always listed but the backend refuses activation unless every assigned person is confidently away.
+- Clicking Babysitter restores Home comfort without changing Heat/Cool selection. A server-generated 24-hour timestamp controls expiry, including across restarts.
+- Any assigned person's Home state cancels it immediately on the next occupancy refresh. After 24 hours, normal Auto Away confirmation logic resumes; not an unconditional forced Away.
+- Manual Return Home stays 6 hours; Arriving stays 2 hours; Babysitter does not peer-sync.
+- Active Babysitter appears as a selected main-screen mode and HA preset.

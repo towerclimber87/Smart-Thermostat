@@ -5416,6 +5416,9 @@ class ThermostatScreen(Page):
         self.away_body.setWordWrap(True)
         self.away_body.setFont(font(18, QFont.Black))
         self.away_body.setStyleSheet("color:#e7d8ff; background:transparent; border:0;")
+        self.away_babysitter_button = RoundButton("👶 Babysitter · 24 hours", active=True, min_h=56)
+        self.away_babysitter_button.setMinimumWidth(260)
+        self.away_babysitter_button.clicked.connect(lambda: self.set_mode("babysitter"))
         self.away_home_button = RoundButton("Return Home", active=True, min_h=62)
         self.away_home_button.setMinimumWidth(260)
         self.away_home_button.clicked.connect(self.return_home_from_away)
@@ -5424,6 +5427,7 @@ class ThermostatScreen(Page):
         away_lay.addWidget(self.away_body)
         away_lay.addSpacing(10)
         away_lay.addWidget(self.away_home_button, 0, Qt.AlignCenter)
+        away_lay.addWidget(self.away_babysitter_button, 0, Qt.AlignCenter)
         away_lay.addStretch(1)
         self.away_overlay.mousePressEvent = lambda event: self.return_home_from_away()
         self.away_overlay.hide()
@@ -6708,7 +6712,7 @@ class ThermostatScreen(Page):
                 equipment = "Idle • Fan Hold"
             elif relays.get("fan"):
                 equipment = "Fan"
-        mode_label = "Away" if away else "Arriving" if self.arriving_override_active(t) else mode.capitalize()
+        mode_label = "Away" if away else "Babysitter" if self.babysitter_override_active(t) else "Arriving" if self.arriving_override_active(t) else mode.capitalize()
         text = f"• {mode_label} • {equipment}"
         if self.status_badge.text() != text:
             self.status_badge.setText(text)
@@ -7490,10 +7494,10 @@ class ThermostatScreen(Page):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(12)
         lay.addStretch(1)
-        for mode in ["off", "cool", "heat", "away", "arriving"]:
+        for mode in ["off", "cool", "heat", "away", "arriving", "babysitter"]:
             label = "Arriving" if mode == "arriving" else mode.capitalize()
             b = RoundButton(label, active=False, min_h=38)
-            b.setFixedSize(106 if mode == "arriving" else 82, 38)
+            b.setFixedSize(112 if mode == "babysitter" else 106 if mode == "arriving" else 82, 38)
             b.clicked.connect(lambda checked=False, m=mode: self.set_mode(m))
             self.mode_buttons[mode] = b
             lay.addWidget(b)
@@ -7660,17 +7664,46 @@ class ThermostatScreen(Page):
         expires_at = self.safe_float(override.get("expiresAt") or override.get("until"), 0.0)
         return expires_at <= 0 or expires_at > time.time() * 1000
 
+    def babysitter_override_active(self, snapshot: dict | None = None) -> bool:
+        t = snapshot if isinstance(snapshot, dict) else self.thermostat_view()
+        override = t.get("presenceHomeOverride") if isinstance(t.get("presenceHomeOverride"), dict) else {}
+        return (bool(override.get("active")) and str(override.get("reason") or "").lower() == "babysitter"
+                and self.safe_float(override.get("expiresAt"), 0) > time.time() * 1000)
+
+    def babysitter_override_payload(self, snapshot: dict | None = None) -> dict:
+        now_ms = int(time.time() * 1000)
+        duration_ms = 24 * 60 * 60 * 1000
+        return {"active": True, "startedAt": now_ms, "entityIds": self.auto_away_entity_ids(snapshot),
+                "reason": "babysitter", "durationMs": duration_ms, "expiresAt": now_ms + duration_ms}
+
     def set_mode(self, mode: str):
         if self.reject_locked_control():
             return
         if self.kid_mode_active():
             return
         mode = str(mode or "").strip().lower()
-        if mode not in {"off", "heat", "cool", "away", "arriving"}:
+        if mode not in {"off", "heat", "cool", "away", "arriving", "babysitter"}:
             return
         before_tap = copy.deepcopy(self.thermostat_view())
-        if self.intimacy_hold_active(before_tap) and mode in {"away", "arriving"}:
+        if self.intimacy_hold_active(before_tap) and mode in {"away", "arriving", "babysitter"}:
             self.requestToast.emit(f"{intimacy_hold_target_text(before_tap)} hold active — Away and Arriving are ignored")
+            return
+        if mode == "babysitter":
+            if self.babysitter_override_active(before_tap):
+                self.requestToast.emit("Babysitter mode is already active")
+                return
+            # Only expose the action from automatic Away. Backend also validates
+            # live HA occupancy, so stale wall-screen state cannot enable it.
+            if not before_tap.get("away") or str(before_tap.get("awaySource") or "").lower() not in {"presence", "auto"} or not self.auto_away_entity_ids(before_tap):
+                self.requestToast.emit("Babysitter requires everyone assigned to Auto Away to be away")
+                return
+            changes = {"preset_mode": "babysitter", "presetChangeSource": "panel"}
+            def done(result):
+                if isinstance(result, dict):
+                    self.s.ingest_thermostat(result)
+                    self.sync(self.s.config, self.s.thermostat)
+            self.run_async("thermostat-babysitter", lambda: self.s.api.thermostat_update(changes),
+                           done, lambda err: self.requestToast.emit(f"Babysitter failed: {err}"))
             return
         arriving_was_active = mode == "arriving" and self.arriving_override_active(before_tap)
         if mode == "arriving":
@@ -8230,11 +8263,14 @@ class ThermostatScreen(Page):
         self.plus.setEnabled(setpoint_visible)
         kid_mode = self.kid_mode_active()
         arriving = self.arriving_override_active(t) and not away
+        babysitter = self.babysitter_override_active(t) and not away
         for m, b in self.mode_buttons.items():
-            selected = (m == mode and not away and not arriving) or (m == "away" and away) or (m == "arriving" and arriving)
+            selected = (m == mode and not away and not arriving and not babysitter) or (m == "away" and away) or (m == "arriving" and arriving) or (m == "babysitter" and babysitter)
             b.setStyleSheet(self._floating_button_style(selected))
             if m == "arriving":
                 b.setVisible(not kid_mode)
+            elif m == "babysitter":
+                b.setVisible(not kid_mode and (babysitter or (away and str(t.get("awaySource") or "").lower() in {"presence", "auto"} and bool(self.auto_away_entity_ids(t)))))
         fan = str(t.get("fan") or "auto").lower()
         if self.cooling_is_active(t) and fan == "off":
             fan = "auto"
@@ -8271,6 +8307,7 @@ class ThermostatScreen(Page):
                 self.away_body.setText("No assigned Auto Away users are home. Tap Return Home to hold Home for up to 6 hours; normal presence control resumes sooner if someone returns.")
             else:
                 self.away_body.setText("Tap to return Home and resume normal comfort.")
+            self.away_babysitter_button.setVisible(source == "presence" and bool(self.auto_away_entity_ids(t)))
             self.position_away_overlay()
             self.away_overlay.show()
             self.away_overlay.raise_()

@@ -126,6 +126,7 @@ PANEL_COMMAND_GRACE_MS = int(float(os.environ.get("SMART_THERMOSTAT_PANEL_COMMAN
 # for setpoint changes so the wall thermostat does not snap back to an old HA
 # value 30-60 seconds after the user tapped the touchscreen.
 PANEL_TARGET_COMMAND_GRACE_MS = int(float(os.environ.get("SMART_THERMOSTAT_PANEL_TARGET_GRACE_SECONDS", "300") or "300") * 1000)
+BABYSITTER_DURATION_MS = 24 * 60 * 60 * 1000
 ARRIVING_AWAY_BYPASS_MS = int(float(os.environ.get("SMART_THERMOSTAT_ARRIVING_BYPASS_MINUTES", "120") or "120") * 60000)
 MANUAL_RETURN_HOME_DURATION_MS = 6 * 60 * 60 * 1000
 INTIMACY_HOLD_TARGET_F = 66
@@ -1171,6 +1172,9 @@ def _normalize_presence_home_override(value: object) -> dict | None:
         if duration_ms <= 0:
             duration_ms = MANUAL_RETURN_HOME_DURATION_MS
         expires_at = int(started_at + duration_ms)
+    elif reason == "babysitter" and expires_at <= 0:
+        duration_ms = BABYSITTER_DURATION_MS
+        expires_at = int(started_at + duration_ms)
     elif reason == "arriving" and expires_at <= 0:
         expires_at = int(started_at + (duration_ms if duration_ms > 0 else ARRIVING_AWAY_BYPASS_MS))
     if expires_at > 0 and now_ms >= expires_at:
@@ -1212,8 +1216,10 @@ def _presence_home_override_payload(
         payload["durationMs"] = int(duration_ms)
     if expires_at is not None and expires_at > 0:
         payload["expiresAt"] = int(expires_at)
-    elif reason in {"arriving", "manual-return-home"}:
-        if reason == "arriving":
+    elif reason in {"arriving", "manual-return-home", "babysitter"}:
+        if reason == "babysitter":
+            duration = BABYSITTER_DURATION_MS
+        elif reason == "arriving":
             duration = int(duration_ms) if duration_ms is not None and duration_ms > 0 else ARRIVING_AWAY_BYPASS_MS
         else:
             duration = int(duration_ms) if duration_ms is not None and duration_ms > 0 else MANUAL_RETURN_HOME_DURATION_MS
@@ -7023,7 +7029,7 @@ def _apply_presence_away_logic(thermostat: dict) -> dict:
                 manual_latch["seenAway"] = sorted(seen)
                 updated["manualAwayPresenceLatch"] = manual_latch
         if home_override:
-            _clear_auto_away_pending("Home/Arriving override is active")
+            _clear_auto_away_pending("timed Home override is active")
             # A Home override blocks Auto Away while all assigned people still
             # report Away/unknown. Manual Return Home lasts for at most six hours
             # (or until a real Home report); Arriving also remembers a confirmed departure so the next
@@ -7773,8 +7779,8 @@ def _thermostat_status_payload(*, refresh_runtime: bool = False, apply_hardware:
     preset_mode = (
         "away"
         if thermostat.get("away")
-        else "arriving"
-        if presence_override and str(presence_override.get("reason") or "").strip().lower() == "arriving"
+        else str(presence_override.get("reason") or "home").strip().lower()
+        if presence_override and str(presence_override.get("reason") or "").strip().lower() in {"arriving", "babysitter"}
         else "home"
     )
     sync_status = _sync_status_payload()
@@ -8077,7 +8083,7 @@ def _incoming_explicitly_leaves_away(incoming: dict | None) -> bool:
     if "away" in incoming and not _boolish(incoming.get("away")):
         return True
     preset = incoming.get("preset_mode", incoming.get("presetMode"))
-    return str(preset or "").strip().lower() in {"home", "arriving"}
+    return str(preset or "").strip().lower() in {"home", "arriving", "babysitter"}
 
 
 def _incoming_has_comfort_target_change(incoming: dict | None) -> bool:
@@ -8150,24 +8156,36 @@ def _handle_thermostat_update_locked(payload: dict) -> tuple[dict, dict, dict]:
         "source",
     )
 
-    # Arriving is a deliberate preset, never an inferred presence state.  Older
+    # Timed presence presets are deliberate, never inferred presence states. Older
     # panel code could send a whole thermostat fragment containing an Arriving
     # presenceHomeOverride without also naming the requested preset.  That made
-    # a stale fragment capable of resurrecting Arriving after an explicit Home
-    # command.  Only an explicit preset_mode/presetMode=arriving command may
-    # create or refresh the timed Arriving override.
+    # a stale fragment capable of resurrecting a timed mode after explicit Home
+    # command. Only an explicit matching preset_mode/presetMode command may
+    # create or refresh the timed override.
     incoming_presence_override = _normalize_presence_home_override(incoming.get("presenceHomeOverride"))
     incoming_presence_reason = str((incoming_presence_override or {}).get("reason") or "").strip().lower()
-    if incoming_presence_reason == "arriving" and requested_preset != "arriving":
+    if incoming_presence_reason in {"arriving", "babysitter"} and requested_preset != incoming_presence_reason:
         incoming = dict(incoming)
         incoming["presenceHomeOverride"] = None
         print(
-            "Ignored implicit Arriving override without an explicit Arriving preset "
+            "Ignored implicit timed presence override without its matching explicit preset "
             f"(source={preset_change_source or 'unknown'}).",
             flush=True,
         )
 
-    if requested_preset in {"home", "away", "arriving"}:
+    if requested_preset == "babysitter":
+        # Never let an HA/panel command manufacture occupancy. Require the real
+        # configured Auto Away people to be confidently absent at activation.
+        ids = _thermostat_auto_away_entity_ids(existing)
+        states = _person_states_for_schedule(ids, existing) if ids else {}
+        if not (ids and states and all(_presence_state_confidently_away(states.get(i)) for i in ids)):
+            incoming = dict(incoming)
+            for field in ("preset_mode", "presetMode", "presenceHomeOverride", "away", "awaySource", "manualAwayPresenceLatch"):
+                incoming.pop(field, None)
+            requested_preset = ""
+            print("Babysitter command ignored: assigned Auto Away people are not all confirmed away", flush=True)
+
+    if requested_preset in {"home", "away", "arriving", "babysitter"}:
         # Treat Home Assistant preset commands exactly like the matching wall-panel
         # actions. Arriving may come from temporary peer Sync; Home and Away may
         # still be commanded directly in Home Assistant. The receiving thermostat
@@ -8181,12 +8199,12 @@ def _handle_thermostat_update_locked(payload: dict) -> tuple[dict, dict, dict]:
         )
         if requested_preset == "away":
             incoming["presenceHomeOverride"] = None
-        elif requested_preset == "arriving":
-            if not _normalize_presence_home_override(incoming.get("presenceHomeOverride")):
+        elif requested_preset in {"arriving", "babysitter"}:
+            if requested_preset == "babysitter" or not _normalize_presence_home_override(incoming.get("presenceHomeOverride")):
                 incoming["presenceHomeOverride"] = _presence_home_override_payload(
                     _thermostat_auto_away_entity_ids(existing),
-                    reason="arriving",
-                    duration_ms=ARRIVING_AWAY_BYPASS_MS,
+                    reason=requested_preset,
+                    duration_ms=BABYSITTER_DURATION_MS if requested_preset == "babysitter" else ARRIVING_AWAY_BYPASS_MS,
                 )
         else:
             # Explicit Home must always clear a prior timed Arriving hold.  Do
@@ -8327,9 +8345,9 @@ def _handle_thermostat_update_locked(payload: dict) -> tuple[dict, dict, dict]:
     existing_home_override_reason = str((existing_home_override or {}).get("reason") or "").strip().lower()
     if (
         requested_mode in {"off", "heat", "cool"}
-        and requested_preset != "arriving"
+        and requested_preset not in {"arriving", "babysitter"}
         and _source_is_panel_guard_exempt(mode_change_source)
-        and existing_home_override_reason == "arriving"
+        and existing_home_override_reason in {"arriving", "babysitter"}
     ):
         # Heat/Cool/Off from the panel or another explicit control source is a
         # direct operating choice. Treat it as leaving the temporary Arriving
